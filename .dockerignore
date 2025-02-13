@@ -1,0 +1,10 @@
+.git
+.gitignore
+build/
+*.o
+*.so
+*.a
+*.log
+README.md
+Dockerfile
+.dockerignore 
