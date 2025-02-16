@@ -558,5 +558,5 @@ FodyWeavers.xsd
 # Additional files built by Visual Studio
 *.tlog
 
-./tools/accountlogin/google-chrome-stable_current_amd64.deb
+tools/accountlogin/google-chrome-stable_current_amd64.deb
 # End of https://www.toptal.com/developers/gitignore/api/intellij+all,visualstudio,visualstudiocode,cmake,c,c++
