@@ -350,10 +350,14 @@
         "reverse_api_list":["chaynsapi","testapi"],
         "account":[{
             "apiname": "chaynsapi",
-            "username": "xxxxxx",
-            "passwd": "xxxxxxx",
-            "userTobitId":5212410,
-            "authToken": "bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInZlciI6MSwia2lkIjoibmt5M21kYmcifQ.eyJqdGkiOiJhMWNmNjg4NS02MmE5LTRiMmQtYWE2MC0xMzhkYjNlNDRiYWYiLCJzdWIiOiJXU1YtUlpQTEgiLCJ0eXBlIjoxLCJleHAiOiIyMDI1LTAyLTE2VDEyOjU4OjI1WiIsImlhdCI6IjIwMjUtMDItMTJUMTI6NTg6MjVaIiwiTG9jYXRpb25JRCI6Mzc4LCJTaXRlSUQiOiI2MDAyMS0wODk4OSIsIklzQWRtaW4iOmZhbHNlLCJUb2JpdFVzZXJJRCI6NTIxMjQxMCwiUGVyc29uSUQiOiJXU1YtUlpQTEgiLCJGaXJzdE5hbWUiOiJ5eCIsIkxhc3ROYW1lIjoiYWMiLCJSb2xlcyI6WyJzd2l0Y2hfbG9jYXRpb24iXSwicHJvdiI6MH0.a917UakNcfxvV2X_2Doe1AXdefvmUVO5NgQ88A79qJocsR5NHn6E41I_YTe5pcVUx6R-FPw1AO_sAnHxGpzOEVvk4WFUT3XC3C_87kkXKoqQA3ahdZBZ4XsFc1zdVv1vvpmI6QlrsXxWPtrLtkOWvJeuZ3nTf5b0gYy9VHsVs_3mBYcI_qdBS5mOzdCeC0OzKOdo0WuVQ1BCe3bmoEoGtNXDhsbHpV578xDtXgyJBNhgct668mYW3vqD172GbaX9yLrLzWeRC-xQOndw1Zkj7N64yERJeSxb2UI6MhfkSHt743ylLDrmEeCxm7L-HxPGLVKM40Z44M1_zlh0Dth6iA"            
-        }]
+            "username": "yxac@protonmail.com",
+            "passwd": "12345Abc"
+            },
+        {
+            "apiname": "chaynsapi",
+            "username": "my_notify@outlook.com",
+            "passwd": "12345Abc"
+        }
+    ]
     }
 }
