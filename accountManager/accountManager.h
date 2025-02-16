@@ -15,9 +15,10 @@ struct Accountinfo_st
     string passwd;
     string authToken;
     int useCount;
-    bool tokenStatus;
-    bool accountStatus;
+    bool tokenStatus=false;
+    bool accountStatus=false;
     int userTobitId;
+    string personId;
     Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId)
     {
         this->apiName = apiName;
@@ -39,6 +40,7 @@ struct AccountCompare
         return a->useCount > b->useCount;
     }
 };
+//定义函数指针
 
 class AccountManager
 {
@@ -46,6 +48,14 @@ class AccountManager
    // static AccountManager* instance;
     map<string,shared_ptr<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>> accountPoolMap;
     list<shared_ptr<Accountinfo_st>> accountList;
+     // 使用 std::function 来定义指向成员函数的指针
+    map<string, void (AccountManager::*)(shared_ptr<Accountinfo_st>)> updateTokenMap = {
+        {"chaynsapi", &AccountManager::updateChaynsToken}
+    };
+
+    map<string, bool (AccountManager::*)(string)> checkTokenMap = {
+        {"chaynsapi", &AccountManager::checkChaynsToken}
+    };
     //list<string> apiNameList;
      AccountManager();
     ~AccountManager();
@@ -65,8 +75,14 @@ class AccountManager
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account);
     void checkAccount();
     void checkToken();
+    void updateToken();
+    void updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo);
+    bool checkChaynsToken(string token);
+    Json::Value getChaynsToken(string username,string passwd);
     void registerAPIinterface(string apiName,shared_ptr<APIinterface> apiInterface);
     void refreshAccountQueue(string apiName);
     void printAccountPoolMap();
+    void checkUpdateTokenthread();
+    bool isServerReachable(const string& host, int maxRetries = 300);
 };
 #endif

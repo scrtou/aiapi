@@ -7,13 +7,13 @@ int main() {
     //Load config file
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
-    
+
+
     //开启线程执行
     thread t1([]{
-        AccountManager::getInstance().init();
         ApiManager::getInstance().init();
-
-        AccountManager::getInstance().checkToken();
+        AccountManager::getInstance().init();
+        //AccountManager::getInstance().checkUpdateTokenthread();
     });
     t1.detach();
     drogon::app().run();
