@@ -416,7 +416,7 @@ def login_chayns(username, password):
         
         # 等待邮箱输入框出现并输入
         #//*[@id="CC_INPUT_0"]
-        time.sleep(1)
+        time.sleep(2)
         username_input = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//*[@id='CC_INPUT_0']"))
         )

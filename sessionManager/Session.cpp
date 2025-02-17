@@ -44,8 +44,8 @@ void chatSession::updateSession(const std::string &ConversationId,session_st &se
 
 session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
 {
-    std::string tempConversationId=generateConversationKey(generateJsonbySession(session));
-    //LOG_INFO << "根据请求消息生成ConversationId: " << tempConversationId;
+    std::string tempConversationId=generateConversationKey(generateJsonbySession(session,false));
+    LOG_INFO << "根据请求消息生成ConversationId: " << tempConversationId;
     if(sessionIsExist(tempConversationId))
     {
         LOG_INFO<<"会话已存在，更新会话";
@@ -56,10 +56,23 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
     }
     else
     {
-        LOG_INFO<<"会话不存在，创建会话";
-        session.preConversationId=tempConversationId;
-        session.curConversationId=tempConversationId;
-        addSession(tempConversationId,session);
+        if(context_map.find(tempConversationId) != context_map.end())
+        {
+            LOG_INFO<<"在上下文会话中存在";
+            session_map[context_map[tempConversationId]].requestmessage=session.requestmessage;
+            session_map[context_map[tempConversationId]].last_active_time=session.last_active_time;
+            session_map[context_map[tempConversationId]].contextIsFull=true;
+            session=session_map[context_map[tempConversationId]];
+            context_map.erase(tempConversationId);
+        }
+        else
+        {
+            LOG_INFO<<"会话不存在，创建会话";
+            session.preConversationId=tempConversationId;
+            session.curConversationId=tempConversationId;
+            session.apiChatinfoConversationId=tempConversationId;
+            addSession(tempConversationId,session);
+        }
     }
     return session;
 
@@ -88,12 +101,24 @@ void chatSession::coverSessionresponse(session_st& session)
     session.last_active_time=time(nullptr);
     std::string newConversationId;
     newConversationId=chatSession::getInstance()->generateConversationKey(
-    chatSession::getInstance()->generateJsonbySession(session)
+    chatSession::getInstance()->generateJsonbySession(session,session.contextIsFull)
     );
     session.preConversationId=session.curConversationId;    
     session.curConversationId = newConversationId;
     addSession(newConversationId,session);
     delSession(session.preConversationId);
+
+    //如果上下文未满，则更新上下文长度,生成新的contextConversationId
+    if(!session.contextIsFull)
+    {
+        LOG_INFO << "上下文未满，更新上下文长度,生成新的contextConversationId";
+        session.contextlength=session.message_context.size()-2;
+        std::string tempConversationId=generateConversationKey(generateJsonbySession(session,true));
+        context_map.erase(session.contextConversationId);
+        session.contextConversationId=tempConversationId;
+        context_map[tempConversationId]=session.curConversationId;
+        updateSession(session.curConversationId,session);
+    }
 }
 std::string chatSession::generateSHA256(const std::string& input) {
     //计算sha256的耗时
@@ -229,6 +254,7 @@ bool chatSession::sessionIsExist(const std::string &ConversationId)
 }
 session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
 {
+    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"开始生成session_st";
     session_st session;
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
@@ -241,8 +267,6 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
                 session.systemprompt = requestbody["messages"][i]["content"].asString();
                 continue;
             }
-        
-    
         Json::Value msgData;
         msgData["role"] = requestbody["messages"][i]["role"];
         msgData["content"] = requestbody["messages"][i]["content"];
@@ -250,18 +274,24 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     }
     session.requestmessage = requestbody["messages"][requestbody["messages"].size()-1]["content"].asString();
     session.last_active_time = time(NULL);
+    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
+    LOG_INFO << "session_st message_context: " << Json::FastWriter().write(session.message_context);
     return session;
 }
-Json::Value chatSession::generateJsonbySession(const session_st& session)
+Json::Value chatSession::generateJsonbySession(const session_st& session,bool contextIsFull)
 {
      Json::Value keyData;
      Json::Value messages(Json::arrayValue);
-     for(const auto& msg : session.message_context)
+     int startIndex=contextIsFull?(session.message_context.size()-session.contextlength):0;
+     for(int i=session.message_context.size()-1;i>=startIndex;i--)
      {
-        messages.append(msg);
+        messages.append(session.message_context[i]);
      }
      keyData["messages"] = messages;
      keyData["client_info"] = session.client_info;
      keyData["model"] = session.selectmodel;
+     Json::StreamWriterBuilder writer;
+     writer["emitUTF8"] = true;  // 确保输出UTF-8编码
+     LOG_INFO << "生成ConversationId使用的数据: " << Json::writeString(writer,keyData);
      return keyData;
 }
