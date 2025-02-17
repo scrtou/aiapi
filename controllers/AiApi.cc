@@ -39,7 +39,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
-
+    LOG_INFO << "开始生成session_st";
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
     session=chatSession::getInstance()->createNewSessionOrUpdateSession(session);

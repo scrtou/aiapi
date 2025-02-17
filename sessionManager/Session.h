@@ -13,18 +13,23 @@
 #include <iomanip>
 #include <stdexcept>
 #include <deque>
+#include <list>
 using namespace drogon;
 static const int SESSION_EXPIRE_TIME = 86400; //24小时，单位秒数,会话过期时间
-static const int SESSION_MAX_MESSAGES = 4; //上下文会话最大消息条数,一轮两条
+//static const int SESSION_MAX_MESSAGES = 4; //上下文会话最大消息条数,一轮两条
 struct session_st
 {
   std::string preConversationId="";
   std::string curConversationId="";
+  std::string contextConversationId="";
+  std::string apiChatinfoConversationId="";
   time_t last_active_time=0;
   std::string selectapi="";
   std::string selectmodel="";
   std::string systemprompt="";
-  std::deque<Json::Value> message_context;  // 存储上下文的双端队列，每个元素是一个JSON对象
+  Json::Value message_context=Json::Value(Json::arrayValue);  // 存储上下文的一个JSON数组
+  int contextlength=0;
+  bool contextIsFull=false;
   std::string requestmessage="";
   Json::Value responsemessage;
   Json::Value client_info;
@@ -34,11 +39,13 @@ struct session_st
   }
   void addMessageToContext(const Json::Value& message)
   {
+    /*
     if(message_context.size() >= SESSION_MAX_MESSAGES)
     {
       message_context.pop_front();
     }
-    message_context.push_back(message);
+    */
+    message_context.append(message);
   }
 };
 
@@ -50,6 +57,7 @@ class chatSession
     static chatSession *instance;
     std::mutex mutex_;
     std::unordered_map<std::string, session_st> session_map;
+    std::unordered_map<std::string, std::string> context_map;//上下文会话id与会话id的映射
 public:
     static chatSession *getInstance()
     {
@@ -72,6 +80,6 @@ public:
 
     bool sessionIsExist(const std::string &ConversationId);
     session_st gennerateSessionstByReq(const HttpRequestPtr &req);
-    Json::Value generateJsonbySession(const session_st& session);
+    Json::Value generateJsonbySession(const session_st& session,bool contextIsFull);
 };
 #endif  

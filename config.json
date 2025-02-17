@@ -352,12 +352,13 @@
             "apiname": "chaynsapi",
             "username": "yxac@protonmail.com",
             "passwd": "12345Abc"
-            },
-        {
+            }
+        /*
+        ,{
             "apiname": "chaynsapi",
             "username": "my_notify@outlook.com",
             "passwd": "12345Abc"
-        }
+        }*/
     ]
     }
 }
