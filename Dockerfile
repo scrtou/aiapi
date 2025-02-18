@@ -22,16 +22,18 @@ RUN apt-get update && apt-get install -y \
  zlib1g-dev \
  wget \
  jq \
+ python3-full \
  python3-pip \
+ python3-venv \
  wget \
  unzip\
  software-properties-common \
  && rm -rf /var/lib/apt/lists/*
 
 
-# 安装Python依赖
+# 强制系统级安装Python包
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # 安装 Drogon
 WORKDIR /usr/src
@@ -75,7 +77,6 @@ RUN cmake ..
 RUN make -j $(nproc)
 
 # 设置环境变量
-ENV SELENIUM_HOST=localhost
 ENV SELENIUM_PORT=4444
 
 # 暴露端口
