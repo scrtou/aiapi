@@ -347,18 +347,6 @@
     ],
     //custom_config: custom configuration for users. This object can be get by the app().getCustomConfig() method. 
     "custom_config": {
-        "reverse_api_list":["chaynsapi","testapi"],
-        "account":[{
-            "apiname": "chaynsapi",
-            "username": "yxac@protonmail.com",
-            "passwd": "12345Abc"
-            }
-        /*
-        ,{
-            "apiname": "chaynsapi",
-            "username": "my_notify@outlook.com",
-            "passwd": "12345Abc"
-        }*/
-    ]
+        "reverse_api_list":["chaynsapi","testapi"]
     }
 }
