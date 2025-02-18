@@ -56,11 +56,11 @@ COPY . .
 # 创建启动脚本
 RUN echo '#!/bin/bash\n\
 if [ ! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/build/config.json\n\
+    echo "$CONFIG_JSON" > /usr/src/app/config.json\n\
 fi\n\
 \n\
 if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
+    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
 fi\n\
 \n\
 cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
