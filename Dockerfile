@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
  && apt-get install -y google-chrome-stable \
  && rm -rf /var/lib/apt/lists/*
 
-安装 ChromeDriver
+#安装 ChromeDriver
 RUN CHROME_DRIVER_VERSION=curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE && \
  wget -q -O /tmp/chromedriver.zip http://chromedriver.storage.googleapis.com/$CHROME_DRIVER_VERSION/chromedriver_linux64.zip && \
  unzip /tmp/chromedriver.zip -d /usr/bin && \
