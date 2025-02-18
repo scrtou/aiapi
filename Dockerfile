@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM selenium/standalone-chrome:latest
 
 # 设置时区和语言环境
 ENV TZ=Asia/Shanghai
@@ -26,22 +26,6 @@ RUN apt-get update && apt-get install -y \
  unzip\
  software-properties-common \
  && rm -rf /var/lib/apt/lists/*
-
-# 安装Chrome
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
-
-# 获取Chrome版本号
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3) \
-    && CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}") \
-    && wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
-    && unzip chromedriver_linux64.zip \
-    && mv chromedriver /usr/local/bin/ \
-    && chmod +x /usr/local/bin/chromedriver \
-    && rm chromedriver_linux64.zip
 
 
 # 安装Python依赖
@@ -76,7 +60,7 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
+cd /usr/src/app/tools/accountlogin && python3 loginremote.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
