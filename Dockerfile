@@ -6,7 +6,6 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 ENV LANG=C.UTF-8
 
 
-# 安装基本工具和编译环境
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -23,19 +22,16 @@ RUN apt-get update && apt-get install -y \
     wget \
     jq \
     python3-pip \
-    wget \
-    unzip\
+    unzip \
+    gnupg \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
     && echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
     && apt-get update \
     && apt-get install -y google-chrome-stable \
+    chromium chromium-driver \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-# 安装 ChromeDriver
-RUN CHROME_DRIVER_VERSION=`curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE` && \
-    wget -q -O /tmp/chromedriver.zip http://chromedriver.storage.googleapis.com/$CHROME_DRIVER_VERSION/chromedriver_linux64.zip && \
-    unzip /tmp/chromedriver.zip -d /usr/bin && \
-    rm /tmp/chromedriver.zip && \
-    chmod +x /usr/bin/chromedriver
+
 
 # 安装Python依赖
 COPY requirements.txt .
