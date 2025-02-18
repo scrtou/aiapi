@@ -7,38 +7,35 @@ ENV LANG=C.UTF-8
 
 # 安装基本工具和Chrome
 RUN apt-get update && apt-get install -y \
-    curl \
-    git \
-    gcc \
-    g++ \
-    cmake \
-    make \
-    openssl \
-    libssl-dev \
-    libjsoncpp-dev \
-    xvfb \
-    uuid-dev \
-    zlib1g-dev \
-    wget \
-    jq \
-    python3-pip \
-    unzip \
-    gnupg \
-    && rm -rf /var/lib/apt/lists/*
+ curl \
+ git \
+ gcc \
+ g++ \
+ cmake \
+ make \
+ openssl \
+ libssl-dev \
+ libjsoncpp-dev \
+ xvfb \
+ uuid-dev \
+ zlib1g-dev \
+ wget \
+ jq \
+ python3-pip \
+ wget \
+ unzip\
+ && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+ && echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+ && apt-get update \
+ && apt-get install -y google-chrome-stable \
+ && rm -rf /var/lib/apt/lists/*
 
-# 安装特定版本的Chrome和对应的ChromeDriver
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | awk -F. '{print $1}') \
-    && wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/$CHROME_VERSION.0.6261.0/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip \
-    && unzip /tmp/chromedriver.zip -d /tmp \
-    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
-    && chmod +x /usr/local/bin/chromedriver \
-    && rm -rf /tmp/chromedriver* \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+安装 ChromeDriver
+RUN CHROME_DRIVER_VERSION=curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE && \
+ wget -q -O /tmp/chromedriver.zip http://chromedriver.storage.googleapis.com/$CHROME_DRIVER_VERSION/chromedriver_linux64.zip && \
+ unzip /tmp/chromedriver.zip -d /usr/bin && \
+ rm /tmp/chromedriver.zip && \
+ chmod +x /usr/bin/chromedriver
 
 
 # 安装Python依赖
