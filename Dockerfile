@@ -8,6 +8,7 @@ ENV LANG=C.UTF-8
 
 # 安装基本工具和编译环境
 RUN apt-get update && apt-get install -y \
+    curl \
     git \
     gcc \
     g++ \
@@ -22,8 +23,19 @@ RUN apt-get update && apt-get install -y \
     wget \
     jq \
     python3-pip \
-    docker-compose \
+    wget \
+    unzip\
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
+# 安装 ChromeDriver
+RUN CHROME_DRIVER_VERSION=`curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE` && \
+    wget -q -O /tmp/chromedriver.zip http://chromedriver.storage.googleapis.com/$CHROME_DRIVER_VERSION/chromedriver_linux64.zip && \
+    unzip /tmp/chromedriver.zip -d /usr/bin && \
+    rm /tmp/chromedriver.zip && \
+    chmod +x /usr/bin/chromedriver
 
 # 安装Python依赖
 COPY requirements.txt .
@@ -57,7 +69,7 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginremote.py &\n\
+cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
@@ -69,6 +81,10 @@ WORKDIR /usr/src/app/build
 # 构建项目
 RUN cmake ..
 RUN make -j $(nproc)
+
+# 设置环境变量
+ENV SELENIUM_HOST=localhost
+ENV SELENIUM_PORT=4444
 
 # 暴露端口
 EXPOSE 5555 5556
