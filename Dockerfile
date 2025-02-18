@@ -1,4 +1,5 @@
 FROM selenium/standalone-chrome:latest
+USER root
 
 # 设置时区和语言环境
 ENV TZ=Asia/Shanghai
