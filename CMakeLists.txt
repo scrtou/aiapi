@@ -30,12 +30,14 @@ add_executable(${PROJECT_NAME} main.cc )
 # and comment out the following lines
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(PostgreSQL REQUIRED)
 # 获取 Drogon target 的属性
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(${PROJECT_NAME} PRIVATE PostgreSQL::PostgreSQL)
 
 
 # ##############################################################################

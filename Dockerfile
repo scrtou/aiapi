@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y \
  python3-venv \
  wget \
  unzip\
+ postgresql postgresql-server-dev-all libpq-dev \
  software-properties-common \
  && rm -rf /var/lib/apt/lists/*
 
@@ -42,7 +43,7 @@ WORKDIR /usr/src/drogon
 RUN git submodule update --init
 RUN mkdir build
 WORKDIR /usr/src/drogon/build
-RUN cmake ..
+RUN cmake .. -DBUILD_POSTGRESQL=ON
 RUN make -j $(nproc)
 RUN make install
 RUN ldconfig

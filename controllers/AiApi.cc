@@ -1,9 +1,16 @@
 #include "AiApi.h"
 #include <drogon/HttpResponse.h>
 #include <json/json.h>
+#include<drogon/drogon.h>
 #include <unistd.h>
 #include <apiManager/ApiManager.h>
+#include <accountManager/accountManager.h>
 #include <sessionManager/Session.h>
+#include <drogon/orm/Exception.h>
+#include <drogon/orm/DbClient.h>
+using namespace drogon;
+using namespace drogon::orm;
+
 // Add definition of your processing function here
 void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
@@ -231,4 +238,53 @@ void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const 
     Json::Value response= ApiManager::getInstance().getApiByApiName("chaynsapi")->getModels();
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
+}
+void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "accountAdd";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    auto dbClient = app().getDbClient("aichat");
+    LOG_INFO << "addAccountDatebase start";
+    Json::Value response;
+    for(auto &item:*jsonPtr)
+    {   Accountinfo_st accountinfo;
+        accountinfo.apiName=item["apiname"].asString();
+        accountinfo.userName=item["username"].asString();
+        accountinfo.passwd=item["password"].asString();
+        accountinfo.authToken=item["authtoken"].empty()?"":item["authtoken"].asString();
+        accountinfo.userTobitId=item["usertobitid"].empty()?0:item["usertobitid"].asInt();
+        accountinfo.personId=item["personid"].empty()?"":item["personid"].asString();
+        accountinfo.useCount=item["usecount"].empty()?0:item["usecount"].asInt();
+        accountinfo.tokenStatus=item["tokenstatus"].empty()?false:item["tokenstatus"].asBool();
+        accountinfo.accountStatus=item["accountstatus"].empty()?false:item["accountstatus"].asBool();
+        Json::Value responseitem;
+        responseitem["apiname"]=accountinfo.apiName;
+        responseitem["username"]=accountinfo.userName;
+        if(AccountManager::getInstance().addAccount(accountinfo))
+        {
+            responseitem["status"]="success";
+            AccountManager::getInstance().addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+        }
+        else
+        {
+            responseitem["status"]="failed";
+        }
+        response.append(responseitem);
+
+    }
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
+
+    LOG_INFO << "addAccountDatebase end";
+    AccountManager::getInstance().checkUpdateAccountToken();
 }

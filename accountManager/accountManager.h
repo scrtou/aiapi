@@ -19,7 +19,8 @@ struct Accountinfo_st
     bool accountStatus=false;
     int userTobitId;
     string personId;
-    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId)
+    Accountinfo_st(){}
+    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId)
     {
         this->apiName = apiName;
         this->userName = userName;
@@ -71,7 +72,8 @@ class AccountManager
     void init();
     void loadAccount();
     void saveAccount();
-    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId);
+
+    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId);
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account);
     void checkAccount();
     void checkToken();
@@ -83,6 +85,16 @@ class AccountManager
     void refreshAccountQueue(string apiName);
     void printAccountPoolMap();
     void checkUpdateTokenthread();
+    void checkUpdateAccountToken();
     bool isServerReachable(const string& host, int maxRetries = 300);
+    void loadAccountFromDatebase();
+    void saveAccountToDatebase();
+    void loadAccountFromConfig();
+    bool addAccount(struct Accountinfo_st accountinfo);
+    bool updateAccount(struct Accountinfo_st accountinfo);
+    bool deleteAccount(struct Accountinfo_st accountinfo);
+    list<Accountinfo_st> getAccountDBList();
+    list<shared_ptr<Accountinfo_st>> getAccountList();
+    bool isTableExist(string tableName);
 };
 #endif

@@ -1,7 +1,10 @@
 #include "accountManager.h"
 #include<drogon/drogon.h>
 #include <ApiManager.h>
+#include <drogon/orm/Exception.h>
+#include <drogon/orm/DbClient.h>
 using namespace drogon;
+using namespace drogon::orm;
 AccountManager::AccountManager()
 {
 
@@ -19,21 +22,13 @@ void AccountManager::loadAccount()
 {
     LOG_INFO << "loadAccount start";
     //load account from config.json
-    auto customConfig = app().getCustomConfig();
-    auto accountList = customConfig["account"];
-
-    //and add to accountPoolMap
-    for(auto& account : accountList)
+    if(isTableExist("account"))
     {
-        auto apiName = account["apiname"].asString();
-        auto userName = account["username"].asString();
-        auto passwd = account["passwd"].asString();
-        auto authToken =account["authToken"].asString();
-        auto useCount = 0;
-        auto tokenStatus = false;
-        auto accountStatus = false;
-        auto userTobitId = 0;
-        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId);
+        loadAccountFromDatebase();
+    }
+    else
+    {
+        loadAccountFromConfig();
     }
     LOG_INFO << "accountList size: " << accountList.size();
     LOG_INFO << "accountPoolMap size: " << accountPoolMap.size();
@@ -45,9 +40,31 @@ void AccountManager::loadAccount()
     LOG_INFO << "loadAccount end";
     //printAccountPoolMap();
 }
-void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId)
+void AccountManager::loadAccountFromConfig()
 {
-    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId);
+    LOG_INFO << "loadAccountFromConfig start";
+     auto customConfig = app().getCustomConfig();
+    auto accountList = customConfig["account"];
+
+    //and add to accountPoolMap
+    for(auto& account : accountList)
+    {
+        auto apiName =account["apiname"].empty()?"":account["apiname"].asString();
+        auto userName = account["username"].empty()?"":account["username"].asString();
+        auto passwd = account["passwd"].empty()?"":account["passwd"].asString();
+        auto authToken =account["authToken"].empty()?"":account["authToken"].asString();
+        auto useCount = account["usecount"].empty()?0:account["usecount"].asInt();
+        auto tokenStatus = account["tokenStatus"].empty()?false:account["tokenStatus"].asBool();
+        auto accountStatus = account["accountStatus"].empty()?false:account["accountStatus"].asBool();
+        auto userTobitId = account["usertobitid"].empty()?0:account["usertobitid"].asInt();
+        auto personId = account["personId"].empty()?"":account["personId"].asString();
+        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId);
+    }
+    LOG_INFO << "loadAccountFromConfig end";
+}
+void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId)
+{
+    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId);
     accountList.push_back(account);
     if(accountPoolMap[apiName] == nullptr)
     {
@@ -159,7 +176,7 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
 void AccountManager::checkToken()
 {
     LOG_INFO << "checkToken start";
-    LOG_INFO << "checkToken accountList size: " << checkTokenMap.size();
+    LOG_INFO << "checkToken function map size: " << checkTokenMap.size();
     for(auto accountinfo:accountList)
     {   
         LOG_INFO << "checkToken accountinfo: " << accountinfo->apiName << " " << accountinfo->userName;
@@ -187,6 +204,7 @@ void AccountManager::updateToken()
            if(updateTokenMap[accountinfo->apiName])
            {
                 (this->*updateTokenMap[accountinfo->apiName])(accountinfo);
+                updateAccount(*(accountinfo.get()));
            }
            else
            {
@@ -223,8 +241,13 @@ void AccountManager::checkUpdateTokenthread()
             updateToken();
             this_thread::sleep_for(chrono::hours(1));
         }
- 
 }
+void AccountManager::checkUpdateAccountToken()  
+{
+    checkToken();
+    updateToken();
+}  
+
 // 添加检测服务可用性的函数
 bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
     auto checkClient = HttpClient::newHttpClient(host);
@@ -249,4 +272,114 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
     }
     
     return false;
+}
+void AccountManager::loadAccountFromDatebase()
+{
+    LOG_INFO << "loadAccountFromDatebase start";
+    auto accountDBList = getAccountDBList();
+    for(auto& accountinfo:accountDBList)
+    {
+        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+    }
+    LOG_INFO << "loadDatebase end";
+}
+void AccountManager::saveAccountToDatebase()
+{
+    LOG_INFO << "saveAccountToDatebase start";
+    for(auto& accountinfo:accountList)
+    {
+        updateAccount(*(accountinfo.get()));
+    }
+    LOG_INFO << "saveAccountToDatebase end";
+}
+
+bool AccountManager::addAccount(struct Accountinfo_st accountinfo)
+{
+    auto dbClient = app().getDbClient("aichat");
+    std::string selectsql = "select * from account where apiname=$1 and username=$2";
+    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)";
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
+    auto result = dbClient->execSqlSync(selectsql,accountinfo.apiName,accountinfo.userName);
+    if(result.size()!=0)
+    {
+        LOG_INFO << "账号 " << accountinfo.userName << " 已存在";
+        return false;
+    }
+    else
+    {
+         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+        if(result1.affectedRows()!=0)
+        {
+            LOG_INFO << "账号 " << accountinfo.userName << " 添加成功";
+            return true;
+        }
+        else
+        {
+            LOG_ERROR << "账号 " << accountinfo.userName << " 添加失败";
+            return false;
+        }
+    }
+}
+bool AccountManager::updateAccount(struct Accountinfo_st accountinfo)
+{
+    auto dbClient = app().getDbClient("aichat");
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
+    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.apiName,accountinfo.userName);
+    if(result.affectedRows()!=0)
+    {
+        LOG_INFO << "账号 " << accountinfo.userName << " 更新成功";
+        return true;
+    }
+    else
+    {
+        LOG_ERROR << "账号 " << accountinfo.userName << " 更新失败";
+        return false;
+    }
+    
+}
+bool AccountManager::deleteAccount(struct Accountinfo_st accountinfo)
+{
+    auto dbClient = app().getDbClient("aichat");
+    std::string deletesql = "delete from account where apiname=$1 and username=$2";
+    auto result = dbClient->execSqlSync(deletesql,accountinfo.apiName,accountinfo.userName);
+    if(result.affectedRows()!=0)
+    {
+        LOG_INFO << "账号 " << accountinfo.userName << " 删除成功";
+        return true;
+    }
+    else
+    {
+        LOG_ERROR << "账号 " << accountinfo.userName << " 删除失败";
+        return false;
+    }
+}
+list<shared_ptr<Accountinfo_st>> AccountManager::getAccountList()
+{
+    return accountList;
+}
+list<Accountinfo_st> AccountManager::getAccountDBList()
+{
+    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid from account";
+    auto dbClient = app().getDbClient("aichat");
+    auto result = dbClient->execSqlSync(selectsql);
+    list<Accountinfo_st> accountDBList;
+    for(auto& item:result)
+    {
+        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>());
+        accountDBList.push_back(accountinfo);
+    }
+    return accountDBList;
+}
+bool AccountManager::isTableExist(string tableName)
+{
+    auto dbClient = app().getDbClient("aichat");
+    auto result = dbClient->execSqlSync("select * from information_schema.tables where table_name='" + tableName + "'");
+    if(result.size()!=0)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
