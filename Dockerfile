@@ -79,7 +79,7 @@ cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
     chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 暴露端口
-EXPOSE 5555 5556
+EXPOSE 5555
 
 # 设置入口点和命令
 ENTRYPOINT ["/usr/src/app/docker-entrypoint.sh"]
