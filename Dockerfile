@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y \
     postgresql \
     postgresql-server-dev-all \
     libpq-dev \
+    libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
 # 强制系统级安装Python包
@@ -45,7 +46,7 @@ RUN git clone https://github.com/drogonframework/drogon && \
     git submodule update --init && \
     mkdir build && \
     cd build && \
-    cmake .. -DBUILD_POSTGRESQL=ON && \
+    cmake .. -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=ON && \
     make -j $(nproc) && \
     make install && \
     ldconfig && \

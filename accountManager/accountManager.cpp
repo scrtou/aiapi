@@ -5,6 +5,38 @@
 #include <drogon/orm/DbClient.h>
 using namespace drogon;
 using namespace drogon::orm;
+//pg create table 
+std::string createTablePgSql = R"(
+    CREATE TABLE IF NOT EXISTS account (
+        id SERIAL PRIMARY KEY,
+        updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        apiname VARCHAR(255),
+        username VARCHAR(255),
+        password VARCHAR(255),
+        authtoken TEXT,
+        usecount INTEGER,
+        tokenstatus BOOLEAN,
+        accountstatus BOOLEAN,
+        usertobitid INTEGER,
+        personid VARCHAR(255)
+    );
+)";
+std::string createTableSqlMysql=R"(
+    CREATE TABLE IF NOT EXISTS account ( 
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, 
+    updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    apiname VARCHAR(255),
+    username VARCHAR(255),
+    password VARCHAR(255),
+    authtoken TEXT,
+    usecount INT,
+    tokenstatus TINYINT(1),
+    accountstatus TINYINT(1),
+    usertobitid INT,
+    personid VARCHAR(255)
+) ENGINE=InnoDB;)";
+
+
 AccountManager::AccountManager()
 {
 
@@ -296,7 +328,7 @@ void AccountManager::saveAccountToDatebase()
 
 bool AccountManager::addAccount(struct Accountinfo_st accountinfo)
 {
-    auto dbClient = app().getDbClient("aichat");
+    auto dbClient = app().getDbClient("aichatpg");
     std::string selectsql = "select * from account where apiname=$1 and username=$2";
     std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)";
     std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
@@ -323,7 +355,7 @@ bool AccountManager::addAccount(struct Accountinfo_st accountinfo)
 }
 bool AccountManager::updateAccount(struct Accountinfo_st accountinfo)
 {
-    auto dbClient = app().getDbClient("aichat");
+    auto dbClient = app().getDbClient("aichatpg");
     std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
     auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.apiName,accountinfo.userName);
     if(result.affectedRows()!=0)
@@ -340,7 +372,7 @@ bool AccountManager::updateAccount(struct Accountinfo_st accountinfo)
 }
 bool AccountManager::deleteAccount(struct Accountinfo_st accountinfo)
 {
-    auto dbClient = app().getDbClient("aichat");
+    auto dbClient = app().getDbClient("aichatpg");
     std::string deletesql = "delete from account where apiname=$1 and username=$2";
     auto result = dbClient->execSqlSync(deletesql,accountinfo.apiName,accountinfo.userName);
     if(result.affectedRows()!=0)
@@ -361,7 +393,7 @@ list<shared_ptr<Accountinfo_st>> AccountManager::getAccountList()
 list<Accountinfo_st> AccountManager::getAccountDBList()
 {
     std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid from account";
-    auto dbClient = app().getDbClient("aichat");
+    auto dbClient = app().getDbClient("aichatpg");
     auto result = dbClient->execSqlSync(selectsql);
     list<Accountinfo_st> accountDBList;
     for(auto& item:result)
@@ -373,7 +405,7 @@ list<Accountinfo_st> AccountManager::getAccountDBList()
 }
 bool AccountManager::isTableExist(string tableName)
 {
-    auto dbClient = app().getDbClient("aichat");
+    auto dbClient = app().getDbClient("aichatpg");
     auto result = dbClient->execSqlSync("select * from information_schema.tables where table_name='" + tableName + "'");
     if(result.size()!=0)
     {
@@ -386,11 +418,10 @@ bool AccountManager::isTableExist(string tableName)
 }
 void AccountManager::createTable(string tableName)
 {
-    auto dbClient = app().getDbClient("aichat");
-    std::string sql = "create table if not exists " + tableName + " (id int auto_increment primary key,updatetime datetime default current_timestamp,apiname varchar(255),username varchar(255),password varchar(255),authtoken text,usecount int,tokenstatus boolean,accountstatus boolean,usertobitid int,personid varchar(255))";
+    auto dbClient = app().getDbClient("aichatpg");
     try 
     {
-        dbClient->execSqlSync(sql);
+        dbClient->execSqlSync(createTablePgSql);
     }
     catch(const std::exception& e)
     {
