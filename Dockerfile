@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y \
     libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
-
+USER seluser
 # 强制系统级安装Python包
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
