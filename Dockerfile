@@ -35,10 +35,21 @@ RUN apt-get update && apt-get install -y \
     libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
-USER seluser
-# 强制系统级安装Python包
+
+# 以root用户安装Python包
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+
+# 创建并设置必要的目录
+RUN mkdir -p /home/seluser/.wdm/drivers && \
+    mkdir -p /home/seluser/.local/lib && \
+    chown -R seluser:seluser /home/seluser/.wdm && \
+    chown -R seluser:seluser /home/seluser/.local && \
+    chmod -R 755 /home/seluser/.wdm && \
+    chmod -R 755 /home/seluser/.local
+
+# 切换到seluser
+USER seluser
 
 # 安装Drogon（优化构建步骤）
 WORKDIR /usr/src
@@ -56,15 +67,11 @@ RUN git clone https://github.com/drogonframework/drogon && \
 
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
-COPY . .
+COPY --chown=seluser:seluser . .
 
 # 创建必要的目录并设置权限
 RUN mkdir -p build/uploads/tmp uploads/tmp && \
-    chmod -R 777 build/uploads/tmp uploads/tmp && \
-    # 创建并设置 webdriver 目录权限
-    mkdir -p /home/seluser/.wdm/drivers && \
-    chown -R root:root /home/seluser/.wdm/drivers && \
-    chmod -R 777 /home/seluser/.wdm/drivers
+    chmod -R 777 build/uploads/tmp uploads/tmp
 
 # 构建项目
 WORKDIR /usr/src/app/build
