@@ -34,7 +34,7 @@ std::string createTableSqlMysql=R"(
     accountstatus TINYINT(1),
     usertobitid INT,
     personid VARCHAR(255)
-) ENGINE=InnoDB;";
+) ENGINE=InnoDB;)";
 
 
 AccountManager::AccountManager()
