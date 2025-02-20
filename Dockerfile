@@ -62,9 +62,9 @@ COPY . .
 RUN mkdir -p build/uploads/tmp uploads/tmp && \
     chmod -R 777 build/uploads/tmp uploads/tmp && \
     # 创建并设置 webdriver 目录权限
-    mkdir -p /home/seluser/.wdm && \
-    chown -R seluser:seluser /home/seluser/.wdm && \
-    chmod -R 755 /home/seluser/.wdm
+    mkdir -p /home/seluser/.wdm/drivers && \
+    chown -R seluser:seluser /home/seluser/.wdm/drivers && \
+    chmod -R 777 /home/seluser/.wdm/drivers
 
 # 构建项目
 WORKDIR /usr/src/app/build
