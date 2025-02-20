@@ -13,7 +13,7 @@ class AiApi : public drogon::HttpController<AiApi>
     // ADD_METHOD_TO(AiApi::your_method_name, "/absolute/path/{1}/{2}/list", Get); // path is /absolute/path/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::chaynsapichat, "/chaynsapi/v1/chat/completions", Post); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::chaynsapimodels, "/chaynsapi/v1/models", Get); // path is /AiApi/{arg1}/{arg2}/list
-    ADD_METHOD_TO(AiApi::accountAdd, "/account/add", Post); // path is /AiApi/{arg1}/{arg2}/list
+    ADD_METHOD_TO(AiApi::accountAdd, "/aichat/account/add", Post); // path is /AiApi/{arg1}/{arg2}/list
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
