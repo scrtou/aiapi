@@ -387,9 +387,10 @@ bool AccountManager::isTableExist(string tableName)
 void AccountManager::createTable(string tableName)
 {
     auto dbClient = app().getDbClient("aichat");
+    std::string sql = "create table if not exists " + tableName + " (id int auto_increment primary key,updatetime datetime default current_timestamp,apiname varchar(255),username varchar(255),password varchar(255),authtoken text,usecount int,tokenstatus boolean,accountstatus boolean,usertobitid int,personid varchar(255))";
     try 
     {
-        dbClient->execSqlSync("create table if not exists " + tableName + " (apiname varchar(255),username varchar(255),password varchar(255),authtoken varchar(255),usecount int,tokenstatus boolean,accountstatus boolean,usertobitid int,personid varchar(255))");
+        dbClient->execSqlSync(sql);
     }
     catch(const std::exception& e)
     {
