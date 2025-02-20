@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
+
 # 强制系统级安装Python包
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
@@ -59,7 +60,11 @@ COPY . .
 
 # 创建必要的目录并设置权限
 RUN mkdir -p build/uploads/tmp uploads/tmp && \
-    chmod -R 777 build/uploads/tmp uploads/tmp
+    chmod -R 777 build/uploads/tmp uploads/tmp && \
+    # 创建并设置 webdriver 目录权限
+    mkdir -p /home/seluser/.wdm && \
+    chown -R seluser:seluser /home/seluser/.wdm && \
+    chmod -R 755 /home/seluser/.wdm
 
 # 构建项目
 WORKDIR /usr/src/app/build
@@ -75,7 +80,11 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
+# 清理可能存在的Chrome用户数据目录\n\
+rm -rf /tmp/.com.google.Chrome* /tmp/.org.chromium.Chromium* /tmp/chrome-* \n\
+\n\
+cd /usr/src/app/tools/accountlogin && \
+CHROME_USER_DATA_DIR=/tmp/chrome-data-$(date +%s) python3 loginlocal.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
     chmod +x /usr/src/app/docker-entrypoint.sh
 
