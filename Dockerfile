@@ -40,18 +40,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# 创建并设置必要的目录
-RUN mkdir -p /home/seluser/.wdm/drivers && \
-    mkdir -p /home/seluser/.local/lib && \
-    chown -R seluser:seluser /home/seluser/.wdm && \
-    chown -R seluser:seluser /home/seluser/.local && \
-    chmod -R 755 /home/seluser/.wdm && \
-    chmod -R 755 /home/seluser/.local
-
-# 切换到seluser
-USER seluser
-
-# 安装Drogon（优化构建步骤）
+# 安装Drogon（以root用户安装）
 WORKDIR /usr/src
 RUN git clone https://github.com/drogonframework/drogon && \
     cd drogon && \
@@ -65,13 +54,28 @@ RUN git clone https://github.com/drogonframework/drogon && \
     cd / && \
     rm -rf /usr/src/drogon
 
+# 创建并设置必要的目录
+RUN mkdir -p /home/seluser/.wdm/drivers && \
+    mkdir -p /home/seluser/.local/lib && \
+    chown -R seluser:seluser /home/seluser/.wdm && \
+    chown -R seluser:seluser /home/seluser/.local && \
+    chmod -R 755 /home/seluser/.wdm && \
+    chmod -R 755 /home/seluser/.local
+
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
 COPY --chown=seluser:seluser . .
 
+# 设置项目目录权限
+RUN chown -R seluser:seluser /usr/src/app && \
+    chmod -R 755 /usr/src/app
+
 # 创建必要的目录并设置权限
 RUN mkdir -p build/uploads/tmp uploads/tmp && \
     chmod -R 777 build/uploads/tmp uploads/tmp
+
+# 切换到seluser
+USER seluser
 
 # 构建项目
 WORKDIR /usr/src/app/build
