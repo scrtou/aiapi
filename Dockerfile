@@ -54,23 +54,25 @@ RUN git clone https://github.com/drogonframework/drogon && \
     cd / && \
     rm -rf /usr/src/drogon
 
-# 创建并设置必要的目录
-RUN mkdir -p /home/seluser/.wdm/drivers && \
-    mkdir -p /home/seluser/.local/lib && \
-    chown -R seluser:seluser /home/seluser/.wdm && \
-    chown -R seluser:seluser /home/seluser/.local && \
-    chmod -R 755 /home/seluser/.wdm && \
-    chmod -R 755 /home/seluser/.local
-
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
 COPY . .
 
-# 创建并设置构建目录
-RUN mkdir -p build && \
-    mkdir -p build/uploads/tmp uploads/tmp && \
+# 创建必要的目录并设置权限
+RUN mkdir -p /usr/src/app/uploads/tmp && \
+    mkdir -p /usr/src/app/build/uploads/tmp && \
+    mkdir -p /home/seluser/.wdm/drivers && \
+    mkdir -p /home/seluser/.local/lib && \
+    mkdir -p /home/seluser/chrome-data && \
     chown -R seluser:seluser /usr/src/app && \
-    chmod -R 755 /usr/src/app
+    chown -R seluser:seluser /home/seluser/.wdm && \
+    chown -R seluser:seluser /home/seluser/.local && \
+    chown -R seluser:seluser /home/seluser/chrome-data && \
+    chmod -R 777 /usr/src/app/uploads && \
+    chmod -R 777 /usr/src/app/build/uploads && \
+    chmod -R 777 /home/seluser/.wdm && \
+    chmod -R 777 /home/seluser/.local && \
+    chmod -R 777 /home/seluser/chrome-data
 
 # 切换到seluser
 USER seluser
@@ -89,11 +91,18 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
 fi\n\
 \n\
-# 清理可能存在的Chrome用户数据目录\n\
-rm -rf /tmp/.com.google.Chrome* /tmp/.org.chromium.Chromium* /tmp/chrome-* \n\
+# 确保目录存在并有正确的权限\n\
+mkdir -p /usr/src/app/uploads/tmp\n\
+mkdir -p /usr/src/app/build/uploads/tmp\n\
+chmod -R 777 /usr/src/app/uploads\n\
+chmod -R 777 /usr/src/app/build/uploads\n\
+\n\
+# 清理并创建新的Chrome用户数据目录\n\
+rm -rf /home/seluser/chrome-data/*\n\
+mkdir -p /home/seluser/chrome-data\n\
 \n\
 cd /usr/src/app/tools/accountlogin && \
-CHROME_USER_DATA_DIR=/tmp/chrome-data-$(date +%s) python3 loginlocal.py &\n\
+CHROME_USER_DATA_DIR=/home/seluser/chrome-data python3 loginlocal.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
     chmod +x /usr/src/app/docker-entrypoint.sh
 
