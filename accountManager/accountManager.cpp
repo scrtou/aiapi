@@ -5,6 +5,36 @@
 #include <drogon/orm/DbClient.h>
 using namespace drogon;
 using namespace drogon::orm;
+//pg create table 
+std::string createTablePgSql="CREATE TABLE IF NOT EXISTS account (
+    id SERIAL PRIMARY KEY,
+    updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    apiname VARCHAR(255),
+    username VARCHAR(255),
+    password VARCHAR(255),
+    authtoken TEXT,
+    usecount INTEGER,
+    tokenstatus BOOLEAN,
+    accountstatus BOOLEAN,
+    usertobitid INTEGER,
+    personid VARCHAR(255)
+);
+";
+std::string createTableSqlMysql="CREATE TABLE IF NOT EXISTS account (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    apiname VARCHAR(255),
+    username VARCHAR(255),
+    password VARCHAR(255),
+    authtoken TEXT,
+    usecount INT,
+    tokenstatus TINYINT(1),
+    accountstatus TINYINT(1),
+    usertobitid INT,
+    personid VARCHAR(255)
+) ENGINE=InnoDB;";
+
+
 AccountManager::AccountManager()
 {
 
@@ -387,10 +417,9 @@ bool AccountManager::isTableExist(string tableName)
 void AccountManager::createTable(string tableName)
 {
     auto dbClient = app().getDbClient("aichatpg");
-    std::string sql = "create table if not exists " + tableName + " (id int auto_increment primary key,updatetime datetime default current_timestamp,apiname varchar(255),username varchar(255),password varchar(255),authtoken text,usecount int,tokenstatus boolean,accountstatus boolean,usertobitid int,personid varchar(255))";
     try 
     {
-        dbClient->execSqlSync(sql);
+        dbClient->execSqlSync(createTablePgSql);
     }
     catch(const std::exception& e)
     {
