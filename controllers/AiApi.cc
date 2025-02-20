@@ -253,7 +253,6 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         return;
     }
 
-    auto dbClient = app().getDbClient("aichat");
     LOG_INFO << "addAccountDatebase start";
     Json::Value response;
     for(auto &item:*jsonPtr)
@@ -287,4 +286,62 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
 
     LOG_INFO << "addAccountDatebase end";
     AccountManager::getInstance().checkUpdateAccountToken();
+}
+void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "accountInfo";
+    auto accountList=AccountManager::getInstance().getAccountList();
+    Json::Value response;
+    for(auto &account:accountList)
+    {
+        Json::Value accountitem;
+        accountitem["apiname"]=account->apiName;
+        accountitem["username"]=account->userName;
+        accountitem["password"]=account->passwd;
+        accountitem["authtoken"]=account->authToken;
+        accountitem["usecount"]=account->useCount;
+        accountitem["tokenstatus"]=account->tokenStatus;
+        accountitem["accountstatus"]=account->accountStatus;
+        accountitem["usertobitid"]=account->userTobitId;
+        accountitem["personid"]=account->personId;
+        response.append(accountitem);
+    }
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
+}
+void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "accountDelete";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+ 
+    Json::Value response;
+    for(auto &item:*jsonPtr)
+    {
+        Accountinfo_st accountinfo;
+        Json::Value responseitem;
+        accountinfo.apiName=item["apiname"].asString();
+        accountinfo.userName=item["username"].asString();
+        responseitem["apiname"]=accountinfo.apiName;
+        responseitem["username"]=accountinfo.userName;
+        if(AccountManager::getInstance().deleteAccount(accountinfo))
+        {
+            responseitem["status"]="success";
+        }
+        else
+        {
+            responseitem["status"]="failed";
+        }
+        response.append(responseitem);
+    }
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
 }
