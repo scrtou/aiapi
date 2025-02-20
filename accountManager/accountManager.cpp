@@ -239,7 +239,6 @@ void AccountManager::updateToken()
                 (this->*updateTokenMap[accountinfo->apiName])(accountinfo);
                 updateAccount(*(accountinfo.get()));
                 refreshAccountQueue(accountinfo->apiName);
-                updateAccount(*(accountinfo.get()));
            }
            else
            {
