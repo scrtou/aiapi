@@ -96,5 +96,6 @@ class AccountManager
     list<Accountinfo_st> getAccountDBList();
     list<shared_ptr<Accountinfo_st>> getAccountList();
     bool isTableExist(string tableName);
+    void createTable(string tableName);
 };
 #endif

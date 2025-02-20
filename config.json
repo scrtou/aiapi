@@ -45,15 +45,15 @@
             //filename: Sqlite3 db file name
             //"filename":"",
             //host: Server address,localhost by default
-            "host": "db.rzauvhbzbgawbsbhtxck.supabase.co",
+            "host": "pg-f76a4d9-yxmysql.l.aivencloud.com",
             //port: Server port, 5432 by default
-            "port": 5432,
+            "port": 19894,
             //dbname: Database name
-            "dbname": "postgres",
+            "dbname": "aichat",
             //user: 'postgres' by default
-            "user": "postgres",
+            "user": "avnadmin",
             //passwd: '' by default
-            "passwd": "Tx4MEoWHm5fm3r",
+            "passwd": "AVNS_5xiThwpDvKohSb2Wkeb",
             //is_fast: false by default, if it is true, the client is faster but user can't call
             //any synchronous interface of it.
             "is_fast": false,

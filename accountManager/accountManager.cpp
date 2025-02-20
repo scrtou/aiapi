@@ -14,6 +14,7 @@ AccountManager::~AccountManager()
 }
 void AccountManager::init()
 {
+    createTable("account");
     loadAccount();
     checkUpdateTokenthread();
 }   
@@ -382,4 +383,17 @@ bool AccountManager::isTableExist(string tableName)
     {
         return false;
     }
+}
+void AccountManager::createTable(string tableName)
+{
+    auto dbClient = app().getDbClient("aichat");
+    try 
+    {
+        dbClient->execSqlSync("create table if not exists " + tableName + " (apiname varchar(255),username varchar(255),password varchar(255),authtoken varchar(255),usecount int,tokenstatus boolean,accountstatus boolean,usertobitid int,personid varchar(255))");
+    }
+    catch(const std::exception& e)
+    {
+        LOG_ERROR << "createTable error: " << e.what();
+    }
+    
 }

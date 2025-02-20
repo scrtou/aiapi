@@ -2,59 +2,69 @@ FROM selenium/standalone-chrome:latest
 USER root
 
 # 设置时区和语言环境
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Shanghai \
+    LANG=C.UTF-8 \
+    SELENIUM_PORT=4444
+
+# 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-ENV LANG=C.UTF-8
 
-# 安装基本工具和Chrome
+# 安装依赖，合并RUN命令减少层级
 RUN apt-get update && apt-get install -y \
- curl \
- git \
- gcc \
- g++ \
- cmake \
- make \
- openssl \
- libssl-dev \
- libjsoncpp-dev \
- xvfb \
- uuid-dev \
- zlib1g-dev \
- wget \
- jq \
- python3-full \
- python3-pip \
- python3-venv \
- wget \
- unzip\
- postgresql postgresql-server-dev-all libpq-dev \
- software-properties-common \
- && rm -rf /var/lib/apt/lists/*
-
-
+    curl \
+    git \
+    gcc \
+    g++ \
+    cmake \
+    make \
+    openssl \
+    libssl-dev \
+    libjsoncpp-dev \
+    xvfb \
+    uuid-dev \
+    zlib1g-dev \
+    wget \
+    jq \
+    python3-full \
+    python3-pip \
+    python3-venv \
+    unzip \
+    postgresql \
+    postgresql-server-dev-all \
+    libpq-dev \
+    software-properties-common \
+    && rm -rf /var/lib/apt/lists/* 
 # 强制系统级安装Python包
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# 安装 Drogon
+# 安装Drogon（优化构建步骤）
 WORKDIR /usr/src
-RUN git clone https://github.com/drogonframework/drogon
-WORKDIR /usr/src/drogon
-RUN git submodule update --init
-RUN mkdir build
-WORKDIR /usr/src/drogon/build
-RUN cmake .. -DBUILD_POSTGRESQL=ON
-RUN make -j $(nproc)
-RUN make install
-RUN ldconfig
+RUN git clone https://github.com/drogonframework/drogon && \
+    cd drogon && \
+    git submodule update --init && \
+    mkdir build && \
+    cd build && \
+    cmake .. -DBUILD_POSTGRESQL=ON && \
+    make -j $(nproc) && \
+    make install && \
+    ldconfig && \
+    cd / && \
+    rm -rf /usr/src/drogon
 
-# 设置工作目录
-WORKDIR /usr/src/app
-
-# 复制项目文件
+# 设置工作目录和复制项目文件
+WORKDIR /usr/src/app/
 COPY . .
 
-# 创建启动脚本
+# 创建必要的目录并设置权限
+RUN mkdir -p build/uploads/tmp uploads/tmp && \
+    chmod -R 777 build/uploads/tmp uploads/tmp
+
+# 构建项目
+WORKDIR /usr/src/app/build
+RUN cmake .. && make -j $(nproc)
+
+# 创建并设置启动脚本
 RUN echo '#!/bin/bash\n\
 if [ ! -z "$CONFIG_JSON" ]; then\n\
     echo "$CONFIG_JSON" > /usr/src/app/config.json\n\
@@ -65,26 +75,12 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
 fi\n\
 \n\
 cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
-cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
-
-RUN chmod +x /usr/src/app/docker-entrypoint.sh
-
-# 创建构建目录
-RUN mkdir -p build
-WORKDIR /usr/src/app/build
-
-# 构建项目
-RUN cmake ..
-RUN make -j $(nproc)
-
-# 设置环境变量
-ENV SELENIUM_PORT=4444
+cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
+    chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 暴露端口
 EXPOSE 5555 5556
 
-# 设置入口点
+# 设置入口点和命令
 ENTRYPOINT ["/usr/src/app/docker-entrypoint.sh"]
-
-# 运行应用
 CMD ["./aiapi"]
