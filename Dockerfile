@@ -64,15 +64,13 @@ RUN mkdir -p /home/seluser/.wdm/drivers && \
 
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
-COPY --chown=seluser:seluser . .
+COPY . .
 
-# 设置项目目录权限
-RUN chown -R seluser:seluser /usr/src/app && \
+# 创建并设置构建目录
+RUN mkdir -p build && \
+    mkdir -p build/uploads/tmp uploads/tmp && \
+    chown -R seluser:seluser /usr/src/app && \
     chmod -R 755 /usr/src/app
-
-# 创建必要的目录并设置权限
-RUN mkdir -p build/uploads/tmp uploads/tmp && \
-    chmod -R 777 build/uploads/tmp uploads/tmp
 
 # 切换到seluser
 USER seluser
