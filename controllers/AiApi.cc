@@ -285,6 +285,7 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
     callback(resp);
 
     LOG_INFO << "addAccountDatebase end";
+    
     AccountManager::getInstance().checkUpdateAccountToken();
 }
 void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
