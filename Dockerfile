@@ -101,7 +101,6 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh

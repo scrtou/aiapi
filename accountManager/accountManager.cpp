@@ -5,6 +5,7 @@
 #include <drogon/orm/DbClient.h>
 using namespace drogon;
 using namespace drogon::orm;
+const string getTokenUrl = "https://aiapi-tool.onrender.com/aichat/chayns/login";
 //pg create table 
 std::string createTablePgSql = R"(
     CREATE TABLE IF NOT EXISTS account (
@@ -178,7 +179,7 @@ bool AccountManager::checkChaynsToken(string token)
 Json::Value AccountManager::getChaynsToken(string username,string passwd)
 {
     //LOG_INFO << "getChaynsToken start";
-    const string serverUrl = "http://127.0.0.1:5556";
+    const string serverUrl = getTokenUrl;
      // 等待服务器可用
     if (!isServerReachable(serverUrl)) {
         LOG_ERROR << "Server is not reachable after maximum retries";
