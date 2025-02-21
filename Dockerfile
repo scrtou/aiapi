@@ -55,7 +55,7 @@ RUN set -eux \
 
 # 以 root 用户安装 Python 包
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # 安装 Drogon（以 root 用户安装）
 WORKDIR /usr/src
