@@ -1,5 +1,4 @@
-FROM selenium/standalone-chrome:latest
-USER root
+FROM ubuntu:22.04
 
 # 设置时区和语言环境
 ENV TZ=Asia/Shanghai \
@@ -34,6 +33,8 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libmariadb-dev \
     software-properties-common \
+    chromium chromium-driver \
+    google-chrome-stable \
     && rm -rf /var/lib/apt/lists/* 
 
 # 以root用户安装Python包
@@ -61,21 +62,9 @@ COPY . .
 # 创建必要的目录并设置权限
 RUN mkdir -p /usr/src/app/uploads/tmp && \
     mkdir -p /usr/src/app/build/uploads/tmp && \
-    mkdir -p /home/seluser/.wdm/drivers && \
-    mkdir -p /home/seluser/.local/lib && \
-    mkdir -p /home/seluser/chrome-data && \
-    chown -R seluser:seluser /usr/src/app && \
-    chown -R seluser:seluser /home/seluser/.wdm && \
-    chown -R seluser:seluser /home/seluser/.local && \
-    chown -R seluser:seluser /home/seluser/chrome-data && \
     chmod -R 777 /usr/src/app/uploads && \
     chmod -R 777 /usr/src/app/build/uploads && \
-    chmod -R 777 /home/seluser/.wdm && \
-    chmod -R 777 /home/seluser/.local && \
-    chmod -R 777 /home/seluser/chrome-data
 
-# 切换到seluser
-USER seluser
 
 # 构建项目
 WORKDIR /usr/src/app/build
