@@ -154,10 +154,12 @@ def get_chrome_driver():
             driver.quit()
             return service
         else:
-            return Service(ChromeDriverManager().install())
-        else:
-            raise Exception("ChromeDriver未找到")
-
+            try:
+                print("ChromeDriver安装中...")
+                return Service(ChromeDriverManager().install())
+            except Exception as e:
+                print(f"ChromeDriver安装失败: {str(e)}")
+                raise
     except Exception as e:
         print(f"ChromeDriver加载失败: {str(e)}")
         raise
@@ -584,7 +586,7 @@ async def handle_login(request: ChaynsLoginRequest):
 async def health_check():
     return {"status": "ok"}
 
-f __name__ == "__main__":
+if __name__ == "__main__":
     print("启动登录服务")
     print("清理环境...")
     os.system("pkill -f chrome")
