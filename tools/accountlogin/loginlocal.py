@@ -97,7 +97,6 @@ class WebDriverManager:
                 self._driver = self._create_driver()
             else:
                 try:
-                    self._driver.current_url
                     if clear_data:
                         # 如果清理失败，强制重新创建driver
                         if not self._clear_browser_data():
@@ -135,6 +134,13 @@ def kill_chrome_processes():
 def get_chrome_driver():
     """获取ChromeDriver，优先使用本地安装的版本"""
     try:
+        # 清理可能存在的Chrome进程
+        os.system("pkill -f chrome")
+        time.sleep(1)
+        
+        # 清理旧的Chrome数据目录
+        os.system("rm -rf /tmp/chrome-data-*")
+        
         if os.path.exists('/usr/bin/chromedriver'):
             service = Service('/usr/bin/chromedriver')
             # 测试service是否可用
@@ -149,6 +155,9 @@ def get_chrome_driver():
             return service
         else:
             return Service(ChromeDriverManager().install())
+        else:
+            raise Exception("ChromeDriver未找到")
+
     except Exception as e:
         print(f"ChromeDriver加载失败: {str(e)}")
         raise
@@ -156,6 +165,12 @@ def get_chrome_driver():
 def get_chrome_options():
     """配置Chrome选项"""
     chrome_options = Options()
+    
+    # 为每个实例创建唯一的用户数据目录
+    user_data_dir = f"/tmp/chrome-data-{time.time()}"
+    os.makedirs(user_data_dir, exist_ok=True)
+    os.chmod(user_data_dir, 0o777)
+    chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
     
     # 只保留最必要的选项
     chrome_options.add_argument('--headless=new')  # 使用新版headless模式
@@ -569,21 +584,24 @@ async def handle_login(request: ChaynsLoginRequest):
 async def health_check():
     return {"status": "ok"}
 
-if __name__ == "__main__":
+f __name__ == "__main__":
     print("启动登录服务")
-    #启动浏览器
+    print("清理环境...")
+    os.system("pkill -f chrome")
+    os.system("rm -rf /tmp/chrome-data-*")
+    time.sleep(2)
+    
     print("启动浏览器")
     try:
         start_time = time.time()
-        driver=WebDriverManager.get_instance().get_driver(clear_data=True)
-        if driver:
-            end_time = time.time()
-            print(f"启动浏览器成功: {end_time - start_time} 秒")
-            uvicorn.run(app, host="0.0.0.0", port=5556, log_level="info")
-        else:
-            print("启动浏览器失败")
-        #uvicorn.run(app, host="127.0.0.1", port=5555, log_level="info")
+        driver_manager = WebDriverManager.get_instance()
+        driver = driver_manager.get_driver(clear_data=True)
+        if not driver:
+            raise Exception("浏览器启动失败")
+        end_time = time.time()
+        print(f"启动浏览器成功: {end_time - start_time} 秒")
+        
+        uvicorn.run(app, host="0.0.0.0", port=5556, log_level="info")
     except Exception as e:
         print(f"启动浏览器失败: {str(e)}")
         raise
-    
