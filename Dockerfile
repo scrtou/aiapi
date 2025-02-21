@@ -42,19 +42,19 @@ RUN sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable 
 # 安装谷歌浏览器
 RUN apt-get update && apt-get install -y google-chrome-stable
 
-# 安装 ChromeDriver
 # 安装 ChromeDriver（最终稳定版）
-RUN set -euxo pipefail \
-    && CHROME_FULL_VERSION=$(google-chrome --version | awk '{print $3}') \
-    && CHROMEDRIVER_VERSION=$(curl -fsS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_FULL_VERSION") \
-    && echo "正在安装 ChromeDriver 版本: $CHROMEDRIVER_VERSION" \
-    && wget -nv --tries=3 "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip" \
+RUN /bin/bash -c 'set -euxo pipefail \
+    && CHROME_FULL_VERSION=$(google-chrome --version | awk "{print \$3}") \
+    && echo "Chrome 版本: $CHROME_FULL_VERSION" \
+    && CHROMEDRIVER_VERSION=$(curl -fsS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_FULL_VERSION}") \
+    && echo "匹配的 ChromeDriver 版本: $CHROMEDRIVER_VERSION" \
+    && wget -nv --tries=3 "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
     && unzip -t chromedriver_linux64.zip \
     && unzip chromedriver_linux64.zip \
     && mv chromedriver /usr/local/bin/ \
     && chmod +x /usr/local/bin/chromedriver \
     && rm chromedriver_linux64.zip \
-    && chromedriver --version
+    && chromedriver --version'
 
 # 以 root 用户安装 Python 包
 COPY requirements.txt .
