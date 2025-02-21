@@ -64,7 +64,7 @@ RUN git clone https://github.com/drogonframework/drogon && \
     git submodule update --init && \
     mkdir build && \
     cd build && \
-    cmake.. -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=ON && \
+    cmake .. -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=ON && \
     make -j $(nproc) && \
     make install && \
     ldconfig && \
@@ -84,7 +84,7 @@ RUN mkdir -p /usr/src/app/uploads/tmp && \
 
 # 构建项目
 WORKDIR /usr/src/app/build
-RUN cmake.. && make -j $(nproc)
+RUN cmake .. && make -j $(nproc)
 
 # 创建并设置启动脚本
 RUN echo '#!/bin/bash\n\
