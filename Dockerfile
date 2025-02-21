@@ -8,7 +8,7 @@ ENV TZ=Asia/Shanghai \
 # 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# 安装依赖，合并RUN命令减少层级
+# 安装依赖，合并 RUN 命令减少层级
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -33,22 +33,36 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libmariadb-dev \
     software-properties-common \
-    chromium chromium-driver \
-    google-chrome-stable \
     && rm -rf /var/lib/apt/lists/* 
 
-# 以root用户安装Python包
-COPY requirements.txt .
+# 添加谷歌浏览器官方源
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+RUN sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+
+# 安装谷歌浏览器
+RUN apt-get update && apt-get install -y google-chrome-stable
+
+# 安装 ChromeDriver
+RUN CHROME_VERSION=$(google-chrome --product-version | cut -d'.' -f1,2) \
+    && CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION") \
+    && wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip" \
+    && unzip chromedriver_linux64.zip \
+    && mv chromedriver /usr/local/bin/ \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm chromedriver_linux64.zip
+
+# 以 root 用户安装 Python 包
+COPY requirements.txt.
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# 安装Drogon（以root用户安装）
+# 安装 Drogon（以 root 用户安装）
 WORKDIR /usr/src
 RUN git clone https://github.com/drogonframework/drogon && \
     cd drogon && \
     git submodule update --init && \
     mkdir build && \
     cd build && \
-    cmake .. -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=ON && \
+    cmake.. -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=ON && \
     make -j $(nproc) && \
     make install && \
     ldconfig && \
@@ -57,7 +71,7 @@ RUN git clone https://github.com/drogonframework/drogon && \
 
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
-COPY . .
+COPY..
 
 # 创建必要的目录并设置权限
 RUN mkdir -p /usr/src/app/uploads/tmp && \
@@ -68,15 +82,15 @@ RUN mkdir -p /usr/src/app/uploads/tmp && \
 
 # 构建项目
 WORKDIR /usr/src/app/build
-RUN cmake .. && make -j $(nproc)
+RUN cmake.. && make -j $(nproc)
 
 # 创建并设置启动脚本
 RUN echo '#!/bin/bash\n\
-if [ ! -z "$CONFIG_JSON" ]; then\n\
+if [! -z "$CONFIG_JSON" ]; then\n\
     echo "$CONFIG_JSON" > /usr/src/app/config.json\n\
 fi\n\
 \n\
-if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
+if [! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
 fi\n\
 \n\
@@ -89,6 +103,9 @@ chmod -R 777 /usr/src/app/build/uploads\n\
 # 清理并创建新的Chrome用户数据目录\n\
 rm -rf /home/seluser/chrome-data/*\n\
 mkdir -p /home/seluser/chrome-data\n\
+\n\
+# 启动ChromeDriver（添加这一行确保驱动在容器启动时运行）\n\
+chromedriver --port=9515 --whitelisted-ips=\n\
 \n\
 cd /usr/src/app/tools/accountlogin && \
 CHROME_USER_DATA_DIR=/home/seluser/chrome-data python3 loginlocal.py &\n\
