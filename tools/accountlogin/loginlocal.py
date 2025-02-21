@@ -134,20 +134,9 @@ def kill_chrome_processes():
 
 def get_chrome_driver():
     """获取ChromeDriver，优先使用本地安装的版本"""
-    try:
-        if os.path.exists('/usr/bin/chromedriver'):
-            service = Service('/usr/bin/chromedriver')
-            # 测试service是否可用
-            driver = webdriver.Chrome(service=service, options=get_chrome_options())
-            driver.quit()
-            return service
+    return Service('/usr/local/bin/chromedriver')
     except Exception as e:
-        print(f"本地ChromeDriver测试失败: {str(e)}")
-    
-    try:
-        return Service(ChromeDriverManager().install())
-    except Exception as e:
-        print(f"ChromeDriverManager安装失败: {str(e)}")
+        print(f"ChromeDriver加载失败: {str(e)}")
         raise
 
 def get_chrome_options():
