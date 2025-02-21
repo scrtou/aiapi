@@ -134,7 +134,21 @@ def kill_chrome_processes():
 
 def get_chrome_driver():
     """获取ChromeDriver，优先使用本地安装的版本"""
-    return Service('/usr/local/bin/chromedriver')
+    try:
+        if os.path.exists('/usr/bin/chromedriver'):
+            service = Service('/usr/bin/chromedriver')
+            # 测试service是否可用
+            driver = webdriver.Chrome(service=service, options=get_chrome_options())
+            driver.quit()
+            return service
+        elif os.path.exists('/usr/local/bin/chromedriver'):
+            service = Service('/usr/local/bin/chromedriver')
+            # 测试service是否可用
+            driver = webdriver.Chrome(service=service, options=get_chrome_options())
+            driver.quit()
+            return service
+        else:
+            return Service(ChromeDriverManager().install())
     except Exception as e:
         print(f"ChromeDriver加载失败: {str(e)}")
         raise
@@ -561,10 +575,13 @@ if __name__ == "__main__":
     print("启动浏览器")
     try:
         start_time = time.time()
-        WebDriverManager.get_instance().get_driver(clear_data=True)
-        end_time = time.time()
-        print(f"启动浏览器成功: {end_time - start_time} 秒")
-        uvicorn.run(app, host="0.0.0.0", port=5556, log_level="info")
+        driver=WebDriverManager.get_instance().get_driver(clear_data=True)
+        if driver:
+            end_time = time.time()
+            print(f"启动浏览器成功: {end_time - start_time} 秒")
+            uvicorn.run(app, host="0.0.0.0", port=5556, log_level="info")
+        else:
+            print("启动浏览器失败")
         #uvicorn.run(app, host="127.0.0.1", port=5555, log_level="info")
     except Exception as e:
         print(f"启动浏览器失败: {str(e)}")
