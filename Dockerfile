@@ -79,7 +79,7 @@ COPY . .
 RUN mkdir -p /usr/src/app/uploads/tmp && \
     mkdir -p /usr/src/app/build/uploads/tmp && \
     chmod -R 777 /usr/src/app/uploads && \
-    chmod -R 777 /usr/src/app/build/uploads && 
+    chmod -R 777 /usr/src/app/build/uploads
 
 
 # 构建项目
