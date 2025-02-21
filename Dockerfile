@@ -87,20 +87,20 @@ RUN mkdir -p /usr/src/app/uploads/tmp && \
 WORKDIR /usr/src/app/build
 RUN cmake .. && make -j $(nproc)
 
-# 创建并设置启动脚本
+# 创建启动脚本
 RUN echo '#!/bin/bash\n\
-if [! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/config.json\n\
+if [ ! -z "$CONFIG_JSON" ]; then\n\
+    echo "$CONFIG_JSON" > /usr/src/app/build/config.json\n\
 fi\n\
 \n\
-if [! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
+if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
+    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && \
-CHROME_USER_DATA_DIR=/home/seluser/chrome-data python3 loginlocal.py &\n\
-cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
-    chmod +x /usr/src/app/docker-entrypoint.sh
+cd /usr/src/app/tools/accountlogin &&sudo python3 loginremote.py &\n\
+cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
+
+RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 暴露端口
 EXPOSE 5555
