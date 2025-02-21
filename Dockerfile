@@ -7,6 +7,7 @@ ENV TZ=Asia/Shanghai \
 
 # 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+USER root
 
 # 安装依赖，合并 RUN 命令减少层级
 RUN apt-get update && apt-get install -y \
