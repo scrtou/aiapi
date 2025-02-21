@@ -52,7 +52,7 @@ RUN CHROME_VERSION=$(google-chrome --product-version | cut -d'.' -f1,2) \
     && rm chromedriver_linux64.zip
 
 # 以 root 用户安装 Python 包
-COPY requirements.txt.
+COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # 安装 Drogon（以 root 用户安装）
@@ -71,7 +71,7 @@ RUN git clone https://github.com/drogonframework/drogon && \
 
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/
-COPY..
+COPY . .
 
 # 创建必要的目录并设置权限
 RUN mkdir -p /usr/src/app/uploads/tmp && \
