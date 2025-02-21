@@ -34,27 +34,24 @@ RUN apt-get update && apt-get install -y \
     libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
+# 安装 Google Chrome
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
+    && apt-get update && apt-get install -y google-chrome-stable
 
-# 添加谷歌浏览器官方源
-RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
-RUN sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
-
-# 安装谷歌浏览器
-RUN apt-get update && apt-get install -y google-chrome-stable
-
-# 安装 ChromeDriver（最终稳定版）
-RUN /bin/bash -c 'set -euxo pipefail \
-    && CHROME_FULL_VERSION=$(google-chrome --version | awk "{print \$3}") \
+# 安装 ChromeDriver（适配 Chrome for Testing 存储库）
+RUN set -eux \
+    && CHROME_FULL_VERSION=$(google-chrome --version | awk '{print $3}') \
     && echo "Chrome 版本: $CHROME_FULL_VERSION" \
-    && CHROMEDRIVER_VERSION=$(curl -fsS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_FULL_VERSION}") \
-    && echo "匹配的 ChromeDriver 版本: $CHROMEDRIVER_VERSION" \
-    && wget -nv --tries=3 "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
-    && unzip -t chromedriver_linux64.zip \
-    && unzip chromedriver_linux64.zip \
-    && mv chromedriver /usr/local/bin/ \
+    && CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_FULL_VERSION/linux64/chromedriver-linux64.zip" \
+    && echo "ChromeDriver 下载链接: $CHROMEDRIVER_URL" \
+    && wget -nv --tries=3 "$CHROMEDRIVER_URL" \
+    && unzip -t chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/ \
     && chmod +x /usr/local/bin/chromedriver \
-    && rm chromedriver_linux64.zip \
-    && chromedriver --version'
+    && rm -rf chromedriver-linux64.zip chromedriver-linux64 \
+    && chromedriver --version
 
 # 以 root 用户安装 Python 包
 COPY requirements.txt .
