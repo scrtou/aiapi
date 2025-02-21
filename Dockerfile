@@ -97,19 +97,6 @@ if [! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
 fi\n\
 \n\
-# 确保目录存在并有正确的权限\n\
-mkdir -p /usr/src/app/uploads/tmp\n\
-mkdir -p /usr/src/app/build/uploads/tmp\n\
-chmod -R 777 /usr/src/app/uploads\n\
-chmod -R 777 /usr/src/app/build/uploads\n\
-\n\
-# 清理并创建新的Chrome用户数据目录\n\
-rm -rf /home/seluser/chrome-data/*\n\
-mkdir -p /home/seluser/chrome-data\n\
-\n\
-# 启动ChromeDriver（添加这一行确保驱动在容器启动时运行）\n\
-chromedriver --port=9515 --whitelisted-ips=\n\
-\n\
 cd /usr/src/app/tools/accountlogin && \
 CHROME_USER_DATA_DIR=/home/seluser/chrome-data python3 loginlocal.py &\n\
 cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \

@@ -195,7 +195,6 @@ def get_chrome_options():
     chrome_options.add_argument('--disable-notifications')
     chrome_options.add_argument('--disable-popup-blocking')
     
-    chrome_options.add_argument(f'--user-data-dir={os.environ.get("CHROME_USER_DATA_DIR")}')
     # 设置更严格的隐私选项
     prefs = {
         'profile.default_content_setting_values': {
