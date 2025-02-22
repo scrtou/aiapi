@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装Python依赖
-COPY requirements.txt .
+COPY src/requirements.txt .
 RUN pip install -r requirements.txt
 
 # 安装 Drogon
@@ -50,21 +50,21 @@ COPY . .
 # 创建启动脚本
 RUN echo '#!/bin/bash\n\
 if [ ! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/build/config.json\n\
+    echo "$CONFIG_JSON" > /usr/src/app/src/build/config.json\n\
 fi\n\
 \n\
 if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
+    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/src/  build/config.json\n\
 fi\n\
 \n\
 cd /usr/src/app/tools/accountlogin && python3 loginremote.py &\n\
-cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
+cd /usr/src/app/src/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 创建构建目录
-RUN mkdir -p build
-WORKDIR /usr/src/app/build
+RUN mkdir -p src/build
+WORKDIR /usr/src/app/src/build
 
 # 构建项目
 RUN cmake ..
