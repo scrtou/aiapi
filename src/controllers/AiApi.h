@@ -2,7 +2,12 @@
 
 #include <drogon/HttpController.h>
 using namespace drogon;
-
+struct LogEntry {
+    std::string timestamp;
+    std::string level;
+    std::string message;
+    std::string original;
+};
 class AiApi : public drogon::HttpController<AiApi>
 {
   public:
@@ -32,4 +37,7 @@ class AiApi : public drogon::HttpController<AiApi>
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);
+  std::string generateHtmlPage();
+  LogEntry parseLogLine(const std::string& log);
+  std::string formatLogEntry(const LogEntry& entry);
 };

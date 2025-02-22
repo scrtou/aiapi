@@ -395,33 +395,239 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
 }
 void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-     LOG_INFO << "logsInfo";
+    int lines = 0;
+    if (req->getParameter("lines") != "") {
+        try {
+            lines = std::stoi(req->getParameter("lines"));
+        } catch (...) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("无效的 lines 参数");
+            callback(resp);
+            return;
+        }
+    }
+
     const std::string logPath = "../logs/aichat.log";
     std::ifstream logFile(logPath);
 
     if (!logFile.is_open()) {
-        Json::Value error;
-        error["error"] = "无法打开日志文件";
-        auto resp = HttpResponse::newHttpJsonResponse(error);
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k500InternalServerError);
+        resp->setBody("无法打开日志文件");
         callback(resp);
         return;
     }
 
-    // 读取日志内容并进行格式化
-    std::stringstream formattedContent;
+    std::map<std::string, std::vector<LogEntry>> logsByDay;
     std::string line;
+    std::vector<std::string> allLogs;
+
     while (std::getline(logFile, line)) {
-        // 替换原始的 \n 为 HTML 的换行标签
-        formattedContent << line << "<br>\n";
+        allLogs.push_back(line);
     }
 
-    Json::Value response;
-    response["logs"] = formattedContent.str();
-    
+    if (lines > 0 && lines < allLogs.size()) {
+        allLogs.erase(allLogs.begin(), allLogs.end() - lines);
+    }
+
+    // 按日期分组
+    for (const auto& log : allLogs) {
+        if (log.length() >= 8) {  // 确保日志行至少包含日期部分
+            std::string date = log.substr(0, 8);  // 提取 YYYYMMDD
+            // 格式化日期显示
+            std::string formattedDate = date.substr(0, 4) + "-" + 
+                                      date.substr(4, 2) + "-" + 
+                                      date.substr(6, 2);
+            logsByDay[formattedDate].push_back(parseLogLine(log));
+        }
+    }
+
+    // 生成HTML内容
+    std::stringstream htmlContent;
+    htmlContent << generateHtmlPage();
+
+    // 插入日志统计
+    std::string logCount = "总日志数: " + std::to_string(allLogs.size()) + " 条";
+
+    // 生成日志内容
+    std::stringstream logContent;
+    for (auto it = logsByDay.rbegin(); it != logsByDay.rend(); ++it) {
+        logContent << "<div class='day-section'>"
+                  << "<div class='day-header'>" << it->first << "</div>";
+
+        for (const auto& entry : it->second) {
+            logContent << formatLogEntry(entry);
+        }
+
+        logContent << "</div>";
+    }
+
+    // 替换占位符
+    std::string html = htmlContent.str();
+    size_t logCountPos = html.find("<span id=\"log-count\"></span>");
+    if (logCountPos != std::string::npos) {
+        html.replace(logCountPos, 28, logCount);
+    }
+
+    size_t logContentPos = html.find("<div id=\"log-content\"></div>");
+    if (logContentPos != std::string::npos) {
+        html.replace(logContentPos, 29, logContent.str());
+    }
+
     auto resp = HttpResponse::newHttpResponse();
-    resp->setContentTypeString("text/html; charset=utf-8");
-    resp->setBody("<pre style='white-space: pre-wrap; word-wrap: break-word;'>" 
-                  + formattedContent.str() + 
-                  "</pre>");
+    resp->setStatusCode(k200OK);
+    resp->setContentTypeCode(CT_TEXT_HTML);
+    resp->addHeader("Content-Type", "text/html; charset=utf-8");
+    resp->setBody(html);
     callback(resp);
+}
+std::string AiApi::generateHtmlPage() {
+    return R"(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统日志查看器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .day-section {
+            margin-bottom: 30px;
+        }
+        .day-header {
+            background: #4a90e2;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .log-entry {
+            padding: 8px 15px;
+            border-bottom: 1px solid #eee;
+            font-family: 'Consolas', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .log-entry:hover {
+            background-color: #f8f8f8;
+        }
+        .log-time {
+            color: #666;
+            margin-right: 10px;
+        }
+        .log-level {
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-right: 10px;
+        }
+        .level-DEBUG {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .level-INFO {
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+        .level-WARNING {
+            background-color: #fff3e0;
+            color: #f57c00;
+        }
+        .level-ERROR {
+            background-color: #ffebee;
+            color: #d32f2f;
+        }
+        .log-message {
+            color: #333;
+        }
+        .log-json {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 5px 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .summary {
+            color: #666;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>系统日志查看器</h1>
+        </div>
+        <div class="summary">
+            <strong>日志统计：</strong> <span id="log-count"></span>
+        </div>
+        <div id="log-content"></div>
+    </div>
+</body>
+</html>
+)";
+}
+
+LogEntry AiApi::parseLogLine(const std::string& log) {
+    LogEntry entry;
+    entry.original = log;
+
+    // 解析时间戳和日志级别
+    std::regex logPattern(R"((\d{8}\s+\d{2}:\d{2}:\d{2}\.\d+)\s+UTC\s+\d+\s+(\w+)\s+(.*))");
+    std::smatch matches;
+    
+    if (std::regex_search(log, matches, logPattern)) {
+        entry.timestamp = matches[1].str();
+        entry.level = matches[2].str();
+        entry.message = matches[3].str();
+    }
+
+    return entry;
+}
+
+std::string AiApi::formatLogEntry(const LogEntry& entry) {
+    std::stringstream result;
+    
+    result << "<div class='log-entry'>"
+           << "<span class='log-time'>" << entry.timestamp << "</span>"
+           << "<span class='log-level level-" << entry.level << "'>" << entry.level << "</span>";
+
+    // 检查是否包含JSON数据
+    if (entry.message.find("{") != std::string::npos && entry.message.find("}") != std::string::npos) {
+        result << "<div class='log-message'>" 
+               << entry.message.substr(0, entry.message.find("{")) 
+               << "<pre class='log-json'>" << entry.message.substr(entry.message.find("{")) << "</pre>"
+               << "</div>";
+    } else {
+        result << "<span class='log-message'>" << entry.message << "</span>";
+    }
+
+    result << "</div>";
+    return result.str();
 }
