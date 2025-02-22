@@ -89,7 +89,6 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
             LOG_INFO << "流式响应";
             // 创建一个新的响应对象
             // 创建一个持久的上下文对象
-
             struct StreamContext {
                     size_t pos = 0;
                     bool sent_done = false;
@@ -186,7 +185,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
             resp->addHeader("Connection", "keep-alive");
             resp->addHeader("X-Accel-Buffering", "no");
             resp->addHeader("Transfer-Encoding", "chunked");
-            resp->addHeader("Keep-Alive", "timeout=60");
+            resp->addHeader("Keep-Alive", "timeout=120");
             resp->addHeader("Transfer-Encoding", "chunked");
             callback(resp); 
         }

@@ -268,11 +268,11 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
                 continue;
             }
         Json::Value msgData;
-        msgData["role"] = requestbody["messages"][i]["role"];
-        msgData["content"] = requestbody["messages"][i]["content"];
+        msgData["role"] = requestbody["messages"][i]["role"].asString();
+        msgData["content"] = Json::FastWriter().write(requestbody["messages"][i]["content"]);
         session.addMessageToContext(msgData);
     }
-    session.requestmessage = requestbody["messages"][requestbody["messages"].size()-1]["content"].asString();
+    session.requestmessage = Json::FastWriter().write(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
     session.last_active_time = time(NULL);
     LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
     LOG_INFO << "session_st message_context: " << Json::FastWriter().write(session.message_context);
