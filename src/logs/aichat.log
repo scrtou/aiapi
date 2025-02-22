@@ -1,0 +1,54 @@
+20250222 11:08:51.558084 UTC 2372136 INFO  AccountManager::init start - accountManager.cpp:19
+20250222 11:08:55.665137 UTC 2372136 INFO  loadAccount start - accountManager.cpp:34
+20250222 11:08:56.084960 UTC 2372136 INFO  loadAccountFromDatebase start - accountManager.cpp:320
+20250222 11:08:56.528151 UTC 2372136 INFO  loadDatebase end - accountManager.cpp:326
+20250222 11:08:56.528167 UTC 2372136 INFO  apiName: chaynsapi,accountQueue size: 2 - accountManager.cpp:47
+20250222 11:08:56.528169 UTC 2372136 INFO  loadAccount end - accountManager.cpp:50
+20250222 11:08:56.528310 UTC 2372136 INFO  AccountManager::init end - accountManager.cpp:29
+20250222 11:08:56.528324 UTC 2372136 INFO  ApiManager::init start - ApiManager.cpp:72
+20250222 11:08:56.528339 UTC 2372136 INFO   ApiFactory::m_ApiFactoryMap size: 1 - ApiManager.cpp:76
+20250222 11:08:56.528333 UTC 2372194 INFO  waitUpdateAccountTokenThread start - accountManager.cpp:367
+20250222 11:08:56.528297 UTC 2372193 INFO  checkToken start - accountManager.cpp:207
+20250222 11:08:56.531568 UTC 2372193 INFO  checkToken function map size: 1 - accountManager.cpp:208
+20250222 11:08:56.531591 UTC 2372193 INFO  checkToken accountinfo: chaynsapi my_notify@outlook.com - accountManager.cpp:213
+20250222 11:08:56.531823 UTC 2372193 INFO  checkChaynsTonen start - accountManager.cpp:159
+20250222 11:08:56.880937 UTC 2372136 INFO   Chayns NativeModelChatbot modles Successfully loaded 27 models from API - chaynsapi.cpp:487
+20250222 11:08:56.881276 UTC 2372136 INFO  ApiManager::init end - ApiManager.cpp:94
+20250222 11:08:56.881281 UTC 2372136 INFO  m_ApiNameApiMap size: 1 - ApiManager.cpp:95
+20250222 11:08:57.138105 UTC 2372193 DEBUG [checkChaynsToken] checkAlivableToken response: 200 - accountManager.cpp:166
+20250222 11:08:57.138129 UTC 2372193 INFO  checkChaynsTonen end - accountManager.cpp:167
+20250222 11:08:57.138187 UTC 2372193 INFO  checkToken result: 1 - accountManager.cpp:217
+20250222 11:08:57.138198 UTC 2372193 INFO  checkToken accountinfo: chaynsapi yxac@protonmail.com - accountManager.cpp:213
+20250222 11:08:57.138206 UTC 2372193 INFO  checkChaynsTonen start - accountManager.cpp:159
+20250222 11:08:57.700238 UTC 2372193 DEBUG [checkChaynsToken] checkAlivableToken response: 200 - accountManager.cpp:166
+20250222 11:08:57.700257 UTC 2372193 INFO  checkChaynsTonen end - accountManager.cpp:167
+20250222 11:08:57.700330 UTC 2372193 INFO  checkToken result: 1 - accountManager.cpp:217
+20250222 11:08:57.700353 UTC 2372193 INFO  checkToken end - accountManager.cpp:227
+20250222 11:14:01.572746 UTC 2374281 INFO  AccountManager::init start - accountManager.cpp:19
+20250222 11:14:06.517185 UTC 2374281 INFO  loadAccount start - accountManager.cpp:34
+20250222 11:14:06.904650 UTC 2374281 INFO  loadAccountFromDatebase start - accountManager.cpp:320
+20250222 11:14:07.315699 UTC 2374281 INFO  loadDatebase end - accountManager.cpp:326
+20250222 11:14:07.315718 UTC 2374281 INFO  apiName: chaynsapi,accountQueue size: 2 - accountManager.cpp:47
+20250222 11:14:07.315721 UTC 2374281 INFO  loadAccount end - accountManager.cpp:50
+20250222 11:14:07.315859 UTC 2374281 INFO  AccountManager::init end - accountManager.cpp:29
+20250222 11:14:07.315865 UTC 2374281 INFO  ApiManager::init start - ApiManager.cpp:72
+20250222 11:14:07.315884 UTC 2374281 INFO   ApiFactory::m_ApiFactoryMap size: 1 - ApiManager.cpp:76
+20250222 11:14:07.315848 UTC 2374341 INFO  checkToken start - accountManager.cpp:207
+20250222 11:14:07.316087 UTC 2374341 INFO  checkToken function map size: 1 - accountManager.cpp:208
+20250222 11:14:07.316096 UTC 2374341 INFO  checkToken accountinfo: chaynsapi my_notify@outlook.com - accountManager.cpp:213
+20250222 11:14:07.316105 UTC 2374341 INFO  checkChaynsTonen start - accountManager.cpp:159
+20250222 11:14:07.315882 UTC 2374342 INFO  waitUpdateAccountTokenThread start - accountManager.cpp:367
+20250222 11:14:07.670233 UTC 2374281 INFO   Chayns NativeModelChatbot modles Successfully loaded 27 models from API - chaynsapi.cpp:487
+20250222 11:14:07.670567 UTC 2374281 INFO  ApiManager::init end - ApiManager.cpp:94
+20250222 11:14:07.670573 UTC 2374281 INFO  m_ApiNameApiMap size: 1 - ApiManager.cpp:95
+20250222 11:14:07.918215 UTC 2374341 DEBUG [checkChaynsToken] checkAlivableToken response: 200 - accountManager.cpp:166
+20250222 11:14:07.918229 UTC 2374341 INFO  checkChaynsTonen end - accountManager.cpp:167
+20250222 11:14:07.918243 UTC 2374341 INFO  checkToken result: 1 - accountManager.cpp:217
+20250222 11:14:07.918253 UTC 2374341 INFO  checkToken accountinfo: chaynsapi yxac@protonmail.com - accountManager.cpp:213
+20250222 11:14:07.918261 UTC 2374341 INFO  checkChaynsTonen start - accountManager.cpp:159
+20250222 11:14:08.480894 UTC 2374341 DEBUG [checkChaynsToken] checkAlivableToken response: 200 - accountManager.cpp:166
+20250222 11:14:08.480914 UTC 2374341 INFO  checkChaynsTonen end - accountManager.cpp:167
+20250222 11:14:08.480916 UTC 2374341 INFO  checkToken result: 1 - accountManager.cpp:217
+20250222 11:14:08.480940 UTC 2374341 INFO  checkToken end - accountManager.cpp:227
+20250222 11:14:57.848819 UTC 2374276 INFO  logsInfo - AiApi.cc:398
+20250222 04:14:57.848725 GET /aichat/logs/info [0] (113.132.209.104:60224 - 216.126.234.4:5555) 200 OK 5127 0.000848

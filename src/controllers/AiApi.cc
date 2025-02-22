@@ -9,6 +9,7 @@
 #include <sessionManager/Session.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
+#include <fstream>
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -389,6 +390,18 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
         accountitem["personid"]=account.personId;
         response.append(accountitem);
     }
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
+}
+void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "logsInfo";
+    //从logs文件夹中读取logs文件
+    const std::string logPath="../logs/aichat.log";
+    std::ifstream logFile(logPath);
+    std::string logContent((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
+    Json::Value response;
+    response["logs"]=logContent;
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
 }

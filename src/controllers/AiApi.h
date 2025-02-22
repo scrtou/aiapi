@@ -17,6 +17,7 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::accountDelete, "/aichat/account/delete", Post); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountInfo, "/aichat/account/info", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountDbInfo, "/aichat/account/dbinfo", Get); // path is /AiApi/{arg1}/{arg2}/list
+    ADD_METHOD_TO(AiApi::logsInfo, "/aichat/logs/info", Get); // path is /AiApi/{arg1}/{arg2}/list
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -27,6 +28,7 @@ class AiApi : public drogon::HttpController<AiApi>
     void accountDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountDbInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);
