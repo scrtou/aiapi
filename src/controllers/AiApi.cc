@@ -17,6 +17,8 @@ using namespace drogon::orm;
 void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     //打印所有的请求头
+    //打印原始请求
+    LOG_INFO<<"原始请求:"<<req->toCurlString();
     //打印请求头
     LOG_DEBUG<<"请求头:";
     for(auto &header : req->getHeaders())
