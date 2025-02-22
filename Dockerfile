@@ -85,6 +85,8 @@ RUN mkdir -p /usr/src/app/src/uploads/tmp && \
 
 # 构建项目
 WORKDIR /usr/src/app/src/build
+RUN mkdir -p /usr/src/app/src/build/logs
+RUN chmod -R 777 /usr/src/app/src/logs
 RUN cmake .. && make -j $(nproc)
 
 # 创建启动脚本
