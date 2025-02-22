@@ -1,5 +1,4 @@
-FROM selenium/standalone-chrome:latest
-USER root
+FROM ubuntu:22.04
 
 # 设置时区和语言环境
 ENV TZ=Asia/Shanghai \
@@ -8,8 +7,9 @@ ENV TZ=Asia/Shanghai \
 
 # 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+USER root
 
-# 安装依赖，合并RUN命令减少层级
+# 安装依赖，合并 RUN 命令减少层级
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -35,11 +35,30 @@ RUN apt-get update && apt-get install -y \
     libmariadb-dev \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/* 
-# 强制系统级安装Python包
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+# 安装 Google Chrome
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
+    && apt-get update && apt-get install -y google-chrome-stable
 
-# 安装Drogon（优化构建步骤）
+# 安装 ChromeDriver（适配 Chrome for Testing 存储库）
+RUN set -eux \
+    && CHROME_FULL_VERSION=$(google-chrome --version | awk '{print $3}') \
+    && echo "Chrome 版本: $CHROME_FULL_VERSION" \
+    && CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_FULL_VERSION/linux64/chromedriver-linux64.zip" \
+    && echo "ChromeDriver 下载链接: $CHROMEDRIVER_URL" \
+    && wget -nv --tries=3 "$CHROMEDRIVER_URL" \
+    && unzip -t chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/ \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64.zip chromedriver-linux64 \
+    && chromedriver --version
+
+# 以 root 用户安装 Python 包
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# 安装 Drogon（以 root 用户安装）
 WORKDIR /usr/src
 RUN git clone https://github.com/drogonframework/drogon && \
     cd drogon && \
@@ -58,26 +77,29 @@ WORKDIR /usr/src/app/
 COPY . .
 
 # 创建必要的目录并设置权限
-RUN mkdir -p build/uploads/tmp uploads/tmp && \
-    chmod -R 777 build/uploads/tmp uploads/tmp
+RUN mkdir -p /usr/src/app/src/uploads/tmp && \
+    mkdir -p /usr/src/app/build/src/uploads/tmp && \
+    chmod -R 777 /usr/src/app/src/uploads && \
+    chmod -R 777 /usr/src/app/build/src/uploads
+
 
 # 构建项目
-WORKDIR /usr/src/app/build
+WORKDIR /usr/src/app/src/build
 RUN cmake .. && make -j $(nproc)
 
-# 创建并设置启动脚本
+# 创建启动脚本
 RUN echo '#!/bin/bash\n\
 if [ ! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/config.json\n\
+    echo "$CONFIG_JSON" > /usr/src/app/src/build/config.json\n\
 fi\n\
 \n\
 if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/config.json\n\
+    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/src/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginlocal.py &\n\
-cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh && \
-    chmod +x /usr/src/app/docker-entrypoint.sh
+cd /usr/src/app/src/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
+
+RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 暴露端口
 EXPOSE 5555
