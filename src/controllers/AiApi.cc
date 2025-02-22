@@ -18,7 +18,6 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
 {
     //打印所有的请求头
     //打印原始请求
-    LOG_INFO<<"原始请求:"<<req->toCurlString();
     //打印请求头
     LOG_DEBUG<<"请求头:";
     for(auto &header : req->getHeaders())
@@ -27,7 +26,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     }
     //打印请求信息
     LOG_INFO<<"请求信息:"<<req->getBody();
-
+    std::string body = std::string(req->body());
+    LOG_INFO << "Body: " << body;
+    
     auto jsonPtr = req->getJsonObject();
        if (!jsonPtr) {
         Json::Value error;
