@@ -395,6 +395,7 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
 }
 void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
+    /*
     const std::string logPath = "../logs/aichat.log";
     std::ifstream logFile(logPath);
 
@@ -496,6 +497,181 @@ void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpRes
     // 输出所有日志行
     for (const auto& logLine : allLines) {
         formattedContent << logLine << "\n";
+    }
+
+    formattedContent << "</pre></div></body></html>";
+
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setStatusCode(k200OK);
+    resp->setContentTypeCode(CT_TEXT_HTML);
+    resp->addHeader("Content-Type", "text/html; charset=utf-8");
+    resp->setBody(formattedContent.str());
+    callback(resp);
+    */
+   const std::string logPath = "../logs/aichat.log";
+    std::ifstream logFile(logPath);
+
+    if (!logFile.is_open()) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k500InternalServerError);
+        resp->setBody("无法打开日志文件");
+        callback(resp);
+        return;
+    }
+
+    // 处理lines参数
+    int lines = 0;
+    if (req->getParameter("lines") != "") {
+        try {
+            lines = std::stoi(req->getParameter("lines"));
+        } catch (...) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("无效的 lines 参数");
+            callback(resp);
+            return;
+        }
+    }
+
+    std::vector<std::string> allLines;
+    std::string line;
+    while (std::getline(logFile, line)) {
+        allLines.push_back(line);
+    }
+
+    if (lines > 0 && lines < allLines.size()) {
+        allLines.erase(allLines.begin(), allLines.end() - lines);
+    }
+
+    std::stringstream formattedContent;
+    formattedContent << R"(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统日志查看器</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 13px;
+            line-height: 1.5;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 0;
+            overflow-x: auto;
+        }
+        .log-line {
+            padding: 2px 0;
+            border-bottom: 1px solid #333;
+        }
+        .timestamp { color: #569cd6; }
+        .level-DEBUG { color: #4ec9b0; }
+        .level-INFO { color: #9cdcfe; }
+        .level-ERROR { color: #f44747; }
+        .level-WARNING { color: #ce9178; }
+        .component { color: #dcdcaa; }
+        .json { color: #ce9178; }
+        .header {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .controls {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .refresh-btn {
+            padding: 8px 15px;
+            background-color: #0078d4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .refresh-btn:hover {
+            background-color: #106ebe;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>系统日志查看器</h1>
+        </div>
+        <div class="controls">
+            <span>总行数: )" << allLines.size() << R"(</span>
+            <button class="refresh-btn" onclick="location.reload()">刷新</button>
+        </div>
+        <pre>)";
+
+    // 处理每一行日志
+    for (const auto& log : allLines) {
+        std::string processedLog = log;
+        
+        // 添加颜色标记
+        if (log.find("DEBUG") != std::string::npos) {
+            processedLog = std::regex_replace(processedLog, 
+                std::regex("DEBUG"), 
+                "<span class='level-DEBUG'>DEBUG</span>");
+        } else if (log.find("INFO") != std::string::npos) {
+            processedLog = std::regex_replace(processedLog, 
+                std::regex("INFO"), 
+                "<span class='level-INFO'>INFO</span>");
+        } else if (log.find("ERROR") != std::string::npos) {
+            processedLog = std::regex_replace(processedLog, 
+                std::regex("ERROR"), 
+                "<span class='level-ERROR'>ERROR</span>");
+        }
+
+        // 高亮时间戳
+        if (log.length() >= 26) { // 确保有足够长度包含时间戳
+            processedLog = "<span class='timestamp'>" + 
+                          processedLog.substr(0, 26) + "</span>" + 
+                          processedLog.substr(26);
+        }
+
+        // 高亮组件名称
+        std::regex componentRegex(R"(\[(.*?)\])");
+        processedLog = std::regex_replace(processedLog, componentRegex, 
+            "<span class='component'>[$1]</span>");
+
+        // 高亮JSON内容
+        if (processedLog.find("{") != std::string::npos && 
+            processedLog.find("}") != std::string::npos) {
+            size_t jsonStart = processedLog.find("{");
+            size_t jsonEnd = processedLog.rfind("}") + 1;
+            if (jsonStart != std::string::npos && jsonEnd != std::string::npos) {
+                std::string beforeJson = processedLog.substr(0, jsonStart);
+                std::string jsonPart = processedLog.substr(jsonStart, jsonEnd - jsonStart);
+                std::string afterJson = processedLog.substr(jsonEnd);
+                
+                processedLog = beforeJson + 
+                              "<span class='json'>" + jsonPart + "</span>" + 
+                              afterJson;
+            }
+        }
+
+        formattedContent << "<div class='log-line'>" << processedLog << "</div>";
     }
 
     formattedContent << "</pre></div></body></html>";
