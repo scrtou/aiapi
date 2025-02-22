@@ -400,8 +400,7 @@ void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpRes
     const std::string logPath="../logs/aichat.log";
     std::ifstream logFile(logPath);
     std::string logContent((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
-    Json::Value response;
-    response["logs"]=logContent;
-    auto resp = HttpResponse::newHttpJsonResponse(response);
+
+    auto resp = HttpResponse::newHttpJsonResponse(logContent);
     callback(resp);
 }
