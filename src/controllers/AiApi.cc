@@ -395,12 +395,33 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
 }
 void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    LOG_INFO << "logsInfo";
-    //从logs文件夹中读取logs文件
-    const std::string logPath="../logs/aichat.log";
+     LOG_INFO << "logsInfo";
+    const std::string logPath = "../logs/aichat.log";
     std::ifstream logFile(logPath);
-    std::string logContent((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());
 
-    auto resp = HttpResponse::newHttpJsonResponse(logContent);
+    if (!logFile.is_open()) {
+        Json::Value error;
+        error["error"] = "无法打开日志文件";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        callback(resp);
+        return;
+    }
+
+    // 读取日志内容并进行格式化
+    std::stringstream formattedContent;
+    std::string line;
+    while (std::getline(logFile, line)) {
+        // 替换原始的 \n 为 HTML 的换行标签
+        formattedContent << line << "<br>\n";
+    }
+
+    Json::Value response;
+    response["logs"] = formattedContent.str();
+    
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setContentTypeString("text/html; charset=utf-8");
+    resp->setBody("<pre style='white-space: pre-wrap; word-wrap: break-word;'>" 
+                  + formattedContent.str() + 
+                  "</pre>");
     callback(resp);
 }
