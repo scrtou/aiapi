@@ -1,0 +1,8 @@
+build/*
+# Build directories
+build/
+**/CMakeFiles/
+*.o
+*.so
+*.a
+*.exe

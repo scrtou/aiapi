@@ -50,7 +50,7 @@ void Chaynsapi::loadUsertokenlist()
 void Chaynsapi::loadChatinfoPollMap()
 {   
     LOG_INFO << " Chaynsapi::loadChatinfoPollMap";
-    for(auto& tempnam:modelNameIdMap)
+    for(auto& tempnam:modelMap_NativeModelChatbot)
     {
         string modelname=tempnam.first;
         chatinfo_st chatinfo;
@@ -100,7 +100,7 @@ void Chaynsapi::createChatThread(string modelname,chatinfo_st& chatinfo)
     {
         chatinfo.threadid=threadid;
         chatinfo.usermessageid=usermessageid;
-        chatinfo.modelbotid=modelNameIdMap[modelname]["tobit_id"].asInt();
+        chatinfo.modelbotid=modelMap_NativeModelChatbot[modelname]["tobit_id"].asInt();
         chatinfo.status=0;
         chatinfo.accountinfo=accountinfo;
     }
@@ -121,7 +121,7 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
     
     Json::Value members(Json::arrayValue);
     Json::Value member1;
-    member1["tobitId"] = modelNameIdMap[modelname]["tobit_id"].asInt();  
+    member1["tobitId"] = modelMap_NativeModelChatbot[modelname]["tobit_id"].asInt();  
     members.append(member1);
     
     Json::Value member2;    
@@ -327,10 +327,57 @@ void Chaynsapi::checkModels()
 }
 void Chaynsapi::loadModels()
 {
+    getModels_NativeModelChatbot();
+    //返回v1/models openai接口格式
+        /*
+        data": [
+        {
+            "id": model,
+            "object": "model",
+            "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
+            "owned_by": "example_owner",  # 假设所有者为固定值，实际使用时应从数据源获取
+            "permission": [
+                {
+                    "id": "modelperm-LwHkVFn8AcMItP432fKKDIKJ",  # 假设权限ID为固定值，实际使用时应从数据源获取
+                    "object": "model_permission",
+                    "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
+                    "allow_create_engine": True,
+                    "allow_sampling": True,
+                    "allow_logprobs": True,
+                    "allow_search_indices": False,
+                    "allow_view": True,
+                    "allow_fine_tuning": False,
+                    "organization": "*",
+                    "group": None,
+                    "is_blocking": False
+                }
+            ],
+            "root": model,
+            "parent": None
+        } for model in lst_models
+        ],
+        */
+       for(auto& model:modelMap_NativeModelChatbot)
+       {
+        Json::Value tmp_model_info;
+        tmp_model_info["id"]=model.second["showName"].asString();
+        tmp_model_info["object"]="model";
+        tmp_model_info["created"]=1626777600;
+        tmp_model_info["owned_by"]="example_owner";
+        tmp_model_info["permission"]=Json::Value(Json::arrayValue);
+        tmp_model_info["root"]=model.second["showName"].asString();
+        tmp_model_info["parent"]=Json::Value();
+        model_info["data"].append(tmp_model_info);
+       }
 
-    LOG_INFO << "Models API called";
+}
+
+void Chaynsapi::getModels_ai_proxy()
+{
+ LOG_INFO << "ai_proxy Models API called";
     
     // 创建HTTP客户端
+    //https://cube.tobit.cloud/chayns-ai-chatbot/NativeModelChatbot
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
     auto request = HttpRequest::newHttpRequest();
     
@@ -371,55 +418,72 @@ void Chaynsapi::loadModels()
     for (const auto& model : api_models) {
         if (model.get("isAvailable", false).asBool()) {
             Json::Value tmp_model_info;
-            tmp_model_info["id"] = model.get("modelName", "");
-            tmp_model_info["name"] = model.get("showName", "");
-            tmp_model_info["description"] = model.get("showName", "").asString() + " model";
-            tmp_model_info["context_length"] = 32000;  // 默认上下文长度
+            tmp_model_info["id"] = model.get("id", "");
+            tmp_model_info["personId"] = model.get("personId", 0);
+            tmp_model_info["showName"] = model.get("showName", "");
+            tmp_model_info["modelName"] = model.get("modelName", "");
             tmp_model_info["tobit_id"] = model.get("tobitId", 0);
-            // LOG_INFO << "id: " << model_info["id"].asString()<<" tobit_id: "<<model_info["tobit_id"].asInt();
-            modelNameIdMap[tmp_model_info["id"].asString()]=tmp_model_info;
-        //返回v1/models openai接口格式
-        /*
-        data": [
-        {
-            "id": model,
-            "object": "model",
-            "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
-            "owned_by": "example_owner",  # 假设所有者为固定值，实际使用时应从数据源获取
-            "permission": [
-                {
-                    "id": "modelperm-LwHkVFn8AcMItP432fKKDIKJ",  # 假设权限ID为固定值，实际使用时应从数据源获取
-                    "object": "model_permission",
-                    "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
-                    "allow_create_engine": True,
-                    "allow_sampling": True,
-                    "allow_logprobs": True,
-                    "allow_search_indices": False,
-                    "allow_view": True,
-                    "allow_fine_tuning": False,
-                    "organization": "*",
-                    "group": None,
-                    "is_blocking": False
-                }
-            ],
-            "root": model,
-            "parent": None
-        } for model in lst_models
-        ],
-        */
-        Json::Value tmpv1_model_info;
-        tmpv1_model_info["id"]=tmp_model_info["id"].asString();
-        tmpv1_model_info["object"]="model";
-        tmpv1_model_info["created"]=1626777600;
-        tmpv1_model_info["owned_by"]="example_owner";
-        tmpv1_model_info["permission"]=Json::Value(Json::arrayValue);
-        model_info["data"].append(tmpv1_model_info);
+                modelMap_ai_proxy[tmp_model_info["showName"].asString()]=tmp_model_info;
 
         }
     }
     
-    LOG_INFO << " Chaynsapi modles Successfully loaded " << model_info["data"].size() << " models from API" << " ModelNameIdMap size: " << modelNameIdMap.size();
+    LOG_INFO << " Chayns ai_proxy modles Successfully loaded " << modelMap_ai_proxy.size() << " models from API";
    
+}
+void Chaynsapi::getModels_NativeModelChatbot()
+{
+    // 创建HTTP客户端
+    //https://cube.tobit.cloud/chayns-ai-chatbot/NativeModelChatbot
+    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
+    auto request = HttpRequest::newHttpRequest();
+    
+    // 设置请求
+    request->setMethod(HttpMethod::Get);
+    request->setPath("/chayns-ai-chatbot/NativeModelChatbot");
+    
+    // 发送请求
+    auto [result, response] = client->sendRequest(request);
+    
+    if (result != ReqResult::Ok) {
+        LOG_ERROR << "Failed to fetch models from API";
+        Json::Value error;
+        error["error"]["message"] = "Failed to fetch models";
+        error["error"]["type"] = "api_error";
+        LOG_ERROR << "Failed to fetch models from API";
+        return;
+    }
+    
+    // 解析API响应
+    Json::Value api_models;
+    Json::Reader reader;
+    std::string body = std::string(response->getBody());  // 显式转换
+    if (!reader.parse(body, api_models)) {
+        LOG_ERROR << "Failed to parse API response";
+        Json::Value error;
+        error["error"]["message"] = "Failed to parse models response";
+        error["error"]["type"] = "api_error";
+        LOG_ERROR << "Failed to parse API response";
+        return;
+    }
+    
+    for (const auto& model : api_models) {
+            Json::Value tmp_model_info;
+            tmp_model_info["showName"] = model.get("showName", "");
+            tmp_model_info["usedModel"] = model.get("usedModel", "");
+            tmp_model_info["personId"] = model.get("personId", "");
+            tmp_model_info["tobit_id"] = model.get("tobitId", 0);
+            tmp_model_info["supportedMimeTypes"] = model.get("supportedMimeTypes", "");
+            tmp_model_info["canHandleImages"] = model.get("canHandleImages", "");
+            tmp_model_info["canHandleFunctionCalling"] = model.get("isAvailable", "");
+            // LOG_INFO << "id: " << model_info["id"].asString()<<" tobit_id: "<<model_info["tobit_id"].asInt();
+            modelMap_NativeModelChatbot[tmp_model_info["showName"].asString()]=tmp_model_info;
+       
+    }
+    
+    LOG_INFO << " Chayns NativeModelChatbot modles Successfully loaded " << modelMap_NativeModelChatbot.size() << " models from API";
+   
+    
 }
 
 void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)

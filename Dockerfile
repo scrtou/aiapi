@@ -81,27 +81,27 @@ WORKDIR /usr/src/app/
 COPY . .
 
 # 创建必要的目录并设置权限
-RUN mkdir -p /usr/src/app/uploads/tmp && \
-    mkdir -p /usr/src/app/build/uploads/tmp && \
-    chmod -R 777 /usr/src/app/uploads && \
-    chmod -R 777 /usr/src/app/build/uploads
+RUN mkdir -p /usr/src/app/src/uploads/tmp && \
+    mkdir -p /usr/src/app/build/src/uploads/tmp && \
+    chmod -R 777 /usr/src/app/src/uploads && \
+    chmod -R 777 /usr/src/app/build/src/uploads
 
 
 # 构建项目
-WORKDIR /usr/src/app/build
+WORKDIR /usr/src/app/src/build
 RUN cmake .. && make -j $(nproc)
 
 # 创建启动脚本
 RUN echo '#!/bin/bash\n\
 if [ ! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/build/config.json\n\
+    echo "$CONFIG_JSON" > /usr/src/app/src/build/config.json\n\
 fi\n\
 \n\
 if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/build/config.json\n\
+    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/src/build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
+cd /usr/src/app/src/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
 

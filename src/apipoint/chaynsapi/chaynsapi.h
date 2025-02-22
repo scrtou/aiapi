@@ -47,14 +47,17 @@ class Chaynsapi:public APIinterface
         DEClARE_RUNTIME(chaynsapi);
         map<string,chatinfo_st> chatinfoMap; //ConversationId:chatinfo_st
         map<string,list<chatinfo_st>> chatinfoPollMap; //modelb:chatinfo_st
-        map<string,Json::Value> modelNameIdMap; //modelname:modelid
-        Json::Value model_info;
+        map<string,Json::Value> modelMap_ai_proxy; //modelname:modelid
+        map<string,Json::Value> modelMap_NativeModelChatbot; //modelname:modelid
+        Json::Value model_info;//v1/models openai接口格式
         std::mutex chatinfoPollMap_mutex;
         std::mutex chatinfoMap_mutex;
 
         void loadUsertokenlist();
         void loadChatinfoPollMap();
         void loadModels();
+        void getModels_ai_proxy();
+        void getModels_NativeModelChatbot();
         bool checkAlivableToken(string token);
          void createChatThread( string modelname,shared_ptr<Accountinfo_st> accountinfo,string& threadid,string& usermessageid);
         void createChatThread(string modelname,chatinfo_st& chatinfo);
