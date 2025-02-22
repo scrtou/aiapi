@@ -47,6 +47,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
+    auto starttime=time(nullptr);
     LOG_INFO << "开始生成session_st";
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
@@ -231,6 +232,8 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 resp->setContentTypeString("application/json; charset=utf-8");
                 callback(resp);
         }
+    auto endtime=time(nullptr);
+    LOG_INFO << "生成session_st时间:"<<endtime-starttime<<"秒";
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
