@@ -395,6 +395,17 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
 }
 void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
+    const std::string logPath = "../logs/aichat.log";
+    std::ifstream logFile(logPath);
+
+    if (!logFile.is_open()) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k500InternalServerError);
+        resp->setBody("无法打开日志文件");
+        callback(resp);
+        return;
+    }
+
     int lines = 0;
     if (req->getParameter("lines") != "") {
         try {
@@ -408,78 +419,92 @@ void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpRes
         }
     }
 
-    const std::string logPath = "../logs/aichat.log";
-    std::ifstream logFile(logPath);
-
-    if (!logFile.is_open()) {
-        auto resp = HttpResponse::newHttpResponse();
-        resp->setStatusCode(k500InternalServerError);
-        resp->setBody("无法打开日志文件");
-        callback(resp);
-        return;
-    }
-
-    std::map<std::string, std::vector<LogEntry>> logsByDay;
+    // 如果需要限制行数，先将所有行读入vector
+    std::vector<std::string> allLines;
     std::string line;
-    std::vector<std::string> allLogs;
-
     while (std::getline(logFile, line)) {
-        allLogs.push_back(line);
+        allLines.push_back(line);
     }
 
-    if (lines > 0 && lines < allLogs.size()) {
-        allLogs.erase(allLogs.begin(), allLogs.end() - lines);
+    // 如果指定了行数限制，只保留最后N行
+    if (lines > 0 && lines < allLines.size()) {
+        allLines.erase(allLines.begin(), allLines.end() - lines);
     }
 
-    // 按日期分组
-    for (const auto& log : allLogs) {
-        if (log.length() >= 8) {  // 确保日志行至少包含日期部分
-            std::string date = log.substr(0, 8);  // 提取 YYYYMMDD
-            // 格式化日期显示
-            std::string formattedDate = date.substr(0, 4) + "-" + 
-                                      date.substr(4, 2) + "-" + 
-                                      date.substr(6, 2);
-            logsByDay[formattedDate].push_back(parseLogLine(log));
+    std::stringstream formattedContent;
+    formattedContent << R"(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志查看器</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            font-family: Arial, sans-serif;
         }
-    }
-
-    // 生成HTML内容
-    std::stringstream htmlContent;
-    htmlContent << generateHtmlPage();
-
-    // 插入日志统计
-    std::string logCount = "总日志数: " + std::to_string(allLogs.size()) + " 条";
-
-    // 生成日志内容
-    std::stringstream logContent;
-    for (auto it = logsByDay.rbegin(); it != logsByDay.rend(); ++it) {
-        logContent << "<div class='day-section'>"
-                  << "<div class='day-header'>" << it->first << "</div>";
-
-        for (const auto& entry : it->second) {
-            logContent << formatLogEntry(entry);
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+            margin: 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            color: #333;
+            margin: 0 0 10px 0;
+        }
+        .summary {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>系统日志查看器</h1>
+        </div>
+        <div class="summary">
+            总日志行数: )" << allLines.size() << R"( 行
+        </div>
+        <pre>)";
 
-        logContent << "</div>";
+    // 输出所有日志行
+    for (const auto& logLine : allLines) {
+        formattedContent << logLine << "\n";
     }
 
-    // 替换占位符
-    std::string html = htmlContent.str();
-    size_t logCountPos = html.find("<span id=\"log-count\"></span>");
-    if (logCountPos != std::string::npos) {
-        html.replace(logCountPos, 28, logCount);
-    }
-
-    size_t logContentPos = html.find("<div id=\"log-content\"></div>");
-    if (logContentPos != std::string::npos) {
-        html.replace(logContentPos, 29, logContent.str());
-    }
+    formattedContent << "</pre></div></body></html>";
 
     auto resp = HttpResponse::newHttpResponse();
     resp->setStatusCode(k200OK);
     resp->setContentTypeCode(CT_TEXT_HTML);
     resp->addHeader("Content-Type", "text/html; charset=utf-8");
-    resp->setBody(html);
+    resp->setBody(formattedContent.str());
     callback(resp);
 }
 std::string AiApi::generateHtmlPage() {
