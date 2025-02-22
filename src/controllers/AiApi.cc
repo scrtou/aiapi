@@ -34,6 +34,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
 
     
     auto jsonPtr = req->getJsonObject();
+    /*
        if (!jsonPtr) {
         Json::Value error;
         error["error"]["message"] = "Invalid JSON in request body";
@@ -43,6 +44,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
+    */
     auto& reqbody = *jsonPtr;
 
     auto& reqmessages = reqbody["messages"];
