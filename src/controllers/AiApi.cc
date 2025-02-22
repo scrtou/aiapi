@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <apiManager/ApiManager.h>
 #include <accountManager/accountManager.h>
+#include <dbManager/account/accountDbManager.h>
 #include <sessionManager/Session.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
@@ -253,8 +254,9 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         return;
     }
 
-    LOG_INFO << "addAccountDatebase start";
+    LOG_INFO << "addAccount start";
     Json::Value response;
+    list<Accountinfo_st> accountList;
     for(auto &item:*jsonPtr)
     {   Accountinfo_st accountinfo;
         accountinfo.apiName=item["apiname"].asString();
@@ -269,24 +271,29 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         Json::Value responseitem;
         responseitem["apiname"]=accountinfo.apiName;
         responseitem["username"]=accountinfo.userName;
-        if(AccountManager::getInstance().addAccount(accountinfo))
+        //先添加到accountManager
+        if(AccountManager::getInstance().addAccountbyPost(accountinfo))
         {
             responseitem["status"]="success";
-            AccountManager::getInstance().addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+            accountList.push_back(accountinfo);
         }
         else
         {
             responseitem["status"]="failed";
         }
         response.append(responseitem);
-
     }
+    thread addAccountThread([accountList](){
+        for(auto &account:accountList)
+        {
+            AccountDbManager::getInstance()->addAccount(account);
+        }
+        AccountManager::getInstance().checkUpdateAccountToken();
+    });
+    addAccountThread.detach();
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
-
-    LOG_INFO << "addAccountDatebase end";
-    
-    AccountManager::getInstance().checkUpdateAccountToken();
+    LOG_INFO << "addAccount end";
 }
 void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
@@ -295,17 +302,20 @@ void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const Http
     Json::Value response;
     for(auto &account:accountList)
     {
-        Json::Value accountitem;
-        accountitem["apiname"]=account->apiName;
-        accountitem["username"]=account->userName;
-        accountitem["password"]=account->passwd;
-        accountitem["authtoken"]=account->authToken;
-        accountitem["usecount"]=account->useCount;
-        accountitem["tokenstatus"]=account->tokenStatus;
-        accountitem["accountstatus"]=account->accountStatus;
-        accountitem["usertobitid"]=account->userTobitId;
-        accountitem["personid"]=account->personId;
-        response.append(accountitem);
+        for(auto &userName:account.second)
+        {
+            Json::Value accountitem;
+            accountitem["apiname"]=userName.second->apiName;
+            accountitem["username"]=userName.second->userName;
+            accountitem["password"]=userName.second->passwd;
+            accountitem["authtoken"]=userName.second->authToken;
+            accountitem["usecount"]=userName.second->useCount;
+            accountitem["tokenstatus"]=userName.second->tokenStatus;
+            accountitem["accountstatus"]=userName.second->accountStatus;
+            accountitem["usertobitid"]=userName.second->userTobitId;
+            accountitem["personid"]=userName.second->personId;
+            response.append(accountitem);
+        }
     }
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
@@ -325,6 +335,7 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
     }
  
     Json::Value response;
+    list<Accountinfo_st> accountList;
     for(auto &item:*jsonPtr)
     {
         Accountinfo_st accountinfo;
@@ -333,15 +344,48 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
         accountinfo.userName=item["username"].asString();
         responseitem["apiname"]=accountinfo.apiName;
         responseitem["username"]=accountinfo.userName;
-        if(AccountManager::getInstance().deleteAccount(accountinfo))
+
+        if(AccountManager::getInstance().deleteAccountbyPost(accountinfo.apiName,accountinfo.userName))
         {
             responseitem["status"]="success";
+            accountList.push_back(accountinfo);
         }
         else
         {
             responseitem["status"]="failed";
         }
         response.append(responseitem);
+    }
+    thread deleteAccountThread([accountList](){
+        for(auto &account:accountList)
+        {
+            AccountDbManager::getInstance()->deleteAccount(account.apiName,account.userName);
+        }
+    });
+    deleteAccountThread.detach();   
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
+    //删除accountdbManager中的账号
+}
+void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "accountDbInfo";
+    Json::Value response;
+    response["dbName"]="aichat";
+    response["tableName"]="account";
+    for(auto &account:AccountDbManager::getInstance()->getAccountDBList())
+    {
+        Json::Value accountitem;
+        accountitem["apiname"]=account.apiName;
+        accountitem["username"]=account.userName;
+        accountitem["password"]=account.passwd;
+        accountitem["authtoken"]=account.authToken;
+        accountitem["usecount"]=account.useCount;
+        accountitem["tokenstatus"]=account.tokenStatus;
+        accountitem["accountstatus"]=account.accountStatus;
+        accountitem["usertobitid"]=account.userTobitId;
+        accountitem["personid"]=account.personId;
+        response.append(accountitem);
     }
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);

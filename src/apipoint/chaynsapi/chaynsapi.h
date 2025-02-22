@@ -10,7 +10,7 @@
 #include <sstream>
 #include <iomanip>
 
-const int MAX_RETRIES = 30;  // 最大重试次数
+const int MAX_RETRIES = 100;  // 最大重试次数
 const int BASE_DELAY = 300;  // 最大重试间隔（豪秒）
 // ... existing code ...
 
@@ -46,7 +46,7 @@ class Chaynsapi:public APIinterface
     private:
         DEClARE_RUNTIME(chaynsapi);
         map<string,chatinfo_st> chatinfoMap; //ConversationId:chatinfo_st
-        map<string,list<chatinfo_st>> chatinfoPollMap; //modelb:chatinfo_st
+        map<string,list<chatinfo_st>> chatinfoPollMap; //modelname:chatinfo_st
         map<string,Json::Value> modelMap_ai_proxy; //modelname:modelid
         map<string,Json::Value> modelMap_NativeModelChatbot; //modelname:modelid
         Json::Value model_info;//v1/models openai接口格式

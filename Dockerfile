@@ -71,10 +71,6 @@ RUN git clone https://github.com/drogonframework/drogon && \
     ldconfig && \
     cd / && \
     rm -rf /usr/src/drogon
-RUN mkdir -p /tmp/chrome-data && \
-    chmod -R 777 /tmp/chrome-data && \
-    mkdir -p /dev/shm && \
-    chmod -R 777 /dev/shm
 
 # 设置工作目录和复制项目文件
 WORKDIR /usr/src/app/

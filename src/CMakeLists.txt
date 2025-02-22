@@ -58,6 +58,7 @@ aux_source_directory(sessionManager SESSION_SRC)
 aux_source_directory(apipoint/chaynsapi CHAYNSAPI_SRC)
 aux_source_directory(accountManager ACCOUNT_SRC)
 aux_source_directory(apiManager API_SRC)
+aux_source_directory(dbManager/account ACCOUNTDB_SRC)
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
 # use the following line to create views with namespaces.
@@ -75,6 +76,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
                            ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/models
+                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/apiManager)
 target_sources(${PROJECT_NAME}
                PRIVATE
@@ -86,7 +88,8 @@ target_sources(${PROJECT_NAME}
                ${CHAYNSAPI_SRC}
                ${SESSION_SRC}
                ${ACCOUNT_SRC}
-               ${API_SRC})
+               ${API_SRC}
+               ${ACCOUNTDB_SRC})
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

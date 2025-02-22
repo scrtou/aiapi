@@ -7,15 +7,17 @@ int main() {
     //Load config file
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
-
-
-    //开启线程执行
-    thread t1([]{
-        ApiManager::getInstance().init();
-        AccountManager::getInstance().init();
-        //AccountManager::getInstance().checkUpdateTokenthread();
+    
+    
+    // 在事件循环开始后立即执行
+    app().getLoop()->queueInLoop([](){
+        std::thread t1([]{ 
+            AccountManager::getInstance().init();
+            ApiManager::getInstance().init();
+        });
+        t1.detach();
     });
-    t1.detach();
+
     drogon::app().run();
 
     return 0;

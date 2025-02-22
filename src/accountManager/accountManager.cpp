@@ -6,37 +6,6 @@
 using namespace drogon;
 using namespace drogon::orm;
 const string getTokenUrl = "https://aiapi-tool.onrender.com/aichat/chayns/login";
-//pg create table 
-std::string createTablePgSql = R"(
-    CREATE TABLE IF NOT EXISTS account (
-        id SERIAL PRIMARY KEY,
-        updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        apiname VARCHAR(255),
-        username VARCHAR(255),
-        password VARCHAR(255),
-        authtoken TEXT,
-        usecount INTEGER,
-        tokenstatus BOOLEAN,
-        accountstatus BOOLEAN,
-        usertobitid INTEGER,
-        personid VARCHAR(255)
-    );
-)";
-std::string createTableSqlMysql=R"(
-    CREATE TABLE IF NOT EXISTS account ( 
-    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, 
-    updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    apiname VARCHAR(255),
-    username VARCHAR(255),
-    password VARCHAR(255),
-    authtoken TEXT,
-    usecount INT,
-    tokenstatus TINYINT(1),
-    accountstatus TINYINT(1),
-    usertobitid INT,
-    personid VARCHAR(255)
-) ENGINE=InnoDB;)";
-
 
 AccountManager::AccountManager()
 {
@@ -47,16 +16,24 @@ AccountManager::~AccountManager()
 }
 void AccountManager::init()
 {
-    createTable("account");
+    LOG_INFO << "AccountManager::init start";
+    accountDbManager = AccountDbManager::getInstance();
+    if(!accountDbManager->isTableExist())
+    {
+        accountDbManager->createTable();
+    }
     loadAccount();
+    //checkUpdateAccountToken();
     checkUpdateTokenthread();
+    waitUpdateAccountTokenThread();
+    LOG_INFO << "AccountManager::init end";
 }   
  
 void AccountManager::loadAccount()
 {
     LOG_INFO << "loadAccount start";
     //load account from config.json
-    if(isTableExist("account"))
+    if(accountDbManager->isTableExist())
     {
         loadAccountFromDatebase();
     }
@@ -64,8 +41,7 @@ void AccountManager::loadAccount()
     {
         loadAccountFromConfig();
     }
-    LOG_INFO << "accountList size: " << accountList.size();
-    LOG_INFO << "accountPoolMap size: " << accountPoolMap.size();
+
     for(auto& apiName : accountPoolMap)
     {
         LOG_INFO << "apiName: " << apiName.first << ",accountQueue size: " << apiName.second->size();
@@ -78,10 +54,10 @@ void AccountManager::loadAccountFromConfig()
 {
     LOG_INFO << "loadAccountFromConfig start";
      auto customConfig = app().getCustomConfig();
-    auto accountList = customConfig["account"];
+    auto configAccountList = customConfig["account"];
 
     //and add to accountPoolMap
-    for(auto& account : accountList)
+    for(auto& account : configAccountList)
     {
         auto apiName =account["apiname"].empty()?"":account["apiname"].asString();
         auto userName = account["username"].empty()?"":account["username"].asString();
@@ -99,12 +75,33 @@ void AccountManager::loadAccountFromConfig()
 void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId)
 {
     auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId);
-    accountList.push_back(account);
+    accountList[apiName][userName] = account;
     if(accountPoolMap[apiName] == nullptr)
     {
         accountPoolMap[apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
     }
     accountPoolMap[apiName]->push(account);
+}
+bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
+{
+    if(accountList[accountinfo.apiName].find(accountinfo.userName) != accountList[accountinfo.apiName].end())
+    {
+        return false;
+    }
+    addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+    return true;
+}
+bool AccountManager::deleteAccountbyPost(string apiName,string userName)
+{
+
+    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
+    {
+        accountList[apiName][userName]->tokenStatus = false;
+        accountList[apiName][userName]->accountStatus = false;
+        accountList[apiName].erase(userName);
+        return true;
+    }
+    return false;   
 }
 void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& account)
 {
@@ -157,8 +154,6 @@ void AccountManager::printAccountPoolMap()
     }
     LOG_INFO << "printAccountPoolMap end";
 }
-
-
 bool AccountManager::checkChaynsToken(string token)
 {
     LOG_INFO << "checkChaynsTonen start";
@@ -166,7 +161,7 @@ bool AccountManager::checkChaynsToken(string token)
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/AccountService/v1.0/Chayns/User");
-    request->addHeader("Authorization", token);
+    request->addHeader("Authorization","Bearer " + token);
     auto [result, response] = client->sendRequest(request);
     LOG_DEBUG << "checkAlivableToken response: " << response->getStatusCode();
     LOG_INFO << "checkChaynsTonen end";
@@ -211,19 +206,23 @@ void AccountManager::checkToken()
 {
     LOG_INFO << "checkToken start";
     LOG_INFO << "checkToken function map size: " << checkTokenMap.size();
-    for(auto accountinfo:accountList)
+    for(auto apiName:accountList)
     {   
-        LOG_INFO << "checkToken accountinfo: " << accountinfo->apiName << " " << accountinfo->userName;
-        if(checkTokenMap[accountinfo->apiName])
+        for(auto& userName:apiName.second)
         {
-            bool result = (this->*checkTokenMap[accountinfo->apiName])(accountinfo->authToken);
-            accountinfo->tokenStatus = result;
-            LOG_INFO << "checkToken result: " << result;
-        }
-        else
-        {
-            LOG_ERROR << "apiName: " << accountinfo->apiName << " is not supported";
-        }
+            LOG_INFO << "checkToken accountinfo: " << userName.second->apiName << " " << userName.second->userName;
+            if(checkTokenMap[userName.second->apiName])
+            {
+                bool result = (this->*checkTokenMap[userName.second->apiName])(userName.second->authToken);
+                LOG_INFO << "checkToken result: " << result;
+                setStatusTokenStatus(userName.second->apiName,userName.second->userName,result);
+                
+            }
+            else
+            {
+                LOG_ERROR << "apiName: " << userName.second->apiName << " is not supported";
+            }
+        }   
     }
     LOG_INFO << "checkToken end";
 }
@@ -231,23 +230,26 @@ void AccountManager::checkToken()
 void AccountManager::updateToken()
 {
     LOG_INFO << "updateToken start";
-    for(auto accountinfo:accountList)
+    for(auto apiName:accountList)
     {
-        if(!accountinfo->tokenStatus||accountinfo->authToken.empty())
+        for(auto& userName:apiName.second)
         {
-           if(updateTokenMap[accountinfo->apiName])
+            if(!userName.second->tokenStatus||userName.second->authToken.empty())
+            {
+                if(updateTokenMap[userName.second->apiName])
            {
-                (this->*updateTokenMap[accountinfo->apiName])(accountinfo);
-                if(accountinfo->tokenStatus)
+                (this->*updateTokenMap[userName.second->apiName])(userName.second);
+                if(userName.second->tokenStatus)
                 {
-                    updateAccount(*(accountinfo.get()));
-                    refreshAccountQueue(accountinfo->apiName);
+                    accountDbManager->updateAccount(*(userName.second.get()));
+                    refreshAccountQueue(userName.second->apiName);
                 }
            }
            else
-           {
-            LOG_ERROR << "apiName: " << accountinfo->apiName << " is not supported";
-           }
+                {
+                    LOG_ERROR << "apiName: " << userName.second->apiName << " is not supported";
+                }
+            }
         }
     }
     LOG_INFO << "updateToken end";
@@ -272,18 +274,20 @@ void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
 }
 void AccountManager::checkUpdateTokenthread()
 {
-    
+    thread t1([&]{
         while(true) 
         {
             checkToken();
-            updateToken();
             this_thread::sleep_for(chrono::hours(1));
+            //updateToken();
         }
+    });
+    t1.detach();
 }
 void AccountManager::checkUpdateAccountToken()  
 {
     checkToken();
-    updateToken();
+   // updateToken();
 }  
 
 // 添加检测服务可用性的函数
@@ -314,7 +318,7 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
 void AccountManager::loadAccountFromDatebase()
 {
     LOG_INFO << "loadAccountFromDatebase start";
-    auto accountDBList = getAccountDBList();
+    auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
@@ -324,113 +328,92 @@ void AccountManager::loadAccountFromDatebase()
 void AccountManager::saveAccountToDatebase()
 {
     LOG_INFO << "saveAccountToDatebase start";
-    for(auto& accountinfo:accountList)
+    for(auto& apiName:accountList)
     {
-        updateAccount(*(accountinfo.get()));
+        for(auto& userName:apiName.second)
+        {
+            accountDbManager->addAccount(*(userName.second.get()));
+        }
     }
     LOG_INFO << "saveAccountToDatebase end";
 }
 
-bool AccountManager::addAccount(struct Accountinfo_st accountinfo)
-{
-    auto dbClient = app().getDbClient("aichatpg");
-    std::string selectsql = "select * from account where apiname=$1 and username=$2";
-    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)";
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
-    auto result = dbClient->execSqlSync(selectsql,accountinfo.apiName,accountinfo.userName);
-    if(result.size()!=0)
-    {
-        LOG_INFO << "账号 " << accountinfo.userName << " 已存在";
-        return false;
-    }
-    else
-    {
-         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
-        if(result1.affectedRows()!=0)
-        {
-            LOG_INFO << "账号 " << accountinfo.userName << " 添加成功";
-            return true;
-        }
-        else
-        {
-            LOG_ERROR << "账号 " << accountinfo.userName << " 添加失败";
-            return false;
-        }
-    }
-}
-bool AccountManager::updateAccount(struct Accountinfo_st accountinfo)
-{
-    auto dbClient = app().getDbClient("aichatpg");
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
-    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.apiName,accountinfo.userName);
-    if(result.affectedRows()!=0)
-    {
-        LOG_INFO << "账号 " << accountinfo.userName << " 更新成功";
-        return true;
-    }
-    else
-    {
-        LOG_ERROR << "账号 " << accountinfo.userName << " 更新失败";
-        return false;
-    }
-    
-}
-bool AccountManager::deleteAccount(struct Accountinfo_st accountinfo)
-{
-    auto dbClient = app().getDbClient("aichatpg");
-    std::string deletesql = "delete from account where apiname=$1 and username=$2";
-    auto result = dbClient->execSqlSync(deletesql,accountinfo.apiName,accountinfo.userName);
-    if(result.affectedRows()!=0)
-    {
-        LOG_INFO << "账号 " << accountinfo.userName << " 删除成功";
-        return true;
-    }
-    else
-    {
-        LOG_ERROR << "账号 " << accountinfo.userName << " 删除失败";
-        return false;
-    }
-}
-list<shared_ptr<Accountinfo_st>> AccountManager::getAccountList()
+map<string,map<string,shared_ptr<Accountinfo_st>>> AccountManager::getAccountList()
 {
     return accountList;
 }
-list<Accountinfo_st> AccountManager::getAccountDBList()
+void AccountManager::setStatusAccountStatus(string apiName,string userName,bool status)
 {
-    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid from account";
-    auto dbClient = app().getDbClient("aichatpg");
-    auto result = dbClient->execSqlSync(selectsql);
-    list<Accountinfo_st> accountDBList;
-    for(auto& item:result)
+    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
-        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>());
-        accountDBList.push_back(accountinfo);
-    }
-    return accountDBList;
-}
-bool AccountManager::isTableExist(string tableName)
-{
-    auto dbClient = app().getDbClient("aichatpg");
-    auto result = dbClient->execSqlSync("select * from information_schema.tables where table_name='" + tableName + "'");
-    if(result.size()!=0)
-    {
-        return true;
-    }
-    else
-    {
-        return false;
+        accountList[apiName][userName]->accountStatus = status;
     }
 }
-void AccountManager::createTable(string tableName)
+void AccountManager::setStatusTokenStatus(string apiName,string userName,bool status)
 {
-    auto dbClient = app().getDbClient("aichatpg");
-    try 
+    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
-        dbClient->execSqlSync(createTablePgSql);
+        accountList[apiName][userName]->tokenStatus = status;
+        if(!status)
+            {
+                std::lock_guard<std::mutex> lock(accountListNeedUpdateMutex);
+                accountListNeedUpdate.push_back(accountList[apiName][userName]);
+                accountListNeedUpdateCondition.notify_one();
+            }
     }
-    catch(const std::exception& e)
-    {
-        LOG_ERROR << "createTable error: " << e.what();
-    }
-    
+}
+void AccountManager::waitUpdateAccountToken()
+{
+    LOG_INFO << "waitUpdateAccountTokenThread start";
+    while (true) {  // 持续运行的工作循环
+        shared_ptr<Accountinfo_st> account;
+        
+        // 获取待更新账号，仅在访问共享队列时加锁
+        {
+            std::unique_lock<std::mutex> lock(accountListNeedUpdateMutex);
+            while (accountListNeedUpdate.empty()) {
+                accountListNeedUpdateCondition.wait(lock);
+            }
+            
+            account = accountListNeedUpdate.front();
+            accountListNeedUpdate.pop_front();
+            LOG_INFO << "Processing account update for user: " << account->userName;
+        }
+
+        // 验证账号
+        if (!account) {
+            LOG_ERROR << "Invalid account pointer";
+            continue;
+        }
+
+        // 查找更新函数
+        auto updateFunc = updateTokenMap.find(account->apiName);
+        if (updateFunc == updateTokenMap.end()) {
+            LOG_ERROR << "Unsupported API name: " << account->apiName;
+            continue;
+        }
+
+        try {
+            // 执行token更新
+            (this->*(updateFunc->second))(account);
+
+            // 仅在更新成功时更新数据库和刷新队列
+            if (account->tokenStatus) {
+                if (!accountDbManager->updateAccount(*account)) {
+                    LOG_ERROR << "Failed to update account in database";
+                    continue;
+                }
+                refreshAccountQueue(account->apiName);
+            }
+        }
+        catch (const std::exception& e) {
+            LOG_ERROR << "Exception during account update: " << e.what() 
+                     << " for user: " << account->userName;
+        }
+    };
+}
+void AccountManager::waitUpdateAccountTokenThread()
+{
+    std::thread worker(&AccountManager::waitUpdateAccountToken, this);
+    worker.detach();    
 }

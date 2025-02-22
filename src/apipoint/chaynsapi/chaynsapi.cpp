@@ -18,8 +18,10 @@ Chaynsapi::~Chaynsapi()
 void Chaynsapi::init()
 {
     loadModels();
-    //loadUsertokenlist();
-    //loadChatinfoPollMap();
+    thread t1([this](){
+        //loadChatinfoPollMap();
+    });
+    t1.detach();
 }
 
 void Chaynsapi::loadUsertokenlist()
@@ -50,6 +52,7 @@ void Chaynsapi::loadUsertokenlist()
 void Chaynsapi::loadChatinfoPollMap()
 {   
     LOG_INFO << " Chaynsapi::loadChatinfoPollMap";
+    
     for(auto& tempnam:modelMap_NativeModelChatbot)
     {
         string modelname=tempnam.first;
@@ -146,7 +149,7 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
     
     // 设置请求头
     req->setContentTypeString("application/json");
-    req->addHeader("Authorization", accountinfo->authToken);
+    req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
     req->addHeader("Accept", "*/*");
     /*
     LOG_INFO << "=== Full Request Details ===";
@@ -312,7 +315,7 @@ bool Chaynsapi::checkAlivableToken(string token)
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/v2/userSettings");
-    request->addHeader("Authorization", token);
+    request->addHeader("Authorization", "Bearer " + token);
     auto [result, response] = client->sendRequest(request);
     LOG_DEBUG << "checkAlivableToken response: " << response->getStatusCode();
     if(response->getStatusCode()!=200)
@@ -519,7 +522,7 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     
     // 设置请求头
     req->setContentTypeString("application/json");
-    req->addHeader("Authorization", accountinfo->authToken);
+    req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
     req->addHeader("Accept", "*/*");
     
     LOG_DEBUG << "=== Request Body ===";
@@ -576,7 +579,7 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
     req->setMethod(HttpMethod::Get);
     req->setPath(path);
     req->setContentTypeString("application/json");
-    req->addHeader("Authorization", accountinfo->authToken);
+    req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
     req->addHeader("Accept", "*/*");
     
     LOG_INFO << "url: " << path;

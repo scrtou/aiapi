@@ -283,7 +283,7 @@ Json::Value chatSession::generateJsonbySession(const session_st& session,bool co
      Json::Value keyData;
      Json::Value messages(Json::arrayValue);
      int startIndex=contextIsFull?(session.message_context.size()-session.contextlength):0;
-     for(int i=session.message_context.size()-1;i>=startIndex;i--)
+     for(int i=startIndex;i<session.message_context.size();i++)
      {
         messages.append(session.message_context[i]);
      }

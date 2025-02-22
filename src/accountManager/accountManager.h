@@ -7,7 +7,10 @@
 #include <map>
 #include <list>
 #include <APIinterface.h>
+#include <../dbManager/account/accountDbManager.h>
 using namespace std;
+using namespace drogon;
+class AccountDbManager;
 struct Accountinfo_st
 {
     string apiName;
@@ -48,8 +51,11 @@ class AccountManager
     private:
    // static AccountManager* instance;
     map<string,shared_ptr<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>> accountPoolMap;
-    list<shared_ptr<Accountinfo_st>> accountList;
-     // 使用 std::function 来定义指向成员函数的指针
+    map<string,map<string,shared_ptr<Accountinfo_st>>> accountList;//apiName->userName->accountinfo
+    list<shared_ptr<Accountinfo_st>> accountListNeedUpdate;//需要更新的账号,
+    std::mutex accountListNeedUpdateMutex;
+    std::condition_variable accountListNeedUpdateCondition;
+     // 
     map<string, void (AccountManager::*)(shared_ptr<Accountinfo_st>)> updateTokenMap = {
         {"chaynsapi", &AccountManager::updateChaynsToken}
     };
@@ -58,6 +64,7 @@ class AccountManager
         {"chaynsapi", &AccountManager::checkChaynsToken}
     };
     //list<string> apiNameList;
+    shared_ptr<AccountDbManager> accountDbManager;
      AccountManager();
     ~AccountManager();
 
@@ -74,6 +81,8 @@ class AccountManager
     void saveAccount();
 
     void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId);
+    bool addAccountbyPost(Accountinfo_st accountinfo);
+    bool deleteAccountbyPost(string apiName,string userName);
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account);
     void checkAccount();
     void checkToken();
@@ -90,12 +99,10 @@ class AccountManager
     void loadAccountFromDatebase();
     void saveAccountToDatebase();
     void loadAccountFromConfig();
-    bool addAccount(struct Accountinfo_st accountinfo);
-    bool updateAccount(struct Accountinfo_st accountinfo);
-    bool deleteAccount(struct Accountinfo_st accountinfo);
-    list<Accountinfo_st> getAccountDBList();
-    list<shared_ptr<Accountinfo_st>> getAccountList();
-    bool isTableExist(string tableName);
-    void createTable(string tableName);
+    void setStatusAccountStatus(string apiName,string userName,bool status);
+    void setStatusTokenStatus(string apiName,string userName,bool status);
+    std::map<string,map<string,shared_ptr<Accountinfo_st>>> getAccountList();
+    void waitUpdateAccountToken();
+    void waitUpdateAccountTokenThread();
 };
 #endif
