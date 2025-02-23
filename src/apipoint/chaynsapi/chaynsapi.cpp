@@ -571,6 +571,7 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     size_t total_chunks = (total_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
     LOG_INFO << "chaynsapi::sendMessage begin";
     LOG_INFO << "total_size: " << total_size;
+    LOG_INFO << "CHUNK_SIZE: " << CHUNK_SIZE;
     LOG_INFO << "total_chunks: " << total_chunks;
     // HTTP-Client einmalig erstellen
     auto client = HttpClient::newHttpClient("https://intercom.tobit.cloud");
