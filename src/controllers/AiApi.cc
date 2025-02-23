@@ -239,7 +239,6 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 callback(resp);
         }
     auto endtime=time(nullptr);
-    LOG_INFO << "处理请求结束时间: " << std::ctime(&endtime);
     LOG_INFO << "消耗时间: " << endtime-starttime << "秒";
     LOG_INFO << "chaynsapichat 请求结束";
 }

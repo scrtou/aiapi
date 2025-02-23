@@ -254,7 +254,7 @@ bool chatSession::sessionIsExist(const std::string &ConversationId)
 }
 session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
 {
-    LOG_INFO<<<<__FUNCTION__<<":"<<__LINE__<<"开始生成session_st";
+    LOG_INFO<<__FUNCTION__<<":"<<__LINE__<<"开始生成session_st";
     session_st session;
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
