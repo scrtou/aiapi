@@ -115,8 +115,9 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
     if(account->tokenStatus)
     {
         account->useCount++;
-    }
+    }   
     accountPoolMap[apiName]->push(account);
+    LOG_INFO << __FUNCTION__ <<"getAccount success; "<<account->apiName<< " " << account->userName;
 }
 void AccountManager::checkAccount()
 {
@@ -163,7 +164,7 @@ bool AccountManager::checkChaynsToken(string token)
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
     auto [result, response] = client->sendRequest(request);
-    LOG_DEBUG << "checkAlivableToken response: " << response->getStatusCode();
+    LOG_INFO << "checkAlivableToken response: " << response->getStatusCode();
     LOG_INFO << "checkChaynsTonen end";
     if(response->getStatusCode()!=200)
     {

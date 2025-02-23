@@ -176,9 +176,9 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
     int statusCode = response->getStatusCode();
     std::string responseBody = std::string(response->getBody());  // 显式转换
     
-    LOG_INFO << "=== Response ===";
-    LOG_INFO << "Status Code: " << statusCode;
-    LOG_DEBUG << "=== Response Body ===";
+    LOG_INFO << __FUNCTION__ << "=== Response ===";
+    LOG_INFO << __FUNCTION__ << "Status Code: " << statusCode;
+    LOG_DEBUG << __FUNCTION__ << "=== Response Body ===";
     LOG_DEBUG << responseBody;
     
     // 解析响应
@@ -665,10 +665,10 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
         if(reader.parse(responseBody, resp_json)) {
             if (resp_json.isMember("message")) {
                 creationTime = resp_json["message"]["creationTime"].asString();
-                LOG_DEBUG << "creationTime: " << creationTime;
+                LOG_INFO << __FUNCTION__ <<"creationTime: " << creationTime;
             }
         } else {
-            LOG_ERROR << "Failed to parse response JSON for chunk " << current_chunk;
+            LOG_ERROR << __FUNCTION__ << "Failed to parse response JSON for chunk " << current_chunk;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
