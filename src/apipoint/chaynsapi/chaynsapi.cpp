@@ -655,7 +655,7 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
         std::string responseBody = std::string(response->getBody());
 
         LOG_INFO << "=== Response ===";
-        LOG_INFO << "Status Code: " << statusCode;
+        LOG_INFO <<__FUNCTION__<<"Status Code: " << statusCode;
         LOG_DEBUG << "=== Response Body ===";
         LOG_DEBUG << responseBody;
 
@@ -780,12 +780,13 @@ void Chaynsapi::afterResponseProcess(session_st& session)
 {
     if(chatinfoMap.find(session.preConversationId)!=chatinfoMap.end())
     {
-        LOG_INFO << "find chatinfo in chatinfoMap,recoverChatinfoResponse by ConversationId: " << session.preConversationId;
+        LOG_DEBUG << "find chatinfo in chatinfoMap,recoverChatinfoResponse by ConversationId: " << session.preConversationId;
         std::lock_guard<std::mutex> lock(chatinfoMap_mutex);
         chatinfo_st chatinfo=chatinfoMap[session.preConversationId];
         chatinfo.status=2;
         chatinfoMap[session.curConversationId]=chatinfo;
         chatinfoMap.erase(session.preConversationId);
+        LOG_INFO << __FUNCTION__ <<"update Chatinfo success by ConversationId: ";
     }
     else
     {

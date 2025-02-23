@@ -82,6 +82,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     string message=responsejson["message"].asString();
     int statusCode=responsejson["statusCode"].asInt();
     LOG_INFO << "chaynsapi返回结果 statusCode: " << statusCode;
+    LOG_INFO << "chaynsapi返回结果 message size: " << message.size();
     const auto& stream = reqbody["stream"].asBool();
 
     LOG_INFO << "stream: " << stream;
