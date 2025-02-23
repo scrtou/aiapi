@@ -117,7 +117,7 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         account->useCount++;
     }   
     accountPoolMap[apiName]->push(account);
-    LOG_INFO << __FUNCTION__ <<"getAccount success; "<<account->apiName<< " " << account->userName;
+    //LOG_INFO << __FUNCTION__ <<"getAccount success; "<<account->apiName<< " " << account->userName;
 }
 void AccountManager::checkAccount()
 {

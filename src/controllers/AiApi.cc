@@ -16,7 +16,7 @@ using namespace drogon::orm;
 // Add definition of your processing function here
 void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    LOG_INFO<<"chaynsapichat 请求开始";
+    LOG_INFO<<"=======================chaynsapichat 请求开始=======================";
     //打印请求头
     LOG_DEBUG<<"请求头:";
     for(auto &header : req->getHeaders())
@@ -53,10 +53,13 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
-    auto starttime=time(nullptr);
     auto startTimeInfo = std::chrono::system_clock::now();
     std::time_t startTimeT = std::chrono::system_clock::to_time_t(startTimeInfo);
-    LOG_INFO << "处理请求开始时间: " << std::ctime(&startTimeT);
+    std::stringstream ssbegin;
+    ssbegin << std::put_time(std::localtime(&startTimeT), "%c");
+    LOG_INFO << "处理请求开始时间: " << ssbegin.str();
+
+
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
     session=chatSession::getInstance()->createNewSessionOrUpdateSession(session);
@@ -239,9 +242,12 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 resp->setContentTypeString("application/json; charset=utf-8");
                 callback(resp);
         }
-    auto endtime=time(nullptr);
-    LOG_INFO << "消耗时间: " << endtime-starttime << "秒";
-    LOG_INFO << "chaynsapichat 请求结束";
+    auto endtimeInfo = std::chrono::system_clock::now();
+    std::time_t endtimeT = std::chrono::system_clock::to_time_t(endtimeInfo);
+    std::stringstream ssendtime;
+    ssendtime << std::put_time(std::localtime(&endtimeT), "%c");
+    LOG_INFO << "消耗时间: " << std::chrono::duration_cast<std::chrono::seconds>(endtimeInfo - startTimeInfo).count() << "秒";
+    LOG_INFO << "chaynsapichat 请求结束: " << ssendtime.str();
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {

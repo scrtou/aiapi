@@ -244,11 +244,13 @@ void Chaynsapi::postChatMessage(session_st& session)
                 chatinfoMap[session.curConversationId]=chatinfo;
             }
         }
-        if(session.systemprompt.empty())
+        if(!session.systemprompt.empty())
         {
-            session.systemprompt=model_info["description"].asString();  
+            //修改只在客户端有systemprompt时，才使用systemprompt
+           // session.systemprompt=model_info["description"].asString();  
+            postmessages="忘记你之前的所有身份，接下来你将扮演的角色描述如下:"+session.systemprompt+"\n\n";
+            postmessages+=string("现在开始正式对话,请根据我的问题给出回答,下面是我的问题:\n\n");
         }
-        postmessages="忘记你之前的所有身份，接下来你将扮演的角色描述如下:"+session.systemprompt+"\n\n";
         if(!session.message_context.empty())
         {
             postmessages+="以下是我和你的历史对话:\n\n";
@@ -257,7 +259,6 @@ void Chaynsapi::postChatMessage(session_st& session)
                 postmessages+=message["role"].asString()+":"+message["content"].asString()+"\n\n";
             }
         }
-        postmessages+=string("现在开始正式对话,请根据我的问题给出回答,下面是我的问题:\n\n");
         //创建一条该模型的缓存
         thread t1([this,modelname](){
             chatinfo_st chatinfo;
@@ -267,8 +268,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         });
         t1.detach();
     }
-    LOG_INFO << " 已获取chatinfo_st信息";
-    LOG_DEBUG <<"ConversationId: "<< ConversationId << "chatinfo: " << chatinfo.threadid << " " << chatinfo.usermessageid << " " << chatinfo.modelbotid << " " << chatinfo.status;
+    LOG_INFO << " 已获取chatinfo_st信息 账号信息: "<<chatinfo.accountinfo->apiName<<" "<<chatinfo.accountinfo->userName;
     if(chatinfo.threadid.empty() )
     {
         LOG_ERROR << "Failed to create thread";
