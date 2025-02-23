@@ -587,16 +587,38 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     for(size_t i = 0; i < total_size; i += CHUNK_SIZE) {
         string chunk = message.substr(i, CHUNK_SIZE);
         size_t current_chunk = (i / CHUNK_SIZE) + 1;
-
-        // 添加chunk标记
-        string chunk_message = "[CHUNK " + std::to_string(current_chunk) +
-            "/" + std::to_string(total_chunks) + "]\n" + chunk;
-
-        // 最后一个chunk的结束标记
-        if(current_chunk == total_chunks) {
-            chunk_message += "\n[END OF CHUNKS - 请等待所有chunk完成后再分析]";
+        string chunk_message;
+        if(total_chunks > 1) {
+            if(current_chunk == 1) {
+                // 首块消息优化
+                chunk_message = 
+                    "### Multi-part Message Begin ###\n"
+                    "Total parts: " + std::to_string(total_chunks) + "\n"
+                    "Current part: 1\n"
+                    "Please wait for all parts before processing.\n"
+                    "---\n" + chunk;
+            }
+            else {
+                // 中间块优化
+                chunk_message = 
+                    "### Message Part " + std::to_string(current_chunk) + " ###\n"
+                    "---\n" + chunk;
+            }
+            
+            if(current_chunk == total_chunks) {
+                // 末尾块优化
+                chunk_message += 
+                    "\n---\n"
+                    "### Multi-part Message Complete ###\n"
+                    "All parts received. Please process the complete message now.";
+            }
         }
-
+        else
+        {
+            chunk_message=chunk;
+        }        // 添加chunk标记
+       
+        
         // JSON-Struktur erstellen
         Json::Value json;
         Json::Value author;
@@ -649,7 +671,6 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
             LOG_ERROR << "Failed to parse response JSON for chunk " << current_chunk;
         }
 
-        // Kurze Pause zwischen Chunks
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
