@@ -57,7 +57,6 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     auto startTimeInfo = std::chrono::system_clock::now();
     std::time_t startTimeT = std::chrono::system_clock::to_time_t(startTimeInfo);
     LOG_INFO << "处理请求开始时间: " << std::ctime(&startTimeT);
-    LOG_INFO << "开始生成session_st";
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
     session=chatSession::getInstance()->createNewSessionOrUpdateSession(session);
@@ -70,8 +69,6 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
 
     Json::Value responsejson;
     LOG_INFO << "发送请求给chaynsapi ";
-    LOG_INFO << "session.curConversationId: " << session.curConversationId;
-    LOG_INFO << "session.preConversationId: " << session.preConversationId;
     ApiManager::getInstance().getApiByApiName(selectapi)->postChatMessage(session);
     responsejson=session.responsemessage;
 
@@ -220,18 +217,18 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         }
         // 更新session,重新生成conversationId
         LOG_INFO << "更新session:";
-        LOG_DEBUG << "session.curConversationId: " << session.curConversationId;
-        LOG_DEBUG << "session.preConversationId: " << session.preConversationId;
+        LOG_DEBUG << "PRE session.curConversationId: " << session.curConversationId;
+        LOG_DEBUG << "PRE session.preConversationId: " << session.preConversationId;
         chatSession::getInstance()->coverSessionresponse(session);
         LOG_INFO << "更新session完成:";
-        LOG_DEBUG << "session.curConversationId: " << session.curConversationId;
-        LOG_DEBUG << "session.preConversationId: " << session.preConversationId;
+        LOG_DEBUG << "CUR session.curConversationId: " << session.curConversationId;
+        LOG_DEBUG << "CUR session.preConversationId: " << session.preConversationId;
         ApiManager::getInstance().getApiByApiName(selectapi)->afterResponseProcess(session);
     }
     else
         {   
                 LOG_INFO << "非流式响应,错误码:"<<statusCode;
-                 Json::Value response;
+                Json::Value response;
                 Json::Value error;
                 error["error"]["message"] = "Failed to get response from chaynsapi";
                 error["error"]["type"] = "invalid_request_error";

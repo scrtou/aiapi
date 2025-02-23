@@ -195,8 +195,8 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
         LOG_ERROR << "Failed to parse response JSON";
     }
     
-    LOG_INFO << "threadid: " << threadid;
-    LOG_INFO << "usermessageid: " << usermessageid;
+    LOG_DEBUG << "threadid: " << threadid;
+    LOG_DEBUG << "usermessageid: " << usermessageid;
     if (threadid.empty()) {
         LOG_ERROR << "Failed to create thread";
     }
@@ -570,9 +570,9 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     size_t total_size = message.length();
     size_t total_chunks = (total_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
     LOG_INFO << "chaynsapi::sendMessage begin";
-    LOG_INFO << "total_size: " << total_size;
-    LOG_INFO << "CHUNK_SIZE: " << CHUNK_SIZE;
-    LOG_INFO << "total_chunks: " << total_chunks;
+    LOG_INFO << "总消息大小: " << total_size;
+    LOG_INFO << "每个chunk大小: " << CHUNK_SIZE;
+    LOG_INFO << "总chunk数: " << total_chunks;
     // HTTP-Client einmalig erstellen
     auto client = HttpClient::newHttpClient("https://intercom.tobit.cloud");
     auto req = HttpRequest::newHttpRequest();
@@ -588,13 +588,13 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
         string chunk = message.substr(i, CHUNK_SIZE);
         size_t current_chunk = (i / CHUNK_SIZE) + 1;
 
-        // Chunk-Markierung hinzufügen
+        // 添加chunk标记
         string chunk_message = "[CHUNK " + std::to_string(current_chunk) +
             "/" + std::to_string(total_chunks) + "]\n" + chunk;
 
-        // Abschlussmarkierung für letzten Chunk
+        // 最后一个chunk的结束标记
         if(current_chunk == total_chunks) {
-            chunk_message += "\n[END OF CHUNKS - Please wait for all chunks before analysis]";
+            chunk_message += "\n[END OF CHUNKS - 请等待所有chunk完成后再分析]";
         }
 
         // JSON-Struktur erstellen

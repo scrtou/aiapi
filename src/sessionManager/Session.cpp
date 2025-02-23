@@ -45,7 +45,7 @@ void chatSession::updateSession(const std::string &ConversationId,session_st &se
 session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
 {
     std::string tempConversationId=generateConversationKey(generateJsonbySession(session,false));
-    LOG_INFO << "根据请求消息生成ConversationId: " << tempConversationId;
+    LOG_DEBUG << "根据请求消息生成ConversationId: " << tempConversationId;
     if(sessionIsExist(tempConversationId))
     {
         LOG_INFO<<"会话已存在，更新会话";
@@ -254,7 +254,7 @@ bool chatSession::sessionIsExist(const std::string &ConversationId)
 }
 session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
 {
-    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"开始生成session_st";
+    LOG_INFO<<<<__FUNCTION__<<":"<<__LINE__<<"开始生成session_st";
     session_st session;
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
@@ -274,7 +274,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     }
     session.requestmessage = Json::FastWriter().write(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
     session.last_active_time = time(NULL);
-    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
+    LOG_INFO<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
     LOG_DEBUG << "session_st message_context: " << Json::FastWriter().write(session.message_context);
     return session;
 }
@@ -292,7 +292,7 @@ Json::Value chatSession::generateJsonbySession(const session_st& session,bool co
      keyData["model"] = session.selectmodel;
      Json::StreamWriterBuilder writer;
      writer["emitUTF8"] = true;  // 确保输出UTF-8编码
-    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成构建ConversationId的数据完成";
+    LOG_INFO<<"生成构建ConversationId的数据完成";
     LOG_DEBUG << "生成ConversationId使用的数据: " << Json::writeString(writer,keyData);
     return keyData;
 }
