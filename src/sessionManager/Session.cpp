@@ -160,7 +160,7 @@ std::string chatSession::generateSHA256(const std::string& input) {
             EVP_MD_CTX_free(ctx);
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            LOG_INFO << "sha256计算耗时: " << duration.count() << " 微秒";
+            LOG_INFO << "sha256计算完成,耗时: " << duration.count() << " 微秒";
             return ss.str();
         }
         catch (...) {
@@ -275,7 +275,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     session.requestmessage = Json::FastWriter().write(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
     session.last_active_time = time(NULL);
     LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
-    LOG_INFO << "session_st message_context: " << Json::FastWriter().write(session.message_context);
+    LOG_DEBUG << "session_st message_context: " << Json::FastWriter().write(session.message_context);
     return session;
 }
 Json::Value chatSession::generateJsonbySession(const session_st& session,bool contextIsFull)
@@ -292,6 +292,7 @@ Json::Value chatSession::generateJsonbySession(const session_st& session,bool co
      keyData["model"] = session.selectmodel;
      Json::StreamWriterBuilder writer;
      writer["emitUTF8"] = true;  // 确保输出UTF-8编码
-     LOG_INFO << "生成ConversationId使用的数据: " << Json::writeString(writer,keyData);
-     return keyData;
+    LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成构建ConversationId的数据完成";
+    LOG_DEBUG << "生成ConversationId使用的数据: " << Json::writeString(writer,keyData);
+    return keyData;
 }
