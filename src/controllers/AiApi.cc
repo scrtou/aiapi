@@ -247,7 +247,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     std::stringstream ssendtime;
     ssendtime << std::put_time(std::localtime(&endtimeT), "%c");
     LOG_INFO << "消耗时间: " << std::chrono::duration_cast<std::chrono::seconds>(endtimeInfo - startTimeInfo).count() << "秒";
-    LOG_INFO << "chaynsapichat 请求结束: " << ssendtime.str();
+    LOG_INFO << "=======================chaynsapichat 请求结束=======================";
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {

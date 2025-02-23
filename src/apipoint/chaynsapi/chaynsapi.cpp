@@ -851,7 +851,10 @@ void Chaynsapi::eraseChatinfoMap(string ConversationId)
 }
 Json::Value Chaynsapi::getModels()
 {
-   return model_info;
+    Json::Value openai_model_info;
+    openai_model_info["data"]=model_info["data"];
+    openai_model_info["object"]="list";
+   return openai_model_info;
 }
 void* Chaynsapi::createApi()
 {
