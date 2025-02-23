@@ -564,7 +564,7 @@ void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string t
     }
 }
 
-void sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
+void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
 {
     LOG_DEBUG << "chaynsapi::sendMessage";
     const size_t CHUNK_SIZE = 100 * 1024; // 100KB per chunk

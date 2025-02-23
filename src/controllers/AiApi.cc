@@ -16,8 +16,7 @@ using namespace drogon::orm;
 // Add definition of your processing function here
 void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    //打印所有的请求头
-    //打印原始请求
+    LOG_INFO<<"chaynsapichat 请求开始";
     //打印请求头
     LOG_DEBUG<<"请求头:";
     for(auto &header : req->getHeaders())
@@ -27,14 +26,11 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     //打印请求信息
     
     std::string body = Json::FastWriter().write(*(req->getJsonObject()));
-    LOG_INFO<<"请求信息:"<<body;
-    // 检查body大小
-    LOG_INFO << "Body size: " << body.length();
-    // 如果body非空但显示为空，可以尝试逐字节打印
+    LOG_DEBUG<<"请求信息:"<<body;
 
     
     auto jsonPtr = req->getJsonObject();
-    /*
+    
        if (!jsonPtr) {
         Json::Value error;
         error["error"]["message"] = "Invalid JSON in request body";
@@ -44,7 +40,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
-    */
+    
     auto& reqbody = *jsonPtr;
 
     auto& reqmessages = reqbody["messages"];
@@ -244,6 +240,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         }
     auto endtime=time(nullptr);
     LOG_INFO << "生成session_st时间:"<<endtime-starttime<<"秒";
+    LOG_INFO<<"chaynsapichat 请求结束";
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
