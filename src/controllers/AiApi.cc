@@ -25,9 +25,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         LOG_DEBUG<<header.first<<":"<<header.second;
     }
     //打印请求信息
-    LOG_INFO<<"请求信息:"<<req->getBody();
     
     std::string body = Json::FastWriter().write(*(req->getJsonObject()));
+    LOG_INFO<<"请求信息:"<<body;
     // 检查body大小
     LOG_INFO << "Body size: " << body.length();
     // 如果body非空但显示为空，可以尝试逐字节打印
