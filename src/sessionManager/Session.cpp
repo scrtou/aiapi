@@ -266,7 +266,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
             {
                 session.systemprompt = requestbody["messages"][i]["content"].asString();
                 continue;
-            }
+            }   
         Json::Value msgData;
         msgData["role"] = requestbody["messages"][i]["role"].asString();
         msgData["content"] = Json::FastWriter().write(requestbody["messages"][i]["content"]);

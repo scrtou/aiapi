@@ -489,9 +489,10 @@ void Chaynsapi::getModels_NativeModelChatbot()
     
 }
 
-void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
+void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
 {
     LOG_INFO << "Chaynsapi::sendMessage";
+   
     
     // 构建JSON结构
     Json::Value json;
@@ -523,6 +524,7 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     // 设置请求头
     req->setContentTypeString("application/json");
     req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+    
     req->addHeader("Accept", "*/*");
     
     LOG_DEBUG << "=== Request Body ===";
@@ -562,6 +564,97 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
     }
 }
 
+void sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
+{
+    LOG_DEBUG << "chaynsapi::sendMessage";
+    const size_t CHUNK_SIZE = 100 * 1024; // 100KB per chunk
+    size_t total_size = message.length();
+    size_t total_chunks = (total_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    // HTTP-Client einmalig erstellen
+    auto client = HttpClient::newHttpClient("https://intercom.tobit.cloud");
+    auto req = HttpRequest::newHttpRequest();
+
+    // Grundlegende Request-Konfiguration
+    req->setMethod(HttpMethod::Post);
+    req->setPath("/api/thread/" + threadid + "/message");
+    req->setContentTypeString("application/json");
+    req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+    req->addHeader("Accept", "*/*");
+
+    for(size_t i = 0; i < total_size; i += CHUNK_SIZE) {
+        string chunk = message.substr(i, CHUNK_SIZE);
+        size_t current_chunk = (i / CHUNK_SIZE) + 1;
+
+        // Chunk-Markierung hinzufügen
+        string chunk_message = "[CHUNK " + std::to_string(current_chunk) +
+            "/" + std::to_string(total_chunks) + "]\n" + chunk;
+
+        // Abschlussmarkierung für letzten Chunk
+        if(current_chunk == total_chunks) {
+            chunk_message += "\n[END OF CHUNKS - Please wait for all chunks before analysis]";
+        }
+
+        // JSON-Struktur erstellen
+        Json::Value json;
+        Json::Value author;
+        author["tobitId"] = accountinfo->userTobitId;
+        json["author"] = author;
+
+        // Message-Objekt erstellen
+        Json::Value messagejson;
+        messagejson["text"] = chunk_message;
+        messagejson["typeId"] = 1;
+        messagejson["meta"] = Json::Value(Json::objectValue);
+        messagejson["guid"] = generateGuid();
+        json["message"] = messagejson;
+
+        Json::FastWriter writer;
+        std::string requestBody = writer.write(json);
+
+        // Request Body aktualisieren
+        req->setBody(requestBody);
+
+        LOG_DEBUG << "=== Request Body ===";
+        LOG_DEBUG << requestBody;
+
+        // Request senden
+        auto [result, response] = client->sendRequest(req);
+
+        if (result != ReqResult::Ok) {
+            LOG_ERROR << "Failed to send request for chunk " << current_chunk;
+            return;
+        }
+
+        // Response verarbeiten
+        int statusCode = response->getStatusCode();
+        std::string responseBody = std::string(response->getBody());
+
+        LOG_DEBUG << "=== Response ===";
+        LOG_DEBUG << "Status Code: " << statusCode;
+        LOG_DEBUG << "=== Response Body ===";
+        LOG_DEBUG << responseBody;
+
+        // Response parsen
+        Json::Value resp_json;
+        Json::Reader reader;
+        if(reader.parse(responseBody, resp_json)) {
+            if (resp_json.isMember("message")) {
+                creationTime = resp_json["message"]["creationTime"].asString();
+                LOG_DEBUG << "creationTime: " << creationTime;
+            }
+        } else {
+            LOG_ERROR << "Failed to parse response JSON for chunk " << current_chunk;
+        }
+
+        // Kurze Pause zwischen Chunks
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (creationTime.empty()) {
+        LOG_ERROR << "Failed to send message";
+    }
+}
 void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string& creationTime,string& response_message,int& response_statusCode)
 {
     LOG_INFO << "Chaynsapi::getMessage";
