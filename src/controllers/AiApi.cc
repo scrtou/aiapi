@@ -54,6 +54,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         return;
     }
     auto starttime=time(nullptr);
+    auto startTimeInfo = std::chrono::system_clock::now();
+    std::time_t startTimeT = std::chrono::system_clock::to_time_t(startTimeInfo);
+    LOG_INFO << "处理请求开始时间: " << std::ctime(&startTimeT);
     LOG_INFO << "开始生成session_st";
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
@@ -81,7 +84,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     //string message=Json::writeString(writer,responsejson["message"]);
     string message=responsejson["message"].asString();
     int statusCode=responsejson["statusCode"].asInt();
-
+    LOG_INFO << "chaynsapi返回结果 statusCode: " << statusCode;
     const auto& stream = reqbody["stream"].asBool();
 
     LOG_INFO << "stream: " << stream;
@@ -239,8 +242,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 callback(resp);
         }
     auto endtime=time(nullptr);
-    LOG_INFO << "生成session_st时间:"<<endtime-starttime<<"秒";
-    LOG_INFO<<"chaynsapichat 请求结束";
+    LOG_INFO << "处理请求结束时间: " << std::ctime(&endtime);
+    LOG_INFO << "消耗时间: " << endtime-starttime << "秒";
+    LOG_INFO << "chaynsapichat 请求结束";
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {

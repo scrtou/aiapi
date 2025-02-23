@@ -176,8 +176,8 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
     int statusCode = response->getStatusCode();
     std::string responseBody = std::string(response->getBody());  // 显式转换
     
-    LOG_DEBUG << "=== Response ===";
-    LOG_DEBUG << "Status Code: " << statusCode;
+    LOG_INFO << "=== Response ===";
+    LOG_INFO << "Status Code: " << statusCode;
     LOG_DEBUG << "=== Response Body ===";
     LOG_DEBUG << responseBody;
     
@@ -280,7 +280,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         return;
     }
     string user_message=postmessages+session.requestmessage;
-    LOG_INFO << "user_message: " << user_message;
+    LOG_DEBUG << "user_message: " << user_message;
     
 
     string creationTime;
@@ -566,11 +566,12 @@ void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string t
 
 void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
 {
-    LOG_DEBUG << "chaynsapi::sendMessage";
-    const size_t CHUNK_SIZE = 100 * 1024; // 100KB per chunk
+    const size_t CHUNK_SIZE = 50 * 1024; // 50KB per chunk
     size_t total_size = message.length();
     size_t total_chunks = (total_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
+    LOG_INFO << "chaynsapi::sendMessage begin";
+    LOG_INFO << "total_size: " << total_size;
+    LOG_INFO << "total_chunks: " << total_chunks;
     // HTTP-Client einmalig erstellen
     auto client = HttpClient::newHttpClient("https://intercom.tobit.cloud");
     auto req = HttpRequest::newHttpRequest();
@@ -630,8 +631,8 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
         int statusCode = response->getStatusCode();
         std::string responseBody = std::string(response->getBody());
 
-        LOG_DEBUG << "=== Response ===";
-        LOG_DEBUG << "Status Code: " << statusCode;
+        LOG_INFO << "=== Response ===";
+        LOG_INFO << "Status Code: " << statusCode;
         LOG_DEBUG << "=== Response Body ===";
         LOG_DEBUG << responseBody;
 
@@ -657,7 +658,7 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
 }
 void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string& creationTime,string& response_message,int& response_statusCode)
 {
-    LOG_INFO << "Chaynsapi::getMessage";
+    LOG_INFO << "Chaynsapi::getMessage begin";
      // 创建HTTP客户端
         auto client = HttpClient::newHttpClient("https://intercom.tobit.cloud");
         auto req = HttpRequest::newHttpRequest();
