@@ -63,7 +63,7 @@ class Chaynsapi:public APIinterface
         void createChatThread(string modelname,chatinfo_st& chatinfo);
         //发送消息
         void sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
-        void sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
+        void sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
         //获取消息
         void getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string &creationTime,string& response_message,int& response_statusCode);
 

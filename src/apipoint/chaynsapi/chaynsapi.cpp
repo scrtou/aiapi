@@ -282,26 +282,71 @@ void Chaynsapi::postChatMessage(session_st& session)
     string user_message=postmessages+session.requestmessage;
     LOG_DEBUG << "user_message: " << user_message;
     
+    //发送消息
+    const size_t CHUNK_SIZE = 50 * 1024; // 50KB per chunk
+    size_t total_size = user_message.length();
+    size_t total_chunks = (total_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    LOG_INFO << "chaynsapi::sendMessage begin";
+    LOG_INFO << "总消息大小: " << total_size;
+    LOG_INFO << "每个chunk大小: " << CHUNK_SIZE;
+    LOG_INFO << "总chunk数: " << total_chunks;
 
-    string creationTime;
-    sendMessage(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,user_message,creationTime);
-    if(creationTime.empty())
-    {
-        LOG_ERROR << "Failed to send message";
-        return;
-    }
-    //更新chatinfo_st信息
-    chatinfoMap[ConversationId].status=1;
-    chatinfoMap[ConversationId].messagecreatetime=creationTime;
-
-    //获取消息
+     //get获取的消息
     string response_message;
     int response_statusCode;
-    getMessage(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,creationTime,response_message,response_statusCode);
-    //更新chatinfo_st信息
-    chatinfoMap[ConversationId].status=2;
-    chatinfoMap[ConversationId].messagecreatetime=creationTime;
-    //返回消息
+    for(size_t i = 0; i < total_size; i += CHUNK_SIZE) {
+        response_message="";
+        response_statusCode=0;
+        string chunk = user_message.substr(i, CHUNK_SIZE);
+        size_t current_chunk = (i / CHUNK_SIZE) + 1;
+        string chunk_message;
+        if(total_chunks > 1) {
+            if(current_chunk == 1) {
+                // 首块消息优化
+                chunk_message = 
+                    "### Multi-part Message Begin ###\n"
+                    "Total parts: " + std::to_string(total_chunks) + "\n"
+                    "Current part: 1\n"
+                    "Please wait for all parts before processing.\n"
+                    "---\n" + chunk;
+            }
+            else {
+                // 中间块优化
+                chunk_message = 
+                    "### Message Part " + std::to_string(current_chunk) + " ###\n"
+                    "---\n" + chunk;
+            }
+            
+            if(current_chunk == total_chunks) {
+                // 末尾块优化
+                chunk_message += 
+                    "\n---\n"
+                    "### Multi-part Message Complete ###\n"
+                    "All parts received. Please process the complete message now.";
+            }
+        }
+        else
+        {
+            chunk_message=chunk;
+        }        // 添加chunk标记
+        string creationTime;
+        sendMessageSignal(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,chunk_message,creationTime);
+        if(creationTime.empty())
+        {
+            LOG_ERROR << "Failed to send request for chunk " << current_chunk;
+            return;
+        }
+    
+    
+        //更新chatinfo_st信息
+        chatinfoMap[ConversationId].status=1;
+        chatinfoMap[ConversationId].messagecreatetime=creationTime;
+        getMessage(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,creationTime,response_message,response_statusCode);
+        //更新chatinfo_st信息
+        chatinfoMap[ConversationId].status=2;
+        chatinfoMap[ConversationId].messagecreatetime=creationTime;
+        //返回消息    
+    }    
     session.responsemessage["message"]=response_message;
     session.responsemessage["statusCode"]=response_statusCode;
 }
@@ -489,9 +534,9 @@ void Chaynsapi::getModels_NativeModelChatbot()
     
 }
 
-void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
+void Chaynsapi::sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
 {
-    LOG_INFO << "Chaynsapi::sendMessage";
+    LOG_INFO << "Chaynsapi::sendMessageSignal";
    
     
     // 构建JSON结构
@@ -501,7 +546,7 @@ void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string t
     author["tobitId"] = accountinfo->userTobitId;
     json["author"] = author;
 
-// 创建 message 对象
+    // 创建 message 对象
     Json::Value messagejson;
     messagejson["text"] = message;
     messagejson["typeId"] = 1;
@@ -530,37 +575,35 @@ void Chaynsapi::sendMessageOrige(shared_ptr<Accountinfo_st> accountinfo,string t
     LOG_DEBUG << "=== Request Body ===";
     LOG_DEBUG << requestBody;
 
-    // 发送请求
+    // Request senden
     auto [result, response] = client->sendRequest(req);
-    
+
     if (result != ReqResult::Ok) {
         LOG_ERROR << "Failed to send request";
         return;
     }
-    
-    // 获取响应码和响应体
+
+        // Response verarbeiten
     int statusCode = response->getStatusCode();
-    std::string responseBody = std::string(response->getBody());  // 显式转换
-    
-    LOG_DEBUG << "=== Response ===";
-    LOG_DEBUG << "Status Code: " << statusCode;
+    std::string responseBody = std::string(response->getBody());
+
+    LOG_INFO << "=== Response ===";
+    LOG_INFO <<__FUNCTION__<<"Status Code: " << statusCode;
     LOG_DEBUG << "=== Response Body ===";
     LOG_DEBUG << responseBody;
-    
-    // 解析响应
+
+        // Response parsen
     Json::Value resp_json;
     Json::Reader reader;
     if(reader.parse(responseBody, resp_json)) {
-        if (resp_json.isMember("message")) {
-            creationTime = resp_json["message"]["creationTime"].asString();
-            LOG_INFO << "creationTime: " << creationTime;
-        }
-    } else {
-        LOG_ERROR << "Failed to parse response JSON";
+    if (resp_json.isMember("message")) {
+        creationTime = resp_json["message"]["creationTime"].asString();
+        LOG_INFO << __FUNCTION__ <<"creationTime: " << creationTime;
     }
-    
-    if (creationTime.empty()) {
-        LOG_ERROR << "Failed to send message";
+    } else {
+        LOG_ERROR << __FUNCTION__ << "Failed to parse response JSON";
+        creationTime="";
+        return;
     }
 }
 
@@ -669,9 +712,13 @@ void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string thread
             }
         } else {
             LOG_ERROR << __FUNCTION__ << "Failed to parse response JSON for chunk " << current_chunk;
+            creationTime="";
+            return;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        
     }
 
     if (creationTime.empty()) {
@@ -704,7 +751,7 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
     for(int retry = 0; retry < MAX_RETRIES; retry++) {
         if(retry > 0) {
             int delay = std::max((BASE_DELAY+BASE_DELAY) / (1 << retry), 100); // 最少延迟100ms
-            LOG_INFO << "Retry attempt " << retry << " after " << delay << "ms";
+            LOG_DEBUG << "Retry attempt " << retry << " after " << delay << "ms";
             std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         }
 
@@ -719,10 +766,13 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
         
         // 对于204状态码快速处理
         if(statusCode == 204) {
-            LOG_INFO << "Message not ready yet, will retry...";
+            if(retry==0)
+            {
+                LOG_INFO << "Message not ready yet, will retry...";
+            }
             continue;
         }
-
+        LOG_INFO << "Message ready: statusCode: " << statusCode<<" retry: "<<retry;
         // 使用string_view避免不必要的拷贝
         std::string_view responseBody(response->getBody());
         
