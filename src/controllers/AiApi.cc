@@ -789,3 +789,12 @@ std::string AiApi::formatLogEntry(const LogEntry& entry) {
     result << "</div>";
     return result.str();
 }
+void AiApi::refleshToken(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO<<"=======================refleshToken 请求开始=======================";
+    AccountManager::getInstance().checkUpdateAccountToken();
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setStatusCode(k200OK);
+    resp->setBody("refleshToken");
+    callback(resp);
+}

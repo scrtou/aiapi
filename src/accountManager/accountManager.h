@@ -33,6 +33,7 @@ struct Accountinfo_st
         this->tokenStatus = tokenStatus;
         this->accountStatus = accountStatus;
         this->userTobitId = userTobitId;
+        this->personId = personId;
     }
 };
 

@@ -88,12 +88,15 @@ std::string chatSession::generateConversationKey(
 
 void chatSession::coverSessionresponse(session_st& session)
 {
+    LOG_INFO<<"coverSessionresponse开始";
     Json::Value assistantresponse;
     assistantresponse["role"]="user";
     assistantresponse["content"]=session.requestmessage;
+    LOG_DEBUG << "coverSessionresponse添加user消息: " << Json::FastWriter().write(assistantresponse);
     session.addMessageToContext(assistantresponse);
     assistantresponse["role"]="assistant";
     assistantresponse["content"]=session.responsemessage["message"].asString();
+    LOG_DEBUG << "coverSessionresponse添加assistant消息: " << Json::FastWriter().write(assistantresponse);
     session.addMessageToContext(assistantresponse);
     session.requestmessage.clear();
     session.responsemessage.clear();
@@ -259,20 +262,69 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
     session.selectmodel = requestbody["model"].asString();
-    
+    //Json::StreamWriterBuilder writer;
+    //writer["emitUTF8"] = true;  // 确保输出UTF-8编码
     for(int i = 0; i < requestbody["messages"].size()-1; i++)
     {
          if(requestbody["messages"][i]["role"] == "system")
             {
                 session.systemprompt = requestbody["messages"][i]["content"].asString();
+                //session.systemprompt=Json::writeString(writer,requestbody["messages"][i]["content"]);
                 continue;
             }   
         Json::Value msgData;
         msgData["role"] = requestbody["messages"][i]["role"].asString();
-        msgData["content"] = Json::FastWriter().write(requestbody["messages"][i]["content"]);
+       // Json::Value  tempcontent=Json::FastWriter().write(requestbody["messages"][i]["content"]);
+        std::string contentmessage;
+        if(requestbody["messages"][i]["content"].isArray())
+        {
+            for(const auto& content : requestbody["messages"][i]["content"])
+            {
+                if (content["type"].asString() == "text") {
+                    contentmessage += content["text"].asString();
+                }
+            }
+        }
+        else
+        {
+            contentmessage=requestbody["messages"][i]["content"].asString();
+        }
+         msgData["content"] = contentmessage;
+
         session.addMessageToContext(msgData);
     }
-    session.requestmessage = Json::FastWriter().write(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
+     // 处理最后一条消息，判断是否包含图片
+    const Json::Value& lastMessage = requestbody["messages"][requestbody["messages"].size()-1];
+    if (lastMessage["content"].isArray()) {
+        // 新格式：包含图片
+        session.has_image = false;
+        std::string textContent;
+        for (const auto& content : lastMessage["content"]) {
+            if (content["type"].asString() == "text") {
+                textContent += content["text"].asString();
+            } else if (content["type"].asString() == "image_url") {
+                session.has_image = true;
+                std::string imageUrl = content["image_url"]["url"].asString();
+                // 提取base64数据和图片类型
+                if (imageUrl.find("data:image/") == 0) {
+                    size_t commaPos = imageUrl.find(",");
+                    if (commaPos != std::string::npos) {
+                        // 提取图片类型
+                        size_t typeStart = imageUrl.find("/") + 1;
+                        size_t typeEnd = imageUrl.find(";");
+                        session.image_type = imageUrl.substr(typeStart, typeEnd - typeStart);
+                        // 提取base64数据
+                        session.image_base64 = imageUrl.substr(commaPos + 1);
+                    }
+                }
+            }
+        }
+        session.requestmessage = textContent;
+    } else {
+        // 原始格式：纯文本
+        session.requestmessage = lastMessage["content"].asString();
+    }
+    
     session.last_active_time = time(NULL);
     LOG_INFO<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
     LOG_DEBUG << "session_st message_context: " << Json::FastWriter().write(session.message_context);

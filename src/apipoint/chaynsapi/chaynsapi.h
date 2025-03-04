@@ -62,11 +62,18 @@ class Chaynsapi:public APIinterface
          void createChatThread( string modelname,shared_ptr<Accountinfo_st> accountinfo,string& threadid,string& usermessageid);
         void createChatThread(string modelname,chatinfo_st& chatinfo);
         //发送消息
-        void sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
-        void sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
+        void sendMessage(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
+        void sendMessageSignal(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
         //获取消息
         void getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string &creationTime,string& response_message,int& response_statusCode);
-
+        void sendImageFromFile(session_st& session,shared_ptr<Accountinfo_st> accountinfo,
+                         const string& base64Image,
+                         const string& imageType,
+                         string& returnImagePath);  
+        void sendImageFromBase64(session_st& session,shared_ptr<Accountinfo_st> accountinfo,
+                         const string& base64Image,
+                         const string& imageType,
+                         string& returnImagePath);                
         Chaynsapi();
        
         string modelUrl="https://intercom.tobit.cloud/api/v1/models";

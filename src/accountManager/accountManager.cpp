@@ -6,6 +6,7 @@
 using namespace drogon;
 using namespace drogon::orm;
 const string getTokenUrl = "https://aiapi-tool.onrender.com/aichat/chayns/login";
+//const string getTokenUrl = "http://127.0.0.1:5556/aichat/chayns/login";
 
 AccountManager::AccountManager()
 {
@@ -264,6 +265,8 @@ void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
     LOG_INFO << "updateChaynsToken token result: " << (token.empty()?"empty":"not empty");
     if(!token.empty())
     {
+        LOG_DEBUG << "usertobitid "<<token["userid"].asInt();
+        LOG_DEBUG << "personid "<<token["personid"].asString();
                 accountinfo->tokenStatus = true;
                 accountinfo->authToken = token["token"].asString();
                 accountinfo->accountStatus = true;
@@ -322,6 +325,8 @@ void AccountManager::loadAccountFromDatebase()
     auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
+        LOG_DEBUG << "loadAccountFromDatebase accountinfo: ";
+        LOG_DEBUG << "apiName: " << accountinfo.apiName<<" userName: "<<accountinfo.userName<<" passwd: "<<accountinfo.passwd<<" useCount: "<<accountinfo.useCount<<" tokenStatus: "<<accountinfo.tokenStatus<<" accountStatus: "<<accountinfo.accountStatus<<" userTobitId: "<<accountinfo.userTobitId<<" personId: "<<accountinfo.personId;
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
     }
     LOG_INFO << "loadDatebase end";

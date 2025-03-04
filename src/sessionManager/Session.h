@@ -32,6 +32,12 @@ struct session_st
   bool contextIsFull=false;
   std::string requestmessage="";
   Json::Value responsemessage;
+  //图片url
+  bool has_image = false;
+  std::string image_base64;  // 存储base64格式的图片数据
+  std::string image_type;    // 存储图片类型(jpeg, png等)
+  std::string return_image_path;    // 存储图片路径
+  
   Json::Value client_info;
   void clearMessageContext()
   {

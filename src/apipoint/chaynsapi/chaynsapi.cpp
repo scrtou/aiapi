@@ -3,6 +3,7 @@
 #include <chaynsapi.h>
 #include <../../apiManager/Apicomn.h> 
 #include <unistd.h>
+#include <fstream>
 IMPLEMENT_RUNTIME(chaynsapi,Chaynsapi);
 using namespace drogon;
 
@@ -201,7 +202,179 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
         LOG_ERROR << "Failed to create thread";
     }
 }
+void Chaynsapi::sendImageFromFile(session_st& session,shared_ptr<Accountinfo_st> accountinfo,
+                         const string& base64Image,
+                         const string& imageType,
+                         string& returnImagePath)
+{
+   LOG_INFO << "Chaynsapi::sendImage";
+    
+    // 创建临时文件
+    string tempFilename = "/tmp/temp_image_" + std::to_string(time(nullptr)) + "." + imageType;
+    
+    // 将 base64 转换为文件
+    try {
+        // 解码 base64
+        string binaryData = drogon::utils::base64Decode(base64Image);
+        
+        // 写入临时文件
+        std::ofstream tempFile(tempFilename, std::ios::binary);
+        if (!tempFile.is_open()) {
+            LOG_ERROR << "Failed to create temporary file";
+            return;
+        }
+        tempFile.write(binaryData.c_str(), binaryData.length());
+        tempFile.close();
+        
+        // 创建 HTTP 客户端
+        auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
+        auto req = HttpRequest::newHttpJsonRequest({});  // 创建空的 JSON 请求
+        
+        // 设置请求
+        req->setMethod(HttpMethod::Post);
+        req->setPath("/image-service/v3/Images/" + accountinfo->personId);
+        req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+        
+            // 修改这部分代码
+        string boundary = "----WebKitFormBoundary" + generateGuid();
+        string contentType = "multipart/form-data; boundary=" + boundary;
+        req->addHeader("Content-Type", contentType);
+        
+        // 读取文件内容
+        std::ifstream file(tempFilename, std::ios::binary);
+        std::string fileContent((std::istreambuf_iterator<char>(file)), 
+                            std::istreambuf_iterator<char>());
+        file.close();
+        
+        // 构建 multipart body
+        string body;
+        body += "--" + boundary + "\r\n";
+        body += "Content-Disposition: form-data; name=\"file\"; filename=\"image." + imageType + "\"\r\n";
+        body += "Content-Type: image/" + imageType + "\r\n\r\n";
+        body += fileContent;
+        body += "\r\n--" + boundary + "--\r\n";
+        
+        req->setBody(body);
+        
+        // 发送请求
+        auto [result, response] = client->sendRequest(req);
+        
+        // 删除临时文件
+        std::remove(tempFilename.c_str());
+        
+        if (result != ReqResult::Ok) {
+            LOG_ERROR << "Failed to send image";
+            return;
+        }
+        
+        // 解析响应
+        int statusCode = response->getStatusCode();
+        std::string responseBody = std::string(response->getBody());
+        
+        LOG_INFO << "Image upload status code: " << statusCode;
+        LOG_DEBUG << "Response body: " << responseBody;
+        
+        if (statusCode == 201) {  // 成功创建
+            Json::Value respJson;
+            Json::Reader reader;
+            if (reader.parse(responseBody, respJson)) {
+                // 获取图片路径，组合完整的URL
+                string baseDomain = respJson["baseDomain"].asString();
+                string imagePath = respJson["image"]["path"].asString();
+                returnImagePath = baseDomain + imagePath;
+                LOG_INFO << "Complete image URL: " << returnImagePath;
 
+            } else {
+                LOG_ERROR << "Failed to parse response JSON";
+            }
+        } else {
+            LOG_ERROR << "Failed to upload image, status code: " << statusCode;
+        }
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR << "Error processing image: " << e.what();
+        // 确保临时文件被删除
+        std::remove(tempFilename.c_str());
+    }
+}
+
+void Chaynsapi::sendImageFromBase64(session_st& session,shared_ptr<Accountinfo_st> accountinfo,
+                         const string& base64Image,
+                         const string& imageType,
+                         string& returnImagePath)
+{
+     LOG_INFO << "Chaynsapi::sendImageFromBase64";
+    
+    try {
+        // 解码 base64 为二进制数据
+        string binaryData = drogon::utils::base64Decode(base64Image);
+        
+        // 创建 HTTP 客户端
+        auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
+       // auto client = HttpClient::newHttpClient("http://127.0.0.1:9999");
+        auto req = HttpRequest::newHttpRequest();
+        req->setMethod(HttpMethod::Post);
+        req->setPath("/image-service/v3/Images/" + accountinfo->personId);
+        
+        // 生成 boundary
+        string boundary = generateGuid();
+
+        // 设置请求头
+        req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+        req->addHeader("Accept", "*/*");
+        req->setContentTypeString("multipart/form-data; boundary=" + boundary);
+        // 构建 multipart body
+        string body;
+        body += "--" + boundary + "\r\n";
+        std::string imagename = std::to_string(time(nullptr)) + "." + imageType;
+        body += "Content-Disposition: form-data; name=\"file\"; filename=\"" + imagename + "\"\r\n";
+        body += "Content-Type: image/" + imageType + "\r\n";
+        body += "\r\n";
+        body.append(binaryData.c_str(), binaryData.length());
+        body += "\r\n--" + boundary + "--\r\n";
+        req->setBody(body);
+        
+        // 打印请求信息以便调试
+        LOG_DEBUG << "Request URL: " <<req->getPath();
+        LOG_DEBUG << "Authorization: Bearer " << accountinfo->authToken;
+        LOG_DEBUG << "Image Type: " << imageType;
+        LOG_DEBUG << "Binary Data Size: " << binaryData.length();
+        
+        // 发送请求
+        auto [result, response] = client->sendRequest(req);
+        
+        if (result != ReqResult::Ok) {
+            LOG_ERROR << "Failed to send image";
+            return;
+        }
+        
+        // 解析响应
+        int statusCode = response->getStatusCode();
+        std::string responseBody = std::string(response->getBody());
+        
+        LOG_INFO << "Image upload status code: " << statusCode;
+        LOG_DEBUG << "Response body: " << responseBody;
+        
+        if (statusCode == 201) {  // 成功创建
+            Json::Value respJson;
+            Json::Reader reader;
+            if (reader.parse(responseBody, respJson)) {
+                string baseDomain = respJson["baseDomain"].asString();
+                string imagePath = respJson["image"]["path"].asString();
+                returnImagePath = baseDomain + imagePath;
+                LOG_INFO << "Complete image URL: " << returnImagePath;
+            } else {
+                LOG_ERROR << "Failed to parse response JSON";
+            }
+        } else {
+            LOG_ERROR << "Failed to upload image, status code: " << statusCode 
+                     << ", response: " << responseBody;
+        }
+        
+    } catch (const std::exception& e) {
+        LOG_ERROR << "Error processing image: " << e.what();
+    }
+}        
 void Chaynsapi::postChatMessage(session_st& session)
 {
     string postmessages;
@@ -269,6 +442,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         t1.detach();
     }
     LOG_INFO << " 已获取chatinfo_st信息 账号信息: "<<chatinfo.accountinfo->apiName<<" "<<chatinfo.accountinfo->userName;
+    
     if(chatinfo.threadid.empty() )
     {
         LOG_ERROR << "Failed to create thread";
@@ -281,7 +455,23 @@ void Chaynsapi::postChatMessage(session_st& session)
     }
     string user_message=postmessages+session.requestmessage;
     LOG_DEBUG << "user_message: " << user_message;
-    
+    //先发送图片
+    // 如果有图片，先发送图片
+    string  returnImagePath;
+    if (session.has_image) {
+        LOG_DEBUG << "persionId: "<<chatinfo.accountinfo->personId;
+        string imageCreationTime;
+        sendImageFromBase64(session,chatinfo.accountinfo,
+                 session.image_base64,
+                 session.image_type,
+                 returnImagePath);
+                 
+        if (returnImagePath.empty()) {
+            LOG_ERROR << "Failed to send image";
+            return;
+        }
+    }
+    session.return_image_path=returnImagePath;
     //发送消息
     const size_t CHUNK_SIZE = 50 * 1024; // 50KB per chunk
     size_t total_size = user_message.length();
@@ -330,14 +520,16 @@ void Chaynsapi::postChatMessage(session_st& session)
             chunk_message=chunk;
         }        // 添加chunk标记
         string creationTime;
-        sendMessageSignal(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,chunk_message,creationTime);
+        sendMessageSignal(session,chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,chunk_message,creationTime);
         if(creationTime.empty())
         {
             LOG_ERROR << "Failed to send request for chunk " << current_chunk;
             return;
         }
-    
-    
+        //image不用再发送
+        if(session.has_image)
+            session.has_image=false;
+
         //更新chatinfo_st信息
         chatinfoMap[ConversationId].status=1;
         chatinfoMap[ConversationId].messagecreatetime=creationTime;
@@ -534,7 +726,7 @@ void Chaynsapi::getModels_NativeModelChatbot()
     
 }
 
-void Chaynsapi::sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
+void Chaynsapi::sendMessageSignal(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime)
 {
     LOG_INFO << "Chaynsapi::sendMessageSignal";
    
@@ -552,6 +744,21 @@ void Chaynsapi::sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string 
     messagejson["typeId"] = 1;
     messagejson["meta"] = Json::Value(Json::objectValue);  // 创建空对象
     messagejson["guid"] = generateGuid();
+    /*
+    "images": [
+		{
+		
+		"url": "https://tsimg.cloud/X8V-3RSU7/mluvSOheKZa6Jig.jpeg"
+		
+		}
+    */
+    messagejson["images"]=Json::Value(Json::arrayValue);
+    if(session.has_image)
+    {
+        Json::Value image;
+        image["url"]=session.return_image_path;
+        messagejson["images"].append(image);
+    }
     json["message"] = messagejson;
 
     Json::FastWriter writer;
@@ -607,7 +814,7 @@ void Chaynsapi::sendMessageSignal(shared_ptr<Accountinfo_st> accountinfo,string 
     }
 }
 
-void Chaynsapi::sendMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
+void Chaynsapi::sendMessage(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message, string& creationTime)
 {
     const size_t CHUNK_SIZE = 50 * 1024; // 50KB per chunk
     size_t total_size = message.length();
