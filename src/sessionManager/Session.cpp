@@ -46,7 +46,15 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
 {
     std::string tempConversationId=generateConversationKey(generateJsonbySession(session,false));
     LOG_DEBUG << "根据请求消息生成ConversationId: " << tempConversationId;
-    if(sessionIsExist(tempConversationId))
+    if(session.message_context.size()==0)
+    {
+        LOG_INFO<<"请求消息为空，创建新会话";
+        session.preConversationId=tempConversationId;
+        session.curConversationId=tempConversationId;
+        session.apiChatinfoConversationId=tempConversationId;
+        addSession(tempConversationId,session);
+    }
+    else if(sessionIsExist(tempConversationId))
     {
         LOG_INFO<<"会话已存在，更新会话";
         session_map[tempConversationId].requestmessage=session.requestmessage;
@@ -57,7 +65,7 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
         session=session_map[tempConversationId];
    
     }
-    else
+    else 
     {
         if(context_map.find(tempConversationId) != context_map.end())
         {
@@ -273,7 +281,17 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     {
          if(requestbody["messages"][i]["role"] == "system")
             {
-                session.systemprompt = requestbody["messages"][i]["content"].asString();
+                if(requestbody["messages"][i]["content"].isArray())
+                {
+                    for(const auto& content : requestbody["messages"][i]["content"])
+                    {
+                        session.systemprompt += content["text"].asString();
+                    }
+                }
+                else
+                {
+                    session.systemprompt = requestbody["messages"][i]["content"].asString();
+                }
                 //session.systemprompt=Json::writeString(writer,requestbody["messages"][i]["content"]);
                 continue;
             }   
@@ -303,6 +321,8 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     if (lastMessage["content"].isArray()) {
         // 新格式：包含图片
         session.has_image = false;
+        session.image_base64.clear();
+        session.image_type.clear();
         std::string textContent;
         for (const auto& content : lastMessage["content"]) {
             if (content["type"].asString() == "text") {

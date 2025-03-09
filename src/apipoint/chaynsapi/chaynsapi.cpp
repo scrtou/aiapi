@@ -384,18 +384,18 @@ void Chaynsapi::postChatMessage(session_st& session)
     string ConversationId=session.curConversationId;
     //尝试从chatinfoMap中获取chatinfo_st信息
     chatinfo_st chatinfo;
-    if(chatinfoMap.find(ConversationId)!=chatinfoMap.end())
+    if(chatinfoMap.find(ConversationId)!=chatinfoMap.end()&&session.message_context.size()!=0)
     {
         std::lock_guard<std::mutex> mapLock(chatinfoMap_mutex);
         chatinfo=chatinfoMap[ConversationId];
-        LOG_INFO << "从chatinfoMap中获取chatinfo_st信息";
+        LOG_INFO << "当前会话已存在,从chatinfoMap中获取chatinfo_st信息";
     }
     else
     {
         //从缓存池中根据模型名称获取chatinfo_st 
-        LOG_INFO << "从缓存池获取chatinfo_st信息";
         if(!chatinfoPollMap[modelname].empty())   
         {
+            LOG_INFO << "从缓存池获取chatinfo_st信息";
             std::lock_guard<std::mutex> pollLock(chatinfoPollMap_mutex);
             chatinfo=chatinfoPollMap[modelname].front();
             chatinfoPollMap[modelname].pop_front();
@@ -441,7 +441,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         });
         t1.detach();
     }
-    LOG_INFO << " 已获取chatinfo_st信息 账号信息: "<<chatinfo.accountinfo->apiName<<" "<<chatinfo.accountinfo->userName;
+    LOG_INFO << " 已获取chatinfo_st信息 账号信息: "<<chatinfo.threadid<<" "<<chatinfo.modelbotid<<" "<<chatinfo.accountinfo->userName;
     
     if(chatinfo.threadid.empty() )
     {
