@@ -92,11 +92,11 @@ void chatSession::coverSessionresponse(session_st& session)
     Json::Value assistantresponse;
     assistantresponse["role"]="user";
     assistantresponse["content"]=session.requestmessage;
-    LOG_DEBUG << "coverSessionresponse添加user消息: " << Json::FastWriter().write(assistantresponse);
+    LOG_DEBUG << "coverSessionresponse添加user消息: " << Json::FastWriter().write(assistantresponse).asString();
     session.addMessageToContext(assistantresponse);
     assistantresponse["role"]="assistant";
     assistantresponse["content"]=session.responsemessage["message"].asString();
-    LOG_DEBUG << "coverSessionresponse添加assistant消息: " << Json::FastWriter().write(assistantresponse);
+    LOG_DEBUG << "coverSessionresponse添加assistant消息: " << Json::FastWriter().write(assistantresponse).asString();
     session.addMessageToContext(assistantresponse);
     session.requestmessage.clear();
     session.responsemessage.clear();
