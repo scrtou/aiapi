@@ -52,6 +52,8 @@ class Chaynsapi:public APIinterface
         Json::Value model_info;//v1/models openai接口格式
         std::mutex chatinfoPollMap_mutex;
         std::mutex chatinfoMap_mutex;
+        set<int> thinkModelSet;
+
 
         void loadUsertokenlist();
         void loadChatinfoPollMap();
@@ -65,7 +67,7 @@ class Chaynsapi:public APIinterface
         void sendMessage(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
         void sendMessageSignal(session_st& session,shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string message,string& creationTime);
         //获取消息
-        void getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string &creationTime,string& response_message,int& response_statusCode);
+        void getMessage(shared_ptr<Accountinfo_st> accountinfo,struct chatinfo_st& chatinfo,string& response_creationTime,string& response_message,int& response_statusCode);
         void sendImageFromFile(session_st& session,shared_ptr<Accountinfo_st> accountinfo,
                          const string& base64Image,
                          const string& imageType,

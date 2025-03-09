@@ -533,7 +533,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         //更新chatinfo_st信息
         chatinfoMap[ConversationId].status=1;
         chatinfoMap[ConversationId].messagecreatetime=creationTime;
-        getMessage(chatinfo.accountinfo,chatinfo.threadid,chatinfo.usermessageid,creationTime,response_message,response_statusCode);
+        getMessage(chatinfo.accountinfo,chatinfoMap[ConversationId],creationTime,response_message,response_statusCode);
         //更新chatinfo_st信息
         chatinfoMap[ConversationId].status=2;
         chatinfoMap[ConversationId].messagecreatetime=creationTime;
@@ -714,8 +714,13 @@ void Chaynsapi::getModels_NativeModelChatbot()
             tmp_model_info["personId"] = model.get("personId", "");
             tmp_model_info["tobit_id"] = model.get("tobitId", 0);
             tmp_model_info["supportedMimeTypes"] = model.get("supportedMimeTypes", "");
-            tmp_model_info["canHandleImages"] = model.get("canHandleImages", "");
-            tmp_model_info["canHandleFunctionCalling"] = model.get("isAvailable", "");
+            tmp_model_info["canHandleImages"] = model.get("canHandleImages", false);
+            tmp_model_info["canHandleFunctionCalling"] = model.get("canHandleFunctionCalling", false);
+            tmp_model_info["canUseThinking"] = model.get("canUseThinking", false);
+            if(tmp_model_info["canUseThinking"].asBool())
+            {
+                thinkModelSet.insert(tmp_model_info["tobit_id"].asInt());
+            }
             // LOG_INFO << "id: " << model_info["id"].asString()<<" tobit_id: "<<model_info["tobit_id"].asInt();
             modelMap_NativeModelChatbot[tmp_model_info["showName"].asString()]=tmp_model_info;
        
@@ -932,7 +937,7 @@ void Chaynsapi::sendMessage(session_st& session,shared_ptr<Accountinfo_st> accou
         LOG_ERROR << "Failed to send message";
     }
 }
-void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadid,string usermessageid,string& creationTime,string& response_message,int& response_statusCode)
+void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,struct chatinfo_st& chatinfo,string& response_creationTime,string& response_message,int& response_statusCode)
 {
     LOG_INFO << "Chaynsapi::getMessage begin";
      // 创建HTTP客户端
@@ -942,9 +947,9 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
         // 构建请求路径
     std::string path;
     path.reserve(100); // 预分配合适的空间
-    path.append("/api/thread/").append(threadid)
-        .append("/messages?memberId=").append(usermessageid)
-        .append("&date=").append(creationTime);
+    path.append("/api/thread/").append(chatinfo.threadid)
+        .append("/messages?memberId=").append(chatinfo.usermessageid)
+        .append("&date=").append(chatinfo.messagecreatetime);
     
     req->setMethod(HttpMethod::Get);
     req->setPath(path);
@@ -979,6 +984,7 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
             }
             continue;
         }
+        
         LOG_INFO << "Message ready: statusCode: " << statusCode<<" retry: "<<retry;
         // 使用string_view避免不必要的拷贝
         std::string_view responseBody(response->getBody());
@@ -988,9 +994,18 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,string threadi
         if(reader.parse(responseBody.data(), responseBody.data() + responseBody.size(), resp_json)) {
             const auto& messages = resp_json["messages"];
             if (!messages.empty()) {
+                if(thinkModelSet.find(chatinfo.modelbotid)!=thinkModelSet.end())
+                {
+                    LOG_INFO << "use thinking model";
+                    if(messages.size()==1)
+                    {
+                        LOG_INFO << "only one message,continue";
+                        continue;
+                    }
+                }
                 const auto& firstMessage = messages[0];
                 response_message = firstMessage["text"].asString();
-                creationTime = firstMessage["creationTime"].asString();
+                response_creationTime = firstMessage["creationTime"].asString();
                 response_statusCode=200;
                 LOG_INFO << "Successfully retrieved message";
                 return;
