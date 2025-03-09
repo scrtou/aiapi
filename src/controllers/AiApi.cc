@@ -24,8 +24,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         LOG_DEBUG<<header.first<<":"<<header.second;
     }
     //打印请求信息
-    
-    std::string body = Json::FastWriter().write(*(req->getJsonObject()));
+    Json::StreamWriterBuilder writerReq ;
+    writerReq["emitUTF8"] = true;  // 确保输出UTF-8编码
+    std::string body = Json::writeString(writerReq, *(req->getJsonObject()));
     LOG_DEBUG<<"请求信息:"<<body;
 
     

@@ -459,6 +459,7 @@ void Chaynsapi::postChatMessage(session_st& session)
     // 如果有图片，先发送图片
     string  returnImagePath;
     if (session.has_image) {
+        LOG_INFO<<"发送图片";
         LOG_DEBUG << "persionId: "<<chatinfo.accountinfo->personId;
         string imageCreationTime;
         sendImageFromBase64(session,chatinfo.accountinfo,

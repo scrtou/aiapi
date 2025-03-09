@@ -50,6 +50,9 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
     {
         LOG_INFO<<"会话已存在，更新会话";
         session_map[tempConversationId].requestmessage=session.requestmessage;
+        session_map[tempConversationId].has_image=session.has_image;
+        session_map[tempConversationId].image_base64=session.image_base64;
+        session_map[tempConversationId].image_type=session.image_type;
         session_map[tempConversationId].last_active_time=session.last_active_time;
         session=session_map[tempConversationId];
    
@@ -60,7 +63,9 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
         {
             LOG_INFO<<"在上下文会话中存在";
             session_map[context_map[tempConversationId]].requestmessage=session.requestmessage;
-            session_map[context_map[tempConversationId]].last_active_time=session.last_active_time;
+            session_map[context_map[tempConversationId]].has_image=session.has_image;
+            session_map[context_map[tempConversationId]].image_base64=session.image_base64;
+            session_map[context_map[tempConversationId]].image_type=session.image_type;
             session_map[context_map[tempConversationId]].contextIsFull=true;
             session=session_map[context_map[tempConversationId]];
             context_map.erase(tempConversationId);
@@ -92,11 +97,11 @@ void chatSession::coverSessionresponse(session_st& session)
     Json::Value assistantresponse;
     assistantresponse["role"]="user";
     assistantresponse["content"]=session.requestmessage;
-    LOG_DEBUG << "coverSessionresponse添加user消息: " << Json::FastWriter().write(assistantresponse).asString();
+    LOG_DEBUG << "coverSessionresponse添加user消息: " << Json::FastWriter().write(assistantresponse);
     session.addMessageToContext(assistantresponse);
     assistantresponse["role"]="assistant";
     assistantresponse["content"]=session.responsemessage["message"].asString();
-    LOG_DEBUG << "coverSessionresponse添加assistant消息: " << Json::FastWriter().write(assistantresponse).asString();
+    LOG_DEBUG << "coverSessionresponse添加assistant消息: " << Json::FastWriter().write(assistantresponse);
     session.addMessageToContext(assistantresponse);
     session.requestmessage.clear();
     session.responsemessage.clear();
@@ -303,6 +308,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
             if (content["type"].asString() == "text") {
                 textContent += content["text"].asString();
             } else if (content["type"].asString() == "image_url") {
+                LOG_INFO<<"发送图片url:"<<content["image_url"]["url"].asString();
                 session.has_image = true;
                 std::string imageUrl = content["image_url"]["url"].asString();
                 // 提取base64数据和图片类型
