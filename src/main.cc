@@ -14,6 +14,7 @@ int main() {
         std::thread t1([]{ 
             AccountManager::getInstance().init();
             ApiManager::getInstance().init();
+            chatSession::getInstance()->startClearExpiredSession();
         });
         t1.detach();
     });

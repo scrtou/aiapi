@@ -3,6 +3,7 @@
 #include <string>
 #include <map>
 #include "../sessionManager/Session.h"
+#include"../modelsManager/Model.h"
 using namespace std;
 struct modelInfo
 {
@@ -19,6 +20,7 @@ class APIinterface
         virtual bool checkAlivableToken(std::string token)=0;
         virtual Json::Value getModels()=0;
         virtual void eraseChatinfoMap(std::string ConversationId)=0;
-        map<string,modelInfo> ModelInfoMap;
+         map<string,modelInfo> ModelInfoMap;
+
 };
 #endif

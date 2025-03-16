@@ -54,9 +54,9 @@ void Chaynsapi::loadChatinfoPollMap()
 {   
     LOG_INFO << " Chaynsapi::loadChatinfoPollMap";
     
-    for(auto& tempnam:modelMap_NativeModelChatbot)
+    for(auto& tempnam:ModelInfoMap)
     {
-        string modelname=tempnam.first;
+        string modelname=tempnam.second->modelName;
         chatinfo_st chatinfo;
         createChatThread(modelname,chatinfo);
         if(chatinfo.threadid.empty())
@@ -104,7 +104,7 @@ void Chaynsapi::createChatThread(string modelname,chatinfo_st& chatinfo)
     {
         chatinfo.threadid=threadid;
         chatinfo.usermessageid=usermessageid;
-        chatinfo.modelbotid=modelMap_NativeModelChatbot[modelname]["tobit_id"].asInt();
+        chatinfo.modelbotid=ModelNameMap_tobitId[modelname];
         chatinfo.status=0;
         chatinfo.accountinfo=accountinfo;
     }
@@ -125,7 +125,7 @@ void Chaynsapi::createChatThread(string modelname,shared_ptr<Accountinfo_st> acc
     
     Json::Value members(Json::arrayValue);
     Json::Value member1;
-    member1["tobitId"] = modelMap_NativeModelChatbot[modelname]["tobit_id"].asInt();  
+    member1["tobitId"] = ModelNameMap_tobitId[modelname];  
     members.append(member1);
     
     Json::Value member2;    
@@ -568,48 +568,16 @@ void Chaynsapi::checkModels()
 }
 void Chaynsapi::loadModels()
 {
+    ModelInfoMap.clear();
+    modelMap_ai_proxy.clear();
+    modelMap_NativeModelChatbot.clear();
     getModels_NativeModelChatbot();
-    //返回v1/models openai接口格式
-        /*
-        data": [
-        {
-            "id": model,
-            "object": "model",
-            "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
-            "owned_by": "example_owner",  # 假设所有者为固定值，实际使用时应从数据源获取
-            "permission": [
-                {
-                    "id": "modelperm-LwHkVFn8AcMItP432fKKDIKJ",  # 假设权限ID为固定值，实际使用时应从数据源获取
-                    "object": "model_permission",
-                    "created": 1626777600,  # 假设创建时间为固定值，实际使用时应从数据源获取
-                    "allow_create_engine": True,
-                    "allow_sampling": True,
-                    "allow_logprobs": True,
-                    "allow_search_indices": False,
-                    "allow_view": True,
-                    "allow_fine_tuning": False,
-                    "organization": "*",
-                    "group": None,
-                    "is_blocking": False
-                }
-            ],
-            "root": model,
-            "parent": None
-        } for model in lst_models
-        ],
-        */
-       for(auto& model:modelMap_NativeModelChatbot)
-       {
-        Json::Value tmp_model_info;
-        tmp_model_info["id"]=model.second["showName"].asString();
-        tmp_model_info["object"]="model";
-        tmp_model_info["created"]=1626777600;
-        tmp_model_info["owned_by"]="example_owner";
-        tmp_model_info["permission"]=Json::Value(Json::arrayValue);
-        tmp_model_info["root"]=model.second["showName"].asString();
-        tmp_model_info["parent"]=Json::Value();
-        model_info["data"].append(tmp_model_info);
-       }
+    getModels_ai_proxy();
+    for(auto& model:ModelInfoMap)
+    {
+        ModelNameMap_tobitId[model.second->modelName]=model.second->tobitId;
+    }
+    LOG_INFO << " Chayns loadModels modles Successfully loaded size : " << ModelInfoMap.size() ;
 
 }
 
@@ -650,22 +618,33 @@ void Chaynsapi::getModels_ai_proxy()
         LOG_ERROR << "Failed to parse API response";
         return;
     }
-    
-    // 构建响应
-    model_info["object"] = "list";
-    model_info["data"] = Json::Value(Json::arrayValue);
-    
+
     // 过滤和转换可用的模型
     for (const auto& model : api_models) {
         if (model.get("isAvailable", false).asBool()) {
-            Json::Value tmp_model_info;
-            tmp_model_info["id"] = model.get("id", "");
-            tmp_model_info["personId"] = model.get("personId", 0);
-            tmp_model_info["showName"] = model.get("showName", "");
-            tmp_model_info["modelName"] = model.get("modelName", "");
-            tmp_model_info["tobit_id"] = model.get("tobitId", 0);
-                modelMap_ai_proxy[tmp_model_info["showName"].asString()]=tmp_model_info;
-
+            std::shared_ptr<Model> model_info = std::make_shared<Model>();
+            model_info->modelName = model.get("modelName", "").asString();
+            model_info->showName = model.get("showName", "").asString();
+            model_info->tobitId = model.get("tobitId", 0).asInt();
+            model_info->abilities.canHandleImages = model.get("canHandleImages", false).asBool();
+            model_info->abilities.canHandleJsonFormat = model.get("canHandleJsonFormat", false).asBool();
+            model_info->abilities.canCoBotHandleJsonFormat = model.get("canCoBotHandleJsonFormat", false).asBool();
+            model_info->abilities.canHandleFunctionCalling = model.get("canHandleFunctionCalling", false).asBool();
+            model_info->abilities.isImageGenerationModel = model.get("isImageGenerationModel", false).asBool()  ;
+            model_info->abilities.canHandleGoogleSearch = model.get("canHandleGoogleSearch", false).asBool();
+            /*
+            "supportedMimeTypes": [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/pdf"
+            ]
+            */
+            Json::Value supportedMimeTypes = model.get("supportedMimeTypes", Json::Value(Json::arrayValue));
+            for (const auto& mimeType : supportedMimeTypes) {
+                model_info->abilities.supportedMimeTypes.push_back(mimeType.asString());
+            }
+            
+            ModelInfoMap[model_info->tobitId]=model_info;
+            modelMap_ai_proxy.push_back(model_info);
         }
     }
     
@@ -709,21 +688,31 @@ void Chaynsapi::getModels_NativeModelChatbot()
     }
     
     for (const auto& model : api_models) {
-            Json::Value tmp_model_info;
-            tmp_model_info["showName"] = model.get("showName", "");
-            tmp_model_info["usedModel"] = model.get("usedModel", "");
-            tmp_model_info["personId"] = model.get("personId", "");
-            tmp_model_info["tobit_id"] = model.get("tobitId", 0);
-            tmp_model_info["supportedMimeTypes"] = model.get("supportedMimeTypes", "");
-            tmp_model_info["canHandleImages"] = model.get("canHandleImages", false);
-            tmp_model_info["canHandleFunctionCalling"] = model.get("canHandleFunctionCalling", false);
-            tmp_model_info["canUseThinking"] = model.get("canUseThinking", false);
-            if(tmp_model_info["canUseThinking"].asBool())
-            {
-                thinkModelSet.insert(tmp_model_info["tobit_id"].asInt());
-            }
+        std::shared_ptr<Model> model_info = std::make_shared<Model>();
+        model_info->modelName = model.get("modelName", "").asString();
+        model_info->showName = model.get("showName", "").asString();
+        model_info->tobitId = model.get("tobitId", 0).asInt();
+        model_info->abilities.canHandleImages = model.get("canHandleImages", false).asBool();
+        model_info->abilities.canHandleJsonFormat = model.get("canHandleJsonFormat", false).asBool();
+        model_info->abilities.canHandleFunctionCalling = model.get("canHandleFunctionCalling", false).asBool();
+        model_info->abilities.isImageGenerationModel = model.get("isImageGenerationModel", false).asBool();
+        model_info->abilities.canHandleGoogleSearch = model.get("canHandleGoogleSearch", false).asBool();
+        model_info->abilities.canUseThinking = model.get("canUseThinking", false).asBool();
+        Json::Value supportedMimeTypes = model.get("supportedMimeTypes", Json::Value(Json::arrayValue));
+        for (const auto& mimeType : supportedMimeTypes) {
+            model_info->abilities.supportedMimeTypes.push_back(mimeType.asString());
+        }
+        if(model_info->modelName.empty())
+        {
+            model_info->modelName=model_info->showName;
+        }
+        if(model_info->abilities.canUseThinking)
+        {
+            thinkModelSet.insert(model_info->tobitId);
+        }
+        ModelInfoMap[model_info->tobitId]=model_info;
             // LOG_INFO << "id: " << model_info["id"].asString()<<" tobit_id: "<<model_info["tobit_id"].asInt();
-            modelMap_NativeModelChatbot[tmp_model_info["showName"].asString()]=tmp_model_info;
+        modelMap_NativeModelChatbot.push_back(model_info);
        
     }
     
@@ -1074,9 +1063,31 @@ void Chaynsapi::eraseChatinfoMap(string ConversationId)
 }
 Json::Value Chaynsapi::getModels()
 {
+    loadModels();
     Json::Value openai_model_info;
-    openai_model_info["data"]=model_info["data"];
-    openai_model_info["object"]="list";
+    for(auto& model:ModelInfoMap)
+    {
+        Json::Value tmp_model_info;
+        tmp_model_info["id"]=model.second->modelName;
+        tmp_model_info["object"]="model";
+        tmp_model_info["created"]=1626777600;
+        tmp_model_info["owned_by"]="example_owner";
+        tmp_model_info["permission"]=Json::Value(Json::arrayValue);
+        tmp_model_info["root"]=model.second->modelName;
+        tmp_model_info["tobitId"]=model.second->tobitId;
+        tmp_model_info["showName"]=model.second->showName;
+        tmp_model_info["canHandleImages"]=model.second->abilities.canHandleImages;
+        tmp_model_info["canHandleJsonFormat"]=model.second->abilities.canHandleJsonFormat;
+        tmp_model_info["canCoBotHandleJsonFormat"]=model.second->abilities.canCoBotHandleJsonFormat;
+        tmp_model_info["canHandleFunctionCalling"]=model.second->abilities.canHandleFunctionCalling;
+        tmp_model_info["isImageGenerationModel"]=model.second->abilities.isImageGenerationModel;
+        tmp_model_info["canHandleGoogleSearch"]=model.second->abilities.canHandleGoogleSearch;
+        tmp_model_info["canUseThinking"]=model.second->abilities.canUseThinking;
+        tmp_model_info["parent"]=Json::Value();
+        openai_model_info["data"].append(tmp_model_info);
+        openai_model_info["object"]="list";        
+
+    }
    return openai_model_info;
 }
 void* Chaynsapi::createApi()
