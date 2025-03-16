@@ -409,119 +409,6 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
 }
 void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    /*
-    const std::string logPath = "../logs/aichat.log";
-    std::ifstream logFile(logPath);
-
-    if (!logFile.is_open()) {
-        auto resp = HttpResponse::newHttpResponse();
-        resp->setStatusCode(k500InternalServerError);
-        resp->setBody("无法打开日志文件");
-        callback(resp);
-        return;
-    }
-
-    int lines = 0;
-    if (req->getParameter("lines") != "") {
-        try {
-            lines = std::stoi(req->getParameter("lines"));
-        } catch (...) {
-            auto resp = HttpResponse::newHttpResponse();
-            resp->setStatusCode(k400BadRequest);
-            resp->setBody("无效的 lines 参数");
-            callback(resp);
-            return;
-        }
-    }
-
-    // 如果需要限制行数，先将所有行读入vector
-    std::vector<std::string> allLines;
-    std::string line;
-    while (std::getline(logFile, line)) {
-        allLines.push_back(line);
-    }
-
-    // 如果指定了行数限制，只保留最后N行
-    if (lines > 0 && lines < allLines.size()) {
-        allLines.erase(allLines.begin(), allLines.end() - lines);
-    }
-
-    std::stringstream formattedContent;
-    formattedContent << R"(
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>日志查看器</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-            font-family: Arial, sans-serif;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        pre {
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-family: 'Consolas', monospace;
-            font-size: 14px;
-            line-height: 1.5;
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 4px;
-            border: 1px solid #e9ecef;
-            margin: 0;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .header h1 {
-            color: #333;
-            margin: 0 0 10px 0;
-        }
-        .summary {
-            margin-bottom: 20px;
-            padding: 10px;
-            background-color: #e9ecef;
-            border-radius: 4px;
-            color: #495057;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>系统日志查看器</h1>
-        </div>
-        <div class="summary">
-            总日志行数: )" << allLines.size() << R"( 行
-        </div>
-        <pre>)";
-
-    // 输出所有日志行
-    for (const auto& logLine : allLines) {
-        formattedContent << logLine << "\n";
-    }
-
-    formattedContent << "</pre></div></body></html>";
-
-    auto resp = HttpResponse::newHttpResponse();
-    resp->setStatusCode(k200OK);
-    resp->setContentTypeCode(CT_TEXT_HTML);
-    resp->addHeader("Content-Type", "text/html; charset=utf-8");
-    resp->setBody(formattedContent.str());
-    callback(resp);
-    */
    const std::string logPath = "../logs/aichat.log";
     std::ifstream logFile(logPath);
 
@@ -556,6 +443,9 @@ void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpRes
         allLines.erase(allLines.begin(), allLines.end() - lines);
     }
 
+    // 将日志逆序排列，最新的日志显示在前面
+    std::reverse(allLines.begin(), allLines.end());
+
     std::stringstream formattedContent;
     formattedContent << "<!DOCTYPE html>\n"
         "<html lang=\"zh-CN\">\n"
@@ -580,7 +470,7 @@ void AiApi::logsInfo(const HttpRequestPtr &req, std::function<void(const HttpRes
         "<body>\n"
         "<div class=\"container\">\n"
         "<div class=\"header\"><h1>系统日志查看器</h1></div>\n"
-        "<div class=\"summary\">总行数: " << allLines.size() << "</div>\n"
+        "<div class=\"summary\">总行数: " << allLines.size() << " (最新日志显示在前)</div>\n"
         "<pre>\n";
 
     // 处理每一行日志

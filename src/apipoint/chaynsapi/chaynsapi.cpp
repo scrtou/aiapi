@@ -706,7 +706,7 @@ void Chaynsapi::getModels_NativeModelChatbot()
         {
             model_info->modelName=model_info->showName;
         }
-        if(model_info->abilities.canUseThinking)
+        if(model_info->abilities.canUseThinking&&model_info->showName=="Claude 3.7 Sonnet")
         {
             thinkModelSet.insert(model_info->tobitId);
         }
