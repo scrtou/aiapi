@@ -105,6 +105,7 @@ void Chaynsapi::createChatThread(string modelname,chatinfo_st& chatinfo)
         chatinfo.threadid=threadid;
         chatinfo.usermessageid=usermessageid;
         chatinfo.modelbotid=ModelNameMap_tobitId[modelname];
+        chatinfo.modelname=modelname;
         chatinfo.status=0;
         chatinfo.accountinfo=accountinfo;
     }
@@ -377,7 +378,7 @@ void Chaynsapi::sendImageFromBase64(session_st& session,shared_ptr<Accountinfo_s
 }        
 void Chaynsapi::postChatMessage(session_st& session)
 {
-    string postmessages;
+    string postmessages="【请注意】对于接下来的问题，请你都以中文回复!!!\n";
     LOG_INFO << "Chaynsapi::postChatMessage";
     //先根据client ID获取模型名称
     string modelname=session.selectmodel;
@@ -484,7 +485,7 @@ void Chaynsapi::postChatMessage(session_st& session)
 
      //get获取的消息
     string response_message;
-    int response_statusCode;
+    int response_statusCode=200;
     for(size_t i = 0; i < total_size; i += CHUNK_SIZE) {
         response_message="";
         response_statusCode=0;
@@ -995,6 +996,15 @@ void Chaynsapi::getMessage(shared_ptr<Accountinfo_st> accountinfo,struct chatinf
                 }
                 const auto& firstMessage = messages[0];
                 response_message = firstMessage["text"].asString();
+                //对于DeepSeek R1，如果存在“现在生成内容”，则截取“现在生成内容”后面的内容
+                if(chatinfo.modelname=="DeepSeek R1")
+                {
+                    if(response_message.find("现在生成内容")!=string::npos)
+                    {
+                        LOG_INFO << "开始截取，原内容："<<response_message;
+                        response_message=response_message.substr(response_message.find("现在生成内容")+16);
+                    }
+                }
                 response_creationTime = firstMessage["creationTime"].asString();
                 response_statusCode=200;
                 LOG_INFO << "Successfully retrieved message";

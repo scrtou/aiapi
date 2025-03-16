@@ -24,6 +24,7 @@ struct chatinfo_st
    string usermessageid="";
    string messagecreatetime="";
    int modelbotid=-1;
+   string modelname="";
    string picuserfilepath="";
     int status=-1; //0:预留，1:占用；2：空闲
    shared_ptr<Accountinfo_st> accountinfo=nullptr;
