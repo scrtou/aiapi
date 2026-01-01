@@ -75,6 +75,17 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     string message=responsejson["message"].asString();
     int statusCode=responsejson["statusCode"].asInt();
 
+    // Check User-Agent to determine if the request is from Kilo Code
+    std::string userAgent = req->getHeader("user-agent");
+    if (userAgent.find("Kilo-Code") != std::string::npos) {
+        // Kilo Code requires responses to be tool calls.
+        // If the message from the backend is plain text, wrap it in <attempt_completion> tags.
+        // A simple check to see if it already looks like a tool call (starts with '<').
+        if (!message.empty() && message.front() != '<') {
+            message = "<attempt_completion><result>" + message + "</result></attempt_completion>";
+        }
+    }
+
     const auto& stream = reqbody["stream"].asBool();
 
     LOG_INFO << "stream: " << stream;
@@ -92,12 +103,13 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
 
             struct StreamContext {
                     size_t pos = 0;
+                    bool sent_final_chunk = false;
                     bool sent_done = false;
                     std::string response_message;
                     time_t start_time;
-                    bool first_chunk = true;  // 添加标记来追踪第一个chunk
-                    StreamContext(const std::string& msg) : 
-                    response_message(msg), 
+                    bool first_chunk = true;
+                    StreamContext(const std::string& msg) :
+                    response_message(msg),
                     start_time(time(nullptr)) {}
                 };
 
@@ -105,8 +117,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
             auto shared_context = std::make_shared<StreamContext>(message);
             resp = HttpResponse::newStreamResponse([shared_context, oldConversationId](char *buffer, size_t maxBytes) -> size_t {
                 try {
-                    // 使用独立的状态管理器     
-                   if (shared_context->sent_done) {
+                    if (shared_context->sent_done) {
                         return 0;
                     }
 
@@ -114,54 +125,77 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                         LOG_WARN << "Stream timeout";
                         return 0;
                     }
-                    
-                    
-                    
-                    // 处理结束情况
+
+                    // After all content is sent, send the final chunk, then [DONE]
                     if (shared_context->pos >= shared_context->response_message.length()) {
-                        const std::string done_message = "data: [DONE]\n\n";
-                        size_t done_size = std::min(done_message.length(), maxBytes);
-                        memcpy(buffer, done_message.c_str(), done_size);
-                        shared_context->sent_done = true;
-                        return done_size;
+                        if (!shared_context->sent_final_chunk) {
+                            Json::Value data;
+                            data["id"] = "chatcmpl-" + oldConversationId.substr(0, 5) + "-" + std::to_string(time(nullptr));
+                            data["object"] = "chat.completion.chunk";
+                            data["created"] = static_cast<int>(time(nullptr));
+                            data["choices"][0]["index"] = 0;
+                            data["choices"][0]["delta"] = Json::objectValue;
+                            data["choices"][0]["finish_reason"] = "stop";
+
+                            Json::StreamWriterBuilder writer_builder;
+                            writer_builder["indentation"] = "";
+                            writer_builder["emitUTF8"] = true;
+                            std::string json_str = Json::writeString(writer_builder, data);
+                            
+                            std::string final_chunk_str = "data: " + json_str + "\n\n";
+                            size_t to_send = std::min(final_chunk_str.length(), maxBytes);
+                            memcpy(buffer, final_chunk_str.c_str(), to_send);
+                            shared_context->sent_final_chunk = true;
+                            return to_send;
+                        } else {
+                            const std::string done_message = "data: [DONE]\n\n";
+                            size_t done_size = std::min(done_message.length(), maxBytes);
+                            memcpy(buffer, done_message.c_str(), done_size);
+                            shared_context->sent_done = true;
+                            return done_size;
+                        }
                     }
 
-                    // 计算当前chunk大小（确保不切断UTF-8字符）
+                    // Calculate chunk size (UTF-8 safe)
                     size_t chunk_size = 0;
                     size_t remaining = shared_context->response_message.length() - shared_context->pos;
-                    size_t target_size = std::min(remaining, size_t(9)); // 每次发送3个汉字
+                    size_t target_size = std::min(remaining, size_t(30)); // Increased chunk size
                     
                     while (chunk_size < target_size) {
+                        if (shared_context->pos + chunk_size >= shared_context->response_message.length()) break;
                         unsigned char c = shared_context->response_message[shared_context->pos + chunk_size];
-                        if ((c & 0x80) == 0) chunk_size += 1;
-                        else if ((c & 0xE0) == 0xC0) chunk_size += 2;
-                        else if ((c & 0xF0) == 0xE0) chunk_size += 3;
-                        else if ((c & 0xF8) == 0xF0) chunk_size += 4;
-                        if (chunk_size > target_size) break;
-                    }
+                        int char_len = 0;
+                        if ((c & 0x80) == 0) char_len = 1;
+                        else if ((c & 0xE0) == 0xC0) char_len = 2;
+                        else if ((c & 0xF0) == 0xE0) char_len = 3;
+                        else if ((c & 0xF8) == 0xF0) char_len = 4;
+                        else { chunk_size++; continue; }
 
-                    // 构造SSE消息
+                        if (chunk_size + char_len > target_size) break;
+                        chunk_size += char_len;
+                    }
+                    if (chunk_size == 0 && remaining > 0) chunk_size = remaining;
+
+
+                    // Construct SSE message
                     Json::Value data;
                     data["id"] = "chatcmpl-" + oldConversationId.substr(0, 5) + "-" + std::to_string(time(nullptr));
                     data["object"] = "chat.completion.chunk";
                     data["created"] = static_cast<int>(time(nullptr));
-                    // 如果是第一个chunk，发送完整的开始部分
-                    if (shared_context->first_chunk) {
-                        data["choices"][0]["delta"]["content"] = 
-                            shared_context->response_message.substr(0, chunk_size);
-                        shared_context->first_chunk = false;
-                    } else {
-                        data["choices"][0]["delta"]["content"] = 
-                            shared_context->response_message.substr(shared_context->pos, chunk_size);
-                    }
-                    data["choices"][0]["finish_reason"] = Json::Value();
                     data["choices"][0]["index"] = 0;
-                    
-                    Json::FastWriter writer;
-                    std::string json_str = writer.write(data);
-                    if (!json_str.empty() && json_str[json_str.length()-1] == '\n') {
-                        json_str.pop_back();
+
+                    if (shared_context->first_chunk) {
+                        data["choices"][0]["delta"]["role"] = "assistant";
+                        shared_context->first_chunk = false;
                     }
+                    
+                    data["choices"][0]["delta"]["content"] = shared_context->response_message.substr(shared_context->pos, chunk_size);
+                    data["choices"][0]["finish_reason"] = Json::Value();
+
+                    Json::StreamWriterBuilder writer_builder;
+                    writer_builder["indentation"] = "";
+                    writer_builder["emitUTF8"] = true;
+                    std::string json_str = Json::writeString(writer_builder, data);
                     
                     std::string chunk_str = "data: " + json_str + "\n\n";
                     size_t to_send = std::min(chunk_str.length(), maxBytes);
@@ -169,7 +203,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                     
                     shared_context->pos += chunk_size;
                     LOG_DEBUG << "Sent position: " << shared_context->pos << "/" << shared_context->response_message.length();
-                    // 控制发送速率
+                    
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     
                     return to_send;
@@ -185,9 +219,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
             resp->addHeader("Cache-Control", "no-cache");
             resp->addHeader("Connection", "keep-alive");
             resp->addHeader("X-Accel-Buffering", "no");
-            resp->addHeader("Transfer-Encoding", "chunked");
             resp->addHeader("Keep-Alive", "timeout=60");
-            resp->addHeader("Transfer-Encoding", "chunked");
             callback(resp); 
         }
         else

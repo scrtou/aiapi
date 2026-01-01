@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y \
     openssl \
     libssl-dev \
     libjsoncpp-dev \
+    libpq-dev \
+    postgresql-server-dev-all \
+    libmysqlclient-dev \
+    default-libmysqlclient-dev \
     xvfb \
     uuid-dev \
     zlib1g-dev \
@@ -23,10 +27,11 @@ RUN apt-get update && apt-get install -y \
     jq \
     python3-pip \
     docker-compose \
+    libspdlog-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装Python依赖
-COPY src/requirements.txt .
+COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # 安装 Drogon
@@ -57,14 +62,14 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
     echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/src/  build/config.json\n\
 fi\n\
 \n\
-cd /usr/src/app/tools/accountlogin && python3 loginremote.py &\n\
 cd /usr/src/app/src/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 创建构建目录
 RUN mkdir -p src/build
-WORKDIR /usr/src/app/src/build
+WORKDIR /usr/src/app/src/build  
+RUN mkdir -p /var/log/aiapi && chmod -R 777 /var/log/aiapi
 
 # 构建项目
 RUN cmake ..

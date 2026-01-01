@@ -259,20 +259,36 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
     session.selectmodel = requestbody["model"].asString();
+
+    auto getContentAsString = [](const Json::Value& content) -> std::string {
+        if (content.isString()) {
+            return content.asString();
+        }
+        if (content.isArray()) {
+            std::string result;
+            for (const auto& item : content) {
+                if (item.isObject() && item.isMember("text") && item["text"].isString()) {
+                    result += item["text"].asString();
+                }
+            }
+            return result;
+        }
+        return "";
+    };
     
     for(int i = 0; i < requestbody["messages"].size()-1; i++)
     {
          if(requestbody["messages"][i]["role"] == "system")
             {
-                session.systemprompt = requestbody["messages"][i]["content"].asString();
+                session.systemprompt = getContentAsString(requestbody["messages"][i]["content"]);
                 continue;
             }
         Json::Value msgData;
         msgData["role"] = requestbody["messages"][i]["role"];
-        msgData["content"] = requestbody["messages"][i]["content"];
+        msgData["content"] = getContentAsString(requestbody["messages"][i]["content"]);
         session.addMessageToContext(msgData);
     }
-    session.requestmessage = requestbody["messages"][requestbody["messages"].size()-1]["content"].asString();
+    session.requestmessage = getContentAsString(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
     session.last_active_time = time(NULL);
     LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
     LOG_INFO << "session_st message_context: " << Json::FastWriter().write(session.message_context);

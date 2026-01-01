@@ -3,9 +3,21 @@
 #include <ApiManager.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
+#include <cstdlib>
 using namespace drogon;
 using namespace drogon::orm;
-const string getTokenUrl = "https://aiapi-tool.onrender.com/aichat/chayns/login";
+
+// 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
+string getLoginServiceUrl() {
+    const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
+    if (envUrl != nullptr && strlen(envUrl) > 0) {
+        return string(envUrl) + "/aichat/chayns/login";
+    }
+    // 使用 host 网络模式，直接访问宿主机的 127.0.0.1
+    return "http://127.0.0.1:5557/aichat/chayns/login";
+}
+
+const string getTokenUrl = getLoginServiceUrl();
 
 AccountManager::AccountManager()
 {
@@ -196,10 +208,13 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     if(response->getStatusCode()==200)
     {
         body=std::string(response->getBody());
+        LOG_INFO << "Login service response body: " << body;
     }
     string errs;
     istringstream s(body);
-    Json::parseFromStream(reader, s, &responsejson, &errs);
+    if (!Json::parseFromStream(reader, s, &responsejson, &errs)) {
+        LOG_ERROR << "Failed to parse login response JSON: " << errs;
+    }
     return responsejson;
 }
 void AccountManager::checkToken()
@@ -321,6 +336,7 @@ void AccountManager::loadAccountFromDatebase()
     auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
+        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId;
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
     }
     LOG_INFO << "loadDatebase end";

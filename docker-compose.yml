@@ -2,36 +2,10 @@ version: '3'
 services:
   app:
     build: .
-    ports:
-      - "5555:5555"
-      - "5556:5556"
-    depends_on:
-      chrome:
-        condition: service_healthy  # 等待chrome服务健康后再启动
     environment:
-      - SELENIUM_HOST=chrome
-      - SELENIUM_PORT=4444
-    networks:
-      - selenium-network
-
-  chrome:
-    image: selenium/standalone-chrome:latest
-    ports:
-      - "4444:4444"
-      - "7900:7900"
-    shm_size: "2gb"
-    environment:
-      - SE_NODE_MAX_SESSIONS=10
-      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4444/wd/hub/status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    networks:
-      - selenium-network
-
-networks:
-  selenium-network:
-    driver: bridge
+      # 登录服务地址
+      - LOGIN_SERVICE_URL=${LOGIN_SERVICE_URL:-http://127.0.0.1:5557}
+    volumes:
+      - ./logs:/var/log/aiapi
+    network_mode: "host"
+    # 使用 host 网络模式，服务直接监听宿主机端口 5555

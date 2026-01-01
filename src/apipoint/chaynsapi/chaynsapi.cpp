@@ -35,24 +35,72 @@ void Chaynsapi::postChatMessage(session_st& session)
         return;
     }
 
+    if (accountinfo->personId.empty()) {
+        LOG_INFO << "personId is empty, attempting to fetch it.";
+        auto client = HttpClient::newHttpClient("https://auth.chayns.net");
+        auto request = HttpRequest::newHttpRequest();
+        request->setMethod(HttpMethod::Get);
+        request->setPath("/v2/userSettings");
+        request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+        auto [result, response] = client->sendRequest(request);
+        if (result == ReqResult::Ok && response->statusCode() == k200OK) {
+            auto jsonResp = response->getJsonObject();
+            if (jsonResp) {
+                if (jsonResp->isMember("personId")) {
+                    accountinfo->personId = (*jsonResp)["personId"].asString();
+                    LOG_INFO << "Successfully fetched personId: " << accountinfo->personId;
+                } else {
+                    LOG_ERROR << "personId not found in userSettings response JSON. Body: " << response->getBody();
+                }
+            } else {
+                LOG_ERROR << "Failed to parse userSettings response as JSON object. Body: " << response->getBody();
+            }
+        } else {
+            LOG_ERROR << "Failed to fetch userSettings. Status code: " << (response ? response->statusCode() : 0) << ", Body: " << (response ? std::string(response->getBody()) : "No response");
+        }
+    }
+
+    if (accountinfo->personId.empty()) {
+        LOG_ERROR << "personId is still empty after attempting to fetch. Aborting.";
+        session.responsemessage["error"] = "Failed to obtain a valid personId";
+        session.responsemessage["statusCode"] = 500;
+        return;
+    }
+    
     // 1. 发送消息并创建会话
     Json::Value sendMessageRequest;
-    sendMessageRequest["members"][0]["isAdmin"] = true;
-    sendMessageRequest["members"][0]["personId"] = accountinfo->personId;
-    sendMessageRequest["members"][1]["personId"] = modelInfoMap[modelname]["personId"].asString();
+    Json::Value member1;
+    member1["isAdmin"] = true;
+    member1["personId"] = accountinfo->personId;
+    sendMessageRequest["members"].append(member1);
+
+    Json::Value member2;
+    const auto& model_info = modelInfoMap[modelname];
+    if (!model_info.isMember("personId") || !model_info["personId"].isString()) {
+        LOG_ERROR << "personId is missing or not a string for model: " << modelname;
+        session.responsemessage["error"] = "Internal server error: model configuration issue.";
+        session.responsemessage["statusCode"] = 500;
+        return;
+    }
+    member2["personId"] = model_info["personId"].asString();
+    sendMessageRequest["members"].append(member2);
     sendMessageRequest["nerMode"] = "None";
     sendMessageRequest["priority"] = 0;
     sendMessageRequest["typeId"] = 8;
-    sendMessageRequest["messages"][0]["text"] = user_message;
+    Json::Value message;
+    message["text"] = user_message;
+    sendMessageRequest["messages"].append(message);
 
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
     auto reqSend = HttpRequest::newHttpJsonRequest(sendMessageRequest);
     reqSend->setMethod(HttpMethod::Post);
     reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
     reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+    LOG_INFO << "Chaynsapi request body: " << sendMessageRequest.toStyledString();
 
     string threadId;
     string lastMessageTime;
+    string userAuthorId;
 
     auto sendResult = client->sendRequest(reqSend);
     if (sendResult.first != ReqResult::Ok) {
@@ -62,11 +110,28 @@ void Chaynsapi::postChatMessage(session_st& session)
         return;
     }
     auto responseSend = sendResult.second;
-    if (responseSend->statusCode() == k200OK) {
+    LOG_INFO << "Thread creation response body: " << std::string(responseSend->getBody());
+    if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
         auto jsonResp = responseSend->getJsonObject();
         if (jsonResp && jsonResp->isMember("id")) {
             threadId = (*jsonResp)["id"].asString();
-            lastMessageTime = (*jsonResp)["messages"][0]["creationTime"].asString();
+            if (jsonResp->isMember("messages") && (*jsonResp)["messages"].isArray() && (*jsonResp)["messages"].size() > 0) {
+                const auto& firstMessage = (*jsonResp)["messages"][0];
+                if (firstMessage.isMember("creationTime") && firstMessage["creationTime"].isString()) {
+                    lastMessageTime = firstMessage["creationTime"].asString();
+                }
+            }
+            if (jsonResp->isMember("members") && (*jsonResp)["members"].isArray()) {
+                for (const auto& member : (*jsonResp)["members"]) {
+                    if (member.isMember("personId") && member["personId"].asString() == accountinfo->personId) {
+                        if (member.isMember("id") && member["id"].isString()) {
+                            userAuthorId = member["id"].asString();
+                        }
+                        LOG_INFO << "Found userAuthorId: " << userAuthorId;
+                        break;
+                    }
+                }
+            }
         }
     } else {
         LOG_ERROR << "Send message failed with status " << responseSend->statusCode();
@@ -90,6 +155,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         auto reqGet = HttpRequest::newHttpRequest();
         reqGet->setMethod(HttpMethod::Get);
         string getPath = "/intercom-backend/v2/thread/" + threadId + "/message?take=1000&afterDate=" + lastMessageTime;
+        LOG_INFO << "Polling URL: " << "https://cube.tobit.cloud" << getPath;
         reqGet->setPath(getPath);
         reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
 
@@ -101,13 +167,16 @@ void Chaynsapi::postChatMessage(session_st& session)
         auto responseGet = getResult.second;
         if (responseGet->statusCode() == k200OK) {
             auto jsonResp = responseGet->getJsonObject();
-            if (jsonResp && jsonResp->isArray() && jsonResp->size() > 1) {
+            if (jsonResp && jsonResp->isArray() && !jsonResp->empty()) {
                 // 查找来自非用户的最新消息
                 for (int i = jsonResp->size() - 1; i >= 0; --i) {
                     const auto& message = (*jsonResp)[i];
                     if (message.isMember("author") && message["author"].isMember("id") &&
-                        message["author"]["id"].asString() != accountinfo->personId) {
-                        response_message = message["text"].asString();
+                        message["author"]["id"].asString() != userAuthorId &&
+                        message.isMember("typeId") && message["typeId"].asInt() == 1) {
+                        if (message.isMember("text") && message["text"].isString()) {
+                            response_message = message["text"].asString();
+                        }
                         response_statusCode = 200;
                         goto found;
                     }
