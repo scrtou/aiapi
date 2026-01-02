@@ -560,6 +560,5 @@ FodyWeavers.xsd
 
 tools/accountlogin/google-chrome-stable_current_amd64.deb
 # End of https://www.toptal.com/developers/gitignore/api/intellij+all,visualstudio,visualstudiocode,cmake,c,c++
--e 
 # Sensitive configuration
-src/config.json
+config.json

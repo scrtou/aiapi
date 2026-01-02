@@ -9,6 +9,28 @@ int main() {
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
 
+    drogon::app().registerPreRoutingAdvice(
+        [](const drogon::HttpRequestPtr &req,
+           drogon::AdviceCallback &&callback,
+           drogon::AdviceChainCallback &&chainCallback) {
+            if (req->method() == drogon::HttpMethod::Options) {
+                auto resp = drogon::HttpResponse::newHttpResponse();
+                resp->addHeader("Access-Control-Allow-Origin", "*");
+                resp->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+                resp->addHeader("Access-Control-Allow-Headers", "*");
+                resp->setStatusCode(drogon::k204NoContent);
+                callback(resp);
+            } else {
+                chainCallback();
+            }
+        });
+
+    drogon::app().registerPostHandlingAdvice(
+        [](const drogon::HttpRequestPtr &req, const drogon::HttpResponsePtr &resp) {
+            resp->addHeader("Access-Control-Allow-Origin", "*");
+        });
+
+
 
 
     // 在事件循环开始后立即执行

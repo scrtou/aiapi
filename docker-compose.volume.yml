@@ -1,11 +1,10 @@
-version: '3'
 services:
   app:
     build: .
     environment:
-      # 登录服务地址
-      - LOGIN_SERVICE_URL=${LOGIN_SERVICE_URL:-http://127.0.0.1:5557}
+      - DUMMY_VAR=true
     volumes:
-      - ./logs:/var/log/aiapi
+      - ./logs:/usr/src/app/build/logs
+      - ./config.json:/usr/src/app/build/config.json
     network_mode: "host"
     # 使用 host 网络模式，服务直接监听宿主机端口 5555

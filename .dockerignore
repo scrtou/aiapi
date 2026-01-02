@@ -1,10 +1,12 @@
 .git
 .gitignore
 build/
+src/build/
+**/build/
 *.o
 *.so
 *.a
 *.log
 README.md
 Dockerfile
-.dockerignore 
+.dockerignore

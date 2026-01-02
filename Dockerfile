@@ -53,28 +53,32 @@ WORKDIR /usr/src/app
 COPY . .
 
 # 创建启动脚本
-RUN echo '#!/bin/bash\n\
-if [ ! -z "$CONFIG_JSON" ]; then\n\
-    echo "$CONFIG_JSON" > /usr/src/app/src/build/config.json\n\
-fi\n\
-\n\
-if [ ! -z "$CUSTOM_CONFIG" ]; then\n\
-    echo "$CUSTOM_CONFIG" | jq -s ".[0] * $(<config.json)" > /usr/src/app/src/  build/config.json\n\
-fi\n\
-\n\
-cd /usr/src/app/src/build && exec "$@"' > /usr/src/app/docker-entrypoint.sh
+RUN cat <<'EOF' > /usr/src/app/docker-entrypoint.sh
+#!/bin/bash
+CONFIG_PATH="/usr/src/app/build/config.json"
+if [ ! -z "$CONFIG_JSON" ]; then
+    echo "$CONFIG_JSON" > "$CONFIG_PATH"
+fi
+if [ ! -z "$CUSTOM_CONFIG" ]; then
+    TMP_CONFIG=$(mktemp)
+    jq -s ".[0] * .[1]" <(echo "$CUSTOM_CONFIG") "$CONFIG_PATH" > "$TMP_CONFIG" && mv "$TMP_CONFIG" "$CONFIG_PATH"
+fi
+cd /usr/src/app/build && exec "$@"
+EOF
 
 RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 创建构建目录
-RUN mkdir -p src/build
-RUN mkdir -p src/build/logs
-WORKDIR /usr/src/app/src/build  
-RUN mkdir -p /var/log/aiapi && chmod -R 777 /var/log/aiapi
+RUN mkdir -p build
+RUN mkdir -p build/logs
+WORKDIR /usr/src/app/build
 
 # 构建项目
 RUN cmake ..
 RUN make -j $(nproc)
+
+# 复制默认配置文件
+RUN cp /usr/src/app/config.example.json /usr/src/app/build/config.json
 
 # 暴露端口
 EXPOSE 5555 5556

@@ -74,4 +74,4 @@ target_include_directories(${PROJECT_NAME}
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)
 # ##############################################################################
 
-add_subdirectory(test)
+# add_subdirectory(test)

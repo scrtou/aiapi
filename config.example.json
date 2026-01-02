@@ -1,4 +1,10 @@
 {
+    "login_service_urls": [
+        {
+            "name": "chaynsapi",
+            "url": "http://127.0.0.1:5557/aichat/chayns/login"
+        }
+    ],
     "listeners": [
         {
             "address": "0.0.0.0",

@@ -429,7 +429,7 @@ void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const Http
 {
     LOG_INFO << "accountInfo";
     auto accountList=AccountManager::getInstance().getAccountList();
-    Json::Value response;
+    Json::Value response(Json::arrayValue);
     for(auto &account:accountList)
     {
         for(auto &userName:account.second)
@@ -447,8 +447,16 @@ void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const Http
             response.append(accountitem);
         }
     }
-    auto resp = HttpResponse::newHttpJsonResponse(response);
-    callback(resp);
+    if (response.empty()) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k200OK);
+        resp->setContentTypeCode(CT_APPLICATION_JSON);
+        resp->setBody("[]");
+        callback(resp);
+    } else {
+        auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+    }
 }
 void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {

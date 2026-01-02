@@ -8,16 +8,33 @@ using namespace drogon;
 using namespace drogon::orm;
 
 // 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
-string getLoginServiceUrl() {
-    const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
-    if (envUrl != nullptr && strlen(envUrl) > 0) {
-        return string(envUrl) + "/aichat/chayns/login";
+string getLoginServiceUrl(const string& name) {
+    // 1. 优先从配置文件读取
+    auto customConfig = drogon::app().getCustomConfig();
+    if (customConfig.isMember("login_service_urls") && customConfig["login_service_urls"].isArray()) {
+        for (const auto& service : customConfig["login_service_urls"]) {
+            if (service.isMember("name") && service["name"].asString() == name && service.isMember("url")) {
+                string url = service["url"].asString();
+                if (!url.empty()) {
+                    return url; // 返回完整的 URL，不再拼接
+                }
+            }
+        }
     }
-    // 使用 host 网络模式，直接访问宿主机的 127.0.0.1
-    return "http://127.0.0.1:5557/aichat/chayns/login";
-}
 
-const string getTokenUrl = getLoginServiceUrl();
+    // 2. 其次从环境变量读取 (作为后备)
+    const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
+    if (envUrl != nullptr && strlen(envUrl) > 0 && name == "chaynsapi") {
+        return string(envUrl);
+    }
+
+    // 3. 最后使用默认值 (作为后备)
+    if (name == "chaynsapi") {
+        return "http://127.0.0.1:5557/aichat/chayns/login";
+    }
+    
+    return ""; // 如果找不到，返回空字符串
+}
 
 AccountManager::AccountManager()
 {
@@ -186,19 +203,40 @@ bool AccountManager::checkChaynsToken(string token)
 Json::Value AccountManager::getChaynsToken(string username,string passwd)
 {
     //LOG_INFO << "getChaynsToken start";
-    const string serverUrl = getTokenUrl;
+    const string fullUrl = getLoginServiceUrl("chaynsapi");
+    if (fullUrl.empty()) {
+        LOG_ERROR << "login_service_url for 'chaynsapi' not found in config.";
+        return Json::Value();
+    }
+
+    // 解析 URL
+    string baseUrl, path;
+    size_t protocolPos = fullUrl.find("://");
+    if (protocolPos == string::npos) {
+        LOG_ERROR << "Invalid login service URL format: " << fullUrl;
+        return Json::Value();
+    }
+    size_t pathPos = fullUrl.find('/', protocolPos + 3);
+    if (pathPos == string::npos) {
+        baseUrl = fullUrl;
+        path = "/";
+    } else {
+        baseUrl = fullUrl.substr(0, pathPos);
+        path = fullUrl.substr(pathPos);
+    }
+
      // 等待服务器可用
-    if (!isServerReachable(serverUrl)) {
-        LOG_ERROR << "Server is not reachable after maximum retries";
+    if (!isServerReachable(baseUrl)) {
+        LOG_ERROR << "Server is not reachable after maximum retries: " << baseUrl;
         return Json::Value(); // 返回空的Json对象
     }
-    auto client = HttpClient::newHttpClient(serverUrl);
+    auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
-    Json::Value json;   
+    Json::Value json;
     json["username"] = username;
     json["password"] = passwd;
     request->setMethod(HttpMethod::Post);
-    request->setPath("/aichat/chayns/login");
+    request->setPath(path);
     request->setContentTypeString("application/json");
     request->setBody(json.toStyledString());
     auto [result, response] = client->sendRequest(request);
@@ -339,7 +377,7 @@ void AccountManager::loadAccountFromDatebase()
         LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId;
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
     }
-    LOG_INFO << "loadDatebase end";
+    LOG_INFO << "loadDatebase end size "<<accountDBList.size();
 }
 void AccountManager::saveAccountToDatebase()
 {
