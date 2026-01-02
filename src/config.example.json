@@ -128,8 +128,5 @@
                 "use_spdlog": true
             }
         }
-    ],
-    "custom_config": {
-        "reverse_api_list":["chaynsapi","testapi"]
-    }
+    ]
 }
