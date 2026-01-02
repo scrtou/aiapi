@@ -130,18 +130,6 @@
         }
     ],
     "custom_config": {
-        "reverse_api_list":["chaynsapi","testapi"],
-        "account":[{
-            "apiname": "chaynsapi",
-            "username": "YOUR_API_USERNAME",
-            "passwd": "YOUR_API_PASSWORD"
-            }
-        
-        ,{
-            "apiname": "",
-            "username": "",
-            "passwd": ""
-        }
-    ]
+        "reverse_api_list":["chaynsapi","testapi"]
     }
 }
