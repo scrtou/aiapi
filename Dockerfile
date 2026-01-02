@@ -68,6 +68,7 @@ RUN chmod +x /usr/src/app/docker-entrypoint.sh
 
 # 创建构建目录
 RUN mkdir -p src/build
+RUN mkdir -p src/build/logs
 WORKDIR /usr/src/app/src/build  
 RUN mkdir -p /var/log/aiapi && chmod -R 777 /var/log/aiapi
 

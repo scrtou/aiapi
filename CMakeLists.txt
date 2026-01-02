@@ -19,25 +19,28 @@ endif ()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(${PROJECT_NAME} main.cc )
+# Define all sources in one place
+add_executable(${PROJECT_NAME}
+    src/main.cc
+    src/accountManager/accountManager.cpp
+    src/apiManager/ApiFactory.cpp
+    src/apiManager/ApiManager.cpp
+    src/apipoint/chaynsapi/chaynsapi.cpp
+    src/channelManager/channelManager.cpp
+    src/controllers/AiApi.cc
+    src/dbManager/account/accountDbManager.cpp
+    src/dbManager/channel/channelDbManager.cpp
+    src/sessionManager/Session.cpp
+)
 
 # ##############################################################################
-# If you include the drogon source code locally in your project, use this method
-# to add drogon 
-# add_subdirectory(drogon) 
-# target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
-#
-# and comment out the following lines
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
-# 获取 Drogon target 的属性
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-
-
 # ##############################################################################
 
 if (CMAKE_CXX_STANDARD LESS 17)
@@ -48,48 +51,27 @@ else ()
     message(STATUS "use c++20")
 endif ()
 
-aux_source_directory(controllers CTL_SRC)
-aux_source_directory(filters FILTER_SRC)
-aux_source_directory(plugins PLUGIN_SRC)
-aux_source_directory(models MODEL_SRC)
-aux_source_directory(sessionManager SESSION_SRC)
-aux_source_directory(apipoint/chaynsapi CHAYNSAPI_SRC)
-aux_source_directory(accountManager ACCOUNT_SRC)
-aux_source_directory(apiManager API_SRC)
-drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
+drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/src/views
                     ${CMAKE_CURRENT_BINARY_DIR})
-# use the following line to create views with namespaces.
-# drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
-#                     ${CMAKE_CURRENT_BINARY_DIR} TRUE)
-# use the following line to create views with namespace CHANGE_ME prefixed
-# and path namespaces.
-# drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
-#                     ${CMAKE_CURRENT_BINARY_DIR} TRUE CHANGE_ME)
 
 target_include_directories(${PROJECT_NAME}
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-                           ${CMAKE_CURRENT_SOURCE_DIR}/sessionManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
-                           ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/models
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apiManager)
-target_sources(${PROJECT_NAME}
-               PRIVATE
-               ${SRC_DIR}
-               ${CTL_SRC}
-               ${FILTER_SRC}
-               ${PLUGIN_SRC}
-               ${MODEL_SRC}
-               ${CHAYNSAPI_SRC}
-               ${SESSION_SRC}
-               ${ACCOUNT_SRC}
-               ${API_SRC})
+                           PRIVATE
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/accountManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apiManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/chaynsapi
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/channelManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/account
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/channel
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/models
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/sessionManager)
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)
-
 # ##############################################################################
 
 add_subdirectory(test)

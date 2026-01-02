@@ -10,7 +10,7 @@
 #include <sstream>
 #include <iomanip>
 
-const int MAX_RETRIES = 100;  // 最大重试次数
+const int MAX_RETRIES = 1000;  // 最大重试次数
 const int BASE_DELAY = 300;  // 最大重试间隔（豪秒）
 // ... existing code ...
 
@@ -40,5 +40,15 @@ class Chaynsapi:public APIinterface
         bool checkAlivableToken(string token);
 
         Chaynsapi();
+        private:
+    // 定义一个结构体保存线程上下文信息
+    struct ThreadContext {
+        std::string threadId;
+        std::string userAuthorId; // Bot在该线程中的AuthorID，用于轮询时过滤
+    };
+
+    // 映射表: ConversationId -> ThreadContext
+    std::map<std::string, ThreadContext> m_threadMap;
+    std::mutex m_threadMapMutex;
 };
 #endif

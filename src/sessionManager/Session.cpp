@@ -83,7 +83,10 @@ std::string chatSession::generateConversationKey(
     )
 {   // 生成哈希
     //LOG_DEBUG << "生成ConversationId使用的数据: " << Json::FastWriter().write(keyData);
-        return generateSHA256(Json::FastWriter().write(keyData));
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = ""; // Ensure compact, consistent output
+        builder["emitUTF8"] = true;
+        return generateSHA256(Json::writeString(builder, keyData));
 }
 
 void chatSession::coverSessionresponse(session_st& session)
@@ -194,10 +197,10 @@ Json::Value chatSession::getClientInfo(const HttpRequestPtr &req)
         clientInfo["ip"] = req->getPeerAddr().toIp();
         
         // 获取User-Agent
-        auto userAgent = req->getHeader("User-Agent");
-        if (!userAgent.empty()) {
-            clientInfo["user_agent"] = userAgent;
-        }
+        // auto userAgent = req->getHeader("User-Agent");
+        // if (!userAgent.empty()) {
+        //     clientInfo["user_agent"] = userAgent;
+        // }
         /*
         // 获取其他相关头部信息
         std::vector<std::string> importantHeaders = {
@@ -212,7 +215,20 @@ Json::Value chatSession::getClientInfo(const HttpRequestPtr &req)
             }
         }
         */
+        std::string userAgent = req->getHeader("user-agent");
+        std::string clientType = ""; // 默认为空字符串
 
+        if (userAgent.find("Kilo-Code") != std::string::npos) {
+            clientType = "Kilo-Code";
+        } 
+        else if (userAgent.find("RooCode") != std::string::npos) {
+            clientType = "RooCode"; // RooCode 和 Kilo 逻辑基本一致
+        }
+        // else if (userAgent.find("Continue") ...) { clientType = "Continue"; } // 以后可以这样扩展
+
+        // 将字符串标识存入 session
+        clientInfo["client_type"] = clientType; 
+        LOG_INFO << "识别到客户端类型: " << (clientType.empty() ? "Unknown" : clientType);
         return clientInfo;
 }
 void chatSession::clearExpiredSession()
@@ -260,6 +276,8 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     session.client_info = getClientInfo(req);
     session.selectmodel = requestbody["model"].asString();
 
+
+
     auto getContentAsString = [](const Json::Value& content) -> std::string {
         if (content.isString()) {
             return content.asString();
@@ -268,7 +286,14 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
             std::string result;
             for (const auto& item : content) {
                 if (item.isObject() && item.isMember("text") && item["text"].isString()) {
-                    result += item["text"].asString();
+                    std::string textPart = item["text"].asString();
+                    result += textPart;
+            
+                    // 【可选改进】如果当前片段不以换行符结尾，手动补一个换行
+                    // 这样可以确保 <task> 和 <environment_details> 即使在源数据中紧挨着，这里也会分行
+                    if (!textPart.empty() && textPart.back() != '\n') {
+                        result += "\n";
+                    }
                 }
             }
             return result;

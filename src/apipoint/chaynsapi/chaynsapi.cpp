@@ -23,7 +23,22 @@ void Chaynsapi::postChatMessage(session_st& session)
 {
     LOG_INFO << "Chaynsapi::postChatMessage";
     string modelname = session.selectmodel;
-    string user_message = session.requestmessage;
+    
+    // ----------------------------------------------------------------------
+    // [修改点 START] 在发送前一刻，将 System Prompt 注入到用户消息前
+    // ----------------------------------------------------------------------
+    // string user_message;
+    
+    // if (!session.systemprompt.empty()) {
+    //     LOG_INFO << "检测到 System Prompt，正在注入到消息头部 (长度: " << session.systemprompt.length() << ")";
+    //     // 将 System Prompt 和 用户消息拼接，中间用换行符分隔
+    //     user_message = session.systemprompt + "\n\n" + session.requestmessage;
+    // } else {
+    //     user_message = session.requestmessage;
+    // }
+    // ----------------------------------------------------------------------
+    // [修改点 END]
+    // ----------------------------------------------------------------------
 
     shared_ptr<Accountinfo_st> accountinfo = nullptr;
     AccountManager::getInstance().getAccount("chaynsapi", accountinfo);
@@ -67,113 +82,226 @@ void Chaynsapi::postChatMessage(session_st& session)
         return;
     }
     
-    // 1. 发送消息并创建会话
-    Json::Value sendMessageRequest;
-    Json::Value member1;
-    member1["isAdmin"] = true;
-    member1["personId"] = accountinfo->personId;
-    sendMessageRequest["members"].append(member1);
-
-    Json::Value member2;
-    const auto& model_info = modelInfoMap[modelname];
-    if (!model_info.isMember("personId") || !model_info["personId"].isString()) {
-        LOG_ERROR << "personId is missing or not a string for model: " << modelname;
-        session.responsemessage["error"] = "Internal server error: model configuration issue.";
-        session.responsemessage["statusCode"] = 500;
-        return;
-    }
-    member2["personId"] = model_info["personId"].asString();
-    sendMessageRequest["members"].append(member2);
-    sendMessageRequest["nerMode"] = "None";
-    sendMessageRequest["priority"] = 0;
-    sendMessageRequest["typeId"] = 8;
-    Json::Value message;
-    message["text"] = user_message;
-    sendMessageRequest["messages"].append(message);
-
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
-    auto reqSend = HttpRequest::newHttpJsonRequest(sendMessageRequest);
-    reqSend->setMethod(HttpMethod::Post);
-    reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
-    reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-    LOG_INFO << "Chaynsapi request body: " << sendMessageRequest.toStyledString();
-
     string threadId;
+    string userAuthorId; // 这是Bot在这个线程里的ID
     string lastMessageTime;
-    string userAuthorId;
 
-    auto sendResult = client->sendRequest(reqSend);
-    if (sendResult.first != ReqResult::Ok) {
-        LOG_ERROR << "Failed to send message";
-        session.responsemessage["error"] = "Failed to send message";
-        session.responsemessage["statusCode"] = 500;
-        return;
+    // 3. 检查是否存在上下文 (ThreadId)
+    bool isFollowUp = false;
+    {
+        std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        // 使用 preConversationId 查找，因为 session 的 preConversationId 指向上一轮的 curConversationId
+        auto it = m_threadMap.find(session.preConversationId);
+        if (it != m_threadMap.end()) {
+            threadId = it->second.threadId;
+            userAuthorId = it->second.userAuthorId;
+            isFollowUp = true;
+            LOG_INFO << "Found existing threadId: " << threadId << " for preConvId: " << session.preConversationId;
+        }
     }
-    auto responseSend = sendResult.second;
-    LOG_INFO << "Thread creation response body: " << std::string(responseSend->getBody());
-    if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
-        auto jsonResp = responseSend->getJsonObject();
-        if (jsonResp && jsonResp->isMember("id")) {
-            threadId = (*jsonResp)["id"].asString();
-            if (jsonResp->isMember("messages") && (*jsonResp)["messages"].isArray() && (*jsonResp)["messages"].size() > 0) {
-                const auto& firstMessage = (*jsonResp)["messages"][0];
-                if (firstMessage.isMember("creationTime") && firstMessage["creationTime"].isString()) {
-                    lastMessageTime = firstMessage["creationTime"].asString();
-                }
+
+    Json::Value sendResponseJson; // 保存发送请求的响应，用于提取时间和ID
+
+    // 4. 发送请求 (分支逻辑)
+    if (isFollowUp) {
+        // =================================================
+        // 分支 A: 后续对话 (发送消息到现有 Thread)
+        // URL: /intercom-backend/v2/thread/{threadId}/message
+        // =================================================
+        Json::Value messageBody;
+        string messageText = session.requestmessage;
+
+        // [修改点]: 获取 client_type 并根据具体值注入提醒
+        string clientType = session.client_info.get("client_type", "").asString();
+        
+        if (clientType == "Kilo-Code" || clientType == "RooCode") {
+            LOG_INFO << "为 " << clientType << " 客户端注入 System Reminder...";
+            // 这是一个强力的 Reminder，包含所有可用工具的列表
+            string reminder = 
+                "\n\n(SYSTEM REMINDER: Continue the task immediately. Do NOT introduce yourself. "
+                "You have access to the following XML tools: "
+                "<read_file>, <search_files>, <list_files>, "
+                "<apply_diff>, <write_to_file>, <delete_file>, "
+                "<execute_command>, <ask_followup_question>, <attempt_completion>, "
+                "<switch_mode>, <new_task>, <update_todo_list>, <fetch_instructions>. "
+                "You MUST use these exact XML tags to perform actions. "
+                "Do NOT use markdown code blocks for the XML tools.)";
+
+            messageText += reminder;
+        }
+
+        messageBody["text"] = messageText;
+        messageBody["cursorPosition"] = messageText.size(); 
+
+        auto reqSend = HttpRequest::newHttpJsonRequest(messageBody);
+        reqSend->setMethod(HttpMethod::Post);
+        string path = "/intercom-backend/v2/thread/" + threadId + "/message";
+        reqSend->setPath(path);
+        reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+        
+        LOG_INFO << "Sending follow-up message to thread: " << threadId;
+        
+        auto sendResult = client->sendRequest(reqSend);
+        if (sendResult.first != ReqResult::Ok) {
+            LOG_ERROR << "Failed to send follow-up message";
+            session.responsemessage["error"] = "Failed to send message";
+            session.responsemessage["statusCode"] = 500;
+            return;
+        }
+        
+        auto responseSend = sendResult.second;
+        if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
+            // 解析响应，更新 lastMessageTime
+            sendResponseJson = *responseSend->getJsonObject();
+            if (sendResponseJson.isMember("creationTime")) {
+                lastMessageTime = sendResponseJson["creationTime"].asString();
             }
-            if (jsonResp->isMember("members") && (*jsonResp)["members"].isArray()) {
-                for (const auto& member : (*jsonResp)["members"]) {
-                    if (member.isMember("personId") && member["personId"].asString() == accountinfo->personId) {
-                        if (member.isMember("id") && member["id"].isString()) {
-                            userAuthorId = member["id"].asString();
-                        }
-                        LOG_INFO << "Found userAuthorId: " << userAuthorId;
-                        break;
-                    }
-                }
+            // 确保 userAuthorId 正确 (响应中的 author.id 即为发送者ID)
+            if (sendResponseJson.isMember("author") && sendResponseJson["author"].isMember("id")) {
+                userAuthorId = sendResponseJson["author"]["id"].asString();
             }
+        } else {
+            LOG_ERROR << "Follow-up failed code: " << responseSend->statusCode() << " body: " << responseSend->getBody();
+            // 如果后续发送失败（例如线程已关闭），可能需要降级为创建新线程，这里简单处理为报错
+            session.responsemessage["error"] = "Failed to append message";
+            session.responsemessage["statusCode"] = responseSend->statusCode();
+            return;
         }
     } else {
-        LOG_ERROR << "Send message failed with status " << responseSend->statusCode();
-        session.responsemessage["error"] = "Failed to create thread";
-        session.responsemessage["statusCode"] = responseSend->statusCode();
-        return;
+        // =================================================
+        // 分支 B: 新对话 (创建新 Thread)
+        // URL: /intercom-backend/v2/thread?forceCreate=true
+        // =================================================
+        string full_message;
+        if (!session.systemprompt.empty()) {
+            LOG_INFO << "Creating New Thread: Injecting System Prompt (" << session.systemprompt.length() << " chars)";
+            full_message = session.systemprompt + "\n\n" + session.requestmessage;
+        } else {
+            full_message = session.requestmessage;
+        }
+        Json::Value sendMessageRequest;
+        Json::Value member1;
+        member1["isAdmin"] = true;
+        member1["personId"] = accountinfo->personId;
+        sendMessageRequest["members"].append(member1);
+
+        Json::Value member2;
+        const auto& model_info = modelInfoMap[modelname];
+        if (!model_info.isMember("personId") || !model_info["personId"].isString()) {
+            LOG_ERROR << "Model personId missing: " << modelname;
+            session.responsemessage["error"] = "Model config error";
+            session.responsemessage["statusCode"] = 500;
+            return;
+        }
+        member2["personId"] = model_info["personId"].asString();
+        sendMessageRequest["members"].append(member2);
+        sendMessageRequest["nerMode"] = "None";
+        sendMessageRequest["priority"] = 0;
+        sendMessageRequest["typeId"] = 8;
+        
+        Json::Value message;
+        message["text"] = full_message;
+        sendMessageRequest["messages"].append(message);
+
+        auto reqSend = HttpRequest::newHttpJsonRequest(sendMessageRequest);
+        reqSend->setMethod(HttpMethod::Post);
+        reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
+        reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+        
+        LOG_INFO << "Creating new thread";
+
+        auto sendResult = client->sendRequest(reqSend);
+        if (sendResult.first != ReqResult::Ok) {
+             session.responsemessage["error"] = "Failed to connect";
+             session.responsemessage["statusCode"] = 500;
+             return;
+        }
+        auto responseSend = sendResult.second;
+        
+        if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
+            sendResponseJson = *responseSend->getJsonObject();
+            if (sendResponseJson.isMember("id")) {
+                threadId = sendResponseJson["id"].asString();
+                
+                // 提取 userAuthorId (Bot 在群里的 ID)
+                if (sendResponseJson.isMember("members") && sendResponseJson["members"].isArray()) {
+                    for (const auto& member : sendResponseJson["members"]) {
+                        if (member.isMember("personId") && member["personId"].asString() == accountinfo->personId) {
+                            if (member.isMember("id") && member["id"].isString()) {
+                                userAuthorId = member["id"].asString();
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                // 提取时间
+                if (sendResponseJson.isMember("messages") && sendResponseJson["messages"].isArray() && sendResponseJson["messages"].size() > 0) {
+                     lastMessageTime = sendResponseJson["messages"][0]["creationTime"].asString();
+                }
+            }
+        } else {
+            LOG_ERROR << "Create thread failed: " << responseSend->statusCode();
+            session.responsemessage["error"] = "Failed to create thread";
+            session.responsemessage["statusCode"] = responseSend->statusCode();
+            return;
+        }
     }
 
-    if (threadId.empty()) {
-        LOG_ERROR << "Failed to get threadId from response";
-        session.responsemessage["error"] = "Failed to get threadId";
+    if (threadId.empty() || lastMessageTime.empty()) {
+        LOG_ERROR << "Critical info missing: threadId or lastMessageTime";
+        session.responsemessage["error"] = "Protocol error";
         session.responsemessage["statusCode"] = 500;
         return;
     }
 
-    // 2. 轮询获取结果
-    string response_message;
-    int response_statusCode = 204; // No Content
+    // 5. 更新上下文映射表
+    // 将当前的 curConversationId 指向这个 threadId，以便下一次请求（带上这个cur作为pre）能找到
+    {
+        std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        ThreadContext ctx;
+        ctx.threadId = threadId;
+        ctx.userAuthorId = userAuthorId;
+        // 注意：session.curConversationId 是当前对话产生的 ID，
+        // 下一次用户请求时，这个 ID 会变成 session.preConversationId
+        m_threadMap[session.curConversationId] = ctx;
+        
+        // 也可以清理一下旧的映射（可选）
+        m_threadMap.erase(session.preConversationId); 
+    }
 
+    // 6. 轮询获取结果 (逻辑保持不变)
+    string response_message;
+    int response_statusCode = 204; 
+
+    // 注意：这里需要根据 lastMessageTime 轮询
     for (int retry = 0; retry < MAX_RETRIES; ++retry) {
         auto reqGet = HttpRequest::newHttpRequest();
         reqGet->setMethod(HttpMethod::Get);
         string getPath = "/intercom-backend/v2/thread/" + threadId + "/message?take=1000&afterDate=" + lastMessageTime;
-        LOG_INFO << "Polling URL: " << "https://cube.tobit.cloud" << getPath;
+        LOG_INFO << "Polling URL: " << getPath;
         reqGet->setPath(getPath);
         reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
 
         auto getResult = client->sendRequest(reqGet);
         if (getResult.first != ReqResult::Ok) {
-            LOG_ERROR << "Failed to get message on retry " << retry;
+            std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY));
             continue;
         }
+        
         auto responseGet = getResult.second;
         if (responseGet->statusCode() == k200OK) {
             auto jsonResp = responseGet->getJsonObject();
             if (jsonResp && jsonResp->isArray() && !jsonResp->empty()) {
-                // 查找来自非用户的最新消息
+                // 查找最新消息
                 for (int i = jsonResp->size() - 1; i >= 0; --i) {
                     const auto& message = (*jsonResp)[i];
+                    // 过滤条件：不是 Bot 发的 (author.id != userAuthorId) 且 typeId == 1 (文本)
                     if (message.isMember("author") && message["author"].isMember("id") &&
                         message["author"]["id"].asString() != userAuthorId &&
                         message.isMember("typeId") && message["typeId"].asInt() == 1) {
+                        
                         if (message.isMember("text") && message["text"].isString()) {
                             response_message = message["text"].asString();
                         }
@@ -183,20 +311,18 @@ void Chaynsapi::postChatMessage(session_st& session)
                 }
             }
         }
-        
         std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY));
     }
 
-found:
+ found:
     if (response_statusCode == 200) {
         session.responsemessage["message"] = response_message;
     } else {
-        LOG_ERROR << "Failed to get message after " << MAX_RETRIES << " retries.";
+        LOG_ERROR << "Timeout waiting for response in thread " << threadId;
         session.responsemessage["error"] = "Timeout waiting for response";
     }
     session.responsemessage["statusCode"] = response_statusCode;
 }
-
 void Chaynsapi::checkAlivableTokens()
 {
 

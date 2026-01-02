@@ -1,14 +1,17 @@
 #include "AiApi.h"
 #include <drogon/HttpResponse.h>
 #include <json/json.h>
-#include<drogon/drogon.h>
+#include <drogon/drogon.h>
 #include <unistd.h>
 #include <apiManager/ApiManager.h>
 #include <accountManager/accountManager.h>
 #include <dbManager/account/accountDbManager.h>
+#include <channelManager/channelManager.h>
 #include <sessionManager/Session.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
+#include <vector> // 添加 vector 头文件
+
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -16,7 +19,6 @@ using namespace drogon::orm;
 void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     //打印所有的请求头
-    //打印请求头
     LOG_DEBUG<<"请求头:";
     for(auto &header : req->getHeaders())
     {
@@ -51,6 +53,8 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     session_st session;
     session=chatSession::getInstance()->gennerateSessionstByReq(req);
     session=chatSession::getInstance()->createNewSessionOrUpdateSession(session);
+
+    
     if(session.selectapi.empty())
     {
         //select api ....
@@ -71,20 +75,106 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     LOG_DEBUG << "chaynsapi返回结果:" << jsonStr;
 
     // 获取responsejson中的message和statusCode
-    //string message=Json::writeString(writer,responsejson["message"]);
     string message=responsejson["message"].asString();
     int statusCode=responsejson["statusCode"].asInt();
+    string clientType = session.client_info.get("client_type", "").asString();
+   // =========================================================
+    // [修正] Kilo/Roo Code 客户端的清洗与纠错逻辑 (通用版)
+    // =========================================================
+    if ((clientType == "Kilo-Code" || clientType == "RooCode") && !message.empty()) {
+        LOG_INFO << "正在对 " << clientType << " 客户端的响应进行标签清洗...";
+        
+        auto replaceAll = [](std::string& str, const std::string& from, const std::string& to) {
+            if(from.empty()) return;
+            size_t start_pos = 0;
+            while((start_pos = str.find(from, start_pos)) != std::string::npos) {
+                str.replace(start_pos, from.length(), to);
+                start_pos += to.length();
+            }
+        };
 
-    // Check User-Agent to determine if the request is from Kilo Code
-    std::string userAgent = req->getHeader("user-agent");
-    if (userAgent.find("Kilo-Code") != std::string::npos) {
-        // Kilo Code requires responses to be tool calls.
-        // If the message from the backend is plain text, wrap it in <attempt_completion> tags.
-        // A simple check to see if it already looks like a tool call (starts with '<').
-        if (!message.empty() && message.front() != '<') {
-            message = "<attempt_completion><result>" + message + "</result></attempt_completion>";
+        // 1. 基础标签纠错 (修正模型常见的拼写错误)
+        replaceAll(message, "<write_file>", "<write_to_file>");
+        replaceAll(message, "</write_file>", "</write_to_file>");
+        replaceAll(message, "<list_dir>", "<list_files>");
+        replaceAll(message, "</list_dir>", "</list_files>");
+        replaceAll(message, "<run_command>", "<execute_command>");
+        replaceAll(message, "</run_command>", "</execute_command>");
+
+        // 定义所有合法的工具列表
+        static const std::vector<std::string> kiloTools = {
+             "read_file", "write_to_file", "execute_command", "search_files",
+             "list_files", "attempt_completion", "ask_followup_question",
+             "switch_mode", "new_task", "update_todo_list", "fetch_instructions",
+             "apply_diff", "delete_file"
+        };
+
+        // 2. [通用修复] 检测 attempt_completion 包裹其他工具调用的情况
+        // 如果 message 包含 attempt_completion，我们检查内部是否嵌套了其他工具
+        if (message.find("<attempt_completion>") != std::string::npos) {
+            for (const auto& tool : kiloTools) {
+                // 跳过 attempt_completion 自身，否则会把自己剥离掉
+                if (tool == "attempt_completion") continue;
+
+                std::string openTag = "<" + tool + ">";
+                std::string closeTag = "</" + tool + ">";
+
+                // 如果在 attempt_completion 内部发现了其他工具标签
+                if (message.find(openTag) != std::string::npos) {
+                    LOG_INFO << "检测到 attempt_completion 错误包裹了工具: " << tool << "，正在剥离外层...";
+                    
+                    size_t start = message.find(openTag);
+                    size_t end = message.rfind(closeTag);
+                    
+                    if (start != std::string::npos && end != std::string::npos) {
+                        end += closeTag.length(); 
+                        if (end > start) {
+                            // 提取内部工具，丢弃外层的 attempt_completion
+                            message = message.substr(start, end - start);
+                            LOG_INFO << "剥离完成，工具指令已提取。";
+                            // 找到一个就退出，因为 Kilo 一次只执行一个工具
+                            goto skip_markdown_check; 
+                        }
+                    }
+                }
+            }
         }
+
+        // 3. 兼容性提取逻辑 (处理 markdown 包裹 ```xml ... ```)
+        // 只有当经过上面的清洗后，message 里依然没有可以直接执行的 tag 时，才尝试去剥离 markdown
+        {
+            bool hasDirectTool = false;
+            for (const auto& tool : kiloTools) {
+                // 检查是否已经是以 <tool> 开头（或包含裸露的 tag）
+                if (message.find("<" + tool + ">") != std::string::npos) {
+                    hasDirectTool = true;
+                    break;
+                }
+            }
+
+            if (hasDirectTool) {
+                // 如果包含工具标签，检查是否被 Markdown 代码块包裹
+                size_t startTag = message.find('<');
+                size_t endTag = message.rfind('>');
+                // 如果 < 出现在比较靠后的位置（说明前面有 ```xml 或者废话），则提取
+                if (startTag != std::string::npos && endTag != std::string::npos && endTag > startTag) {
+                     // 简单的启发式：如果不是从 0 开始，或者结尾后面还有东西，就裁剪
+                     if (startTag > 0 || endTag < message.length() - 1) {
+                        message = message.substr(startTag, endTag - startTag + 1);
+                     }
+                }
+            } else {
+                // 如果完全没有工具标签，说明是纯文本回复，强制包裹 attempt_completion 以便客户端显示
+                // 防止 message 为空时包裹空标签
+                if (!message.empty()) {
+                    message = "<attempt_completion><result>" + message + "</result></attempt_completion>";
+                }
+            }
+        }
+
+        skip_markdown_check:;
     }
+    // =========================================================
 
     const auto& stream = reqbody["stream"].asBool();
 
@@ -94,7 +184,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     string oldConversationId=session.curConversationId;
     
     if(statusCode==200)
-     {// ... existing code ...
+     {
          if(stream)
             {
             LOG_INFO << "流式响应";
@@ -114,7 +204,9 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 };
 
             // 在lambda外创建上下文，并使用shared_ptr来共享
+            // 注意：这里使用的是经过处理（可能被清洗或包裹）后的 message
             auto shared_context = std::make_shared<StreamContext>(message);
+            
             resp = HttpResponse::newStreamResponse([shared_context, oldConversationId](char *buffer, size_t maxBytes) -> size_t {
                 try {
                     if (shared_context->sent_done) {
@@ -204,7 +296,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                     shared_context->pos += chunk_size;
                     LOG_DEBUG << "Sent position: " << shared_context->pos << "/" << shared_context->response_message.length();
                     
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    //std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     
                     return to_send;
                     
@@ -229,6 +321,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
                 response["id"] = "chatcmpl-" + oldConversationId.substr(0,10);
                 response["object"] = "chat.completion";
                 response["created"] = static_cast<int>(time(nullptr));
+                // 使用处理后的 message
                 response["choices"][0]["message"]["content"] = message;
                 response["choices"][0]["message"]["role"] = "assistant";
                 response["choices"][0]["finish_reason"] = "stop";
@@ -243,6 +336,10 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         }
         // 更新session,重新生成conversationId
         LOG_INFO << "更新session:";
+        // 注意：这里我们应该保存原始的回复到历史记录，还是处理过的？
+        // 建议：保存处理过的 XML，这样上下文更干净，有助于模型理解
+        session.responsemessage["message"] = message; 
+
         LOG_DEBUG << "session.curConversationId: " << session.curConversationId;
         LOG_DEBUG << "session.preConversationId: " << session.preConversationId;
         chatSession::getInstance()->coverSessionresponse(session);
@@ -252,18 +349,19 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         ApiManager::getInstance().getApiByApiName(selectapi)->afterResponseProcess(session);
     }
     else
-        {   
-                LOG_INFO << "非流式响应,错误码:"<<statusCode;
-                 Json::Value response;
-                Json::Value error;
-                error["error"]["message"] = "Failed to get response from chaynsapi";
-                error["error"]["type"] = "invalid_request_error";
-                response["error"]=error;
-                resp = HttpResponse::newHttpJsonResponse(response);
-                resp->setStatusCode(k400BadRequest);
-                resp->setContentTypeString("application/json; charset=utf-8");
-                callback(resp);
-        }
+    {   
+        // ... error handling ...
+        LOG_INFO << "非流式响应,错误码:"<<statusCode;
+            Json::Value response;
+        Json::Value error;
+        error["error"]["message"] = "Failed to get response from chaynsapi";
+        error["error"]["type"] = "invalid_request_error";
+        response["error"]=error;
+        resp = HttpResponse::newHttpJsonResponse(response);
+        resp->setStatusCode(k400BadRequest);
+        resp->setContentTypeString("application/json; charset=utf-8");
+        callback(resp);
+    }
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
@@ -421,4 +519,202 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
     }
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
+}
+
+// 渠道管理接口实现
+void AiApi::channelAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "channelAdd";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    try {
+        Json::Value response;
+        
+        for (auto &reqBody : *jsonPtr)
+        {
+            Channelinfo_st channelInfo;
+            channelInfo.channelName = reqBody["channelname"].asString();
+            channelInfo.channelType = reqBody["channeltype"].asString();
+            channelInfo.channelUrl = reqBody["channelurl"].asString();
+            channelInfo.channelKey = reqBody["channelkey"].asString();
+            channelInfo.channelStatus = reqBody["channelstatus"].empty() ? true : reqBody["channelstatus"].asBool();
+            channelInfo.maxConcurrent = reqBody["maxconcurrent"].empty() ? 10 : reqBody["maxconcurrent"].asInt();
+            channelInfo.timeout = reqBody["timeout"].empty() ? 30 : reqBody["timeout"].asInt();
+            channelInfo.priority = reqBody["priority"].empty() ? 0 : reqBody["priority"].asInt();
+            channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
+            
+            Json::Value responseItem;
+            responseItem["channelname"] = channelInfo.channelName;
+
+            if (ChannelManager::getInstance().addChannel(channelInfo)) {
+                responseItem["status"] = "success";
+                responseItem["message"] = "Channel added successfully";
+            } else {
+                responseItem["status"] = "failed";
+                responseItem["message"] = "Failed to add channel";
+            }
+            response.append(responseItem);
+        }
+        
+        auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+        LOG_INFO << "channelAdd end";
+    } catch (const std::exception& e) {
+        LOG_ERROR << "channelAdd error: " << e.what();
+        Json::Value error;
+        error["error"]["message"] = std::string("Database error: ") + e.what();
+        error["error"]["type"] = "database_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k500InternalServerError);
+        callback(resp);
+    }
+}
+
+void AiApi::channelInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "channelInfo";
+    
+    try {
+        auto channelList = ChannelManager::getInstance().getChannelList();
+        Json::Value response(Json::arrayValue);
+        
+        for (auto &channel : channelList) {
+            Json::Value channelItem;
+            channelItem["id"] = channel.id;
+            channelItem["channelname"] = channel.channelName;
+            channelItem["channeltype"] = channel.channelType;
+            channelItem["channelurl"] = channel.channelUrl;
+            channelItem["channelkey"] = channel.channelKey;
+            channelItem["channelstatus"] = channel.channelStatus;
+            channelItem["maxconcurrent"] = channel.maxConcurrent;
+            channelItem["timeout"] = channel.timeout;
+            channelItem["priority"] = channel.priority;
+            channelItem["description"] = channel.description;
+            channelItem["createtime"] = channel.createTime;
+            channelItem["updatetime"] = channel.updateTime;
+            response.append(channelItem);
+        }
+        
+        auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+    } catch (const std::exception& e) {
+        LOG_ERROR << "channelInfo error: " << e.what();
+        Json::Value error;
+        error["error"]["message"] = std::string("Database error: ") + e.what();
+        error["error"]["type"] = "database_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k500InternalServerError);
+        callback(resp);
+    }
+}
+
+void AiApi::channelDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "channelDelete";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+    
+    try {
+        Json::Value response;
+        
+        for (auto &reqBody : *jsonPtr)
+        {
+            int channelId = reqBody["id"].asInt();
+            
+            Json::Value responseItem;
+            responseItem["id"] = channelId;
+
+            if (ChannelManager::getInstance().deleteChannel(channelId)) {
+                responseItem["status"] = "success";
+                responseItem["message"] = "Channel deleted successfully";
+            } else {
+                responseItem["status"] = "failed";
+                responseItem["message"] = "Failed to delete channel";
+            }
+            response.append(responseItem);
+        }
+        
+        auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+    } catch (const std::exception& e) {
+        LOG_ERROR << "channelDelete error: " << e.what();
+        Json::Value error;
+        error["error"]["message"] = std::string("Database error: ") + e.what();
+        error["error"]["type"] = "database_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k500InternalServerError);
+        callback(resp);
+    }
+}
+
+void AiApi::channelUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "channelUpdate";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+try {
+        auto& reqBody = *jsonPtr;
+        Json::Value response;
+
+// 解析渠道信息
+        Channelinfo_st channelInfo;
+        channelInfo.id = reqBody["id"].asInt();
+        channelInfo.channelName = reqBody["channelname"].asString();
+        channelInfo.channelType = reqBody["channeltype"].asString();
+        channelInfo.channelUrl = reqBody["channelurl"].asString();
+        channelInfo.channelKey = reqBody["channelkey"].asString();
+        channelInfo.channelStatus = reqBody["channelstatus"].asBool();
+        channelInfo.maxConcurrent = reqBody["maxconcurrent"].asInt();
+        channelInfo.timeout = reqBody["timeout"].asInt();
+        channelInfo.priority = reqBody["priority"].asInt();
+        channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
+
+// 更新数据库
+        if (ChannelManager::getInstance().updateChannel(channelInfo)) {
+            response["status"] = "success";
+            response["message"] = "Channel updated successfully";
+            response["id"] = channelInfo.id;
+        } else {
+            response["status"] = "failed";
+            response["message"] = "Failed to update channel";
+        }
+
+auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+        LOG_INFO << "channelUpdate end";
+    } catch (const std::exception& e) {
+        LOG_ERROR << "channelUpdate error: " << e.what();
+        Json::Value error;
+        error["error"]["message"] = std::string("Database error: ") + e.what();
+        error["error"]["type"] = "database_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k500InternalServerError);
+        callback(resp);
+    }
 }
