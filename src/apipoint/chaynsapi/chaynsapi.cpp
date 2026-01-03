@@ -115,7 +115,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         // [修改点]: 获取 client_type 并根据具体值注入提醒
         string clientType = session.client_info.get("client_type", "").asString();
         
-        if (clientType == "Kilo-Code" || clientType == "RooCode") {
+        if (clientType == "Kilo-Code" ) {
             LOG_INFO << "为 " << clientType << " 客户端注入 System Reminder...";
             // 这是一个强力的 Reminder，包含所有可用工具的列表
             string reminder = 
