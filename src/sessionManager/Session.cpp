@@ -305,7 +305,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     {
          if(requestbody["messages"][i]["role"] == "system")
             {
-                session.systemprompt = getContentAsString(requestbody["messages"][i]["content"]);
+                session.systemprompt = session.systemprompt + getContentAsString(requestbody["messages"][i]["content"]);
                 continue;
             }
         Json::Value msgData;
