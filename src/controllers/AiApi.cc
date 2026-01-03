@@ -81,7 +81,7 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
    // =========================================================
     // [修正] Kilo/Roo Code 客户端的清洗与纠错逻辑 (通用版)
     // =========================================================
-    if ((clientType == "Kilo-Code" || clientType == "RooCode") && !message.empty()) {
+    if ((clientType == "Kilo-Code") && !message.empty()) {
         LOG_INFO << "正在对 " << clientType << " 客户端的响应进行标签清洗...";
         
         auto replaceAll = [](std::string& str, const std::string& from, const std::string& to) {
