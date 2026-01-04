@@ -260,6 +260,9 @@ void Chaynsapi::postChatMessage(session_st& session)
     // 将当前的 curConversationId 指向这个 threadId，以便下一次请求（带上这个cur作为pre）能找到
     {
         std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        // 也可以清理一下旧的映射（可选）
+        m_threadMap.erase(session.preConversationId); 
+        
         ThreadContext ctx;
         ctx.threadId = threadId;
         ctx.userAuthorId = userAuthorId;
@@ -267,8 +270,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         // 下一次用户请求时，这个 ID 会变成 session.preConversationId
         m_threadMap[session.curConversationId] = ctx;
         
-        // 也可以清理一下旧的映射（可选）
-        m_threadMap.erase(session.preConversationId); 
+        
     }
 
     // 6. 轮询获取结果 (逻辑保持不变)
