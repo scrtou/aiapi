@@ -76,12 +76,13 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
 
     // 获取responsejson中的message和statusCode
     string message=responsejson["message"].asString();
+    LOG_INFO<<"回复message:"<<message;
     int statusCode=responsejson["statusCode"].asInt();
     string clientType = session.client_info.get("client_type", "").asString();
    // =========================================================
     // [修正] Kilo/Roo Code 客户端的清洗与纠错逻辑 (通用版)
     // =========================================================
-    if ((clientType == "Kilo-Code") && !message.empty()) {
+    if ((clientType == "Kilo-Codetest") && !message.empty()) {
         LOG_INFO << "正在对 " << clientType << " 客户端的响应进行标签清洗...";
         
         auto replaceAll = [](std::string& str, const std::string& from, const std::string& to) {

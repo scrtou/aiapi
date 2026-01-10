@@ -31,7 +31,13 @@ void chatSession::delSession(const std::string &ConversationId)
 void chatSession::getSession(const std::string &ConversationId, session_st &session)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    session = session_map[ConversationId];   
+    auto it = session_map.find(ConversationId);
+    if (it == session_map.end())
+    {
+        LOG_WARN << "getSession: ConversationId not found";
+        return;
+    }
+    session = it->second;
 }
 
 void chatSession::updateSession(const std::string &ConversationId,session_st &session)
@@ -199,7 +205,7 @@ Json::Value chatSession::getClientInfo(const HttpRequestPtr &req)
     Json::Value clientInfo;
 
         // 获取客户端IP
-        clientInfo["ip"] = req->getPeerAddr().toIp();
+        //clientInfo["ip"] = req->getPeerAddr().toIp();
         
         // 获取User-Agent
         // auto userAgent = req->getHeader("User-Agent");
@@ -233,31 +239,98 @@ Json::Value chatSession::getClientInfo(const HttpRequestPtr &req)
 
         // 将字符串标识存入 session
         clientInfo["client_type"] = clientType; 
+
+        std::string auth = req->getHeader("authorization");
+        if (auth.empty()) auth = req->getHeader("Authorization");
+        auto stripBearer = [](std::string &s) {
+            const std::string p1 = "Bearer ";
+            const std::string p2 = "bearer ";
+            if (s.rfind(p1, 0) == 0) s = s.substr(p1.size());
+            else if (s.rfind(p2, 0) == 0) s = s.substr(p2.size());
+            // 简单 trim
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        };
+        stripBearer(auth);
+        clientInfo["client_authorization"]=auth;
         LOG_INFO << "识别到客户端类型: " << (clientType.empty() ? "Unknown" : clientType);
+        LOG_INFO << "识别到客户 authorization: " << (auth.empty() ? "empty" : auth);
         return clientInfo;
 }
+// void chatSession::clearExpiredSession()
+// {
+//     LOG_INFO << "开始清除过期会话，当前会话数量:" << session_map.size();
+//     time_t now = time(nullptr);
+//     //遍历session_map,删除过期会话
+//     for(auto it = session_map.begin(); it != session_map.end();)
+//     {
+//         if (now - it->second.last_active_time > SESSION_EXPIRE_TIME) {
+//             {
+//                 std::lock_guard<std::mutex> lock(mutex_);
+//                 it = session_map.erase(it);
+//             }
+//             if(it->second.selectapi=="chaynsapi")
+//             {
+//                 std::lock_guard<std::mutex> lock(mutex_);
+//                 ApiManager::getInstance().getApiByApiName(it->second.selectapi)->eraseChatinfoMap(it->first);
+//             }
+//         } else {
+//             ++it;
+//         }
+//     }
+//     LOG_INFO << "清除过期会话完成，剩余会话数量:" << session_map.size();
+// }
+
 void chatSession::clearExpiredSession()
 {
-    LOG_INFO << "开始清除过期会话，当前会话数量:" << session_map.size();
-    time_t now = time(nullptr);
-    //遍历session_map,删除过期会话
-    for(auto it = session_map.begin(); it != session_map.end();)
+    std::vector<std::pair<std::string, std::string>> expired; // (conversationId, selectapi)
+
     {
-        if (now - it->second.last_active_time > SESSION_EXPIRE_TIME) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        LOG_INFO << "开始清除过期会话，当前会话数量:" << session_map.size();
+        time_t now = time(nullptr);
+
+        for (auto it = session_map.begin(); it != session_map.end();)
+        {
+            if (now - it->second.last_active_time > SESSION_EXPIRE_TIME)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                const std::string convId = it->first;
+                const std::string apiName = it->second.selectapi;
+                expired.emplace_back(convId, apiName);
+
                 it = session_map.erase(it);
+
+                // 顺带清理 context_map：删除所有指向该会话的映射
+                for (auto ctxIt = context_map.begin(); ctxIt != context_map.end();)
+                {
+                    if (ctxIt->second == convId)
+                        ctxIt = context_map.erase(ctxIt);
+                    else
+                        ++ctxIt;
+                }
             }
-            if(it->second.selectapi=="chaynsapi")
+            else
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                ApiManager::getInstance().getApiByApiName(it->second.selectapi)->eraseChatinfoMap(it->first);
+                ++it;
             }
-        } else {
-            ++it;
+        }
+
+        LOG_INFO << "清除过期会话完成，剩余会话数量:" << session_map.size();
+    } // 解锁后再清 provider，避免锁顺序/死锁风险
+
+    for (const auto& item : expired)
+    {
+        const std::string& convId = item.first;
+        const std::string& apiName = item.second;
+        if (apiName.empty())
+            continue;
+
+        auto api = ApiManager::getInstance().getApiByApiName(apiName);
+        if (api)
+        {
+            api->eraseChatinfoMap(convId);
         }
     }
-    LOG_INFO << "清除过期会话完成，剩余会话数量:" << session_map.size();
 }
 void chatSession::startClearExpiredSession()
 {

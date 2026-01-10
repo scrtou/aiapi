@@ -442,7 +442,9 @@ void Chaynsapi::afterResponseProcess(session_st& session)
 }
 void Chaynsapi::eraseChatinfoMap(string ConversationId)
 {
-    // No longer needed with the new stateless API
+    std::lock_guard<std::mutex> lock(m_threadMapMutex);
+    const auto erased = m_threadMap.erase(ConversationId);
+    LOG_INFO << "eraseChatinfoMap: convId erased=" << erased;
 }
 Json::Value Chaynsapi::getModels()
 {
