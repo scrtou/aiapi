@@ -98,13 +98,14 @@ void AccountManager::loadAccountFromConfig()
         auto accountStatus = account["accountStatus"].empty()?false:account["accountStatus"].asBool();
         auto userTobitId = account["usertobitid"].empty()?0:account["usertobitid"].asInt();
         auto personId = account["personId"].empty()?"":account["personId"].asString();
-        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId);
+        auto createTime = account["createTime"].empty()?"":account["createTime"].asString();
+        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime);
     }
     LOG_INFO << "loadAccountFromConfig end";
 }
-void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId)
+void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime)
 {
-    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId);
+    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime);
     accountList[apiName][userName] = account;
     if(accountPoolMap[apiName] == nullptr)
     {
@@ -118,7 +119,7 @@ bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
     {
         return false;
     }
-    addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+    addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime);
     return true;
 }
 bool AccountManager::deleteAccountbyPost(string apiName,string userName)
@@ -377,8 +378,8 @@ void AccountManager::loadAccountFromDatebase()
     auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
-        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId;
-        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId);
+        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime;
+        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime);
     }
     LOG_INFO << "loadDatebase end size "<<accountDBList.size();
 }

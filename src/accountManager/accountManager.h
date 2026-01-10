@@ -22,8 +22,9 @@ struct Accountinfo_st
     bool accountStatus=false;
     int userTobitId;
     string personId;
+    string createTime;
     Accountinfo_st(){}
-    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId)
+    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="")
     {
         this->apiName = apiName;
         this->userName = userName;
@@ -34,6 +35,7 @@ struct Accountinfo_st
         this->accountStatus = accountStatus;
         this->userTobitId = userTobitId;
         this->personId = personId;
+        this->createTime = createTime;
     }
 };
 
@@ -81,7 +83,7 @@ class AccountManager
     void loadAccount();
     void saveAccount();
 
-    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId);
+    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="");
     bool addAccountbyPost(Accountinfo_st accountinfo);
     bool deleteAccountbyPost(string apiName,string userName);
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account);

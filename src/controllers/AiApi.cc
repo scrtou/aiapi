@@ -11,6 +11,9 @@
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
 #include <vector> // 添加 vector 头文件
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -403,6 +406,14 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
     LOG_INFO << "addAccount start";
     Json::Value response;
     list<Accountinfo_st> accountList;
+    
+    // 生成当前时间字符串
+    auto now = std::chrono::system_clock::now();
+    auto now_time_t = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&now_time_t), "%Y-%m-%d %H:%M:%S");
+    std::string currentTime = ss.str();
+    
     for(auto &item:reqItems)
     {   Accountinfo_st accountinfo;
         accountinfo.apiName=item["apiname"].asString();
@@ -414,6 +425,7 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         accountinfo.useCount=item["usecount"].empty()?0:item["usecount"].asInt();
         accountinfo.tokenStatus=item["tokenstatus"].empty()?false:item["tokenstatus"].asBool();
         accountinfo.accountStatus=item["accountstatus"].empty()?false:item["accountstatus"].asBool();
+        accountinfo.createTime=currentTime;
         Json::Value responseitem;
         responseitem["apiname"]=accountinfo.apiName;
         responseitem["username"]=accountinfo.userName;
@@ -460,6 +472,7 @@ void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const Http
             accountitem["accountstatus"]=userName.second->accountStatus;
             accountitem["usertobitid"]=userName.second->userTobitId;
             accountitem["personid"]=userName.second->personId;
+            accountitem["createtime"]=userName.second->createTime;
             response.append(accountitem);
         }
     }
@@ -555,6 +568,7 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
         accountitem["accountstatus"]=account.accountStatus;
         accountitem["usertobitid"]=account.userTobitId;
         accountitem["personid"]=account.personId;
+        accountitem["createtime"]=account.createTime;
         response.append(accountitem);
     }
     auto resp = HttpResponse::newHttpJsonResponse(response);
