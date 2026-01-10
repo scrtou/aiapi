@@ -384,10 +384,25 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         return;
     }
 
+    Json::Value reqItems(Json::arrayValue);
+    if (jsonPtr->isObject()) {
+        reqItems.append(*jsonPtr);
+    } else if (jsonPtr->isArray()) {
+        reqItems = *jsonPtr;
+    } else {
+        Json::Value error;
+        error["error"]["message"] = "Request body must be a JSON object or an array of objects.";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
     LOG_INFO << "addAccount start";
     Json::Value response;
     list<Accountinfo_st> accountList;
-    for(auto &item:*jsonPtr)
+    for(auto &item:reqItems)
     {   Accountinfo_st accountinfo;
         accountinfo.apiName=item["apiname"].asString();
         accountinfo.userName=item["username"].asString();
@@ -471,10 +486,25 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
         callback(resp);
         return;
     }
+
+    Json::Value reqItems(Json::arrayValue);
+    if (jsonPtr->isObject()) {
+        reqItems.append(*jsonPtr);
+    } else if (jsonPtr->isArray()) {
+        reqItems = *jsonPtr;
+    } else {
+        Json::Value error;
+        error["error"]["message"] = "Request body must be a JSON object or an array of objects.";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
  
     Json::Value response;
     list<Accountinfo_st> accountList;
-    for(auto &item:*jsonPtr)
+    for(auto &item:reqItems)
     {
         Accountinfo_st accountinfo;
         Json::Value responseitem;
@@ -499,8 +529,9 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
         {
             AccountDbManager::getInstance()->deleteAccount(account.apiName,account.userName);
         }
+        AccountManager::getInstance().loadAccount();
     });
-    deleteAccountThread.detach();   
+    deleteAccountThread.detach();
     auto resp = HttpResponse::newHttpJsonResponse(response);
     callback(resp);
     //删除accountdbManager中的账号

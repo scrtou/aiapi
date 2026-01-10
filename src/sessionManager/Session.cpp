@@ -4,6 +4,7 @@
 #include <json/json.h>
 #include "chaynsapi.h"
 #include <apiManager/ApiManager.h>
+#include <apiManager/Apicomn.h>
 using namespace drogon;
 chatSession *chatSession::instance = nullptr;
 
@@ -44,15 +45,16 @@ void chatSession::updateSession(const std::string &ConversationId,session_st &se
 
 session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
 {
+
     std::string tempConversationId=generateConversationKey(generateJsonbySession(session,false));
-    LOG_INFO << "根据请求消息生成ConversationId: " << tempConversationId;
+    LOG_INFO << "根据客户端请求生成ConversationId: " << tempConversationId;
+
     if(sessionIsExist(tempConversationId))
     {
         LOG_INFO<<"会话已存在，更新会话";
         session_map[tempConversationId].requestmessage=session.requestmessage;
         session_map[tempConversationId].last_active_time=session.last_active_time;
         session=session_map[tempConversationId];
-   
     }
     else
     {
@@ -74,19 +76,19 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
             addSession(tempConversationId,session);
         }
     }
+    
     return session;
-
 }
 
 std::string chatSession::generateConversationKey(
         const Json::Value& keyData
     )
 {   // 生成哈希
-    //LOG_DEBUG << "生成ConversationId使用的数据: " << Json::FastWriter().write(keyData);
-        Json::StreamWriterBuilder builder;
-        builder["indentation"] = ""; // Ensure compact, consistent output
-        builder["emitUTF8"] = true;
-        return generateSHA256(Json::writeString(builder, keyData));
+    // 使用 StyledWriter 保证 JSON 键的顺序，从而确保哈希值的一致性。
+    // FastWriter 或默认的 StreamWriterBuilder 不保证顺序。
+    Json::StyledWriter writer;
+    std::string output = writer.write(keyData);
+    return generateSHA256(output);
 }
 
 void chatSession::coverSessionresponse(session_st& session)
@@ -98,20 +100,21 @@ void chatSession::coverSessionresponse(session_st& session)
     assistantresponse["role"]="assistant";
     assistantresponse["content"]=session.responsemessage["message"].asString();
     session.addMessageToContext(assistantresponse);
-    session.requestmessage.clear();
-    session.responsemessage.clear();
-
     session.last_active_time=time(nullptr);
     std::string newConversationId;
     newConversationId=chatSession::getInstance()->generateConversationKey(
     chatSession::getInstance()->generateJsonbySession(session,session.contextIsFull)
     );
-    session.preConversationId=session.curConversationId;    
+    session.preConversationId=session.curConversationId;
     session.curConversationId = newConversationId;
+    if (!session.selectapi.empty()) {
+        auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
+        if (api) {
+            api->transferThreadContext(session.preConversationId, session.curConversationId);
+        }
+    }
     addSession(newConversationId,session);
     delSession(session.preConversationId);
-
-    //如果上下文未满，则更新上下文长度,生成新的contextConversationId
     if(!session.contextIsFull)
     {
         LOG_INFO << "上下文未满，更新上下文长度,生成新的contextConversationId";
@@ -122,6 +125,8 @@ void chatSession::coverSessionresponse(session_st& session)
         context_map[tempConversationId]=session.curConversationId;
         updateSession(session.curConversationId,session);
     }
+    session.requestmessage.clear();
+    session.responsemessage.clear();
 }
 std::string chatSession::generateSHA256(const std::string& input) {
     //计算sha256的耗时
@@ -275,7 +280,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     Json::Value requestbody=*req->getJsonObject();
     session.client_info = getClientInfo(req);
     session.selectmodel = requestbody["model"].asString();
-
+    
 
 
     auto getContentAsString = [](const Json::Value& content) -> std::string {
@@ -301,19 +306,58 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
         return "";
     };
     
-    for(int i = 0; i < requestbody["messages"].size()-1; i++)
+    int splitIndex=0;
+    for(int i = requestbody["messages"].size()-1; i > 0; i--)
     {
-         if(requestbody["messages"][i]["role"] == "system")
+        if(requestbody["messages"][i]["role"]=="assistant")
+        {
+            splitIndex=i;
+            break;
+        }
+    }
+    for(int i = 0; i <requestbody["messages"].size(); i++)
+    {
+        if(requestbody["messages"][i]["role"] == "system")
             {
                 session.systemprompt = session.systemprompt + getContentAsString(requestbody["messages"][i]["content"]);
                 continue;
             }
-        Json::Value msgData;
-        msgData["role"] = requestbody["messages"][i]["role"];
-        msgData["content"] = getContentAsString(requestbody["messages"][i]["content"]);
-        session.addMessageToContext(msgData);
+        if(i<=splitIndex)
+        {
+            // 合并历史记录中的连续 user 消息
+            // 合并历史记录中的连续 user 消息
+            if (requestbody["messages"][i]["role"] == "user" &&
+                !session.message_context.empty() &&
+                session.message_context[session.message_context.size() - 1]["role"] == "user")
+            {
+                session.message_context[session.message_context.size() - 1]["content"] =
+                    session.message_context[session.message_context.size() - 1]["content"].asString() +
+                    getContentAsString(requestbody["messages"][i]["content"]);
+            } else {
+                Json::Value msgData;
+                msgData["role"] = requestbody["messages"][i]["role"];
+                msgData["content"] = getContentAsString(requestbody["messages"][i]["content"]);
+                session.addMessageToContext(msgData);
+            }
+        }
+        else
+        {
+            if(requestbody["messages"][i]["role"]=="user")
+            {
+            if(requestbody["messages"][i]["role"]=="user")
+            {
+                std::string user_content = getContentAsString(requestbody["messages"][i]["content"]);
+                if (session.requestmessage.empty()) {
+                    session.requestmessage = user_content;
+                } else {
+                    session.requestmessage += user_content;
+                }
+            }
+            }
+        }
     }
-    session.requestmessage = getContentAsString(requestbody["messages"][requestbody["messages"].size()-1]["content"]);
+    
+       
     session.last_active_time = time(NULL);
     LOG_INFO<<__FILE__<<":"<<__FUNCTION__<<":"<<__LINE__<<"生成session_st完成";
     LOG_INFO << "session_st message_context: " << Json::FastWriter().write(session.message_context);

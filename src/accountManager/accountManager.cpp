@@ -60,6 +60,7 @@ void AccountManager::init()
  
 void AccountManager::loadAccount()
 {
+    accountPoolMap.clear();
     LOG_INFO << "loadAccount start";
     //load account from config.json
     if(accountDbManager->isTableExist())
@@ -202,12 +203,13 @@ bool AccountManager::checkChaynsToken(string token)
 }
 Json::Value AccountManager::getChaynsToken(string username,string passwd)
 {
-    //LOG_INFO << "getChaynsToken start";
+    LOG_INFO << "getChaynsToken start";
     const string fullUrl = getLoginServiceUrl("chaynsapi");
     if (fullUrl.empty()) {
         LOG_ERROR << "login_service_url for 'chaynsapi' not found in config.";
         return Json::Value();
     }
+    LOG_INFO << "fullurl： "<<fullUrl;
 
     // 解析 URL
     string baseUrl, path;
@@ -224,6 +226,7 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
         baseUrl = fullUrl.substr(0, pathPos);
         path = fullUrl.substr(pathPos);
     }
+    LOG_INFO << "baseUrl： "<<baseUrl;
 
      // 等待服务器可用
     if (!isServerReachable(baseUrl)) {

@@ -1,6 +1,5 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
-#include "APIinterface.h"
 #include <accountManager/accountManager.h>
 #include "../../sessionManager/Session.h"
 #include "../../apiManager/ApiFactory.h"
@@ -30,6 +29,7 @@ class Chaynsapi:public APIinterface
         ~Chaynsapi();
         void afterResponseProcess(session_st& session);
         void eraseChatinfoMap(string ConversationId);
+        void transferThreadContext(const std::string& oldId, const std::string& newId) override;
 
     private:
         DEClARE_RUNTIME(chaynsapi);

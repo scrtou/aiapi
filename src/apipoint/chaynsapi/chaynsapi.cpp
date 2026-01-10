@@ -92,12 +92,13 @@ void Chaynsapi::postChatMessage(session_st& session)
     {
         std::lock_guard<std::mutex> lock(m_threadMapMutex);
         // 使用 preConversationId 查找，因为 session 的 preConversationId 指向上一轮的 curConversationId
-        auto it = m_threadMap.find(session.preConversationId);
+        // 使用 curConversationId 查找，因为 transferThreadContext 会把上下文转移到这个新的 ID 上
+        auto it = m_threadMap.find(session.curConversationId);
         if (it != m_threadMap.end()) {
             threadId = it->second.threadId;
             userAuthorId = it->second.userAuthorId;
             isFollowUp = true;
-            LOG_INFO << "Found existing threadId: " << threadId << " for preConvId: " << session.preConversationId;
+            LOG_INFO << "Found existing threadId: " << threadId << " for curConvId: " << session.curConversationId;
         }
     }
 
@@ -173,13 +174,20 @@ void Chaynsapi::postChatMessage(session_st& session)
         // 分支 B: 新对话 (创建新 Thread)
         // URL: /intercom-backend/v2/thread?forceCreate=true
         // =================================================
+        LOG_INFO << "Creating New Thread: Injecting System Prompt (" << session.systemprompt.length() << " chars)";
         string full_message;
-        if (!session.systemprompt.empty()) {
-            LOG_INFO << "Creating New Thread: Injecting System Prompt (" << session.systemprompt.length() << " chars)";
-            full_message = session.systemprompt + "\n\n" + session.requestmessage;
-        } else {
-            full_message = session.requestmessage;
+        if(!session.message_context.empty())
+        {
+            full_message=session.systemprompt + "\n""接下来，我会发给你openai接口格式的历史消息，：\n";
+            full_message = full_message+session.message_context.toStyledString();
+            full_message = full_message+"\n用户现在的问题是:\n"+session.requestmessage;
         }
+        else
+        {
+            full_message =session.systemprompt +"\n"+ session.requestmessage;
+        }
+
+        
         Json::Value sendMessageRequest;
         Json::Value member1;
         member1["isAdmin"] = true;
@@ -260,17 +268,10 @@ void Chaynsapi::postChatMessage(session_st& session)
     // 将当前的 curConversationId 指向这个 threadId，以便下一次请求（带上这个cur作为pre）能找到
     {
         std::lock_guard<std::mutex> lock(m_threadMapMutex);
-        // 也可以清理一下旧的映射（可选）
-        m_threadMap.erase(session.preConversationId); 
-        
         ThreadContext ctx;
         ctx.threadId = threadId;
         ctx.userAuthorId = userAuthorId;
-        // 注意：session.curConversationId 是当前对话产生的 ID，
-        // 下一次用户请求时，这个 ID 会变成 session.preConversationId
         m_threadMap[session.curConversationId] = ctx;
-        
-        
     }
 
     // 6. 轮询获取结果 (逻辑保持不变)
@@ -419,6 +420,21 @@ std::string generateGuid() {
         ss << dis(gen);
     }
     return ss.str();
+}
+void Chaynsapi::transferThreadContext(const std::string& oldId, const std::string& newId)
+{
+    LOG_INFO << "Attempting to transfer thread context from " << oldId << " to " << newId;
+    std::lock_guard<std::mutex> lock(m_threadMapMutex);
+    auto it = m_threadMap.find(oldId);
+    if (it != m_threadMap.end()) {
+        m_threadMap[newId] = it->second;
+        m_threadMap.erase(it);
+        LOG_INFO << "Successfully transferred thread context from " << oldId << " to " << newId;
+    }
+    else
+    {
+        LOG_WARN << "Failed to transfer thread context: oldId " << oldId << " not found in threadMap.";
+    }
 }
 void Chaynsapi::afterResponseProcess(session_st& session)
 {

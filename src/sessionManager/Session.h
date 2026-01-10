@@ -47,6 +47,7 @@ struct session_st
     */
     message_context.append(message);
   }
+
 };
 
 class chatSession

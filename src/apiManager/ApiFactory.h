@@ -4,7 +4,6 @@
 #include "Apicomn.h"
 #include <unordered_map>
 #include <memory>
-#include "../apipoint/APIinterface.h"
 using namespace std;
 typedef void* (*CreateApi)(void);
 class ApiFactory
