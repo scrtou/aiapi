@@ -425,6 +425,7 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
         accountinfo.useCount=item["usecount"].empty()?0:item["usecount"].asInt();
         accountinfo.tokenStatus=item["tokenstatus"].empty()?false:item["tokenstatus"].asBool();
         accountinfo.accountStatus=item["accountstatus"].empty()?false:item["accountstatus"].asBool();
+        accountinfo.accountType=item["accounttype"].empty()?"free":item["accounttype"].asString();
         accountinfo.createTime=currentTime;
         Json::Value responseitem;
         responseitem["apiname"]=accountinfo.apiName;
@@ -447,6 +448,15 @@ void AiApi::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpR
             AccountDbManager::getInstance()->addAccount(account);
         }
         AccountManager::getInstance().checkUpdateAccountToken();
+        // 账号添加后，只对新添加的账号更新 accountType
+        for(const auto &account : accountList)
+        {
+            auto accountMap = AccountManager::getInstance().getAccountList();
+            if (accountMap.find(account.apiName) != accountMap.end() &&
+                accountMap[account.apiName].find(account.userName) != accountMap[account.apiName].end()) {
+                AccountManager::getInstance().updateAccountType(accountMap[account.apiName][account.userName]);
+            }
+        }
     });
     addAccountThread.detach();
     auto resp = HttpResponse::newHttpJsonResponse(response);
@@ -473,6 +483,7 @@ void AiApi::accountInfo(const HttpRequestPtr &req, std::function<void(const Http
             accountitem["usertobitid"]=userName.second->userTobitId;
             accountitem["personid"]=userName.second->personId;
             accountitem["createtime"]=userName.second->createTime;
+            accountitem["accounttype"]=userName.second->accountType;
             response.append(accountitem);
         }
     }
@@ -544,6 +555,8 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
             AccountDbManager::getInstance()->deleteAccount(account.apiName,account.userName);
         }
         AccountManager::getInstance().loadAccount();
+        // 账号删除后，检查渠道账号数量（可能需要补充账号）
+        AccountManager::getInstance().checkChannelAccountCounts();
     });
     deleteAccountThread.detach();
     auto resp = HttpResponse::newHttpJsonResponse(response);
@@ -569,6 +582,7 @@ void AiApi::accountDbInfo(const HttpRequestPtr &req, std::function<void(const Ht
         accountitem["usertobitid"]=account.userTobitId;
         accountitem["personid"]=account.personId;
         accountitem["createtime"]=account.createTime;
+        accountitem["accounttype"]=account.accountType;
         response.append(accountitem);
     }
     auto resp = HttpResponse::newHttpJsonResponse(response);
@@ -605,6 +619,7 @@ void AiApi::channelAdd(const HttpRequestPtr &req, std::function<void(const HttpR
             channelInfo.timeout = reqBody["timeout"].empty() ? 30 : reqBody["timeout"].asInt();
             channelInfo.priority = reqBody["priority"].empty() ? 0 : reqBody["priority"].asInt();
             channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
+            channelInfo.accountCount = reqBody["accountcount"].empty() ? 0 : reqBody["accountcount"].asInt();
             
             Json::Value responseItem;
             responseItem["channelname"] = channelInfo.channelName;
@@ -618,6 +633,11 @@ void AiApi::channelAdd(const HttpRequestPtr &req, std::function<void(const HttpR
             }
             response.append(responseItem);
         }
+        
+        // 渠道添加后，异步检查渠道账号数量
+        std::thread([](){
+            AccountManager::getInstance().checkChannelAccountCounts();
+        }).detach();
         
         auto resp = HttpResponse::newHttpJsonResponse(response);
         callback(resp);
@@ -655,6 +675,7 @@ void AiApi::channelInfo(const HttpRequestPtr &req, std::function<void(const Http
             channelItem["description"] = channel.description;
             channelItem["createtime"] = channel.createTime;
             channelItem["updatetime"] = channel.updateTime;
+            channelItem["accountcount"] = channel.accountCount;
             response.append(channelItem);
         }
         
@@ -705,6 +726,8 @@ void AiApi::channelDelete(const HttpRequestPtr &req, std::function<void(const Ht
             response.append(responseItem);
         }
         
+        // 渠道删除后不需要更新 accountType
+        
         auto resp = HttpResponse::newHttpJsonResponse(response);
         callback(resp);
     } catch (const std::exception& e) {
@@ -748,12 +771,18 @@ try {
         channelInfo.timeout = reqBody["timeout"].asInt();
         channelInfo.priority = reqBody["priority"].asInt();
         channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
+        channelInfo.accountCount = reqBody["accountcount"].asInt();
 
 // 更新数据库
         if (ChannelManager::getInstance().updateChannel(channelInfo)) {
             response["status"] = "success";
             response["message"] = "Channel updated successfully";
             response["id"] = channelInfo.id;
+            
+            // 渠道更新后，异步检查渠道账号数量
+            std::thread([](){
+                AccountManager::getInstance().checkChannelAccountCounts();
+            }).detach();
         } else {
             response["status"] = "failed";
             response["message"] = "Failed to update channel";
@@ -767,6 +796,131 @@ auto resp = HttpResponse::newHttpJsonResponse(response);
         Json::Value error;
         error["error"]["message"] = std::string("Database error: ") + e.what();
         error["error"]["type"] = "database_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k500InternalServerError);
+        callback(resp);
+    }
+}
+
+void AiApi::accountUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "accountUpdate";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    Json::Value reqItems(Json::arrayValue);
+    if (jsonPtr->isObject()) {
+        reqItems.append(*jsonPtr);
+    } else if (jsonPtr->isArray()) {
+        reqItems = *jsonPtr;
+    } else {
+        Json::Value error;
+        error["error"]["message"] = "Request body must be a JSON object or an array of objects.";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    Json::Value response;
+    list<Accountinfo_st> accountList;
+    
+    for(auto &item:reqItems)
+    {   
+        Accountinfo_st accountinfo;
+        accountinfo.apiName=item["apiname"].asString();
+        accountinfo.userName=item["username"].asString();
+        accountinfo.passwd=item["password"].asString();
+        accountinfo.authToken=item["authtoken"].empty()?"":item["authtoken"].asString();
+        accountinfo.userTobitId=item["usertobitid"].empty()?0:item["usertobitid"].asInt();
+        accountinfo.personId=item["personid"].empty()?"":item["personid"].asString();
+        accountinfo.useCount=item["usecount"].empty()?0:item["usecount"].asInt();
+        accountinfo.tokenStatus=item["tokenstatus"].empty()?false:item["tokenstatus"].asBool();
+        accountinfo.accountStatus=item["accountstatus"].empty()?false:item["accountstatus"].asBool();
+        accountinfo.accountType=item["accounttype"].empty()?"free":item["accounttype"].asString();
+
+        Json::Value responseitem;
+        responseitem["apiname"]=accountinfo.apiName;
+        responseitem["username"]=accountinfo.userName;
+        
+        if(AccountManager::getInstance().updateAccount(accountinfo))
+        {
+            responseitem["status"]="success";
+            accountList.push_back(accountinfo);
+        }
+        else
+        {
+            responseitem["status"]="failed";
+            responseitem["message"]="Account not found";
+        }
+        response.append(responseitem);
+    }
+
+    thread updateAccountThread([accountList](){
+        for(auto &account:accountList)
+        {
+            AccountDbManager::getInstance()->updateAccount(account);
+        }
+        // 账号更新后，只对操作的账号更新 accountType
+        for(const auto &account : accountList)
+        {
+            auto accountMap = AccountManager::getInstance().getAccountList();
+            if (accountMap.find(account.apiName) != accountMap.end() &&
+                accountMap[account.apiName].find(account.userName) != accountMap[account.apiName].end()) {
+                AccountManager::getInstance().updateAccountType(accountMap[account.apiName][account.userName]);
+            }
+        }
+    });
+    updateAccountThread.detach();
+
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    callback(resp);
+    LOG_INFO << "accountUpdate end";
+}
+
+void AiApi::channelUpdateStatus(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "channelUpdateStatus";
+    auto jsonPtr = req->getJsonObject();
+    if (!jsonPtr) {
+        Json::Value error;
+        error["error"]["message"] = "Invalid JSON in request body";
+        error["error"]["type"] = "invalid_request_error";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
+    try {
+        std::string channelName = (*jsonPtr)["channelname"].asString();
+        bool status = (*jsonPtr)["status"].asBool();
+        
+        Json::Value response;
+        if (ChannelManager::getInstance().updateChannelStatus(channelName, status)) {
+            response["status"] = "success";
+            response["message"] = "Channel status updated successfully";
+        } else {
+            response["status"] = "failed";
+            response["message"] = "Failed to update channel status";
+        }
+        
+        auto resp = HttpResponse::newHttpJsonResponse(response);
+        callback(resp);
+    } catch (const std::exception& e) {
+        LOG_ERROR << "channelUpdateStatus error: " << e.what();
+        Json::Value error;
+        error["error"]["message"] = std::string("Error: ") + e.what();
+        error["error"]["type"] = "internal_error";
         auto resp = HttpResponse::newHttpJsonResponse(error);
         resp->setStatusCode(HttpStatusCode::k500InternalServerError);
         callback(resp);

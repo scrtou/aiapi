@@ -30,6 +30,7 @@ class AccountDbManager
     bool saveAccountList(list<struct Accountinfo_st> accountList);
     bool isTableExist();
     void createTable();
+    void checkAndUpgradeTable();
     list<Accountinfo_st> getAccountDBList();
     private:
     shared_ptr<drogon::orm::DbClient> dbClient;

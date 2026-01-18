@@ -14,7 +14,8 @@ std::string createTablePgSql = R"(
         tokenstatus BOOLEAN,
         accountstatus BOOLEAN,
         usertobitid INTEGER,
-        personid VARCHAR(255)
+        personid VARCHAR(255),
+        accounttype VARCHAR(50) DEFAULT 'free'
     );
 )";
 std::string createTableSqlMysql=R"(
@@ -30,7 +31,8 @@ std::string createTableSqlMysql=R"(
     tokenstatus TINYINT(1),
     accountstatus TINYINT(1),
     usertobitid INT,
-    personid VARCHAR(255)
+    personid VARCHAR(255),
+    accounttype VARCHAR(50) DEFAULT 'free'
 ) ENGINE=InnoDB;)";
 
 
@@ -41,11 +43,28 @@ void AccountDbManager::init()
     LOG_INFO << "AccountDbManager::init end";
 }
 
+void AccountDbManager::checkAndUpgradeTable()
+{
+    // Check if accounttype column exists
+    std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
+    auto result = dbClient->execSqlSync(checkSql);
+    if(result.size() == 0)
+    {
+        LOG_INFO << "Column 'accounttype' missing in table 'account', adding it...";
+        try {
+            dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
+            LOG_INFO << "Column 'accounttype' added successfully.";
+        } catch(const std::exception& e) {
+            LOG_ERROR << "Failed to add column 'accounttype': " << e.what();
+        }
+    }
+}
+
 bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 {
     std::string selectsql = "select * from account where apiname=$1 and username=$2";
-    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
+    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8 where apiname=$9 and username=$10";
     auto result = dbClient->execSqlSync(selectsql,accountinfo.apiName,accountinfo.userName);
     if(result.size()!=0)
     {
@@ -54,7 +73,7 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
     }
     else
     {
-         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime);
+         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType);
         if(result1.affectedRows()!=0)
         {
             LOG_INFO << "账号 " << accountinfo.userName << " 添加成功";
@@ -69,8 +88,8 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 }
 bool AccountDbManager::updateAccount(struct Accountinfo_st accountinfo)
 {
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7 where apiname=$8 and username=$9";
-    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.apiName,accountinfo.userName);
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8 where apiname=$9 and username=$10";
+    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.accountType,accountinfo.apiName,accountinfo.userName);
     if(result.affectedRows()!=0)
     {
         LOG_INFO << "账号 " << accountinfo.userName << " 更新成功";
@@ -100,7 +119,7 @@ bool AccountDbManager::deleteAccount(string apiName,string userName)
 }
 list<Accountinfo_st> AccountDbManager::getAccountDBList()
 {
-    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime from account";
+    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,COALESCE(accounttype,'free') as accounttype from account";
     auto result = dbClient->execSqlSync(selectsql);
     list<Accountinfo_st> accountDBList;
     for(auto& item:result)
@@ -109,7 +128,11 @@ list<Accountinfo_st> AccountDbManager::getAccountDBList()
         if (!item["createtime"].isNull()) {
             createTimeStr = item["createtime"].as<std::string>();
         }
-        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr);
+        std::string accountTypeStr = "free";
+        if (!item["accounttype"].isNull()) {
+            accountTypeStr = item["accounttype"].as<std::string>();
+        }
+        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr,accountTypeStr);
         accountDBList.push_back(accountinfo);
     }
     return accountDBList;

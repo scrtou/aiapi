@@ -15,12 +15,14 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::chaynsapimodels, "/chaynsapi/v1/models", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountAdd, "/aichat/account/add", Post); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountDelete, "/aichat/account/delete", Post); // path is /AiApi/{arg1}/{arg2}/list
+    ADD_METHOD_TO(AiApi::accountUpdate, "/aichat/account/update", Post); // 更新账号
     ADD_METHOD_TO(AiApi::accountInfo, "/aichat/account/info", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountDbInfo, "/aichat/account/dbinfo", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::channelAdd, "/aichat/channel/add", Post); // 添加渠道
     ADD_METHOD_TO(AiApi::channelInfo, "/aichat/channel/info", Get); // 获取渠道列表
     ADD_METHOD_TO(AiApi::channelDelete, "/aichat/channel/delete", Post); // 删除渠道
     ADD_METHOD_TO(AiApi::channelUpdate, "/aichat/channel/update", Post); // 更新渠道
+    ADD_METHOD_TO(AiApi::channelUpdateStatus, "/aichat/channel/updatestatus", Post); // 更新渠道状态
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -29,12 +31,14 @@ class AiApi : public drogon::HttpController<AiApi>
     void chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void accountUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountDbInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void channelUpdateStatus(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);

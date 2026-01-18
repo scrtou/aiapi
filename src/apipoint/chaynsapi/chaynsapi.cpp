@@ -24,24 +24,8 @@ void Chaynsapi::postChatMessage(session_st& session)
     LOG_INFO << "Chaynsapi::postChatMessage";
     string modelname = session.selectmodel;
     
-    // ----------------------------------------------------------------------
-    // [修改点 START] 在发送前一刻，将 System Prompt 注入到用户消息前
-    // ----------------------------------------------------------------------
-    // string user_message;
-    
-    // if (!session.systemprompt.empty()) {
-    //     LOG_INFO << "检测到 System Prompt，正在注入到消息头部 (长度: " << session.systemprompt.length() << ")";
-    //     // 将 System Prompt 和 用户消息拼接，中间用换行符分隔
-    //     user_message = session.systemprompt + "\n\n" + session.requestmessage;
-    // } else {
-    //     user_message = session.requestmessage;
-    // }
-    // ----------------------------------------------------------------------
-    // [修改点 END]
-    // ----------------------------------------------------------------------
-
     shared_ptr<Accountinfo_st> accountinfo = nullptr;
-    AccountManager::getInstance().getAccount("chaynsapi", accountinfo);
+    AccountManager::getInstance().getAccount("chaynsapi", accountinfo, "pro");
     if (accountinfo == nullptr || !accountinfo->tokenStatus)
     {
         LOG_ERROR << "Failed to get a valid account for chaynsapi";

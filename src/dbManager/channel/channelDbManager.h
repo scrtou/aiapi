@@ -22,24 +22,26 @@ struct Channelinfo_st
     string description;
     string createTime;
     string updateTime;
+    int accountCount;  // 渠道规定的账号数量
     
-    Channelinfo_st() : id(0), channelStatus(true), maxConcurrent(10), timeout(30), priority(0) {}
+    Channelinfo_st() : id(0), channelStatus(true), maxConcurrent(10), timeout(30), priority(0), accountCount(0) {}
     
     Channelinfo_st(int id, string channelName, string channelType, string channelUrl,
                    string channelKey, bool channelStatus, int maxConcurrent, int timeout,
-                   int priority, string description, string createTime, string updateTime)
+                   int priority, string description, string createTime, string updateTime,
+                   int accountCount = 0)
         : id(id), channelName(channelName), channelType(channelType), channelUrl(channelUrl),
           channelKey(channelKey), channelStatus(channelStatus), maxConcurrent(maxConcurrent),
           timeout(timeout), priority(priority), description(description),
-          createTime(createTime), updateTime(updateTime) {}
+          createTime(createTime), updateTime(updateTime), accountCount(accountCount) {}
     
     Channelinfo_st(string channelName, string channelType, string channelUrl,
                    string channelKey, bool channelStatus, int maxConcurrent,
-                   int timeout, int priority, string description)
+                   int timeout, int priority, string description, int accountCount = 0)
         : id(0), channelName(channelName), channelType(channelType), channelUrl(channelUrl),
           channelKey(channelKey), channelStatus(channelStatus), maxConcurrent(maxConcurrent),
           timeout(timeout), priority(priority), description(description),
-          createTime(""), updateTime("") {}
+          createTime(""), updateTime(""), accountCount(accountCount) {}
 };
 
 class ChannelDbManager
@@ -64,6 +66,7 @@ public:
     list<Channelinfo_st> getChannelList();
     bool isTableExist();
     void createTable();
+    void checkAndUpgradeTable();
     bool updateChannelStatus(string channelName, bool status);
     
 private:

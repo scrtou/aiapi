@@ -23,8 +23,9 @@ struct Accountinfo_st
     int userTobitId;
     string personId;
     string createTime;
+    string accountType;  // 账号类型: "pro" 或 "free"
     Accountinfo_st(){}
-    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="")
+    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free")
     {
         this->apiName = apiName;
         this->userName = userName;
@@ -36,6 +37,7 @@ struct Accountinfo_st
         this->userTobitId = userTobitId;
         this->personId = personId;
         this->createTime = createTime;
+        this->accountType = accountType;
     }
 };
 
@@ -83,10 +85,11 @@ class AccountManager
     void loadAccount();
     void saveAccount();
 
-    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="");
+    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free");
     bool addAccountbyPost(Accountinfo_st accountinfo);
+    bool updateAccount(Accountinfo_st accountinfo);
     bool deleteAccountbyPost(string apiName,string userName);
-    void getAccount(string apiName,shared_ptr<Accountinfo_st>& account);
+    void getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType = "");
     void checkAccount();
     void checkToken();
     void updateToken();
@@ -105,7 +108,18 @@ class AccountManager
     void setStatusAccountStatus(string apiName,string userName,bool status);
     void setStatusTokenStatus(string apiName,string userName,bool status);
     std::map<string,map<string,shared_ptr<Accountinfo_st>>> getAccountList();
+
     void waitUpdateAccountToken();
     void waitUpdateAccountTokenThread();
+
+    void checkChannelAccountCounts();
+    void autoRegisterAccount(string apiName);
+    void checkAccountCountThread();
+    
+    // 定时更新账号类型相关方法
+    bool getUserProAccess(const string& token, const string& personId);  // 获取用户 Pro 权限状态
+    void updateAccountType(shared_ptr<Accountinfo_st> account);  // 更新单个账号的 accountType
+    void updateAllAccountTypes();  // 更新所有账号的 accountType
+    void checkAccountTypeThread();  // 启动定时检查 accountType 的线程
 };
 #endif

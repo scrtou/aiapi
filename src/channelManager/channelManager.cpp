@@ -16,6 +16,10 @@ void ChannelManager::init()
     {
         channelDbManager->createTable();
     }
+    else
+    {
+        channelDbManager->checkAndUpgradeTable();
+    }
     LOG_INFO << "ChannelManager::init end";
 }
 

@@ -15,7 +15,8 @@ std::string createChannelTablePgSql = R"(
         priority INT DEFAULT 0,
         description TEXT,
         createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        accountcount INT DEFAULT 0
     );
 )";
 
@@ -32,7 +33,8 @@ std::string createChannelTableSqlMysql = R"(
         priority INT DEFAULT 0,
         description TEXT,
         createtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updatetime DATETIME DEFAULT CURRENT_TIMESTAMP
+        updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+        accountcount INT DEFAULT 0
     ) ENGINE=InnoDB;
 )";
 
@@ -50,7 +52,7 @@ void ChannelDbManager::init()
 bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
 {
     std::string selectsql = "select * from channel where channelname=$1";
-    std::string insertsql = "insert into channel (channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)";
+    std::string insertsql = "insert into channel (channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, accountcount) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
     
     auto result = dbClient->execSqlSync(selectsql, channelinfo.channelName);
     if(result.size() != 0)
@@ -64,7 +66,8 @@ bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
                                              channelinfo.channelType, channelinfo.channelUrl,
                                              channelinfo.channelKey, channelinfo.channelStatus,
                                              channelinfo.maxConcurrent, channelinfo.timeout,
-                                             channelinfo.priority, channelinfo.description);
+                                             channelinfo.priority, channelinfo.description,
+                                             channelinfo.accountCount);
         if(result1.affectedRows() != 0)
         {
             LOG_INFO << "渠道 " << channelinfo.channelName << " 添加成功";
@@ -80,12 +83,13 @@ bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
 
 bool ChannelDbManager::updateChannel(struct Channelinfo_st channelinfo)
 {
-    std::string updatesql = "update channel set channeltype=$1, channelurl=$2, channelkey=$3, channelstatus=$4, maxconcurrent=$5, timeout=$6, priority=$7, description=$8, updatetime=CURRENT_TIMESTAMP where channelname=$9";
+    std::string updatesql = "update channel set channeltype=$1, channelurl=$2, channelkey=$3, channelstatus=$4, maxconcurrent=$5, timeout=$6, priority=$7, description=$8, accountcount=$9, updatetime=CURRENT_TIMESTAMP where channelname=$10";
     auto result = dbClient->execSqlSync(updatesql, channelinfo.channelType,
                                         channelinfo.channelUrl, channelinfo.channelKey,
                                         channelinfo.channelStatus, channelinfo.maxConcurrent,
                                         channelinfo.timeout, channelinfo.priority,
-                                        channelinfo.description, channelinfo.channelName);
+                                        channelinfo.description, channelinfo.accountCount,
+                                        channelinfo.channelName);
     if(result.affectedRows() != 0)
     {
         LOG_INFO << "渠道 " << channelinfo.channelName << " 更新成功";
@@ -116,7 +120,7 @@ bool ChannelDbManager::deleteChannel(int channelId)
 
 bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& channelinfo)
 {
-    std::string selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime from channel where channelname=$1";
+    std::string selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount from channel where channelname=$1";
     auto result = dbClient->execSqlSync(selectsql, channelName);
     if(result.size() != 0)
     {
@@ -133,6 +137,7 @@ bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& cha
         channelinfo.description = item["description"].as<std::string>();
         channelinfo.createTime = item["createtime"].as<std::string>();
         channelinfo.updateTime = item["updatetime"].as<std::string>();
+        channelinfo.accountCount = item["accountcount"].as<int>();
         return true;
     }
     else
@@ -144,7 +149,7 @@ bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& cha
 
 list<Channelinfo_st> ChannelDbManager::getChannelList()
 {
-    std::string selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime from channel order by id";
+    std::string selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount from channel order by id";
     auto result = dbClient->execSqlSync(selectsql);
     list<Channelinfo_st> channelList;
     for(auto& item : result)
@@ -161,7 +166,8 @@ list<Channelinfo_st> ChannelDbManager::getChannelList()
             item["priority"].as<int>(),
             item["description"].as<std::string>(),
             item["createtime"].as<std::string>(),
-            item["updatetime"].as<std::string>()
+            item["updatetime"].as<std::string>(),
+            item["accountcount"].as<int>()
         );
         channelList.push_back(channelinfo);
     }
@@ -207,5 +213,22 @@ void ChannelDbManager::createTable()
     catch(const std::exception& e)
     {
         LOG_ERROR << "createTable error: " << e.what();
+    }
+}
+
+void ChannelDbManager::checkAndUpgradeTable()
+{
+    // Check if accountcount column exists
+    std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='channel' AND column_name='accountcount'";
+    auto result = dbClient->execSqlSync(checkSql);
+    if(result.size() == 0)
+    {
+        LOG_INFO << "Column 'accountcount' missing in table 'channel', adding it...";
+        try {
+            dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountcount INT DEFAULT 0");
+            LOG_INFO << "Column 'accountcount' added successfully.";
+        } catch(const std::exception& e) {
+            LOG_ERROR << "Failed to add column 'accountcount': " << e.what();
+        }
     }
 }
