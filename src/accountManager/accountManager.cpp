@@ -839,14 +839,14 @@ void AccountManager::checkAccountTypeThread()
 {
     std::thread t([this]() {
         // 启动后等待 5 分钟再执行第一次检查，让系统稳定
-        std::this_thread::sleep_for(std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::minutes(1));
         
         while (true) {
             LOG_INFO << "Starting scheduled account type check...";
             updateAllAccountTypes();
             
-            // 每 24 小时检查一次
-            std::this_thread::sleep_for(std::chrono::hours(24));
+            // 每 0.5 小时检查一次
+            std::this_thread::sleep_for(std::chrono::hours(1));
         }
     });
     t.detach();
