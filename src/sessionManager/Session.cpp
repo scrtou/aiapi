@@ -59,6 +59,7 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
     {
         LOG_INFO<<"会话已存在，更新会话";
         session_map[tempConversationId].requestmessage=session.requestmessage;
+        session_map[tempConversationId].requestImages=session.requestImages;
         session_map[tempConversationId].last_active_time=session.last_active_time;
         session=session_map[tempConversationId];
     }
@@ -68,6 +69,7 @@ session_st& chatSession::createNewSessionOrUpdateSession(session_st& session)
         {
             LOG_INFO<<"在上下文会话中存在";
             session_map[context_map[tempConversationId]].requestmessage=session.requestmessage;
+            session_map[context_map[tempConversationId]].requestImages=session.requestImages;
             session_map[context_map[tempConversationId]].last_active_time=session.last_active_time;
             session_map[context_map[tempConversationId]].contextIsFull=true;
             session=session_map[context_map[tempConversationId]];
@@ -356,19 +358,93 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
     
 
 
-    auto getContentAsString = [](const Json::Value& content) -> std::string {
+    // 从 content 提取图片信息的 lambda
+    auto extractImages = [](const Json::Value& content, std::vector<ImageInfo>& images) {
+        if (!content.isArray()) return;
+        for (const auto& item : content) {
+            if (item.isObject() && item.isMember("type") && item["type"].asString() == "image_url") {
+                if (item.isMember("image_url") && item["image_url"].isObject()) {
+                    const auto& imageUrl = item["image_url"];
+                    if (imageUrl.isMember("url") && imageUrl["url"].isString()) {
+                        std::string url = imageUrl["url"].asString();
+                        ImageInfo imgInfo;
+                        
+                        // 检查是否是 base64 数据 URL
+                        if (url.find("data:") == 0) {
+                            // 格式: data:image/png;base64,xxxx
+                            size_t semicolon = url.find(';');
+                            size_t comma = url.find(',');
+                            if (semicolon != std::string::npos && comma != std::string::npos) {
+                                imgInfo.mediaType = url.substr(5, semicolon - 5); // 提取 image/png
+                                imgInfo.base64Data = url.substr(comma + 1);       // 提取 base64 数据
+                            }
+                        } else {
+                            // 直接是 URL
+                            imgInfo.uploadedUrl = url;
+                        }
+                        
+                        if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
+                            images.push_back(imgInfo);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    // 解析图片的辅助函数
+    auto parseImageFromContent = [](const Json::Value& item, std::vector<ImageInfo>& images) {
+        if (item.isObject() && item.isMember("type") && item["type"].asString() == "image_url") {
+            if (item.isMember("image_url") && item["image_url"].isObject()) {
+                const auto& imageUrl = item["image_url"];
+                if (imageUrl.isMember("url") && imageUrl["url"].isString()) {
+                    std::string url = imageUrl["url"].asString();
+                    ImageInfo imgInfo;
+                    
+                    // 检查是否是 base64 编码的图片
+                    if (url.find("data:") == 0) {
+                        // 格式: data:image/png;base64,xxxxx
+                        size_t semicolonPos = url.find(";");
+                        size_t commaPos = url.find(",");
+                        if (semicolonPos != std::string::npos && commaPos != std::string::npos) {
+                            imgInfo.mediaType = url.substr(5, semicolonPos - 5); // 提取 image/png
+                            imgInfo.base64Data = url.substr(commaPos + 1);       // 提取 base64 数据
+                        }
+                    } else {
+                        // 直接是URL
+                        imgInfo.uploadedUrl = url;
+                    }
+                    images.push_back(imgInfo);
+                }
+            }
+        }
+    };
+
+    auto getContentAsString = [&parseImageFromContent](const Json::Value& content, std::vector<ImageInfo>& images) -> std::string {
         if (content.isString()) {
             return content.asString();
         }
         if (content.isArray()) {
             std::string result;
             for (const auto& item : content) {
-                if (item.isObject() && item.isMember("text") && item["text"].isString()) {
+                if (item.isObject() && item.isMember("type")) {
+                    std::string itemType = item["type"].asString();
+                    if (itemType == "text" && item.isMember("text") && item["text"].isString()) {
+                        std::string textPart = item["text"].asString();
+                        result += textPart;
+                
+                        // 【可选改进】如果当前片段不以换行符结尾，手动补一个换行
+                        // 这样可以确保 <task> 和 <environment_details> 即使在源数据中紧挨着，这里也会分行
+                        if (!textPart.empty() && textPart.back() != '\n') {
+                            result += "\n";
+                        }
+                    } else if (itemType == "image_url") {
+                        parseImageFromContent(item, images);
+                    }
+                } else if (item.isObject() && item.isMember("text") && item["text"].isString()) {
+                    // 兼容旧格式
                     std::string textPart = item["text"].asString();
                     result += textPart;
-            
-                    // 【可选改进】如果当前片段不以换行符结尾，手动补一个换行
-                    // 这样可以确保 <task> 和 <environment_details> 即使在源数据中紧挨着，这里也会分行
                     if (!textPart.empty() && textPart.back() != '\n') {
                         result += "\n";
                     }
@@ -379,7 +455,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
         return "";
     };
     
-    int splitIndex=0;
+    int splitIndex=-1;
     for(int i = requestbody["messages"].size()-1; i > 0; i--)
     {
         if(requestbody["messages"][i]["role"]=="assistant")
@@ -388,16 +464,18 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
             break;
         }
     }
+    // 用于临时存储历史消息中的图片（这些图片我们暂不处理，只存储当前请求的图片）
+    std::vector<ImageInfo> tempImages;
+    
     for(int i = 0; i <requestbody["messages"].size(); i++)
     {
         if(requestbody["messages"][i]["role"] == "system")
             {
-                session.systemprompt = session.systemprompt + getContentAsString(requestbody["messages"][i]["content"]);
+                session.systemprompt = session.systemprompt + getContentAsString(requestbody["messages"][i]["content"], tempImages);
                 continue;
             }
         if(i<=splitIndex)
         {
-            // 合并历史记录中的连续 user 消息
             // 合并历史记录中的连续 user 消息
             if (requestbody["messages"][i]["role"] == "user" &&
                 !session.message_context.empty() &&
@@ -405,11 +483,11 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
             {
                 session.message_context[session.message_context.size() - 1]["content"] =
                     session.message_context[session.message_context.size() - 1]["content"].asString() +
-                    getContentAsString(requestbody["messages"][i]["content"]);
+                    getContentAsString(requestbody["messages"][i]["content"], tempImages);
             } else {
                 Json::Value msgData;
                 msgData["role"] = requestbody["messages"][i]["role"];
-                msgData["content"] = getContentAsString(requestbody["messages"][i]["content"]);
+                msgData["content"] = getContentAsString(requestbody["messages"][i]["content"], tempImages);
                 session.addMessageToContext(msgData);
             }
         }
@@ -417,15 +495,13 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
         {
             if(requestbody["messages"][i]["role"]=="user")
             {
-            if(requestbody["messages"][i]["role"]=="user")
-            {
-                std::string user_content = getContentAsString(requestbody["messages"][i]["content"]);
+                // 提取当前用户请求的文本和图片
+                std::string user_content = getContentAsString(requestbody["messages"][i]["content"], session.requestImages);
                 if (session.requestmessage.empty()) {
                     session.requestmessage = user_content;
                 } else {
                     session.requestmessage += user_content;
                 }
-            }
             }
         }
     }

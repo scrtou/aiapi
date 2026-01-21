@@ -238,6 +238,20 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         }
     }
 }
+void AccountManager::getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account)
+{
+    if (accountList.find(apiName) != accountList.end() &&
+        accountList[apiName].find(userName) != accountList[apiName].end()) {
+        account = accountList[apiName][userName];
+        if (account && account->tokenStatus) {
+            account->useCount++;
+            LOG_INFO << "getAccountByUserName: useCount incremented for " << account->userName << ", new value: " << account->useCount;
+        }
+    } else {
+        LOG_ERROR << "getAccountByUserName: account not found for apiName=" << apiName << ", userName=" << userName;
+        account = nullptr;
+    }
+}
 void AccountManager::checkAccount()
 {
     LOG_INFO << "checkAccount start";

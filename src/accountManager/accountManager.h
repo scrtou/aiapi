@@ -90,6 +90,7 @@ class AccountManager
     bool updateAccount(Accountinfo_st accountinfo);
     bool deleteAccountbyPost(string apiName,string userName);
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType = "");
+    void getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account);
     void checkAccount();
     void checkToken();
     void updateToken();

@@ -1,31 +1,146 @@
 #include <drogon/drogon.h>
 #include <chaynsapi.h>
-#include <../../apiManager/Apicomn.h> 
+#include <../../apiManager/Apicomn.h>
 #include <unistd.h>
-IMPLEMENT_RUNTIME(chaynsapi,Chaynsapi);
+#include <chrono>
+IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 
-Chaynsapi::Chaynsapi()
+chaynsapi::chaynsapi()
 {
    
 }
 
-Chaynsapi::~Chaynsapi()
+chaynsapi::~chaynsapi()
 {
 }
 
-void Chaynsapi::init()
+void chaynsapi::init()
 {
     loadModels();
 }
 
-void Chaynsapi::postChatMessage(session_st& session)
+// 上传图片到 image-service
+std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken)
 {
-    LOG_INFO << "Chaynsapi::postChatMessage";
+    LOG_INFO << "Uploading image to image-service for personId: " << personId;
+    
+    // 如果已经有 URL，直接返回
+    if (!image.uploadedUrl.empty()) {
+        LOG_INFO << "Image already has URL: " << image.uploadedUrl;
+        return image.uploadedUrl;
+    }
+    
+    // 需要上传 base64 图片
+    if (image.base64Data.empty()) {
+        LOG_ERROR << "No image data to upload";
+        return "";
+    }
+    
+    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
+    
+    // 构建上传请求
+    // URL: POST https://cube.tobit.cloud/image-service/v3/Images/{personId}
+    std::string uploadPath = "/image-service/v3/Images/" + personId;
+    
+    // 首先解码 base64 数据
+    std::string decodedData = drogon::utils::base64Decode(image.base64Data);
+    
+    // 确定文件扩展名
+    std::string extension = "png";
+    if (image.mediaType.find("jpeg") != std::string::npos || image.mediaType.find("jpg") != std::string::npos) {
+        extension = "jpg";
+    } else if (image.mediaType.find("gif") != std::string::npos) {
+        extension = "gif";
+    } else if (image.mediaType.find("webp") != std::string::npos) {
+        extension = "webp";
+    }
+    
+    // 创建 HTTP 请求并构建 multipart/form-data 请求体
+    auto request = HttpRequest::newHttpRequest();
+    request->setMethod(HttpMethod::Post);
+    request->setPath(uploadPath);
+    request->addHeader("Authorization", "Bearer " + authToken);
+    
+    // 构建 multipart/form-data 请求体
+    std::string boundary = "----WebKitFormBoundary" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    std::string contentType = "multipart/form-data; boundary=" + boundary;
+    request->setContentTypeString(contentType);
+    
+    std::string mimeType = "image/" + extension;
+    if (extension == "jpg") mimeType = "image/jpeg";
+    
+    std::string body;
+    body += "--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"file\"; filename=\"image." + extension + "\"\r\n";
+    body += "Content-Type: " + mimeType + "\r\n\r\n";
+    body += decodedData;
+    body += "\r\n--" + boundary + "--\r\n";
+    
+    request->setBody(body);
+    
+    auto [result, response] = client->sendRequest(request);
+    
+    if (result != ReqResult::Ok) {
+        LOG_ERROR << "Failed to upload image: network error";
+        return "";
+    }
+    
+    if (response->statusCode() != k200OK && response->statusCode() != k201Created) {
+        LOG_ERROR << "Failed to upload image: status " << response->statusCode() << " body: " << response->getBody();
+        return "";
+    }
+    
+    // 解析响应获取图片URL
+    auto jsonResp = response->getJsonObject();
+    if (!jsonResp) {
+        LOG_ERROR << "Failed to parse upload response as JSON";
+        return "";
+    }
+    
+    // 响应格式: {"image": {"path": "xxx"}, "baseDomain": "https://tsimg.cloud/"}
+    if (jsonResp->isMember("baseDomain") && jsonResp->isMember("image") && (*jsonResp)["image"].isMember("path")) {
+        std::string baseDomain = (*jsonResp)["baseDomain"].asString();
+        std::string imagePath = (*jsonResp)["image"]["path"].asString();
+        std::string imageUrl = baseDomain + imagePath;
+        LOG_INFO << "Image uploaded successfully: " << imageUrl;
+        return imageUrl;
+    }
+    
+    LOG_ERROR << "Unexpected upload response format";
+    return "";
+}
+
+void chaynsapi::postChatMessage(session_st& session)
+{
+    LOG_INFO << "chaynsapi::postChatMessage";
     string modelname = session.selectmodel;
     
     shared_ptr<Accountinfo_st> accountinfo = nullptr;
-    AccountManager::getInstance().getAccount("chaynsapi", accountinfo, "pro");
+    
+    // 检查是否存在上下文 (ThreadId)，如果有则使用相同账户
+    std::string savedAccountUserName;
+    {
+        std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        auto it = m_threadMap.find(session.curConversationId);
+        if (it != m_threadMap.end() && !it->second.accountUserName.empty()) {
+            savedAccountUserName = it->second.accountUserName;
+            LOG_INFO << "Found saved account userName: " << savedAccountUserName << " for curConvId: " << session.curConversationId;
+        }
+    }
+    
+    if (!savedAccountUserName.empty()) {
+        // 使用之前创建 thread 时的相同账户
+        AccountManager::getInstance().getAccountByUserName("chaynsapi", savedAccountUserName, accountinfo);
+        if (accountinfo == nullptr || !accountinfo->tokenStatus) {
+            LOG_WARN << "Saved account " << savedAccountUserName << " is no longer valid, falling back to getAccount";
+            AccountManager::getInstance().getAccount("chaynsapi", accountinfo, "pro");
+        }
+    } else {
+        // 新会话，获取新账户
+        AccountManager::getInstance().getAccount("chaynsapi", accountinfo, "pro");
+    }
+    
     if (accountinfo == nullptr || !accountinfo->tokenStatus)
     {
         LOG_ERROR << "Failed to get a valid account for chaynsapi";
@@ -64,6 +179,20 @@ void Chaynsapi::postChatMessage(session_st& session)
         session.responsemessage["error"] = "Failed to obtain a valid personId";
         session.responsemessage["statusCode"] = 500;
         return;
+    }
+    
+    // 处理图片上传
+    std::vector<std::string> uploadedImageUrls;
+    if (!session.requestImages.empty()) {
+        LOG_INFO << "Processing " << session.requestImages.size() << " images for upload";
+        for (auto& img : session.requestImages) {
+            std::string imageUrl = uploadImageToService(img, accountinfo->personId, accountinfo->authToken);
+            if (!imageUrl.empty()) {
+                uploadedImageUrls.push_back(imageUrl);
+                img.uploadedUrl = imageUrl; // 更新 session 中的 URL
+            }
+        }
+        LOG_INFO << "Successfully uploaded " << uploadedImageUrls.size() << " images";
     }
     
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
@@ -117,7 +246,19 @@ void Chaynsapi::postChatMessage(session_st& session)
         }
 
         messageBody["text"] = messageText;
-        messageBody["cursorPosition"] = messageText.size(); 
+        messageBody["cursorPosition"] = messageText.size();
+        
+        // 添加图片数组 (如果有上传的图片)
+        if (!uploadedImageUrls.empty()) {
+            Json::Value imagesArray(Json::arrayValue);
+            for (const auto& url : uploadedImageUrls) {
+                Json::Value imgObj;
+                imgObj["url"] = url;
+                imagesArray.append(imgObj);
+            }
+            messageBody["images"] = imagesArray;
+            LOG_INFO << "Added " << uploadedImageUrls.size() << " images to follow-up message";
+        }
 
         auto reqSend = HttpRequest::newHttpJsonRequest(messageBody);
         reqSend->setMethod(HttpMethod::Post);
@@ -194,6 +335,19 @@ void Chaynsapi::postChatMessage(session_st& session)
         
         Json::Value message;
         message["text"] = full_message;
+        
+        // 添加图片数组到消息 (如果有上传的图片)
+        if (!uploadedImageUrls.empty()) {
+            Json::Value imagesArray(Json::arrayValue);
+            for (const auto& url : uploadedImageUrls) {
+                Json::Value imgObj;
+                imgObj["url"] = url;
+                imagesArray.append(imgObj);
+            }
+            message["images"] = imagesArray;
+            LOG_INFO << "Added " << uploadedImageUrls.size() << " images to new thread message";
+        }
+        
         sendMessageRequest["messages"].append(message);
 
         auto reqSend = HttpRequest::newHttpJsonRequest(sendMessageRequest);
@@ -255,6 +409,7 @@ void Chaynsapi::postChatMessage(session_st& session)
         ThreadContext ctx;
         ctx.threadId = threadId;
         ctx.userAuthorId = userAuthorId;
+        ctx.accountUserName = accountinfo->userName; // 保存创建thread时使用的账户
         m_threadMap[session.curConversationId] = ctx;
     }
 
@@ -310,11 +465,11 @@ void Chaynsapi::postChatMessage(session_st& session)
     }
     session.responsemessage["statusCode"] = response_statusCode;
 }
-void Chaynsapi::checkAlivableTokens()
+void chaynsapi::checkAlivableTokens()
 {
 
 }
-bool Chaynsapi::checkAlivableToken(string token)
+bool chaynsapi::checkAlivableToken(string token)
 {
     auto client = HttpClient::newHttpClient("https://auth.chayns.net");
     auto request = HttpRequest::newHttpRequest();
@@ -329,11 +484,11 @@ bool Chaynsapi::checkAlivableToken(string token)
     }
     return true;
 }
-void Chaynsapi::checkModels()
+void chaynsapi::checkModels()
 {
 
 }
-void Chaynsapi::loadModels()
+void chaynsapi::loadModels()
 {
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
     auto request = HttpRequest::newHttpRequest();
@@ -372,7 +527,7 @@ void Chaynsapi::loadModels()
         }
     }
     
-    LOG_INFO << "Chayns NativeModelChatbot models successfully loaded: " << modelInfoMap.size() << " models.";
+    LOG_INFO << "chayns NativeModelChatbot models successfully loaded: " << modelInfoMap.size() << " models.";
 }
 
 std::string generateGuid() {
@@ -405,7 +560,7 @@ std::string generateGuid() {
     }
     return ss.str();
 }
-void Chaynsapi::transferThreadContext(const std::string& oldId, const std::string& newId)
+void chaynsapi::transferThreadContext(const std::string& oldId, const std::string& newId)
 {
     LOG_INFO << "Attempting to transfer thread context from " << oldId << " to " << newId;
     std::lock_guard<std::mutex> lock(m_threadMapMutex);
@@ -420,23 +575,23 @@ void Chaynsapi::transferThreadContext(const std::string& oldId, const std::strin
         LOG_WARN << "Failed to transfer thread context: oldId " << oldId << " not found in threadMap.";
     }
 }
-void Chaynsapi::afterResponseProcess(session_st& session)
+void chaynsapi::afterResponseProcess(session_st& session)
 {
    // No longer needed with the new stateless API
 }
-void Chaynsapi::eraseChatinfoMap(string ConversationId)
+void chaynsapi::eraseChatinfoMap(string ConversationId)
 {
     std::lock_guard<std::mutex> lock(m_threadMapMutex);
     const auto erased = m_threadMap.erase(ConversationId);
     LOG_INFO << "eraseChatinfoMap: convId erased=" << erased;
 }
-Json::Value Chaynsapi::getModels()
+Json::Value chaynsapi::getModels()
 {
    return model_info_openai_format;
 }
-void* Chaynsapi::createApi()
+void* chaynsapi::createApi()
 {
-    Chaynsapi* chaynsapi=new Chaynsapi();
-    chaynsapi->init();
-    return chaynsapi;
+    chaynsapi* api=new chaynsapi();
+    api->init();
+    return api;
 }

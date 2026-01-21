@@ -17,6 +17,15 @@
 using namespace drogon;
 static const int SESSION_EXPIRE_TIME = 86400; //24小时，单位秒数,会话过期时间
 //static const int SESSION_MAX_MESSAGES = 4; //上下文会话最大消息条数,一轮两条
+// 图片信息结构
+struct ImageInfo {
+  std::string base64Data;      // base64编码的图片数据
+  std::string mediaType;       // 图片类型如 image/png, image/jpeg
+  std::string uploadedUrl;     // 上传后的图片URL
+  int width = 0;
+  int height = 0;
+};
+
 struct session_st
 {
   std::string preConversationId="";
@@ -31,6 +40,7 @@ struct session_st
   int contextlength=0;
   bool contextIsFull=false;
   std::string requestmessage="";
+  std::vector<ImageInfo> requestImages;  // 当前请求中的图片列表
   Json::Value responsemessage;
   Json::Value client_info;
   void clearMessageContext()
