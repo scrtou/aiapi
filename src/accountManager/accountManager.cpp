@@ -90,6 +90,11 @@ void AccountManager::init()
     waitUpdateAccountTokenThread();
     //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
     checkAccountTypeThread();   // 已改为事件驱动，不再定时检查
+    LOG_INFO<<"config:";
+    const string fullUrl = getLoginServiceUrl("chaynsapi");
+    const string fullUrl1 = getRegistServiceUrl("chaynsapi");
+    LOG_INFO<<"LoginServiceUrl:"<<fullUrl;
+    LOG_INFO<<"RegistServiceUrl:"<<fullUrl1;
     LOG_INFO << "AccountManager::init end";
 }
  
