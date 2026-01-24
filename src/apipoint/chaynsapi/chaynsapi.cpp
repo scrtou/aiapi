@@ -23,17 +23,17 @@ void chaynsapi::init()
 // 上传图片到 image-service
 std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken)
 {
-    LOG_INFO << "Uploading image to image-service for personId: " << personId;
+    LOG_INFO << "[chaynsAPI] 正在上传图片到图片服务, personId: " << personId;
     
     // 如果已经有 URL，直接返回
     if (!image.uploadedUrl.empty()) {
-        LOG_INFO << "Image already has URL: " << image.uploadedUrl;
+        LOG_INFO << "[chaynsAPI] 图片已有URL: " << image.uploadedUrl;
         return image.uploadedUrl;
     }
     
     // 需要上传 base64 图片
     if (image.base64Data.empty()) {
-        LOG_ERROR << "No image data to upload";
+        LOG_ERROR << "[chaynsAPI] 没有图片数据可上传";
         return "";
     }
     
@@ -82,19 +82,19 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
     auto [result, response] = client->sendRequest(request);
     
     if (result != ReqResult::Ok) {
-        LOG_ERROR << "Failed to upload image: network error";
+        LOG_ERROR << "[chaynsAPI] 上传图片失败: 网络错误";
         return "";
     }
     
     if (response->statusCode() != k200OK && response->statusCode() != k201Created) {
-        LOG_ERROR << "Failed to upload image: status " << response->statusCode() << " body: " << response->getBody();
+        LOG_ERROR << "[chaynsAPI] 上传图片失败: 状态码 " << response->statusCode() << " 响应: " << response->getBody();
         return "";
     }
     
     // 解析响应获取图片URL
     auto jsonResp = response->getJsonObject();
     if (!jsonResp) {
-        LOG_ERROR << "Failed to parse upload response as JSON";
+        LOG_ERROR << "[chaynsAPI] 解析上传响应JSON失败";
         return "";
     }
     
@@ -103,17 +103,17 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
         std::string baseDomain = (*jsonResp)["baseDomain"].asString();
         std::string imagePath = (*jsonResp)["image"]["path"].asString();
         std::string imageUrl = baseDomain + imagePath;
-        LOG_INFO << "Image uploaded successfully: " << imageUrl;
+        LOG_INFO << "[chaynsAPI] 图片上传成功: " << imageUrl;
         return imageUrl;
     }
     
-    LOG_ERROR << "Unexpected upload response format";
+    LOG_ERROR << "[chaynsAPI] 上传响应格式异常";
     return "";
 }
 
 void chaynsapi::postChatMessage(session_st& session)
 {
-    LOG_INFO << "chaynsapi::postChatMessage";
+    LOG_INFO << "[chaynsAPI] 发送聊天消息";
     string modelname = session.selectmodel;
     
     shared_ptr<Accountinfo_st> accountinfo = nullptr;
@@ -125,7 +125,7 @@ void chaynsapi::postChatMessage(session_st& session)
         auto it = m_threadMap.find(session.curConversationId);
         if (it != m_threadMap.end() && !it->second.accountUserName.empty()) {
             savedAccountUserName = it->second.accountUserName;
-            LOG_INFO << "Found saved account userName: " << savedAccountUserName << " for curConvId: " << session.curConversationId;
+            LOG_INFO << "[chaynsAPI] 找到已保存的账户用户名: " << savedAccountUserName << " 当前会话ID: " << session.curConversationId;
         }
     }
     
@@ -133,7 +133,7 @@ void chaynsapi::postChatMessage(session_st& session)
         // 使用之前创建 thread 时的相同账户
         AccountManager::getInstance().getAccountByUserName("chaynsapi", savedAccountUserName, accountinfo);
         if (accountinfo == nullptr || !accountinfo->tokenStatus) {
-            LOG_WARN << "Saved account " << savedAccountUserName << " is no longer valid, falling back to getAccount";
+            LOG_WARN << "[chaynsAPI] 已保存账户 " << savedAccountUserName << " 不再有效, 回退到获取新账户";
             AccountManager::getInstance().getAccount("chaynsapi", accountinfo, "pro");
         }
     } else {
@@ -143,14 +143,14 @@ void chaynsapi::postChatMessage(session_st& session)
     
     if (accountinfo == nullptr || !accountinfo->tokenStatus)
     {
-        LOG_ERROR << "Failed to get a valid account for chaynsapi";
+        LOG_ERROR << "[chaynsAPI] 获取有效账户失败";
         session.responsemessage["error"] = "No valid account available";
         session.responsemessage["statusCode"] = 500;
         return;
     }
 
     if (accountinfo->personId.empty()) {
-        LOG_INFO << "personId is empty, attempting to fetch it.";
+        LOG_INFO << "[chaynsAPI] personId为空, 正在尝试获取";
         auto client = HttpClient::newHttpClient("https://auth.chayns.net");
         auto request = HttpRequest::newHttpRequest();
         request->setMethod(HttpMethod::Get);
@@ -162,20 +162,20 @@ void chaynsapi::postChatMessage(session_st& session)
             if (jsonResp) {
                 if (jsonResp->isMember("personId")) {
                     accountinfo->personId = (*jsonResp)["personId"].asString();
-                    LOG_INFO << "Successfully fetched personId: " << accountinfo->personId;
+                    LOG_INFO << "[chaynsAPI] 成功获取personId: " << accountinfo->personId;
                 } else {
-                    LOG_ERROR << "personId not found in userSettings response JSON. Body: " << response->getBody();
+                    LOG_ERROR << "[chaynsAPI] 用户设置响应JSON中未找到personId, 响应: " << response->getBody();
                 }
             } else {
-                LOG_ERROR << "Failed to parse userSettings response as JSON object. Body: " << response->getBody();
+                LOG_ERROR << "[chaynsAPI] 解析用户设置响应为JSON对象失败, 响应: " << response->getBody();
             }
         } else {
-            LOG_ERROR << "Failed to fetch userSettings. Status code: " << (response ? response->statusCode() : 0) << ", Body: " << (response ? std::string(response->getBody()) : "No response");
+            LOG_ERROR << "[chaynsAPI] 获取用户设置失败, 状态码: " << (response ? response->statusCode() : 0) << ", 响应: " << (response ? std::string(response->getBody()) : "无响应");
         }
     }
 
     if (accountinfo->personId.empty()) {
-        LOG_ERROR << "personId is still empty after attempting to fetch. Aborting.";
+        LOG_ERROR << "[chaynsAPI] 尝试获取后personId仍为空, 中止操作";
         session.responsemessage["error"] = "Failed to obtain a valid personId";
         session.responsemessage["statusCode"] = 500;
         return;
@@ -184,7 +184,7 @@ void chaynsapi::postChatMessage(session_st& session)
     // 处理图片上传
     std::vector<std::string> uploadedImageUrls;
     if (!session.requestImages.empty()) {
-        LOG_INFO << "Processing " << session.requestImages.size() << " images for upload";
+        LOG_INFO << "[chaynsAPI] 正在处理 " << session.requestImages.size() << " 张图片上传";
         for (auto& img : session.requestImages) {
             std::string imageUrl = uploadImageToService(img, accountinfo->personId, accountinfo->authToken);
             if (!imageUrl.empty()) {
@@ -192,7 +192,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 img.uploadedUrl = imageUrl; // 更新 session 中的 URL
             }
         }
-        LOG_INFO << "Successfully uploaded " << uploadedImageUrls.size() << " images";
+        LOG_INFO << "[chaynsAPI] 成功上传 " << uploadedImageUrls.size() << " 张图片";
     }
     
     auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
@@ -211,7 +211,7 @@ void chaynsapi::postChatMessage(session_st& session)
             threadId = it->second.threadId;
             userAuthorId = it->second.userAuthorId;
             isFollowUp = true;
-            LOG_INFO << "Found existing threadId: " << threadId << " for curConvId: " << session.curConversationId;
+            LOG_INFO << "[chaynsAPI] 找到现有threadId: " << threadId << ", curConvId: " << session.curConversationId;
         }
     }
 
@@ -257,7 +257,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 imagesArray.append(imgObj);
             }
             messageBody["images"] = imagesArray;
-            LOG_INFO << "Added " << uploadedImageUrls.size() << " images to follow-up message";
+            LOG_INFO << "[chaynsAPI] 已添加 " << uploadedImageUrls.size() << " 张图片到后续消息";
         }
 
         auto reqSend = HttpRequest::newHttpJsonRequest(messageBody);
@@ -266,11 +266,11 @@ void chaynsapi::postChatMessage(session_st& session)
         reqSend->setPath(path);
         reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
         
-        LOG_INFO << "Sending follow-up message to thread: " << threadId;
+        LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: " << threadId;
         
         auto sendResult = client->sendRequest(reqSend);
         if (sendResult.first != ReqResult::Ok) {
-            LOG_ERROR << "Failed to send follow-up message";
+            LOG_ERROR << "[chaynsAPI] 发送后续消息失败";
             session.responsemessage["error"] = "Failed to send message";
             session.responsemessage["statusCode"] = 500;
             return;
@@ -288,7 +288,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 userAuthorId = sendResponseJson["author"]["id"].asString();
             }
         } else {
-            LOG_ERROR << "Follow-up failed code: " << responseSend->statusCode() << " body: " << responseSend->getBody();
+            LOG_ERROR << "[chaynsAPI] 后续消息发送失败, 状态码: " << responseSend->statusCode() << ", 响应体: " << responseSend->getBody();
             // 如果后续发送失败（例如线程已关闭），可能需要降级为创建新线程，这里简单处理为报错
             session.responsemessage["error"] = "Failed to append message";
             session.responsemessage["statusCode"] = responseSend->statusCode();
@@ -299,7 +299,7 @@ void chaynsapi::postChatMessage(session_st& session)
         // 分支 B: 新对话 (创建新 Thread)
         // URL: /intercom-backend/v2/thread?forceCreate=true
         // =================================================
-        LOG_INFO << "Creating New Thread: Injecting System Prompt (" << session.systemprompt.length() << " chars)";
+        LOG_INFO << "[chaynsAPI] 正在创建新线程: 注入系统提示词 (" << session.systemprompt.length() << " 字符)";
         string full_message;
         if(!session.message_context.empty())
         {
@@ -322,7 +322,7 @@ void chaynsapi::postChatMessage(session_st& session)
         Json::Value member2;
         const auto& model_info = modelInfoMap[modelname];
         if (!model_info.isMember("personId") || !model_info["personId"].isString()) {
-            LOG_ERROR << "Model personId missing: " << modelname;
+            LOG_ERROR << "[chaynsAPI] 模型personId缺失: " << modelname;
             session.responsemessage["error"] = "Model config error";
             session.responsemessage["statusCode"] = 500;
             return;
@@ -345,7 +345,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 imagesArray.append(imgObj);
             }
             message["images"] = imagesArray;
-            LOG_INFO << "Added " << uploadedImageUrls.size() << " images to new thread message";
+            LOG_INFO << "[chaynsAPI] 已添加 " << uploadedImageUrls.size() << " 张图片到新线程消息";
         }
         
         sendMessageRequest["messages"].append(message);
@@ -355,7 +355,7 @@ void chaynsapi::postChatMessage(session_st& session)
         reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
         reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
         
-        LOG_INFO << "Creating new thread";
+        LOG_INFO << "[chaynsAPI] 正在创建新线程";
 
         auto sendResult = client->sendRequest(reqSend);
         if (sendResult.first != ReqResult::Ok) {
@@ -388,7 +388,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 }
             }
         } else {
-            LOG_ERROR << "Create thread failed: " << responseSend->statusCode();
+            LOG_ERROR << "[chaynsAPI] 创建线程失败, 状态码: " << responseSend->statusCode();
             session.responsemessage["error"] = "Failed to create thread";
             session.responsemessage["statusCode"] = responseSend->statusCode();
             return;
@@ -396,7 +396,7 @@ void chaynsapi::postChatMessage(session_st& session)
     }
 
     if (threadId.empty() || lastMessageTime.empty()) {
-        LOG_ERROR << "Critical info missing: threadId or lastMessageTime";
+        LOG_ERROR << "[chaynsAPI] 关键信息缺失: threadId或lastMessageTime";
         session.responsemessage["error"] = "Protocol error";
         session.responsemessage["statusCode"] = 500;
         return;
@@ -413,17 +413,20 @@ void chaynsapi::postChatMessage(session_st& session)
         m_threadMap[session.curConversationId] = ctx;
     }
 
-    // 6. 轮询获取结果 (逻辑保持不变)
+    // 6. 轮询获取结果
     string response_message;
-    int response_statusCode = 204; 
+    int response_statusCode = 204;
+    int pollCount = 0;
 
     // 注意：这里需要根据 lastMessageTime 轮询
+    string pollPath = "/intercom-backend/v2/thread/" + threadId + "/message?take=1000&afterDate=" + lastMessageTime;
+    LOG_INFO << "[chaynsAPI] 开始轮询, 最大重试次数: " << MAX_RETRIES << ", URL: " << pollPath;
+    
     for (int retry = 0; retry < MAX_RETRIES; ++retry) {
+        pollCount++;
         auto reqGet = HttpRequest::newHttpRequest();
         reqGet->setMethod(HttpMethod::Get);
-        string getPath = "/intercom-backend/v2/thread/" + threadId + "/message?take=1000&afterDate=" + lastMessageTime;
-        LOG_INFO << "Polling URL: " << getPath;
-        reqGet->setPath(getPath);
+        reqGet->setPath(pollPath);
         reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
 
         auto getResult = client->sendRequest(reqGet);
@@ -448,6 +451,7 @@ void chaynsapi::postChatMessage(session_st& session)
                             response_message = message["text"].asString();
                         }
                         response_statusCode = 200;
+                        LOG_INFO << "[chaynsAPI] 轮询结束, 总计轮询 " << pollCount << " 次, 成功获取响应";
                         goto found;
                     }
                 }
@@ -455,12 +459,14 @@ void chaynsapi::postChatMessage(session_st& session)
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY));
     }
+    
+    LOG_INFO << "[chaynsAPI] 轮询结束, 总计轮询 " << pollCount << " 次, 未获取到响应";
 
  found:
     if (response_statusCode == 200) {
         session.responsemessage["message"] = response_message;
     } else {
-        LOG_ERROR << "Timeout waiting for response in thread " << threadId;
+        LOG_ERROR << "[chaynsAPI] 等待线程响应超时: " << threadId;
         session.responsemessage["error"] = "Timeout waiting for response";
     }
     session.responsemessage["statusCode"] = response_statusCode;
@@ -477,7 +483,7 @@ bool chaynsapi::checkAlivableToken(string token)
     request->setPath("/v2/userSettings");
     request->addHeader("Authorization", "Bearer " + token);
     auto [result, response] = client->sendRequest(request);
-    LOG_DEBUG << "checkAlivableToken response: " << response->getStatusCode();
+    LOG_DEBUG << "[chaynsAPI] 验证Token响应: " << response->getStatusCode();
     if(response->getStatusCode()!=200)
     {
         return false;
@@ -499,14 +505,14 @@ void chaynsapi::loadModels()
     auto [result, response] = client->sendRequest(request);
     
     if (result != ReqResult::Ok || response->statusCode() != k200OK) {
-        LOG_ERROR << "Failed to fetch models from API";
+        LOG_ERROR << "[chaynsAPI] 从API获取模型列表失败";
         return;
     }
     
     Json::Value api_models;
     Json::Reader reader;
     if (!reader.parse(string(response->getBody()), api_models)) {
-        LOG_ERROR << "Failed to parse models API response";
+        LOG_ERROR << "[chaynsAPI] 解析模型API响应失败";
         return;
     }
     
@@ -527,7 +533,7 @@ void chaynsapi::loadModels()
         }
     }
     
-    LOG_INFO << "chayns NativeModelChatbot models successfully loaded: " << modelInfoMap.size() << " models.";
+    LOG_INFO << "[chaynsAPI] chayns NativeModelChatbot模型加载成功: " << modelInfoMap.size() << " 个模型";
 }
 
 std::string generateGuid() {
@@ -562,17 +568,17 @@ std::string generateGuid() {
 }
 void chaynsapi::transferThreadContext(const std::string& oldId, const std::string& newId)
 {
-    LOG_INFO << "Attempting to transfer thread context from " << oldId << " to " << newId;
+    LOG_INFO << "[chaynsAPI] 正在尝试转移线程上下文, 从 " << oldId << " 到 " << newId;
     std::lock_guard<std::mutex> lock(m_threadMapMutex);
     auto it = m_threadMap.find(oldId);
     if (it != m_threadMap.end()) {
         m_threadMap[newId] = it->second;
         m_threadMap.erase(it);
-        LOG_INFO << "Successfully transferred thread context from " << oldId << " to " << newId;
+        LOG_INFO << "[chaynsAPI] 成功转移线程上下文, 从 " << oldId << " 到 " << newId;
     }
     else
     {
-        LOG_WARN << "Failed to transfer thread context: oldId " << oldId << " not found in threadMap.";
+        LOG_WARN << "[chaynsAPI] 转移线程上下文失败: oldId " << oldId << " 在threadMap中未找到";
     }
 }
 void chaynsapi::afterResponseProcess(session_st& session)
@@ -583,7 +589,7 @@ void chaynsapi::eraseChatinfoMap(string ConversationId)
 {
     std::lock_guard<std::mutex> lock(m_threadMapMutex);
     const auto erased = m_threadMap.erase(ConversationId);
-    LOG_INFO << "eraseChatinfoMap: convId erased=" << erased;
+    LOG_INFO << "[chaynsAPI] 删除会话映射: convId 删除数量=" << erased;
 }
 Json::Value chaynsapi::getModels()
 {

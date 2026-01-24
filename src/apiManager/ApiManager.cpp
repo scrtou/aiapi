@@ -1,5 +1,8 @@
 #include "ApiManager.h"
 #include <ApiFactory.h>
+#include <drogon/drogon.h>
+
+using namespace drogon;
 ApiManager::ApiManager()
 {
 }
@@ -69,16 +72,16 @@ void ApiManager::flushModelnameApiQueueMap(const string& modelName)
 }
 void ApiManager::init()
 {
-    LOG_INFO << "ApiManager::init start";
+    LOG_INFO << "[API管理器] 初始化开始";
     auto customConfig = app().getCustomConfig();
     auto reverseApiList = customConfig["reverse_api_list"];
     //LOG_INFO << "reverseApiList size: " << reverseApiList.size();
-    LOG_INFO << " ApiFactory::m_ApiFactoryMap size: " << ApiFactory::getInstance().getApiFactoryMap().size();
+    LOG_INFO << "[API管理器] ApiFactory映射大小: " << ApiFactory::getInstance().getApiFactoryMap().size();
     for(auto& apiName : ApiFactory::getInstance().getApiFactoryMap())
     {
         if(apiName.second==nullptr)
         {
-            LOG_INFO << "api: " << apiName.first << " is nullptr";
+            LOG_INFO << "[API管理器] API: " << apiName.first << " 为空";
             continue;
         }
         void* api = ApiFactory::getInstance().GetClassByName(apiName.first);
@@ -88,11 +91,11 @@ void ApiManager::init()
         }
         else
         {
-            LOG_INFO << "api: " << apiName.first << " is nullptr";
+            LOG_INFO << "[API管理器] API: " << apiName.first << " 为空";
         }
     }
-    LOG_INFO << "ApiManager::init end";
-    LOG_INFO << "m_ApiNameApiMap size: " << m_ApiNameApiMap.size();
+    LOG_INFO << "[API管理器] 初始化完成";
+    LOG_INFO << "[API管理器] API名称映射大小: " << m_ApiNameApiMap.size();
 }
 
 ApiManager& ApiManager::getInstance()
@@ -105,7 +108,7 @@ std::shared_ptr<APIinterface> ApiManager::getApiByApiName(string apiName)
     auto it = m_ApiNameApiMap.find(apiName);
     if(it==m_ApiNameApiMap.end())
     {
-        LOG_ERROR << "apiName: " << apiName << " is not found";
+        LOG_ERROR << "[API管理器] API名称: " << apiName << " 未找到";
         return nullptr;
     }
     return it->second->api;

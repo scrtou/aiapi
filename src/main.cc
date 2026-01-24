@@ -2,12 +2,28 @@
 #include<accountManager/accountManager.h>
 #include<apiManager/ApiManager.h>
 #include<channelManager/channelManager.h>
+#include<sessionManager/Session.h>
 int main() {
     //Set HTTP listener address and port
     //drogon::app().addListener("0.0.0.0", 5555);
     //Load config file
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
+
+    // 读取会话追踪模式配置
+    auto customConfig = drogon::app().getCustomConfig();
+    if (customConfig.isMember("session_tracking")) {
+        std::string mode = customConfig["session_tracking"].get("mode", "hash").asString();
+        if (mode == "zerowidth" || mode == "zero_width") {
+            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
+            LOG_INFO << "会话追踪模式: ZeroWidth (零宽字符嵌入)";
+        } else {
+            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
+            LOG_INFO << "会话追踪模式: Hash (内容哈希)";
+        }
+    } else {
+        LOG_INFO << "会话追踪模式: Hash (默认)";
+    }
 
     drogon::app().registerPreRoutingAdvice(
         [](const drogon::HttpRequestPtr &req,

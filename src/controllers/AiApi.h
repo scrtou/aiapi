@@ -23,6 +23,10 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::channelDelete, "/aichat/channel/delete", Post); // 删除渠道
     ADD_METHOD_TO(AiApi::channelUpdate, "/aichat/channel/update", Post); // 更新渠道
     ADD_METHOD_TO(AiApi::channelUpdateStatus, "/aichat/channel/updatestatus", Post); // 更新渠道状态
+    // OpenAI Responses API 兼容接口
+    ADD_METHOD_TO(AiApi::responsesCreate, "/chaynsapi/v1/responses", Post); // 创建响应
+    ADD_METHOD_TO(AiApi::responsesGet, "/chaynsapi/v1/responses/{1}", Get); // 获取响应
+    ADD_METHOD_TO(AiApi::responsesDelete, "/chaynsapi/v1/responses/{1}", Delete); // 删除响应
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -39,6 +43,10 @@ class AiApi : public drogon::HttpController<AiApi>
     void channelDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelUpdateStatus(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    // OpenAI Responses API 兼容接口
+    void responsesCreate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void responsesGet(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id);
+    void responsesDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id);
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);

@@ -74,7 +74,7 @@ AccountManager::~AccountManager()
 }
 void AccountManager::init()
 {
-    LOG_INFO << "AccountManager::init start";
+    LOG_INFO << "[账户管理] 初始化开始";
     accountDbManager = AccountDbManager::getInstance();
     if(!accountDbManager->isTableExist())
     {
@@ -90,18 +90,18 @@ void AccountManager::init()
     waitUpdateAccountTokenThread();
     //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
     checkAccountTypeThread();   // 已改为事件驱动，不再定时检查
-    LOG_INFO<<"config:";
+    LOG_INFO << "[账户管理] 配置信息:";
     const string fullUrl = getLoginServiceUrl("chaynsapi");
     const string fullUrl1 = getRegistServiceUrl("chaynsapi");
-    LOG_INFO<<"LoginServiceUrl:"<<fullUrl;
-    LOG_INFO<<"RegistServiceUrl:"<<fullUrl1;
-    LOG_INFO << "AccountManager::init end";
+    LOG_INFO << "[账户管理] 登录服务URL: " << fullUrl;
+    LOG_INFO << "[账户管理] 注册服务URL: " << fullUrl1;
+    LOG_INFO << "[账户管理] 初始化完成";
 }
  
 void AccountManager::loadAccount()
 {
     accountPoolMap.clear();
-    LOG_INFO << "loadAccount start";
+    LOG_INFO << "[账户管理] 加载账户开始";
     //load account from config.json
     if(accountDbManager->isTableExist())
     {
@@ -114,15 +114,15 @@ void AccountManager::loadAccount()
 
     for(auto& apiName : accountPoolMap)
     {
-        LOG_INFO << "apiName: " << apiName.first << ",accountQueue size: " << apiName.second->size();
+        LOG_INFO << "[账户管理] API名称: " << apiName.first << ", 账户队列大小: " << apiName.second->size();
 
     }
-    LOG_INFO << "loadAccount end";
+    LOG_INFO << "[账户管理] 加载账户完成";
     //printAccountPoolMap();
 }
 void AccountManager::loadAccountFromConfig()
 {
-    LOG_INFO << "loadAccountFromConfig start";
+    LOG_INFO << "[账户管理] 从配置文件加载账户开始";
      auto customConfig = app().getCustomConfig();
     auto configAccountList = customConfig["account"];
 
@@ -142,7 +142,7 @@ void AccountManager::loadAccountFromConfig()
         auto accountType = account["accountType"].empty()?"free":account["accountType"].asString();
         addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType);
     }
-    LOG_INFO << "loadAccountFromConfig end";
+    LOG_INFO << "[账户管理] 从配置文件加载账户完成";
 }
 void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType)
 {
@@ -197,7 +197,7 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
 {
     if(accountPoolMap.find(apiName) == accountPoolMap.end() || accountPoolMap[apiName] == nullptr || accountPoolMap[apiName]->empty())
     {
-        LOG_ERROR << "accountPoolMap[" << apiName << "] is empty or not found";
+        LOG_ERROR << "[账户管理] 账户池 [" << apiName << "] 为空或未找到";
         return;
     }
 
@@ -207,8 +207,8 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         if(account->tokenStatus)
         {
             account->useCount++;
-            LOG_INFO << "useCount incremented for " << account->userName << ", new value: " << account->useCount;
-            LOG_INFO << "accountList incremented for " << accountList[apiName][account->userName]->userName << ", new value: " << accountList[apiName][account->userName]->useCount;
+            LOG_INFO << "[账户管理] 使用次数已增加: " << account->userName << ", 新值: " << account->useCount;
+            LOG_INFO << "[账户管理] 账户列表已更新: " << accountList[apiName][account->userName]->userName << ", 新值: " << accountList[apiName][account->userName]->useCount;
 
         }
         accountPoolMap[apiName]->push(account);
@@ -226,7 +226,7 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
                 if(account->tokenStatus)
                 {
                     account->useCount++;
-                    LOG_INFO << "useCount incremented for " << account->userName << " (" << accountType << "), new value: " << account->useCount;
+                    LOG_INFO << "[账户管理] 使用次数已增加: " << account->userName << " (" << accountType << "), 新值: " << account->useCount;
                 }
                 accountPoolMap[apiName]->push(account);
                 break;
@@ -239,7 +239,7 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         }
         
         if (!found) {
-            LOG_ERROR << "No account found with type: " << accountType << " for api: " << apiName;
+            LOG_ERROR << "[账户管理] 未找到类型为 " << accountType << " 的账户, API: " << apiName;
         }
     }
 }
@@ -250,19 +250,19 @@ void AccountManager::getAccountByUserName(string apiName, string userName, share
         account = accountList[apiName][userName];
         if (account && account->tokenStatus) {
             account->useCount++;
-            LOG_INFO << "getAccountByUserName: useCount incremented for " << account->userName << ", new value: " << account->useCount;
+            LOG_INFO << "[账户管理] 按用户名获取账户: 使用次数已增加 " << account->userName << ", 新值: " << account->useCount;
         }
     } else {
-        LOG_ERROR << "getAccountByUserName: account not found for apiName=" << apiName << ", userName=" << userName;
+        LOG_ERROR << "[账户管理] 按用户名获取账户: 未找到账户 apiName=" << apiName << ", userName=" << userName;
         account = nullptr;
     }
 }
 void AccountManager::checkAccount()
 {
-    LOG_INFO << "checkAccount start";
+    LOG_INFO << "[账户管理] 检查账户开始";
     //check account from accountList
     //and add to accountPoolMap
-    LOG_INFO << "checkAccount end";
+    LOG_INFO << "[账户管理] 检查账户完成";
 }   
 void AccountManager::refreshAccountQueue(string apiName)
 {
@@ -272,26 +272,26 @@ void AccountManager::refreshAccountQueue(string apiName)
 }
 void AccountManager::printAccountPoolMap()
 {
-    LOG_INFO << "printAccountPoolMap start";
+    LOG_INFO << "[账户管理] 打印账户池映射开始";
     for(auto& apiName : accountPoolMap)
     {
-        LOG_INFO << "apiName: " << apiName.first << ",accountQueue size: " << apiName.second->size();
+        LOG_INFO << "[账户管理] API名称: " << apiName.first << ", 账户队列大小: " << apiName.second->size();
         auto tempQueue = *apiName.second;
        while(!tempQueue.empty())
        {
             auto account = tempQueue.top();
-            LOG_INFO << "userName: " << account->userName;
-            LOG_INFO << "passwd: " << account->passwd;
-            LOG_INFO << "tokenStatus: " << account->tokenStatus;
-            LOG_INFO << "accountStatus: " << account->accountStatus;
-            LOG_INFO << "userTobitId: " << account->userTobitId;
-            LOG_INFO << "useCount: " << account->useCount;
-            LOG_INFO << "authToken: " << account->authToken;
-            LOG_INFO << "--------------------------------"; 
+            LOG_INFO << "[账户管理] 用户名: " << account->userName;
+            LOG_INFO << "[账户管理] 密码: " << account->passwd;
+            LOG_INFO << "[账户管理] Token状态: " << account->tokenStatus;
+            LOG_INFO << "[账户管理] 账户状态: " << account->accountStatus;
+            LOG_INFO << "[账户管理] 用户TobitId: " << account->userTobitId;
+            LOG_INFO << "[账户管理] 使用次数: " << account->useCount;
+            LOG_INFO << "[账户管理] 认证Token: " << account->authToken;
+            LOG_INFO << "[账户管理] --------------------------------"; 
             tempQueue.pop();
        }
     }
-    LOG_INFO << "printAccountPoolMap end";
+    LOG_INFO << "[账户管理] 打印账户池映射完成";
 }
 bool AccountManager::checkChaynsToken(string token)
 {

@@ -27,9 +27,16 @@ add_executable(${PROJECT_NAME}
     apipoint/chaynsapi/chaynsapi.cpp
     channelManager/channelManager.cpp
     controllers/AiApi.cc
+    controllers/sinks/ChatSseSink.cpp
+    controllers/sinks/ChatJsonSink.cpp
+    controllers/sinks/ResponsesSseSink.cpp
     dbManager/account/accountDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     sessionManager/Session.cpp
+    sessionManager/ClientOutputSanitizer.cpp
+    sessionManager/GenerationService.cpp
+    sessionManager/RequestAdapters.cpp
+    tools/ZeroWidthEncoder.cpp
 )
 
 # ##############################################################################
@@ -64,11 +71,13 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers
+                           ${CMAKE_CURRENT_SOURCE_DIR}/controllers/sinks
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/channel
                            ${CMAKE_CURRENT_SOURCE_DIR}/models
-                           ${CMAKE_CURRENT_SOURCE_DIR}/sessionManager)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/sessionManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/tools)
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

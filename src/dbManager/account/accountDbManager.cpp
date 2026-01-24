@@ -38,9 +38,9 @@ std::string createTableSqlMysql=R"(
 
 void AccountDbManager::init()
 {
-    LOG_INFO << "AccountDbManager::init start";
+    LOG_INFO << "[账户数据库] 初始化开始";
     dbClient = app().getDbClient("aichatpg");
-    LOG_INFO << "AccountDbManager::init end";
+    LOG_INFO << "[账户数据库] 初始化完成";
 }
 
 void AccountDbManager::checkAndUpgradeTable()
@@ -50,12 +50,12 @@ void AccountDbManager::checkAndUpgradeTable()
     auto result = dbClient->execSqlSync(checkSql);
     if(result.size() == 0)
     {
-        LOG_INFO << "Column 'accounttype' missing in table 'account', adding it...";
+        LOG_INFO << "[账户数据库] 表'account'中缺少列'accounttype', 正在添加...";
         try {
             dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
-            LOG_INFO << "Column 'accounttype' added successfully.";
+            LOG_INFO << "[账户数据库] 列'accounttype'添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "Failed to add column 'accounttype': " << e.what();
+            LOG_ERROR << "[账户数据库] 添加列'accounttype'失败: " << e.what();
         }
     }
 }
@@ -157,7 +157,7 @@ void AccountDbManager::createTable()
     }
     catch(const std::exception& e)
     {
-        LOG_ERROR << "createTable error: " << e.what();
+        LOG_ERROR << "[账户数据库] 创建表错误: " << e.what();
     }
     
 }

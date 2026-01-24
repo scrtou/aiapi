@@ -40,13 +40,13 @@ std::string createChannelTableSqlMysql = R"(
 
 void ChannelDbManager::init()
 {
-    LOG_INFO << "ChannelDbManager::init start";
+    LOG_INFO << "[渠道数据库] 初始化开始";
     if (!isTableExist())
     {
-        LOG_INFO << "Channel table does not exist, creating table...";
+        LOG_INFO << "[渠道数据库] 渠道表不存在, 正在创建表...";
         createTable();
     }
-    LOG_INFO << "ChannelDbManager::init end";
+    LOG_INFO << "[渠道数据库] 初始化完成";
 }
 
 bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
@@ -208,11 +208,11 @@ void ChannelDbManager::createTable()
     try 
     {
         dbClient->execSqlSync(createChannelTablePgSql);
-        LOG_INFO << "渠道表创建成功";
+        LOG_INFO << "[渠道数据库] 渠道表创建成功";
     }
     catch(const std::exception& e)
     {
-        LOG_ERROR << "createTable error: " << e.what();
+        LOG_ERROR << "[渠道数据库] 创建表错误: " << e.what();
     }
 }
 
@@ -223,12 +223,12 @@ void ChannelDbManager::checkAndUpgradeTable()
     auto result = dbClient->execSqlSync(checkSql);
     if(result.size() == 0)
     {
-        LOG_INFO << "Column 'accountcount' missing in table 'channel', adding it...";
+        LOG_INFO << "[渠道数据库] 表'channel'中缺少列'accountcount', 正在添加...";
         try {
             dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountcount INT DEFAULT 0");
-            LOG_INFO << "Column 'accountcount' added successfully.";
+            LOG_INFO << "[渠道数据库] 列'accountcount'添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "Failed to add column 'accountcount': " << e.what();
+            LOG_ERROR << "[渠道数据库] 添加列'accountcount'失败: " << e.what();
         }
     }
 }

@@ -28,9 +28,14 @@ add_executable(${PROJECT_NAME}
     src/apipoint/chaynsapi/chaynsapi.cpp
     src/channelManager/channelManager.cpp
     src/controllers/AiApi.cc
+    src/controllers/sinks/ChatSseSink.cpp
+    src/controllers/sinks/ChatJsonSink.cpp
+    src/controllers/sinks/ResponsesSseSink.cpp
     src/dbManager/account/accountDbManager.cpp
     src/dbManager/channel/channelDbManager.cpp
     src/sessionManager/Session.cpp
+    src/sessionManager/ClientOutputSanitizer.cpp
+    src/sessionManager/GenerationService.cpp
 )
 
 # ##############################################################################
@@ -63,6 +68,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/chaynsapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers/sinks
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/channel
