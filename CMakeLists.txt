@@ -36,6 +36,8 @@ add_executable(${PROJECT_NAME}
     src/sessionManager/Session.cpp
     src/sessionManager/ClientOutputSanitizer.cpp
     src/sessionManager/GenerationService.cpp
+    src/sessionManager/RequestAdapters.cpp
+    src/tools/ZeroWidthEncoder.cpp
 )
 
 # ##############################################################################
@@ -73,7 +75,8 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/channel
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/models
-                           ${CMAKE_CURRENT_SOURCE_DIR}/src/sessionManager)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/sessionManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/tools)
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 
