@@ -130,6 +130,10 @@
         }
     ],
     "custom_config": {
+        "session_tracking": {
+            "mode": "zerowidth",
+            "_comment": "可选值: 'hash' (基于消息内容哈希，默认) 或 'zerowidth' (基于零宽字符嵌入)"
+        },
         "login_service_urls": [
             {
                 "name": "chaynsapi",
