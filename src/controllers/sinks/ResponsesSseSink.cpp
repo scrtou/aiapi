@@ -1,6 +1,7 @@
 #include "ResponsesSseSink.h"
 #include <json/json.h>
 #include <chrono>
+#include <algorithm>
 
 using namespace drogon;
 
@@ -14,6 +15,11 @@ ResponsesSseSink::ResponsesSseSink(
     responseId_(responseId),
     model_(model)
 {
+    createdAt_ = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
     LOG_DEBUG << "[响应SSE] 已创建, 响应ID: " << responseId_ << ", 模型: " << model_;
 }
 
@@ -35,8 +41,11 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
         else if constexpr (std::is_same_v<T, generation::OutputTextDone>) {
             handleOutputTextDone(arg);
         }
+        else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
+            handleToolCallDone(arg);
+        }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[响应SSE] 令牌用量: 输入=" << arg.inputTokens 
+            LOG_DEBUG << "[响应SSE] 令牌用量: 输入=" << arg.inputTokens
                      << ", 输出=" << arg.outputTokens;
             // Usage 信息会在 Completed 事件中包含
         }
@@ -75,19 +84,24 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const std::str
     }
 }
 
+void ResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Value& data) {
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    writer["emitUTF8"] = true;
+    sendSseEvent(eventType, Json::writeString(writer, data));
+}
+
 void ResponsesSseSink::handleStarted(const generation::Started& event) {
     LOG_DEBUG << "[响应SSE] 开始事件, 响应ID: " << event.responseId;
     
-    // 1. response.created
-    Json::Value responseObj = buildResponseObject("in_progress");
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    sendSseEvent("response.created", Json::writeString(writer, responseObj));
-    
-    // 2. response.in_progress (same response object)
-    sendSseEvent("response.in_progress", Json::writeString(writer, responseObj));
-    
-    // 3. response.output_item.added
+    // 1) response.created
+    Json::Value createdEvent(Json::objectValue);
+    createdEvent["type"] = "response.created";
+    createdEvent["sequence_number"] = sequenceNumber_++;
+    createdEvent["response"] = buildResponseObject("in_progress");
+    sendSseEvent("response.created", createdEvent);
+
+    // 2) response.output_item.added
     Json::Value outputItem;
     outputItem["type"] = "message";
     outputItem["id"] = "msg_" + responseId_;
@@ -95,41 +109,29 @@ void ResponsesSseSink::handleStarted(const generation::Started& event) {
     outputItem["role"] = "assistant";
     outputItem["content"] = Json::Value(Json::arrayValue);
     
-    Json::Value outputItemEvent;
-    outputItemEvent["response_id"] = responseId_;
+    Json::Value outputItemEvent(Json::objectValue);
+    outputItemEvent["type"] = "response.output_item.added";
+    outputItemEvent["sequence_number"] = sequenceNumber_++;
     outputItemEvent["output_index"] = outputItemIndex_;
     outputItemEvent["item"] = outputItem;
-    sendSseEvent("response.output_item.added", Json::writeString(writer, outputItemEvent));
-    
-    // 4. response.content_part.added
-    Json::Value contentPart;
-    contentPart["type"] = "output_text";
-    contentPart["text"] = "";
-    
-    Json::Value contentPartEvent;
-    contentPartEvent["response_id"] = responseId_;
-    contentPartEvent["item_id"] = "msg_" + responseId_;
-    contentPartEvent["output_index"] = outputItemIndex_;
-    contentPartEvent["content_index"] = 0;
-    contentPartEvent["part"] = contentPart;
-    sendSseEvent("response.content_part.added", Json::writeString(writer, contentPartEvent));
+    sendSseEvent("response.output_item.added", outputItemEvent);
 }
 
 void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& event) {
+    sawDelta_ = true;
     // 累积文本
     outputText_ += event.delta;
     
     // response.output_text.delta
-    Json::Value deltaEvent;
-    deltaEvent["response_id"] = responseId_;
+    Json::Value deltaEvent(Json::objectValue);
+    deltaEvent["type"] = "response.output_text.delta";
+    deltaEvent["sequence_number"] = sequenceNumber_++;
     deltaEvent["item_id"] = "msg_" + responseId_;
     deltaEvent["output_index"] = outputItemIndex_;
     deltaEvent["content_index"] = 0;
     deltaEvent["delta"] = event.delta;
     
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    sendSseEvent("response.output_text.delta", Json::writeString(writer, deltaEvent));
+    sendSseEvent("response.output_text.delta", deltaEvent);
 }
 
 void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& event) {
@@ -137,33 +139,57 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
     if (outputText_.empty()) {
         outputText_ = event.text;
     }
-    
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    
-    // 1. response.output_text.done
-    Json::Value textDoneEvent;
-    textDoneEvent["response_id"] = responseId_;
-    textDoneEvent["item_id"] = "msg_" + responseId_;
-    textDoneEvent["output_index"] = outputItemIndex_;
-    textDoneEvent["content_index"] = 0;
-    textDoneEvent["text"] = outputText_;
-    sendSseEvent("response.output_text.done", Json::writeString(writer, textDoneEvent));
-    
-    // 2. response.content_part.done
-    Json::Value contentPart;
-    contentPart["type"] = "output_text";
-    contentPart["text"] = outputText_;
-    
-    Json::Value contentPartDoneEvent;
-    contentPartDoneEvent["response_id"] = responseId_;
-    contentPartDoneEvent["item_id"] = "msg_" + responseId_;
-    contentPartDoneEvent["output_index"] = outputItemIndex_;
-    contentPartDoneEvent["content_index"] = 0;
-    contentPartDoneEvent["part"] = contentPart;
-    sendSseEvent("response.content_part.done", Json::writeString(writer, contentPartDoneEvent));
-    
-    // 3. response.output_item.done
+
+    // 当前项目没有上游真实 token stream；为了兼容 SSE 客户端，若未见 delta，则把 Done 拆分为多个 delta 发送。
+    if (!sawDelta_ && !outputText_.empty()) {
+        auto utf8ChunkSize = [](const std::string& s, size_t pos, size_t maxBytes) -> size_t {
+            if (pos >= s.size()) return 0;
+            size_t remaining = s.size() - pos;
+            size_t target = std::min(remaining, maxBytes);
+            size_t end = pos + target;
+            // Move end backward until it points to a UTF-8 boundary (start of next codepoint).
+            while (end < s.size() && end > pos &&
+                   (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) {
+                end--;
+            }
+            if (end == pos) {
+                unsigned char c = static_cast<unsigned char>(s[pos]);
+                size_t len = 1;
+                if ((c & 0x80) == 0) len = 1;
+                else if ((c & 0xE0) == 0xC0) len = 2;
+                else if ((c & 0xF0) == 0xE0) len = 3;
+                else if ((c & 0xF8) == 0xF0) len = 4;
+                return std::min(len, remaining);
+            }
+            return end - pos;
+        };
+
+        const size_t maxChunkBytes = 64;
+        size_t pos = 0;
+        while (pos < outputText_.size()) {
+            size_t n = utf8ChunkSize(outputText_, pos, maxChunkBytes);
+            if (n == 0) break;
+            std::string chunk = outputText_.substr(pos, n);
+            pos += n;
+
+            Json::Value deltaEvent(Json::objectValue);
+            deltaEvent["type"] = "response.output_text.delta";
+            deltaEvent["sequence_number"] = sequenceNumber_++;
+            deltaEvent["item_id"] = "msg_" + responseId_;
+            deltaEvent["output_index"] = outputItemIndex_;
+            deltaEvent["content_index"] = 0;
+            deltaEvent["delta"] = chunk;
+            sendSseEvent("response.output_text.delta", deltaEvent);
+        }
+    }
+}
+
+void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event) {
+    toolCalls_.push_back(event);
+}
+
+void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
+    // 构建 output item (message)
     Json::Value outputItem;
     outputItem["type"] = "message";
     outputItem["id"] = "msg_" + responseId_;
@@ -171,20 +197,42 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
     outputItem["role"] = "assistant";
     
     Json::Value content(Json::arrayValue);
-    Json::Value textContent;
-    textContent["type"] = "output_text";
-    textContent["text"] = outputText_;
-    content.append(textContent);
+    // 只有当有文本时才添加文本内容
+    if (!outputText_.empty()) {
+        Json::Value textContent;
+        textContent["type"] = "output_text";
+        textContent["text"] = outputText_;
+        textContent["annotations"] = Json::Value(Json::arrayValue);
+        content.append(textContent);
+    }
     outputItem["content"] = content;
+
+    // 添加 tool_calls
+    if (!toolCalls_.empty()) {
+        Json::Value toolCallsJson(Json::arrayValue);
+        for (const auto& tc : toolCalls_) {
+            Json::Value call;
+            call["id"] = tc.id;
+            call["type"] = "function";
+            
+            Json::Value func;
+            func["name"] = tc.name;
+            func["arguments"] = tc.arguments;
+            call["function"] = func;
+            
+            toolCallsJson.append(call);
+        }
+        outputItem["tool_calls"] = toolCallsJson;
+    }
     
-    Json::Value outputItemDoneEvent;
-    outputItemDoneEvent["response_id"] = responseId_;
+    // 发送 response.output_item.done（OpenAI Responses streaming 事件）
+    Json::Value outputItemDoneEvent(Json::objectValue);
+    outputItemDoneEvent["type"] = "response.output_item.done";
+    outputItemDoneEvent["sequence_number"] = sequenceNumber_++;
     outputItemDoneEvent["output_index"] = outputItemIndex_;
     outputItemDoneEvent["item"] = outputItem;
-    sendSseEvent("response.output_item.done", Json::writeString(writer, outputItemDoneEvent));
-}
-
-void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
+    sendSseEvent("response.output_item.done", outputItemDoneEvent);
+    
     // response.completed
     Json::Value responseObj = buildResponseObject("completed");
     
@@ -199,31 +247,18 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
     
     // 添加输出内容
     Json::Value output(Json::arrayValue);
-    Json::Value outputItem;
-    outputItem["type"] = "message";
-    outputItem["id"] = "msg_" + responseId_;
-    outputItem["status"] = "completed";
-    outputItem["role"] = "assistant";
-    
-    Json::Value content(Json::arrayValue);
-    Json::Value textContent;
-    textContent["type"] = "output_text";
-    textContent["text"] = outputText_;
-    content.append(textContent);
-    outputItem["content"] = content;
     output.append(outputItem);
     responseObj["output"] = output;
     
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    sendSseEvent("response.completed", Json::writeString(writer, responseObj));
+    Json::Value completedEvent(Json::objectValue);
+    completedEvent["type"] = "response.completed";
+    completedEvent["sequence_number"] = sequenceNumber_++;
+    completedEvent["response"] = responseObj;
+    sendSseEvent("response.completed", completedEvent);
 }
 
 void ResponsesSseSink::handleError(const generation::Error& event) {
     LOG_ERROR << "[响应SSE] 错误: " << event.message;
-    
-    // response.failed
-    Json::Value responseObj = buildResponseObject("failed");
     
     Json::Value error;
     error["type"] = generation::errorCodeToString(event.code);
@@ -232,25 +267,34 @@ void ResponsesSseSink::handleError(const generation::Error& event) {
     if (!event.detail.empty()) {
         error["detail"] = event.detail;
     }
-    responseObj["error"] = error;
-    
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    sendSseEvent("response.failed", Json::writeString(writer, responseObj));
+
+    Json::Value errorEvent(Json::objectValue);
+    errorEvent["type"] = "error";
+    errorEvent["sequence_number"] = sequenceNumber_++;
+    errorEvent["error"] = error;
+    sendSseEvent("error", errorEvent);
 }
 
 Json::Value ResponsesSseSink::buildResponseObject(const std::string& status) {
     Json::Value response;
     response["id"] = responseId_;
     response["object"] = "response";
-    response["created_at"] = static_cast<Json::Int64>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count()
-    );
+    response["created_at"] = static_cast<Json::Int64>(createdAt_);
     response["status"] = status;
     response["model"] = model_;
+    if (status == "completed") {
+        response["completed_at"] = static_cast<Json::Int64>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count()
+        );
+    } else {
+        response["completed_at"] = Json::nullValue;
+    }
+    response["error"] = Json::nullValue;
+    response["metadata"] = Json::Value(Json::objectValue);
     response["output"] = Json::Value(Json::arrayValue);
+    response["usage"] = Json::nullValue;
     
     return response;
 }

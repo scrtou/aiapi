@@ -46,10 +46,16 @@ struct session_st
   std::string systemprompt="";          // 系统提示词 (Chat: system role, Response: instructions)
   std::string requestmessage="";        // 当前用户输入的文本内容
   std::vector<ImageInfo> requestImages; // 当前请求中的图片列表
+  Json::Value tools;                    // 工具定义列表
+  Json::Value tools_raw;                // 原始工具定义（用于 tool bridge 兜底）
+  std::string toolChoice;               // 工具选择策略
+  bool supportsToolCalls = true;        // 渠道是否支持工具调用
   Json::Value responsemessage;          // AI 响应内容 (消息文本)
   Json::Value api_response_data;        // 完整的 API 响应数据 (Chat/Response 格式)
   Json::Value client_info;              // 客户端信息 (user-agent, authorization 等)
   Json::Value message_context=Json::Value(Json::arrayValue);  // 对话上下文消息数组
+  std::string requestmessage_raw="";    // 原始当前输入（注入 tool bridge 提示词前）
+  std::string tool_bridge_trigger="";   // tool bridge 本次请求触发标记（随机生成，用于只解析本次调用）
   time_t created_time=0;                // 会话创建时间
   time_t last_active_time=0;            // 最后活跃时间
   
@@ -128,6 +134,8 @@ public:
     void clearExpiredSession();
     void startClearExpiredSession();
     bool sessionIsExist(const std::string &ConversationId);
+    bool sessionIsExist(session_st &sessio);
+
     void coverSessionresponse(session_st& session);
     static std::string generateConversationKey(const Json::Value& keyData);
     static std::string generateSHA256(const std::string& input);
@@ -220,6 +228,10 @@ public:
     
     // 更新 Response API 会话（不删除旧 session，直接更新）
     void updateResponseSession(session_st& session);
+
+    // 更新/写入 Response API 的完整响应数据（用于 GET /responses/{id}）。
+    // 只更新 api_response_data，不覆盖 message_context 等上下文字段。
+    bool updateResponseApiData(const std::string& response_id, const Json::Value& apiData);
     
     /**
      * @brief [DEPRECATED] 从 HTTP 请求构建 session_st (Response API)

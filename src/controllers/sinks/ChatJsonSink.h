@@ -4,7 +4,9 @@
 #include <sessionManager/IResponseSink.h>
 #include <json/json.h>
 #include <functional>
+#include <optional>
 #include <string>
+#include <vector>
 
 /**
  * @brief Chat Completions JSON 输出 Sink
@@ -61,7 +63,9 @@ private:
     std::string model_;
     std::string completionId_;
     std::string collectedText_;
+    std::vector<generation::ToolCallDone> toolCalls_;
     std::string finishReason_ = "stop";
+    std::optional<generation::Usage> usage_;
     int statusCode_ = 200;
     bool hasError_ = false;
     std::string errorMessage_;

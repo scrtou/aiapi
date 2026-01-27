@@ -55,10 +55,53 @@ void chatSession::updateSession(const std::string &ConversationId,session_st &se
 
 void chatSession::updateExistingSessionFromRequest(const std::string& sessionId, session_st& session)
 {
-    session_map[sessionId].requestmessage = session.requestmessage;
-    session_map[sessionId].requestImages = session.requestImages;
-    session_map[sessionId].last_active_time = time(nullptr);
-    session = session_map[sessionId];
+    // IMPORTANT:
+    // When updating an existing session, we must merge *request-scoped* fields
+    // (model/system/tools/current input/client info) into the stored session.
+    // Otherwise fields like `tools` will be lost, and tool-bridge logic will
+    // never see the client-provided tool definitions on follow-up turns.
+    auto &stored = session_map[sessionId];
+
+    // Request-scoped fields (always take the latest request values)
+    stored.selectapi = session.selectapi;
+    stored.selectmodel = session.selectmodel;
+    if (!session.systemprompt.empty()) {
+        stored.systemprompt = session.systemprompt;
+    }
+    stored.client_info = session.client_info;
+    stored.requestmessage = session.requestmessage;
+    stored.requestmessage_raw = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
+    stored.requestImages = session.requestImages;
+    if (!session.tools.isNull() && session.tools.isArray() && session.tools.size() > 0) {
+        stored.tools = session.tools;
+        stored.tools_raw = session.tools;  // 更新原始工具定义
+    } else if (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0) {
+        // 如果本次请求未携带 tools，保留旧的 tools_raw（用于 tool bridge 兜底）
+        stored.tools_raw = session.tools_raw;
+    }
+    if (!session.toolChoice.empty()) {
+        stored.toolChoice = session.toolChoice;
+    }
+
+    // Keep protocol flags in sync (mainly for Response API reuse of this helper)
+    // IMPORTANT: for Response API follow-ups, `session.response_id` is per-request (new response id),
+    // while `stored.response_id` should remain stable and match the session_map key (the previous response id).
+    // So we MUST NOT overwrite stored.response_id here.
+    const std::string incomingResponseId = session.response_id;
+    stored.is_response_api = session.is_response_api;
+    stored.has_previous_response_id = session.has_previous_response_id;
+    if (stored.response_id.empty() && !incomingResponseId.empty()) {
+        // only initialize if missing; do not mutate existing key semantics
+        stored.response_id = incomingResponseId;
+    }
+
+    stored.last_active_time = time(nullptr);
+
+    // Return the merged session state to caller
+    session = stored;
+    if (!incomingResponseId.empty()) {
+        session.response_id = incomingResponseId;
+    }
 }
 
 void chatSession::initializeNewSession(const std::string& sessionId, session_st& session)
@@ -133,7 +176,7 @@ session_st& chatSession::createOrUpdateSessionByPreviousResponseId(session_st& s
     
     std::string prevId = session.curConversationId;
     
-    if (!prevId.empty() && sessionIsExist(prevId)) {
+    if (!prevId.empty() && sessionIsExist(session)) {
         // 会话存在，更新并延续上下文
         LOG_INFO << "[Previous Response ID] 延续已存在会话: " << prevId;
         updateExistingSessionFromRequest(prevId, session);
@@ -217,19 +260,24 @@ void chatSession::coverSessionresponse(session_st& session)
 {
     Json::Value assistantresponse;
     assistantresponse["role"]="user";
-    assistantresponse["content"]=session.requestmessage;
+    assistantresponse["content"]=session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
     session.addMessageToContext(assistantresponse);
     assistantresponse["role"]="assistant";
     assistantresponse["content"]=session.responsemessage["message"].asString();
     session.addMessageToContext(assistantresponse);
     session.last_active_time=time(nullptr);
+
+    // These are per-request transient fields. Persisting them in session_map is wasteful,
+    // especially for tool-calling clients where the "current input" can be huge.
+    session.requestmessage.clear();
+    session.requestmessage_raw.clear();
+    session.responsemessage.clear();
+    session.tool_bridge_trigger.clear();
     
     // 零宽字符模式：会话ID保持不变，只更新session内容
     if (isZeroWidthMode()) {
         LOG_INFO << "[ZeroWidth] 更新会话内容，会话ID保持不变: " << session.curConversationId;
         updateSession(session.curConversationId, session);
-        session.requestmessage.clear();
-        session.responsemessage.clear();
         return;
     }
     
@@ -258,8 +306,6 @@ void chatSession::coverSessionresponse(session_st& session)
         context_map[tempConversationId]=session.curConversationId;
         updateSession(session.curConversationId,session);
     }
-    session.requestmessage.clear();
-    session.responsemessage.clear();
 }
 std::string chatSession::generateSHA256(const std::string& input) {
     //计算sha256的耗时
@@ -495,7 +541,27 @@ void chatSession::startClearExpiredSession()
 
 bool chatSession::sessionIsExist(const std::string &ConversationId)
 {
-    return session_map.find(ConversationId) != session_map.end();
+    //查到并且model也一样
+    auto it=session_map.find(ConversationId);
+    if(it!=session_map.end())
+    {
+            return true;
+    }
+    return false;
+}
+bool chatSession::sessionIsExist(session_st &session)
+{
+    //查到并且model也一样
+    auto it=session_map.find(session.curConversationId);
+    if(it!=session_map.end())
+    {
+        if(it->second.selectmodel==session.selectmodel&&it->second.selectapi==session.selectapi)
+        {
+            return true;
+        }
+    }
+    return false;
+
 }
 
 // ========== 图片解析辅助方法实现 (Chat API 和 Response API 共用) ==========
@@ -838,22 +904,54 @@ void chatSession::updateResponseSession(session_st& session)
     // 更新上下文
     Json::Value userMsg;
     userMsg["role"] = "user";
-    userMsg["content"] = session.requestmessage;
+    userMsg["content"] = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
     session.addMessageToContext(userMsg);
     
     Json::Value assistantMsg;
     assistantMsg["role"] = "assistant";
     assistantMsg["content"] = session.responsemessage["message"].asString();
     session.addMessageToContext(assistantMsg);
-    
+
+    // 清理临时数据（避免把超大输入/输出持久化到 session_map）
+    session.requestmessage.clear();
+    session.requestmessage_raw.clear();
+    session.responsemessage.clear();
+    session.tool_bridge_trigger.clear();
+
     // 直接更新，不改变键
     session_map[session.response_id] = session;
     
-    // 清理临时数据
-    session.requestmessage.clear();
-    session.responsemessage.clear();
-    
     LOG_INFO << "[Response API] 更新会话, response_id: " << session.response_id;
+}
+
+bool chatSession::updateResponseApiData(const std::string& response_id, const Json::Value& apiData)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (response_id.empty()) {
+        LOG_WARN << "[Response API] updateResponseApiData: response_id is empty";
+        return false;
+    }
+
+    auto it = session_map.find(response_id);
+    if (it == session_map.end()) {
+        LOG_WARN << "[Response API] updateResponseApiData: response_id not found: " << response_id
+                 << ", creating minimal session";
+
+        session_st s;
+        s.response_id = response_id;
+        s.curConversationId = response_id;
+        s.is_response_api = true;
+        s.created_time = time(nullptr);
+        s.last_active_time = time(nullptr);
+        s.api_response_data = apiData;
+        session_map[response_id] = std::move(s);
+        return false;
+    }
+
+    it->second.api_response_data = apiData;
+    it->second.last_active_time = time(nullptr);
+    return true;
 }
 
 session_st chatSession::gennerateSessionstByResponseReq(const HttpRequestPtr &req)
@@ -943,7 +1041,7 @@ session_st& chatSession::createOrUpdateSessionZeroWidth(session_st& session)
     // 这里检查 curConversationId 是否已设置
     std::string extractedSessionId = session.curConversationId;
     
-    if (!extractedSessionId.empty() && sessionIsExist(extractedSessionId))
+    if (!extractedSessionId.empty() && sessionIsExist(session))
     {
         // 找到了有效的会话ID，更新现有会话
         LOG_INFO << "[ZeroWidth] 使用已提取的会话ID: " << extractedSessionId;

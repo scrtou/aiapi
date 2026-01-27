@@ -32,11 +32,24 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
                 collectedText_ = arg.text;
             }
         }
+        else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
+            toolCalls_.push_back(arg);
+        }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            // 可以存储 usage 信息供后续使用
+            // 存储 usage 信息（供 Chat Completions 的 usage 字段使用）
+            usage_ = arg;
+            if (usage_->totalTokens == 0) {
+                usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
+            }
         }
         else if constexpr (std::is_same_v<T, generation::Completed>) {
             finishReason_ = arg.finishReason.empty() ? "stop" : arg.finishReason;
+            if (arg.usage.has_value()) {
+                usage_ = arg.usage;
+                if (usage_->totalTokens == 0) {
+                    usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
+                }
+            }
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
             hasError_ = true;
@@ -80,13 +93,58 @@ Json::Value ChatJsonSink::buildResponse() {
         ).count()
     );
     response["model"] = model_;
+
+    // Chat Completions usage（简单实现：优先使用 Session/Provider 上报的 usage；没有则返回 0）
+    {
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
+        if (usage_.has_value()) {
+            promptTokens = usage_->inputTokens;
+            completionTokens = usage_->outputTokens;
+            totalTokens = usage_->totalTokens;
+            if (totalTokens == 0) {
+                totalTokens = promptTokens + completionTokens;
+            }
+        }
+        Json::Value usageJson;
+        usageJson["prompt_tokens"] = promptTokens;
+        usageJson["completion_tokens"] = completionTokens;
+        usageJson["total_tokens"] = totalTokens;
+        response["usage"] = usageJson;
+    }
     
     Json::Value choice;
     choice["index"] = 0;
     
     Json::Value message;
     message["role"] = "assistant";
-    message["content"] = collectedText_;
+    if (!toolCalls_.empty()) {
+        // OpenAI ChatCompletions: when tool_calls are present, content is usually null.
+        // Keep text only if we actually have remaining non-tool text.
+        if (collectedText_.empty()) {
+            message["content"] = Json::nullValue;
+        } else {
+            message["content"] = collectedText_;
+        }
+
+        Json::Value toolCallsJson(Json::arrayValue);
+        for (const auto& tc : toolCalls_) {
+            Json::Value call;
+            call["id"] = tc.id;
+            call["type"] = "function";
+
+            Json::Value func;
+            func["name"] = tc.name;
+            func["arguments"] = tc.arguments;
+            call["function"] = func;
+
+            toolCallsJson.append(call);
+        }
+        message["tool_calls"] = toolCallsJson;
+    } else {
+        message["content"] = collectedText_;
+    }
     
     choice["message"] = message;
     choice["finish_reason"] = finishReason_;

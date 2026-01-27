@@ -30,12 +30,15 @@ add_executable(${PROJECT_NAME}
     controllers/sinks/ChatSseSink.cpp
     controllers/sinks/ChatJsonSink.cpp
     controllers/sinks/ResponsesSseSink.cpp
+    controllers/sinks/ResponsesJsonSink.cpp
     dbManager/account/accountDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     sessionManager/Session.cpp
     sessionManager/ClientOutputSanitizer.cpp
     sessionManager/GenerationService.cpp
     sessionManager/RequestAdapters.cpp
+    sessionManager/ToolCallBridge.cpp
+    sessionManager/XmlTagToolCallCodec.cpp
     tools/ZeroWidthEncoder.cpp
 )
 

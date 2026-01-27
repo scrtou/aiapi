@@ -8,6 +8,13 @@
 #include <accountManager/accountManager.h>
 using namespace drogon;
 
+// 数据库类型枚举
+enum class DbType {
+    PostgreSQL,
+    SQLite3,
+    MySQL
+};
+
 class AccountDbManager
 {
     public:
@@ -18,6 +25,7 @@ class AccountDbManager
         {
             instance = make_shared<AccountDbManager>();
             instance->dbClient = app().getDbClient("aichatpg");
+            instance->detectDbType();
         }
         return instance;
     }
@@ -32,8 +40,12 @@ class AccountDbManager
     void createTable();
     void checkAndUpgradeTable();
     list<Accountinfo_st> getAccountDBList();
+    DbType getDbType() const { return dbType; }
+    
     private:
+    void detectDbType();
     shared_ptr<drogon::orm::DbClient> dbClient;
+    DbType dbType = DbType::PostgreSQL;  // 默认为 PostgreSQL
     
 };
 

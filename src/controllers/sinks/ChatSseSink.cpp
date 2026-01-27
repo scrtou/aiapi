@@ -35,24 +35,49 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             std::string json = buildChunkJson(arg.delta, "", firstChunk_);
             sendSseEvent(json);
             firstChunk_ = false;
+            sentText_ = true;
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDone>) {
-            // 如果之前没有发送过增量，发送完整文本
-            if (firstChunk_) {
-                std::string json = buildChunkJson(arg.text, "", true);
+            // 如果之前没有发送过文本增量，发送完整文本
+            if (!sentText_ && !arg.text.empty()) {
+                std::string json = buildChunkJson(arg.text, "", firstChunk_);
                 sendSseEvent(json);
                 firstChunk_ = false;
+                sentText_ = true;
             }
         }
+        else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
+            // 发送 tool_calls delta
+            std::string json = buildToolCallChunkJson(arg, "", firstChunk_);
+            sendSseEvent(json);
+            firstChunk_ = false;
+        }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[聊天SSE] 令牌用量: 输入=" << arg.inputTokens 
-                     << ", 输出=" << arg.outputTokens;
-            // 可以选择在这里发送 usage 信息
+            LOG_DEBUG << "[聊天SSE] 令牌用量: 输入=" << arg.inputTokens
+                      << ", 输出=" << arg.outputTokens;
+            usage_ = arg;
+            if (usage_->totalTokens == 0) {
+                usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
+            }
         }
         else if constexpr (std::is_same_v<T, generation::Completed>) {
+            // Completed 可能携带 usage（优先使用 Completed 的 usage）
+            if (arg.usage.has_value()) {
+                usage_ = arg.usage;
+                if (usage_->totalTokens == 0) {
+                    usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
+                }
+            }
+
             // 发送带有 finish_reason 的最后一个 chunk
             std::string json = buildChunkJson("", arg.finishReason.empty() ? "stop" : arg.finishReason, false);
             sendSseEvent(json);
+
+            // 发送 usage chunk（非标准 OpenAI chunk，但满足“流式返回 usage”的需求）
+            if (usage_.has_value()) {
+                sendSseEvent(buildUsageChunkJson(*usage_));
+            }
+
             sendDone();
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
@@ -143,6 +168,89 @@ std::string ChatSseSink::buildChunkJson(
     chunk["choices"] = Json::Value(Json::arrayValue);
     chunk["choices"].append(choice);
     
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    return Json::writeString(writer, chunk);
+}
+
+std::string ChatSseSink::buildToolCallChunkJson(
+    const generation::ToolCallDone& toolCall,
+    const std::string& finishReason,
+    bool includeRole
+) {
+    Json::Value chunk;
+    chunk["id"] = completionId_;
+    chunk["object"] = "chat.completion.chunk";
+    chunk["created"] = static_cast<Json::Int64>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    chunk["model"] = model_;
+
+    Json::Value choice;
+    choice["index"] = 0;
+
+    Json::Value deltaJson;
+    if (includeRole) {
+        deltaJson["role"] = "assistant";
+    }
+
+    Json::Value toolCallsJson(Json::arrayValue);
+    Json::Value call;
+    call["index"] = toolCall.index;
+    call["id"] = toolCall.id;
+    call["type"] = "function";
+
+    Json::Value func;
+    func["name"] = toolCall.name;
+    func["arguments"] = toolCall.arguments;
+    call["function"] = func;
+
+    toolCallsJson.append(call);
+    deltaJson["tool_calls"] = toolCallsJson;
+
+    choice["delta"] = deltaJson;
+
+    if (!finishReason.empty()) {
+        choice["finish_reason"] = finishReason;
+    } else {
+        choice["finish_reason"] = Json::nullValue;
+    }
+
+    chunk["choices"] = Json::Value(Json::arrayValue);
+    chunk["choices"].append(choice);
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    return Json::writeString(writer, chunk);
+}
+
+std::string ChatSseSink::buildUsageChunkJson(const generation::Usage& usage) {
+    Json::Value chunk;
+    chunk["id"] = completionId_;
+    chunk["object"] = "chat.completion.chunk";
+    chunk["created"] = static_cast<Json::Int64>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    chunk["model"] = model_;
+
+    // 非标准：为了兼容“流式返回 usage”，这里 choices 发送空数组
+    chunk["choices"] = Json::Value(Json::arrayValue);
+
+    int total = usage.totalTokens;
+    if (total == 0) {
+        total = usage.inputTokens + usage.outputTokens;
+    }
+
+    Json::Value usageJson;
+    usageJson["prompt_tokens"] = usage.inputTokens;
+    usageJson["completion_tokens"] = usage.outputTokens;
+    usageJson["total_tokens"] = total;
+    chunk["usage"] = usageJson;
+
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
     return Json::writeString(writer, chunk);

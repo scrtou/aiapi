@@ -25,6 +25,23 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     genReq.stream = reqBody.get("stream", false).asBool();
     genReq.provider = "chaynsapi";  // 默认 provider
     
+    // 1.1 提取 tools 定义
+    if (reqBody.isMember("tools") && reqBody["tools"].isArray()) {
+        genReq.tools = reqBody["tools"];
+        LOG_INFO << "[RequestAdapters] Chat API 请求包含 " << genReq.tools.size() << " 个工具定义";
+    }
+    
+    // 1.2 提取 tool_choice
+    if (reqBody.isMember("tool_choice")) {
+        if (reqBody["tool_choice"].isString()) {
+            genReq.toolChoice = reqBody["tool_choice"].asString();
+        } else if (reqBody["tool_choice"].isObject()) {
+            Json::StreamWriterBuilder writer;
+            writer["indentation"] = "";
+            genReq.toolChoice = Json::writeString(writer, reqBody["tool_choice"]);
+        }
+    }
+    
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(req);
     
@@ -80,6 +97,23 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     genReq.stream = reqBody.get("stream", false).asBool();
     genReq.systemPrompt = reqBody.get("instructions", "").asString();
     genReq.provider = "chaynsapi";  // 默认 provider
+    
+    // 1.1 提取 tools 定义
+    if (reqBody.isMember("tools") && reqBody["tools"].isArray()) {
+        genReq.tools = reqBody["tools"];
+        LOG_INFO << "[RequestAdapters] Responses API 请求包含 " << genReq.tools.size() << " 个工具定义";
+    }
+    
+    // 1.2 提取 tool_choice
+    if (reqBody.isMember("tool_choice")) {
+        if (reqBody["tool_choice"].isString()) {
+            genReq.toolChoice = reqBody["tool_choice"].asString();
+        } else if (reqBody["tool_choice"].isObject()) {
+            Json::StreamWriterBuilder writer;
+            writer["indentation"] = "";
+            genReq.toolChoice = Json::writeString(writer, reqBody["tool_choice"]);
+        }
+    }
     
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(req);
@@ -233,6 +267,12 @@ void RequestAdapters::parseChatMessages(
                 message.role = MessageRole::User;
             } else if (role == "assistant") {
                 message.role = MessageRole::Assistant;
+            } else if (role == "tool") {
+                message.role = MessageRole::Tool;
+                // 提取 tool_call_id
+                if (msg.isMember("tool_call_id")) {
+                    message.toolCallId = msg["tool_call_id"].asString();
+                }
             } else {
                 continue;  // 跳过未知角色
             }
@@ -243,15 +283,27 @@ void RequestAdapters::parseChatMessages(
             part.text = text;
             message.content.push_back(part);
             
-            // 合并连续的相同角色消息
-            if (!result.empty() && result.back().role == message.role) {
+            // 提取 assistant 消息中的 tool_calls
+            if (role == "assistant" && msg.isMember("tool_calls") && msg["tool_calls"].isArray()) {
+                for (const auto& tc : msg["tool_calls"]) {
+                    message.toolCalls.push_back(tc);
+                }
+            }
+            
+            // 合并连续的相同角色消息（但不合并带 tool_calls 的消息）
+            if (!result.empty() && result.back().role == message.role &&
+                message.toolCalls.empty() && result.back().toolCalls.empty() &&
+                message.role != MessageRole::Tool) {
                 result.back().content[0].text += text;
             } else {
                 result.push_back(message);
             }
         } else {
-            // 当前输入：只处理 user 消息
-            if (role == "user") {
+            // 当前输入：
+            // - 标准 ChatCompletions: 最后由 user 消息作为当前输入
+            // - Kilo-Code 等 tool-calling 客户端：可能以 role=tool 发送最新的 tool 结果/feedback
+            //   作为本轮模型需要处理的“当前输入”，因此这里也要接收 tool 消息。
+            if (role == "user" || role == "tool") {
                 currentInput += extractContentText(msg["content"], images, isZeroWidthMode);
             }
         }

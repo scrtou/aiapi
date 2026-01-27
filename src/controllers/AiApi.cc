@@ -19,12 +19,16 @@
 #include <sessionManager/RequestAdapters.h>
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ChatJsonSink.h>
+#include <controllers/sinks/ResponsesSseSink.h>
+#include <controllers/sinks/ResponsesJsonSink.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
 #include <vector> // 添加 vector 头文件
 #include <ctime>
+#include <optional>
 #include <iomanip>
 #include <sstream>
+#include <cstring>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -151,173 +155,77 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
         return;
     }
     
-    // 获取响应内容
-    std::string message;
-    int statusCode = 200;
-    
+    // Stream via ChatSseSink so tool_calls can be forwarded correctly.
     if (collector.hasError()) {
         auto error = collector.getError();
-        statusCode = 400;
-        message = error->message;
-        LOG_ERROR << "GenerationService 返回错误: " << error->message;
-    } else {
-        message = collector.getFinalText();
-        // 注意: 清洗已在 GenerationService::emitResultEvents() 中完成，此处不再重复调用
+        Json::Value errorJson;
+        errorJson["error"]["message"] = error ? error->message : "Provider error";
+        errorJson["error"]["type"] = error ? generation::errorCodeToString(error->code) : "provider_error";
+        errorJson["error"]["code"] = errorJson["error"]["type"];
+        auto errorResp = HttpResponse::newHttpJsonResponse(errorJson);
+        errorResp->setStatusCode(static_cast<HttpStatusCode>(
+            error ? generation::errorCodeToHttpStatus(error->code) : 500
+        ));
+        errorResp->setContentTypeString("application/json; charset=utf-8");
+        callback(errorResp);
+        return;
     }
-    LOG_INFO << "回复message长度:" << message.length();
 
-    HttpResponsePtr resp;
-    std::string oldConversationId = genReq.sessionKey;
-    
-    if (statusCode == 200)
-    {
-            {
-            LOG_INFO << "流式响应";
-            // 创建一个新的响应对象
-            // 创建一个持久的上下文对象
+    std::string ssePayload;
+    ChatSseSink sseSink(
+        [&ssePayload](const std::string& chunk) {
+            ssePayload += chunk;
+            return true;
+        },
+        []() {},
+        genReq.model
+    );
 
-            struct StreamContext {
-                    size_t pos = 0;
-                    bool sent_final_chunk = false;
-                    bool sent_done = false;
-                    std::string response_message;
-                    time_t start_time;
-                    bool first_chunk = true;
-                    StreamContext(const std::string& msg) :
-                    response_message(msg),
-                    start_time(time(nullptr)) {}
-                };
+    for (const auto& ev : collector.getEvents()) {
+        sseSink.onEvent(ev);
+    }
+    sseSink.onClose();
 
-            // 在lambda外创建上下文，并使用shared_ptr来共享
-            // 注意：这里使用的是经过处理（可能被清洗或包裹）后的 message
-            auto shared_context = std::make_shared<StreamContext>(message);
-            
-            resp = HttpResponse::newStreamResponse([shared_context, oldConversationId](char *buffer, size_t maxBytes) -> size_t {
-                try {
-                    if (shared_context->sent_done) {
-                        return 0;
-                    }
+    struct StreamContext {
+        size_t pos = 0;
+        time_t start_time = time(nullptr);
+        explicit StreamContext() = default;
+    };
 
-                    if (time(nullptr) - shared_context->start_time > 60) {
-                        LOG_WARN << "[API接口] 流式传输超时";
-                        return 0;
-                    }
+    auto shared_payload = std::make_shared<std::string>(std::move(ssePayload));
+    auto shared_context = std::make_shared<StreamContext>();
 
-                    // After all content is sent, send the final chunk, then [DONE]
-                    if (shared_context->pos >= shared_context->response_message.length()) {
-                        if (!shared_context->sent_final_chunk) {
-                            Json::Value data;
-                            data["id"] = "chatcmpl-" + oldConversationId.substr(0, 5) + "-" + std::to_string(time(nullptr));
-                            data["object"] = "chat.completion.chunk";
-                            data["created"] = static_cast<int>(time(nullptr));
-                            data["choices"][0]["index"] = 0;
-                            data["choices"][0]["delta"] = Json::objectValue;
-                            data["choices"][0]["finish_reason"] = "stop";
-
-                            Json::StreamWriterBuilder writer_builder;
-                            writer_builder["indentation"] = "";
-                            writer_builder["emitUTF8"] = true;
-                            std::string json_str = Json::writeString(writer_builder, data);
-                            
-                            std::string final_chunk_str = "data: " + json_str + "\n\n";
-                            size_t to_send = std::min(final_chunk_str.length(), maxBytes);
-                            memcpy(buffer, final_chunk_str.c_str(), to_send);
-                            shared_context->sent_final_chunk = true;
-                            return to_send;
-                        } else {
-                            const std::string done_message = "data: [DONE]\n\n";
-                            size_t done_size = std::min(done_message.length(), maxBytes);
-                            memcpy(buffer, done_message.c_str(), done_size);
-                            shared_context->sent_done = true;
-                            return done_size;
-                        }
-                    }
-
-                    // Calculate chunk size (UTF-8 safe)
-                    size_t chunk_size = 0;
-                    size_t remaining = shared_context->response_message.length() - shared_context->pos;
-                    size_t target_size = std::min(remaining, size_t(30)); // Increased chunk size
-                    
-                    while (chunk_size < target_size) {
-                        if (shared_context->pos + chunk_size >= shared_context->response_message.length()) break;
-                        unsigned char c = shared_context->response_message[shared_context->pos + chunk_size];
-                        int char_len = 0;
-                        if ((c & 0x80) == 0) char_len = 1;
-                        else if ((c & 0xE0) == 0xC0) char_len = 2;
-                        else if ((c & 0xF0) == 0xE0) char_len = 3;
-                        else if ((c & 0xF8) == 0xF0) char_len = 4;
-                        else { chunk_size++; continue; }
-
-                        if (chunk_size + char_len > target_size) break;
-                        chunk_size += char_len;
-                    }
-                    if (chunk_size == 0 && remaining > 0) chunk_size = remaining;
-
-
-                    // Construct SSE message
-                    Json::Value data;
-                    data["id"] = "chatcmpl-" + oldConversationId.substr(0, 5) + "-" + std::to_string(time(nullptr));
-                    data["object"] = "chat.completion.chunk";
-                    data["created"] = static_cast<int>(time(nullptr));
-                    data["choices"][0]["index"] = 0;
-
-                    if (shared_context->first_chunk) {
-                        data["choices"][0]["delta"]["role"] = "assistant";
-                        shared_context->first_chunk = false;
-                    }
-                    
-                    data["choices"][0]["delta"]["content"] = shared_context->response_message.substr(shared_context->pos, chunk_size);
-                    data["choices"][0]["finish_reason"] = Json::Value();
-
-                    Json::StreamWriterBuilder writer_builder;
-                    writer_builder["indentation"] = "";
-                    writer_builder["emitUTF8"] = true;
-                    std::string json_str = Json::writeString(writer_builder, data);
-                    
-                    std::string chunk_str = "data: " + json_str + "\n\n";
-                    size_t to_send = std::min(chunk_str.length(), maxBytes);
-                    memcpy(buffer, chunk_str.c_str(), to_send);
-                    
-                    shared_context->pos += chunk_size;
-                    LOG_DEBUG << "[API接口] 发送进度: " << shared_context->pos << "/" << shared_context->response_message.length();
-                    
-                    //std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                    
-                    return to_send;
-                    
-                } catch (const std::exception& e) {
-                    LOG_ERROR << "[API接口] 流式响应错误: " << e.what();
+    auto resp = HttpResponse::newStreamResponse(
+        [shared_payload, shared_context](char *buffer, size_t maxBytes) -> size_t {
+            try {
+                if (time(nullptr) - shared_context->start_time > 60) {
+                    LOG_WARN << "[API接口] 流式传输超时";
                     return 0;
                 }
-            });
-            
-            // 设置响应头
-            resp->setContentTypeString("text/event-stream; charset=utf-8");
-            resp->addHeader("Cache-Control", "no-cache");
-            resp->addHeader("Connection", "keep-alive");
-            resp->addHeader("X-Accel-Buffering", "no");
-            resp->addHeader("Keep-Alive", "timeout=60");
-            callback(resp);
-            
-            // 注意：会话更新和afterResponseProcess已在 GenerationService::runWithSessionGuarded() 中完成
-            // 不需要在这里重复调用
-            LOG_INFO << "流式响应发送完成";
+
+                if (shared_context->pos >= shared_payload->size()) {
+                    return 0;
+                }
+
+                size_t remaining = shared_payload->size() - shared_context->pos;
+                size_t to_send = std::min(remaining, maxBytes);
+                memcpy(buffer, shared_payload->data() + shared_context->pos, to_send);
+                shared_context->pos += to_send;
+                return to_send;
+            } catch (const std::exception& e) {
+                LOG_ERROR << "[API接口] 流式响应错误: " << e.what();
+                return 0;
+            }
         }
-    }
-    else
-    {   
-        // ... error handling ...
-        LOG_INFO << "非流式响应,错误码:"<<statusCode;
-            Json::Value response;
-        Json::Value error;
-        error["error"]["message"] = "Failed to get response from chaynsapi";
-        error["error"]["type"] = "invalid_request_error";
-        response["error"]=error;
-        resp = HttpResponse::newHttpJsonResponse(response);
-        resp->setStatusCode(k400BadRequest);
-        resp->setContentTypeString("application/json; charset=utf-8");
-        callback(resp);
-    }
+    );
+
+    resp->setContentTypeString("text/event-stream; charset=utf-8");
+    resp->addHeader("Cache-Control", "no-cache");
+    resp->addHeader("Connection", "keep-alive");
+    resp->addHeader("X-Accel-Buffering", "no");
+    resp->addHeader("Keep-Alive", "timeout=60");
+    callback(resp);
+    LOG_INFO << "流式响应发送完成";
 }
 void AiApi::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
@@ -572,6 +480,7 @@ void AiApi::channelAdd(const HttpRequestPtr &req, std::function<void(const HttpR
             channelInfo.priority = reqBody["priority"].empty() ? 0 : reqBody["priority"].asInt();
             channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
             channelInfo.accountCount = reqBody["accountcount"].empty() ? 0 : reqBody["accountcount"].asInt();
+            channelInfo.supportsToolCalls = reqBody["supports_tool_calls"].empty() ? false : reqBody["supports_tool_calls"].asBool();
             
             Json::Value responseItem;
             responseItem["channelname"] = channelInfo.channelName;
@@ -628,6 +537,7 @@ void AiApi::channelInfo(const HttpRequestPtr &req, std::function<void(const Http
             channelItem["createtime"] = channel.createTime;
             channelItem["updatetime"] = channel.updateTime;
             channelItem["accountcount"] = channel.accountCount;
+            channelItem["supports_tool_calls"] = channel.supportsToolCalls;
             response.append(channelItem);
         }
         
@@ -724,6 +634,7 @@ try {
         channelInfo.priority = reqBody["priority"].asInt();
         channelInfo.description = reqBody["description"].empty() ? "" : reqBody["description"].asString();
         channelInfo.accountCount = reqBody["accountcount"].asInt();
+        channelInfo.supportsToolCalls = reqBody["supports_tool_calls"].empty() ? false : reqBody["supports_tool_calls"].asBool();
 
 // 更新数据库
         if (ChannelManager::getInstance().updateChannel(channelInfo)) {
@@ -926,22 +837,84 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         return;
     }
     
-    std::string responseMessage;
-    std::string modelUsed;
-    std::string sessionId;
-    int statusCode = 200;
-    
-    // ========== 使用 GenerationService::runGuarded() 统一入口 ==========
-    LOG_INFO << "Responses API " << (stream ? "流式" : "非流式") << "请求 - 使用 GenerationService::runGuarded()";
-    
+    // ========== Responses API：与 Chat 完全对齐 ==========
+    // - stream=false: ResponsesJsonSink（一次性 JSON）
+    // - stream=true : ResponsesSseSink（SSE）
+
+    // 预先生成 responseId，确保 Controller / GenerationService / Session 存储一致
+    std::string responseId = chatSession::generateResponseId();
+    genReq.responseId = responseId;
+
+    // ========== 非流式：ResponsesJsonSink ==========
+    if (!stream) {
+        LOG_INFO << "Responses API 非流式请求 - 使用 GenerationService::runGuarded() + ResponsesJsonSink";
+
+        HttpResponsePtr jsonResp;
+        int httpStatus = 200;
+
+        ResponsesJsonSink jsonSink(
+            [&jsonResp, &httpStatus, &responseId](const Json::Value& builtResponse, int status) {
+                // 存储完整 response（保留 _internal_session_id）到已存在的 response_id 会话中
+                if (status == 200 && !builtResponse.isMember("error")) {
+                    chatSession::getInstance()->updateResponseApiData(responseId, builtResponse);
+                }
+
+                Json::Value publicResponse = builtResponse;
+                publicResponse.removeMember("_internal_session_id");
+
+                jsonResp = HttpResponse::newHttpJsonResponse(publicResponse);
+                httpStatus = status;
+            },
+            responseId,
+            genReq.model,
+            genReq.sessionKey,
+            static_cast<int>(genReq.currentInput.length() / 4)
+        );
+
+        GenerationService genService;
+        auto gateErr = genService.runGuarded(
+            genReq, jsonSink,
+            session::ConcurrencyPolicy::RejectConcurrent
+        );
+
+        if (gateErr.has_value()) {
+            Json::Value errorJson;
+            errorJson["error"]["message"] = gateErr->message;
+            errorJson["error"]["type"] = gateErr->type();
+            errorJson["error"]["code"] = "concurrent_request";
+            auto errorResp = HttpResponse::newHttpJsonResponse(errorJson);
+            errorResp->setStatusCode(static_cast<HttpStatusCode>(gateErr->httpStatus()));
+            callback(errorResp);
+            return;
+        }
+
+        if (jsonResp) {
+            jsonResp->setStatusCode(static_cast<HttpStatusCode>(httpStatus));
+            jsonResp->setContentTypeString("application/json; charset=utf-8");
+            callback(jsonResp);
+        } else {
+            Json::Value error;
+            error["error"]["message"] = "Failed to generate response";
+            error["error"]["type"] = "internal_error";
+            auto errorResp = HttpResponse::newHttpJsonResponse(error);
+            errorResp->setStatusCode(k500InternalServerError);
+            callback(errorResp);
+        }
+
+        LOG_INFO << "[API接口] 创建响应完成, 响应ID: " << responseId;
+        return;
+    }
+
+    // ========== 流式：CollectorSink + ResponsesSseSink ==========
+    LOG_INFO << "Responses API 流式请求 - 使用 GenerationService::runGuarded() + ResponsesSseSink";
+
     CollectorSink collector;
     GenerationService genService;
     auto gateErr = genService.runGuarded(
         genReq, collector,
         session::ConcurrencyPolicy::RejectConcurrent
     );
-    
-    // 检查是否有并发冲突错误
+
     if (gateErr.has_value()) {
         Json::Value errorJson;
         errorJson["error"]["message"] = gateErr->message;
@@ -952,8 +925,7 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         callback(errorResp);
         return;
     }
-    
-    // 检查是否有错误
+
     if (collector.hasError()) {
         auto error = collector.getError();
         Json::Value errorResp;
@@ -964,364 +936,123 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         callback(resp);
         return;
     }
-    
-    // 从 CollectorSink 获取最终文本
-    responseMessage = collector.getFinalText();
-    modelUsed = genReq.model;
-    sessionId = genReq.sessionKey;
-    
-    // 构建 Responses API 格式的响应
-    std::string responseId = chatSession::generateResponseId();
-    int64_t createdAt = static_cast<int64_t>(time(nullptr));
-    
+
+    // 组装一份 JSON 响应用于 Session 存储（对外不直接返回它；对外返回 SSE）
+    std::string responseMessage = collector.getFinalText();
+    std::string modelUsed = genReq.model;
+    std::string sessionId = genReq.sessionKey;
+
     Json::Value response;
     response["id"] = responseId;
     response["object"] = "response";
-    response["created_at"] = createdAt;
+    response["created_at"] = static_cast<Json::Int64>(time(nullptr));
     response["model"] = modelUsed;
     response["status"] = "completed";
-    
-    // 构建 output 数组
+
     Json::Value outputArray(Json::arrayValue);
-    
-    // 添加 message 输出项
     Json::Value messageOutput;
     messageOutput["type"] = "message";
-    messageOutput["id"] = "msg_" + responseId.substr(5);
+    messageOutput["id"] = "msg_" + responseId;
     messageOutput["status"] = "completed";
     messageOutput["role"] = "assistant";
-    
-    // 添加 content 数组
+
     Json::Value contentArray(Json::arrayValue);
-    Json::Value textContent;
-    textContent["type"] = "output_text";
-    textContent["text"] = responseMessage;
-    contentArray.append(textContent);
+    if (!responseMessage.empty()) {
+        Json::Value textContent;
+        textContent["type"] = "output_text";
+        textContent["text"] = responseMessage;
+        contentArray.append(textContent);
+    }
     messageOutput["content"] = contentArray;
-    
+
     outputArray.append(messageOutput);
     response["output"] = outputArray;
-    
-    // 添加 usage 信息 (估算)
+
+    // usage：优先从 Completed 事件获取，否则估算
+    std::optional<generation::Usage> usageOpt;
+    for (const auto& ev : collector.getEvents()) {
+        if (std::holds_alternative<generation::Completed>(ev)) {
+            const auto& c = std::get<generation::Completed>(ev);
+            if (c.usage.has_value()) {
+                usageOpt = *c.usage;
+            }
+        }
+    }
+
     Json::Value usage;
-    usage["input_tokens"] = static_cast<int>(genReq.currentInput.length() / 4);
-    usage["output_tokens"] = static_cast<int>(responseMessage.length() / 4);
-    usage["total_tokens"] = usage["input_tokens"].asInt() + usage["output_tokens"].asInt();
+    if (usageOpt.has_value()) {
+        usage["input_tokens"] = usageOpt->inputTokens;
+        usage["output_tokens"] = usageOpt->outputTokens;
+        usage["total_tokens"] = usageOpt->totalTokens;
+    } else {
+        usage["input_tokens"] = static_cast<int>(genReq.currentInput.length() / 4);
+        usage["output_tokens"] = static_cast<int>(responseMessage.length() / 4);
+        usage["total_tokens"] = usage["input_tokens"].asInt() + usage["output_tokens"].asInt();
+    }
     response["usage"] = usage;
-    
-    // 添加内部会话ID用于后续对话
+
     response["_internal_session_id"] = sessionId;
-    
-    // 存储响应到 Session 层
-    session_st responseSession;
-    responseSession.response_id = responseId;
-    responseSession.api_response_data = response;
-    responseSession.is_response_api = true;
-    responseSession.created_time = time(nullptr);
-    responseSession.last_active_time = time(nullptr);
-    chatSession::getInstance()->createResponseSession(responseSession);
-    
-    // 移除内部字段后返回
-    Json::Value publicResponse = response;
-    publicResponse.removeMember("_internal_session_id");
-    
-    // ======= stream 分支：替换你原来的整个 if (stream) { ... } 代码块即可 =======
-    if (stream) {
-        auto shared_response   = std::make_shared<std::string>(responseMessage);
-        auto shared_pos        = std::make_shared<size_t>(0);
-    
-        // phases:
-        // 0 created
-        // 1 in_progress
-        // 2 output_item.added
-        // 3 content_part.added
-        // 4 delta loop
-        // 5 output_text.done
-        // 6 content_part.done
-        // 7 output_item.done
-        // 8 response.completed
-        // 9 done
-        auto shared_phase      = std::make_shared<int>(0);
-    
-        auto shared_responseId = std::make_shared<std::string>(responseId);
-        auto shared_model      = std::make_shared<std::string>(modelUsed);
-        auto shared_msgId      = std::make_shared<std::string>("msg_" + responseId.substr(5));
-        auto shared_seqNum     = std::make_shared<int>(0);
-    
-        auto shared_usage = std::make_shared<Json::Value>();
-        (*shared_usage)["input_tokens"]  = static_cast<int>(genReq.currentInput.length() / 4);
-        (*shared_usage)["output_tokens"] = static_cast<int>(responseMessage.length() / 4);
-        (*shared_usage)["total_tokens"]  = (*shared_usage)["input_tokens"].asInt() + (*shared_usage)["output_tokens"].asInt();
-    
-        auto shared_sendBuffer = std::make_shared<std::string>();
-        auto shared_sendPos    = std::make_shared<size_t>(0);
-    
-        auto resp = HttpResponse::newStreamResponse(
-            [shared_response, shared_pos, shared_phase,
-             shared_responseId, shared_model, shared_msgId,
-             shared_seqNum, shared_sendBuffer, shared_sendPos,
-             shared_usage, createdAt](char* buffer, size_t maxBytes) -> size_t {
-    
-                // 1) 先把上次没发完的 buffer 发完
-                if (*shared_sendPos < shared_sendBuffer->length()) {
-                    size_t remaining = shared_sendBuffer->length() - *shared_sendPos;
-                    size_t toSend = std::min(remaining, maxBytes);
-                    memcpy(buffer, shared_sendBuffer->c_str() + *shared_sendPos, toSend);
-                    *shared_sendPos += toSend;
-                    return toSend;
-                }
-    
-                Json::StreamWriterBuilder writer;
-                writer["indentation"] = "";
-                writer["emitUTF8"] = true;
-    
-                auto sse = [&](const std::string& eventName, const Json::Value& json) -> std::string {
-                    std::string data = Json::writeString(writer, json);
-                    return "event: " + eventName + "\n" + "data: " + data + "\n\n";
-                };
-    
-                std::string eventStr;
-    
-                // 2) 生成“下一条事件”（只生成一条，交给框架多次回调逐条发）
-                if (*shared_phase == 0) {
-                    Json::Value event;
-                    event["type"] = "response.created";
-                    event["sequence_number"] = (*shared_seqNum)++;
-    
-                    Json::Value respObj;
-                    respObj["id"] = *shared_responseId;
-                    respObj["object"] = "response";
-                    respObj["status"] = "in_progress";
-                    respObj["model"] = *shared_model;
-                    respObj["created_at"] = static_cast<int64_t>(createdAt);
-                    respObj["completed_at"] = Json::nullValue;
-                    respObj["error"] = Json::nullValue;
-                    respObj["metadata"] = Json::Value(Json::objectValue);
-                    respObj["output"] = Json::Value(Json::arrayValue);
-                    respObj["usage"] = Json::nullValue;
-    
-                    event["response"] = respObj;
-                    eventStr = sse("response.created", event);
-                    *shared_phase = 1;
-    
-                } else if (*shared_phase == 1) {
-                    Json::Value event;
-                    event["type"] = "response.in_progress";
-                    event["sequence_number"] = (*shared_seqNum)++;
-    
-                    Json::Value respObj;
-                    respObj["id"] = *shared_responseId;
-                    respObj["object"] = "response";
-                    respObj["status"] = "in_progress";
-                    respObj["model"] = *shared_model;
-                    respObj["created_at"] = static_cast<int64_t>(createdAt);
-                    respObj["completed_at"] = Json::nullValue;
-                    respObj["error"] = Json::nullValue;
-                    respObj["metadata"] = Json::Value(Json::objectValue);
-                    respObj["output"] = Json::Value(Json::arrayValue);
-                    respObj["usage"] = Json::nullValue;
-    
-                    event["response"] = respObj;
-                    eventStr = sse("response.in_progress", event);
-                    *shared_phase = 2;
-    
-                } else if (*shared_phase == 2) {
-                    Json::Value event;
-                    event["type"] = "response.output_item.added";
-                    event["sequence_number"] = (*shared_seqNum)++;
-                    event["output_index"] = 0;
-    
-                    Json::Value item;
-                    item["id"] = *shared_msgId;
-                    item["type"] = "message";
-                    item["status"] = "in_progress";
-                    item["role"] = "assistant";
-                    item["content"] = Json::Value(Json::arrayValue);
-    
-                    event["item"] = item;
-                    eventStr = sse("response.output_item.added", event);
-                    *shared_phase = 3;
-    
-                } else if (*shared_phase == 3) {
-                    Json::Value event;
-                    event["type"] = "response.content_part.added";
-                    event["sequence_number"] = (*shared_seqNum)++;
-                    event["item_id"] = *shared_msgId;
-                    event["output_index"] = 0;
-                    event["content_index"] = 0;
-    
-                    Json::Value part;
-                    part["type"] = "output_text";
-                    part["text"] = "";
-                    part["annotations"] = Json::Value(Json::arrayValue);
-    
-                    event["part"] = part;
-                    eventStr = sse("response.content_part.added", event);
-                    *shared_phase = 4;
-    
-                } else if (*shared_phase == 4) {
-                    // ====== 关键修复点：这里绝不能 return 0 来“等下一次” ======
-                    // 如果内容已经发完，则立刻进入 phase=5，让下一次回调发 done
-                    if (*shared_pos >= shared_response->length()) {
-                        *shared_phase = 5;
-                        // 这一次我们不结束流，而是发一个很小的“空 delta”也可以不发。
-                        // 为了严格按规范，这里直接构造 output_text.done（等下一次也行）。
-                        // 这里选择：本次就发 output_text.done，避免客户端因连接太快结束而漏事件。
-                        Json::Value event;
-                        event["type"] = "response.output_text.done";
-                        event["sequence_number"] = (*shared_seqNum)++;
-                        event["item_id"] = *shared_msgId;
-                        event["output_index"] = 0;
-                        event["content_index"] = 0;
-                        event["text"] = *shared_response;
-    
-                        eventStr = sse("response.output_text.done", event);
-                        *shared_phase = 6;
-                    } else {
-                        // 发 delta
-                        size_t remaining = shared_response->length() - *shared_pos;
-                        size_t targetSize = std::min(remaining, size_t(40));
-                        size_t chunkSize = 0;
-    
-                        while (chunkSize < targetSize) {
-                            if (*shared_pos + chunkSize >= shared_response->length()) break;
-                            unsigned char c = static_cast<unsigned char>((*shared_response)[*shared_pos + chunkSize]);
-                            int charLen = 1;
-                            if ((c & 0x80) == 0) charLen = 1;
-                            else if ((c & 0xE0) == 0xC0) charLen = 2;
-                            else if ((c & 0xF0) == 0xE0) charLen = 3;
-                            else if ((c & 0xF8) == 0xF0) charLen = 4;
-    
-                            if (chunkSize + static_cast<size_t>(charLen) > targetSize) break;
-                            chunkSize += static_cast<size_t>(charLen);
-                        }
-                        if (chunkSize == 0 && remaining > 0) chunkSize = remaining;
-    
-                        std::string chunk = shared_response->substr(*shared_pos, chunkSize);
-                        *shared_pos += chunkSize;
-    
-                        Json::Value event;
-                        event["type"] = "response.output_text.delta";
-                        event["sequence_number"] = (*shared_seqNum)++;
-                        event["item_id"] = *shared_msgId;
-                        event["output_index"] = 0;
-                        event["content_index"] = 0;
-                        event["delta"] = chunk;
-    
-                        eventStr = sse("response.output_text.delta", event);
-    
-                        // 如果这一段发完刚好结束，下次回调会进入上面的 done 分支
-                    }
-    
-                } else if (*shared_phase == 6) {
-                    Json::Value event;
-                    event["type"] = "response.content_part.done";
-                    event["sequence_number"] = (*shared_seqNum)++;
-                    event["item_id"] = *shared_msgId;
-                    event["output_index"] = 0;
-                    event["content_index"] = 0;
-    
-                    Json::Value part;
-                    part["type"] = "output_text";
-                    part["text"] = *shared_response;
-                    part["annotations"] = Json::Value(Json::arrayValue);
-    
-                    event["part"] = part;
-                    eventStr = sse("response.content_part.done", event);
-                    *shared_phase = 7;
-    
-                } else if (*shared_phase == 7) {
-                    Json::Value event;
-                    event["type"] = "response.output_item.done";
-                    event["sequence_number"] = (*shared_seqNum)++;
-                    event["output_index"] = 0;
-    
-                    Json::Value item;
-                    item["id"] = *shared_msgId;
-                    item["type"] = "message";
-                    item["status"] = "completed";
-                    item["role"] = "assistant";
-    
-                    Json::Value contentArr(Json::arrayValue);
-                    Json::Value content;
-                    content["type"] = "output_text";
-                    content["text"] = *shared_response;
-                    content["annotations"] = Json::Value(Json::arrayValue);
-                    contentArr.append(content);
-    
-                    item["content"] = contentArr;
-                    event["item"] = item;
-    
-                    eventStr = sse("response.output_item.done", event);
-                    *shared_phase = 8;
-    
-                } else if (*shared_phase == 8) {
-                    Json::Value event;
-                    event["type"] = "response.completed";
-                    event["sequence_number"] = (*shared_seqNum)++;
-    
-                    Json::Value respObj;
-                    respObj["id"] = *shared_responseId;
-                    respObj["object"] = "response";
-                    respObj["status"] = "completed";
-                    respObj["model"] = *shared_model;
-                    respObj["created_at"] = static_cast<int64_t>(createdAt);
-                    respObj["completed_at"] = static_cast<int64_t>(time(nullptr));
-                    respObj["error"] = Json::nullValue;
-                    respObj["metadata"] = Json::Value(Json::objectValue);
-    
-                    Json::Value outputArr(Json::arrayValue);
-                    Json::Value outputItem;
-                    outputItem["id"] = *shared_msgId;
-                    outputItem["type"] = "message";
-                    outputItem["status"] = "completed";
-                    outputItem["role"] = "assistant";
-    
-                    Json::Value contentArr(Json::arrayValue);
-                    Json::Value content;
-                    content["type"] = "output_text";
-                    content["text"] = *shared_response;
-                    content["annotations"] = Json::Value(Json::arrayValue);
-                    contentArr.append(content);
-    
-                    outputItem["content"] = contentArr;
-                    outputArr.append(outputItem);
-    
-                    respObj["output"] = outputArr;
-                    respObj["usage"] = *shared_usage;
-    
-                    event["response"] = respObj;
-                    eventStr = sse("response.completed", event);
-                    *shared_phase = 9;
-    
-                } else {
-                    // 只有这里才 return 0 结束流
+
+    // 存储完整 response（保留 _internal_session_id）到已存在的 response_id 会话中
+    chatSession::getInstance()->updateResponseApiData(responseId, response);
+
+    // SSE 输出
+    std::string ssePayload;
+
+    ResponsesSseSink sseSink(
+        [&ssePayload](const std::string& chunk) {
+            ssePayload += chunk;
+            return true;
+        },
+        []() {},
+        responseId,
+        modelUsed
+    );
+
+    for (const auto& ev : collector.getEvents()) {
+        sseSink.onEvent(ev);
+    }
+    sseSink.onClose();
+
+    struct StreamContext {
+        size_t pos = 0;
+        time_t start_time = time(nullptr);
+        explicit StreamContext() = default;
+    };
+
+    auto shared_payload = std::make_shared<std::string>(std::move(ssePayload));
+    auto shared_context = std::make_shared<StreamContext>();
+
+    auto resp = HttpResponse::newStreamResponse(
+        [shared_payload, shared_context](char *buffer, size_t maxBytes) -> size_t {
+            try {
+                if (time(nullptr) - shared_context->start_time > 60) {
+                    LOG_WARN << "[API接口] Responses SSE 流式传输超时";
                     return 0;
                 }
-    
-                // 3) 把事件塞进发送缓冲区
-                *shared_sendBuffer = eventStr;
-                *shared_sendPos = 0;
-    
-                // 4) 发出去
-                size_t toSend = std::min(shared_sendBuffer->length(), maxBytes);
-                memcpy(buffer, shared_sendBuffer->c_str(), toSend);
-                *shared_sendPos = toSend;
-                return toSend;
+
+                if (shared_context->pos >= shared_payload->size()) {
+                    return 0;
+                }
+
+                size_t remaining = shared_payload->size() - shared_context->pos;
+                size_t to_send = std::min(remaining, maxBytes);
+                memcpy(buffer, shared_payload->data() + shared_context->pos, to_send);
+                shared_context->pos += to_send;
+                return to_send;
+            } catch (const std::exception& e) {
+                LOG_ERROR << "[API接口] Responses SSE 流式响应错误: " << e.what();
+                return 0;
             }
-        );
-    
-        resp->setContentTypeString("text/event-stream; charset=utf-8");
-        resp->addHeader("Cache-Control", "no-cache");
-        resp->addHeader("Connection", "keep-alive");
-        resp->addHeader("X-Accel-Buffering", "no");
-        callback(resp);
-    } else {
-        auto resp = HttpResponse::newHttpJsonResponse(publicResponse);
-        resp->setStatusCode(k200OK);
-        resp->setContentTypeString("application/json; charset=utf-8");
-        callback(resp);
-    }
+        }
+    );
+
+    resp->setContentTypeString("text/event-stream; charset=utf-8");
+    resp->addHeader("Cache-Control", "no-cache");
+    resp->addHeader("Connection", "keep-alive");
+    resp->addHeader("X-Accel-Buffering", "no");
+    resp->addHeader("Keep-Alive", "timeout=60");
+    callback(resp);
     
     
     LOG_INFO << "[API接口] 创建响应完成, 响应ID: " << responseId;

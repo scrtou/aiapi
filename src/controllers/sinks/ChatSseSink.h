@@ -4,6 +4,7 @@
 #include <sessionManager/IResponseSink.h>
 #include <drogon/drogon.h>
 #include <functional>
+#include <optional>
 #include <string>
 
 using namespace drogon;
@@ -70,6 +71,20 @@ private:
         const std::string& finishReason = "",
         bool includeRole = false
     );
+
+    /**
+     * @brief 生成包含 usage 的 chunk 响应 JSON（choices 为空数组）
+     */
+    std::string buildUsageChunkJson(const generation::Usage& usage);
+
+    /**
+     * @brief 生成包含 tool_calls 的 chunk 响应 JSON
+     */
+    std::string buildToolCallChunkJson(
+        const generation::ToolCallDone& toolCall,
+        const std::string& finishReason = "",
+        bool includeRole = false
+    );
     
     /**
      * @brief 生成唯一的 completion ID
@@ -81,6 +96,8 @@ private:
     std::string model_;
     std::string completionId_;
     bool firstChunk_ = true;
+    bool sentText_ = false;
+    std::optional<generation::Usage> usage_;
     bool closed_ = false;
 };
 

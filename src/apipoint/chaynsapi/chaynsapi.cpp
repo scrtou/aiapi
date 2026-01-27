@@ -229,6 +229,7 @@ void chaynsapi::postChatMessage(session_st& session)
         // [修改点]: 获取 client_type 并根据具体值注入提醒
         string clientType = session.client_info.get("client_type", "").asString();
         
+        /*
         if (clientType == "Kilo-Code" ) {
             LOG_INFO << "为 " << clientType << " 客户端注入 System Reminder...";
             // 这是一个强力的 Reminder，包含所有可用工具的列表
@@ -244,8 +245,9 @@ void chaynsapi::postChatMessage(session_st& session)
 
             messageText += reminder;
         }
-
+        */
         messageBody["text"] = messageText;
+        LOG_DEBUG << "发送的消息" << messageText;
         messageBody["cursorPosition"] = messageText.size();
         
         // 添加图片数组 (如果有上传的图片)
@@ -301,6 +303,7 @@ void chaynsapi::postChatMessage(session_st& session)
         // =================================================
         LOG_INFO << "[chaynsAPI] 正在创建新线程: 注入系统提示词 (" << session.systemprompt.length() << " 字符)";
         string full_message;
+        
         if(!session.message_context.empty())
         {
             full_message=session.systemprompt + "\n""接下来，我会发给你openai接口格式的历史消息，：\n";
@@ -311,7 +314,8 @@ void chaynsapi::postChatMessage(session_st& session)
         {
             full_message =session.systemprompt +"\n"+ session.requestmessage;
         }
-
+        // NOTE: Do not overwrite `full_message` here. We intentionally include the
+        // system prompt (and optional history) when creating a new thread.
         
         Json::Value sendMessageRequest;
         Json::Value member1;
@@ -335,7 +339,8 @@ void chaynsapi::postChatMessage(session_st& session)
         
         Json::Value message;
         message["text"] = full_message;
-        
+        LOG_DEBUG<<"发送的消息"<<full_message;
+
         // 添加图片数组到消息 (如果有上传的图片)
         if (!uploadedImageUrls.empty()) {
             Json::Value imagesArray(Json::arrayValue);
@@ -452,6 +457,8 @@ void chaynsapi::postChatMessage(session_st& session)
                         }
                         response_statusCode = 200;
                         LOG_INFO << "[chaynsAPI] 轮询结束, 总计轮询 " << pollCount << " 次, 成功获取响应";
+                        LOG_DEBUG << "[chaynsAPI] 回复内容 " << response_message;
+
                         goto found;
                     }
                 }

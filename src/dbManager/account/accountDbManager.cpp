@@ -1,4 +1,5 @@
 #include "accountDbManager.h"
+#include <algorithm>  // for std::transform
 //pg create table
 std::string tableName = "account";
 std::string createTablePgSql = R"(
@@ -35,24 +36,93 @@ std::string createTableSqlMysql=R"(
     accounttype VARCHAR(50) DEFAULT 'free'
 ) ENGINE=InnoDB;)";
 
+std::string createTableSqlite3 = R"(
+    CREATE TABLE IF NOT EXISTS account (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+        createtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+        apiname TEXT,
+        username TEXT,
+        password TEXT,
+        authtoken TEXT,
+        usecount INTEGER,
+        tokenstatus INTEGER,
+        accountstatus INTEGER,
+        usertobitid INTEGER,
+        personid TEXT,
+        accounttype TEXT DEFAULT 'free'
+    );
+)";
+
+
+void AccountDbManager::detectDbType()
+{
+    // 从配置文件的 custom_config 读取数据库类型
+    auto customConfig = drogon::app().getCustomConfig();
+    std::string dbTypeStr = "postgresql";  // 默认值
+    
+    if (customConfig.isMember("dbtype")) {
+        dbTypeStr = customConfig["dbtype"].asString();
+    }
+    
+    // 转换为小写进行比较
+    std::transform(dbTypeStr.begin(), dbTypeStr.end(), dbTypeStr.begin(), ::tolower);
+    
+    if (dbTypeStr == "sqlite3" || dbTypeStr == "sqlite") {
+        dbType = DbType::SQLite3;
+        LOG_INFO << "[账户数据库] 配置的数据库类型: SQLite3";
+    } else if (dbTypeStr == "mysql" || dbTypeStr == "mariadb") {
+        dbType = DbType::MySQL;
+        LOG_INFO << "[账户数据库] 配置的数据库类型: MySQL";
+    } else {
+        dbType = DbType::PostgreSQL;
+        LOG_INFO << "[账户数据库] 配置的数据库类型: PostgreSQL";
+    }
+}
 
 void AccountDbManager::init()
 {
     LOG_INFO << "[账户数据库] 初始化开始";
     dbClient = app().getDbClient("aichatpg");
+    detectDbType();
     LOG_INFO << "[账户数据库] 初始化完成";
 }
 
 void AccountDbManager::checkAndUpgradeTable()
 {
-    // Check if accounttype column exists
-    std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
-    auto result = dbClient->execSqlSync(checkSql);
-    if(result.size() == 0)
+    bool hasAccountType = false;
+    
+    if (dbType == DbType::SQLite3)
+    {
+        // SQLite3: 使用 PRAGMA table_info
+        std::string checkSql = "PRAGMA table_info(account)";
+        auto result = dbClient->execSqlSync(checkSql);
+        for (const auto& row : result)
+        {
+            if (row["name"].as<std::string>() == "accounttype")
+            {
+                hasAccountType = true;
+                break;
+            }
+        }
+    }
+    else
+    {
+        // PostgreSQL/MySQL: 使用 information_schema
+        std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
+        auto result = dbClient->execSqlSync(checkSql);
+        hasAccountType = (result.size() > 0);
+    }
+    
+    if (!hasAccountType)
     {
         LOG_INFO << "[账户数据库] 表'account'中缺少列'accounttype', 正在添加...";
         try {
-            dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
+            if (dbType == DbType::SQLite3) {
+                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype TEXT DEFAULT 'free'");
+            } else {
+                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
+            }
             LOG_INFO << "[账户数据库] 列'accounttype'添加成功";
         } catch(const std::exception& e) {
             LOG_ERROR << "[账户数据库] 添加列'accounttype'失败: " << e.what();
@@ -139,25 +209,35 @@ list<Accountinfo_st> AccountDbManager::getAccountDBList()
 }
 bool AccountDbManager::isTableExist()
 {
-    auto result = dbClient->execSqlSync("select * from information_schema.tables where table_name='" + tableName + "'");
-    if(result.size()!=0)
+    if (dbType == DbType::SQLite3)
     {
-        return true;
+        // SQLite3: 使用 sqlite_master
+        auto result = dbClient->execSqlSync("SELECT name FROM sqlite_master WHERE type='table' AND name='" + tableName + "'");
+        return result.size() != 0;
     }
     else
     {
-        return false;
+        // PostgreSQL/MySQL: 使用 information_schema
+        auto result = dbClient->execSqlSync("SELECT table_name FROM information_schema.tables WHERE table_name='" + tableName + "'");
+        return result.size() != 0;
     }
 }
+
 void AccountDbManager::createTable()
 {
-    try 
+    try
     {
-        dbClient->execSqlSync(createTablePgSql);
+        if (dbType == DbType::SQLite3) {
+            dbClient->execSqlSync(createTableSqlite3);
+        } else if (dbType == DbType::MySQL) {
+            dbClient->execSqlSync(createTableSqlMysql);
+        } else {
+            dbClient->execSqlSync(createTablePgSql);
+        }
+        LOG_INFO << "[账户数据库] 账户表创建成功";
     }
     catch(const std::exception& e)
     {
         LOG_ERROR << "[账户数据库] 创建表错误: " << e.what();
     }
-    
 }

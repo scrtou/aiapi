@@ -47,12 +47,16 @@ struct ContentPart {
 
 /**
  * @brief 消息结构
- * 
+ *
  * 内部强类型消息表示
  */
 struct Message {
     MessageRole role = MessageRole::User;
     std::vector<ContentPart> content;
+    
+    // Tool call 相关字段
+    std::vector<Json::Value> toolCalls;  // assistant 消息中的 tool calls
+    std::string toolCallId;               // tool 消息对应的 tool call ID
     
     // 便捷构造函数
     static Message user(const std::string& text) {
@@ -122,6 +126,7 @@ struct GenerationRequest {
     // ========== 身份/上下文 ==========
     std::string sessionKey;         // 内部会话 key，不等同 response_id
     std::string previousKey;        // 可选，用于续聊/Responses 的 previous_response_id 映射
+    std::string responseId;         // [Responses] 服务器端生成的 response_id（可选，用于确保 Controller/Service 一致）
     Json::Value clientInfo;         // 后续可换成强类型
     
     // ========== 生成目标 ==========
@@ -133,6 +138,10 @@ struct GenerationRequest {
     std::vector<Message> messages;  // 内部强类型消息列表
     std::string currentInput;       // 当前用户输入（纯文本）
     std::vector<ImageInfo> images;  // 当前请求中的图片列表
+    
+    // ========== 工具调用 ==========
+    Json::Value tools;               // 工具定义列表
+    std::string toolChoice;          // 工具选择策略 (auto/none/required)
     
     // ========== 输出要求 ==========
     bool stream = false;            // 是否流式输出

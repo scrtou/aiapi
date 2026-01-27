@@ -7,6 +7,8 @@
 #include "Session.h"
 #include "SessionExecutionGate.h"
 #include "Errors.h"
+#include "ToolCallBridge.h"
+#include "XmlTagToolCallCodec.h"
 
 /**
  * @brief 生成服务
@@ -210,6 +212,41 @@ private:
      * @return 清洗后的文本
      */
     std::string sanitizeOutput(const Json::Value& clientInfo, const std::string& text);
+    
+    /**
+     * @brief 使用 ToolCallBridge 处理输出
+     *
+     * 当通道不支持 tool calls 时，使用 ToolCallBridge 解析文本中的工具调用
+     *
+     * @param text 原始文本
+     * @param supportsToolCalls 通道是否支持 tool calls
+     * @param session 会话状态
+     * @param sink 输出通道
+     */
+    void processOutputWithBridge(
+        const std::string& text,
+        bool supportsToolCalls,
+        const session_st& session,
+        IResponseSink& sink
+    );
+    
+    /**
+     * @brief 获取通道的 tool call 支持能力
+     *
+     * @param channelName 通道名称
+     * @return 是否支持 tool calls
+     */
+    static bool getChannelSupportsToolCalls(const std::string& channelName);
+    
+    /**
+     * @brief 为 ToolCallBridge 转换请求
+     *
+     * 当通道不支持 tool calls 时，将工具定义注入到 currentInput 前面
+     * 使用 XmlTagToolCallCodec::encodeToolDefinitions() 生成文本格式的工具定义
+     *
+     * @param session 会话状态（会被修改）
+     */
+    static void transformRequestForToolBridge(session_st& session);
 };
 
 #endif // GENERATION_SERVICE_H

@@ -51,6 +51,16 @@ struct OutputTextDone {
 };
 
 /**
+ * @brief 工具调用完成事件
+ */
+struct ToolCallDone {
+    std::string id;             // call_id
+    std::string name;           // function name
+    std::string arguments;      // function arguments (json)
+    int index = 0;              // tool call index
+};
+
+/**
  * @brief Token 使用量
  */
 struct Usage {
@@ -106,6 +116,7 @@ using GenerationEvent = std::variant<
     Started,
     OutputTextDelta,
     OutputTextDone,
+    ToolCallDone,
     Usage,
     Completed,
     Error
@@ -131,6 +142,7 @@ inline std::string getEventTypeName(const GenerationEvent& event) {
     if (std::holds_alternative<Started>(event)) return "Started";
     if (std::holds_alternative<OutputTextDelta>(event)) return "OutputTextDelta";
     if (std::holds_alternative<OutputTextDone>(event)) return "OutputTextDone";
+    if (std::holds_alternative<ToolCallDone>(event)) return "ToolCallDone";
     if (std::holds_alternative<Usage>(event)) return "Usage";
     if (std::holds_alternative<Completed>(event)) return "Completed";
     if (std::holds_alternative<Error>(event)) return "Error";

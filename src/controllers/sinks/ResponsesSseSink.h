@@ -5,6 +5,7 @@
 #include <drogon/drogon.h>
 #include <functional>
 #include <string>
+#include <vector>
 
 using namespace drogon;
 
@@ -14,11 +15,10 @@ using namespace drogon;
  * 将 GenerationEvent 转换为 OpenAI Responses API SSE 事件序列。
  * 
  * 事件序列映射：
- * - Started → response.created + response.in_progress + response.output_item.added + response.content_part.added
- * - OutputTextDelta → response.output_text.delta
- * - OutputTextDone → response.output_text.done + response.content_part.done + response.output_item.done
- * - Completed → response.completed
- * - Error → response.failed
+ * - Started → response.created + response.output_item.added
+ * - OutputTextDelta/Done → response.output_text.delta（必要时由 Done 拆分为多个 delta）
+ * - Completed → response.output_item.done + response.completed
+ * - Error → error
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 7.2 节
  */
@@ -57,6 +57,7 @@ private:
      * @param data 事件数据 (JSON 字符串)
      */
     void sendSseEvent(const std::string& eventType, const std::string& data);
+    void sendSseEvent(const std::string& eventType, const Json::Value& data);
     
     /**
      * @brief 处理 Started 事件
@@ -79,6 +80,11 @@ private:
     void handleCompleted(const generation::Completed& event);
     
     /**
+     * @brief 处理 ToolCallDone 事件
+     */
+    void handleToolCallDone(const generation::ToolCallDone& event);
+
+    /**
      * @brief 处理 Error 事件
      */
     void handleError(const generation::Error& event);
@@ -95,7 +101,11 @@ private:
     std::string responseId_;
     std::string model_;
     std::string outputText_;     // 累积的输出文本
+    std::vector<generation::ToolCallDone> toolCalls_; // 累积的工具调用
     int outputItemIndex_ = 0;   // 当前输出项索引
+    int64_t createdAt_ = 0;
+    int sequenceNumber_ = 0;
+    bool sawDelta_ = false;
     bool closed_ = false;
 };
 
