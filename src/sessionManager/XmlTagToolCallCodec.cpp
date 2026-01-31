@@ -609,23 +609,49 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
     events.push_back(std::move(evt));
 }
 
-void XmlTagToolCallCodec::flush(std::vector<ToolCallEvent>& events) {
-    // 刷新任何剩余的文本
-    if (!buffer_.empty()) {
-        emitTextEvent(buffer_, events);
-        buffer_.clear();
-    }
+// void XmlTagToolCallCodec::flush(std::vector<ToolCallEvent>& events) {
+//     // 刷新任何剩余的文本
+//     if (!buffer_.empty()) {
+//         emitTextEvent(buffer_, events);
+//         buffer_.clear();
+//     }
     
-    // 如果在解析中途，发送错误或不完整事件
-    if (state_ != XmlParserState::Text) {
-        ToolCallEvent evt;
-        evt.type = EventType::Error;
-        evt.errorMessage = "Incomplete tool call at end of stream";
-        events.push_back(std::move(evt));
-        state_ = XmlParserState::Text;
+//     // 如果在解析中途，发送错误或不完整事件
+//     if (state_ != XmlParserState::Text) {
+//         ToolCallEvent evt;
+//         evt.type = EventType::Error;
+//         evt.errorMessage = "Incomplete tool call at end of stream";
+//         events.push_back(std::move(evt));
+//         state_ = XmlParserState::Text;
+//     }
+// }
+static const char* stateName(XmlParserState s) {
+    switch (s) {
+      case XmlParserState::Text: return "Text";
+      case XmlParserState::InFunctionCalls: return "InFunctionCalls";
+      case XmlParserState::InFunctionCall: return "InFunctionCall";
+      case XmlParserState::InToolTag: return "InToolTag";
+      case XmlParserState::InArgsJson: return "InArgsJson";
+      case XmlParserState::InInvoke: return "InInvoke";
+      case XmlParserState::InParameter: return "InParameter";
+      default: return "Unknown";
     }
-}
-
+  }
+  
+  void XmlTagToolCallCodec::flush(std::vector<ToolCallEvent>& events) {
+      if (!buffer_.empty()) {
+          emitTextEvent(buffer_, events);
+          buffer_.clear();
+      }
+      if (state_ != XmlParserState::Text) {
+          ToolCallEvent evt;
+          evt.type = EventType::Error;
+          evt.errorMessage = std::string("Incomplete tool call at end of stream, state=") + stateName(state_);
+          events.push_back(std::move(evt));
+          state_ = XmlParserState::Text;
+      }
+  }
+  
 void XmlTagToolCallCodec::reset() {
     state_ = XmlParserState::Text;
     buffer_.clear();

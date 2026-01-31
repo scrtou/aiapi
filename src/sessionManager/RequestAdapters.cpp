@@ -22,6 +22,11 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     
     // 1. 提取基本参数
     genReq.model = reqBody.get("model", "").asString();
+    //一些模型映射
+    if(genReq.model=="CAI-CL045")
+    {
+        genReq.model="Claude Opus 4.5";
+    }
     genReq.stream = reqBody.get("stream", false).asBool();
     genReq.provider = "chaynsapi";  // 默认 provider
     
@@ -36,6 +41,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
         if (reqBody["tool_choice"].isString()) {
             genReq.toolChoice = reqBody["tool_choice"].asString();
         } else if (reqBody["tool_choice"].isObject()) {
+            //？
             Json::StreamWriterBuilder writer;
             writer["indentation"] = "";
             genReq.toolChoice = Json::writeString(writer, reqBody["tool_choice"]);

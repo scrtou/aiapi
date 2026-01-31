@@ -19,6 +19,173 @@ using namespace error;
 // ========== 共享 helper 实现 ==========
 
 namespace {
+
+// ========== 通用辅助函数 ==========
+
+std::string trimWhitespace(std::string s) {
+    const auto start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    const auto end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+
+std::string stripMarkdownCodeFence(std::string s) {
+    s = trimWhitespace(std::move(s));
+    if (s.rfind("```", 0) != 0) return s;
+    size_t firstNl = s.find('\n');
+    if (firstNl == std::string::npos) return s;
+    size_t lastFence = s.rfind("```");
+    if (lastFence == std::string::npos || lastFence <= firstNl) return s;
+    return trimWhitespace(s.substr(firstNl + 1, lastFence - (firstNl + 1)));
+}
+
+
+// Normalize whitespace that may break the XML tool-call bridge parser.
+// - NBSP (U+00A0) encoded as UTF-8: 0xC2 0xA0
+// - IDEOGRAPHIC SPACE (U+3000) encoded as UTF-8: 0xE3 0x80 0x80
+static void replaceAllBytes(std::string& s, const std::string& from, const std::string& to) {
+        if (from.empty()) return;
+        size_t pos = 0;
+        while ((pos = s.find(from, pos)) != std::string::npos) {
+            s.replace(pos, from.size(), to);
+            pos += to.size();
+        }
+    }
+    std::string normalizeBridgeXml(std::string s) {
+        // Normalize line endings
+        replaceAllBytes(s, "\r\n", "\n");
+        replaceAllBytes(s, "\r", "\n");
+    
+        // Normalize non-ASCII spaces that some UIs/models output (or templates accidentally contain)
+        replaceAllBytes(s, "\xC2\xA0", " ");       // NBSP
+        replaceAllBytes(s, "\xE3\x80\x80", " ");   // U+3000
+    
+        return s;
+}
+    
+
+// (removed) JSON tool-call parsing helper (bridge output is XML-only now)
+
+std::string toLowerStr(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// 安全地将 Json::Value 转换为字符串，处理非字符串类型
+std::string safeJsonAsString(const Json::Value& val, const std::string& defaultVal = "") {
+    if (val.isString()) {
+        return val.asString();
+    }
+    if (val.isNull()) {
+        return defaultVal;
+    }
+    // 对于其他类型（对象、数组、数字等），序列化为 JSON 字符串
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    return Json::writeString(writer, val);
+}
+
+std::string_view ltrimView(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
+    return std::string_view(s).substr(i);
+}
+
+bool startsWithStr(std::string_view s, std::string_view prefix) {
+    return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
+}
+
+size_t findFunctionCallsPos(std::string_view s) {
+    size_t p1 = s.find("<function_calls");
+    size_t p2 = s.find("<antml:function_calls");
+    if (p1 == std::string_view::npos) return p2;
+    if (p2 == std::string_view::npos) return p1;
+    return (p1 < p2) ? p1 : p2;
+}
+
+std::string extractXmlInputForToolCalls(const session_st& session, const std::string& rawText) {
+    // Avoid false positives:
+    // Some model outputs include <function_calls> blocks as examples inside normal text.
+    // Prefer parsing the Toolify-style trigger marker (<Function_..._Start/>) when present.
+    // Otherwise, only parse when the response *starts* with a tool marker.
+    std::string xmlCandidate = stripMarkdownCodeFence(rawText);
+    const std::string_view trimmed = ltrimView(xmlCandidate);
+
+    std::string xmlInput;
+
+    if (!session.tool_bridge_trigger.empty()) {
+        // Only parse tool calls belonging to this request when the trigger matches.
+        // However, upstream UIs/models occasionally echo an older trigger marker. If the
+        // response starts with a tool marker, still parse it to avoid dropping valid calls.
+        size_t triggerPos = xmlCandidate.rfind(session.tool_bridge_trigger);
+        if (triggerPos != std::string::npos) {
+            xmlInput = xmlCandidate.substr(triggerPos);
+
+            // Strip the Toolify trigger marker (<Function_..._Start/>) so the XML codec
+            // doesn't emit it as normal text before <function_calls>.
+            const std::string_view t2 = ltrimView(xmlInput);
+            if (startsWithStr(t2, "<Function_")) {
+                size_t fcPos = findFunctionCallsPos(t2);
+                if (fcPos != std::string_view::npos && fcPos <= 512) {
+                    xmlInput = std::string(t2.substr(fcPos));
+                }
+            }
+        } else {
+            const bool startsLikeToolCall =
+                startsWithStr(trimmed, "<function_calls") ||
+                startsWithStr(trimmed, "<antml:function_calls") ||
+                startsWithStr(trimmed, "<Function_");
+            if (startsLikeToolCall) {
+                if (startsWithStr(trimmed, "<Function_")) {
+                    // Require a real <function_calls> tag very early to reduce false positives.
+                    size_t fcPos = findFunctionCallsPos(trimmed);
+                    if (fcPos != std::string_view::npos && fcPos <= 512) {
+                        // Strip the trigger marker line, keep only the <function_calls> XML.
+                        xmlInput = std::string(trimmed.substr(fcPos));
+                        LOG_WARN << "[GenerationService] tool_bridge_trigger 不匹配，已从响应开头解析 tool call";
+                    }
+                } else {
+                    xmlInput = std::string(trimmed);
+                    LOG_WARN << "[GenerationService] tool_bridge_trigger 缺失，已从响应开头解析 tool call";
+                }
+            }
+        }
+    } else {
+        // Legacy fixed trigger fallback (backwards compatible).
+        size_t triggerPos = xmlCandidate.rfind("<Function_o2gx_Start/>");
+        if (triggerPos != std::string::npos) {
+            xmlInput = xmlCandidate.substr(triggerPos);
+
+            // Same as above: avoid leaking the trigger marker as normal text.
+            const std::string_view t2 = ltrimView(xmlInput);
+            if (startsWithStr(t2, "<Function_")) {
+                size_t fcPos = findFunctionCallsPos(t2);
+                if (fcPos != std::string_view::npos && fcPos <= 512) {
+                    xmlInput = std::string(t2.substr(fcPos));
+                }
+            }
+        } else {
+            const bool looksLikeToolCall =
+                startsWithStr(trimmed, "<function_calls") ||
+                startsWithStr(trimmed, "<antml:function_calls") ||
+                startsWithStr(trimmed, "<Function_");
+            if (looksLikeToolCall) {
+                if (startsWithStr(trimmed, "<Function_")) {
+                    // Strip the trigger marker and parse only the XML.
+                    size_t fcPos = findFunctionCallsPos(trimmed);
+                    if (fcPos != std::string_view::npos && fcPos <= 512) {
+                        xmlInput = std::string(trimmed.substr(fcPos));
+                    }
+                } else {
+                    xmlInput = std::string(trimmed);
+                }
+            }
+        }
+    }
+
+    return xmlInput;
+}
+
 std::string generateFallbackToolCallId() {
     // Keep the same "call_xxx" style as common tool call ids
     std::ostringstream oss;
@@ -206,7 +373,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         if (!executeProvider(session)) {
             emitError(
                 generation::ErrorCode::ProviderError,
-                session.responsemessage.get("error", "Provider error").asString(),
+                safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
                 sink
             );
             sink.onClose();
@@ -354,7 +521,7 @@ void GenerationService::runWithSession(session_st& session, IResponseSink& sink,
         if (!executeProvider(session)) {
             emitError(
                 generation::ErrorCode::ProviderError,
-                session.responsemessage.get("error", "Provider error").asString(),
+                safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
                 sink
             );
             sink.onClose();
@@ -418,7 +585,7 @@ void GenerationService::runChatFlow(
     if (!executeProvider(session)) {
         emitError(
             generation::ErrorCode::ProviderError,
-            session.responsemessage.get("error", "Provider error").asString(),
+            safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
             sink
         );
         return;
@@ -463,7 +630,7 @@ void GenerationService::runResponseFlow(
     if (!executeProvider(session)) {
         emitError(
             generation::ErrorCode::ProviderError,
-            session.responsemessage.get("error", "Provider error").asString(),
+            safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
             sink
         );
         return;
@@ -505,896 +672,73 @@ bool GenerationService::executeProvider(session_st& session) {
 
 void GenerationService::emitResultEvents(const session_st& session, IResponseSink& sink) {
     // 获取输出文本
-    std::string text = session.responsemessage.get("message", "").asString();
-    const std::string clientType = session.client_info.get("client_type", "").asString();
+    std::string text = safeJsonAsString(session.responsemessage.get("message", ""), "");
+    const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
     const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
-    
+
     // 1. 应用基础文本清洗（标签纠错、控制字符等）
     text = sanitizeOutput(session.client_info, text);
-    
-    // 2. 根据通道能力处理 tool calls（如果通道不支持，则使用 Bridge 解析）
-    bool supportsToolCalls = getChannelSupportsToolCalls(session.selectapi);
-    auto normalizeLower = [](std::string s) {
-        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    };
-    const bool toolChoiceNone = (normalizeLower(session.toolChoice) == "none");
 
-    // 将事件转换回文本或 ToolCall 事件
+    // 2. 根据通道能力处理 tool calls（如果通道不支持，则使用 Bridge 解析）
+    const bool supportsToolCalls = getChannelSupportsToolCalls(session.selectapi);
+    const bool toolChoiceNone = (toLowerStr(session.toolChoice) == "none");
+
     std::string textContent;
     std::vector<generation::ToolCallDone> toolCalls;
 
+    // Parsing policy (simplified):
+    // - When the channel supports native tool calls, we do NOT parse tool calls from text.
+    // - When tool_choice=none, treat everything as text.
+    // - Otherwise (bridge mode), we ONLY accept the Toolify-style XML bridge format.
+    //   (Single-format bridge keeps the parser predictable and reduces accidental parses.)
     if (supportsToolCalls || toolChoiceNone) {
         textContent = text;
     } else {
-        auto trimWs = [](std::string s) -> std::string {
-            const auto start = s.find_first_not_of(" \t\n\r");
-            if (start == std::string::npos) return "";
-            const auto end = s.find_last_not_of(" \t\n\r");
-            return s.substr(start, end - start + 1);
-        };
-
-        auto stripMarkdownCodeFence = [&](std::string s) -> std::string {
-            s = trimWs(std::move(s));
-            if (s.rfind("```", 0) != 0) {
-                return s;
-            }
-
-            // Find first newline after opening fence (``` or ```json)
-            size_t firstNl = s.find('\n');
-            if (firstNl == std::string::npos) {
-                return s;
-            }
-
-            // Find closing fence from the end
-            size_t lastFence = s.rfind("```");
-            if (lastFence == std::string::npos || lastFence <= firstNl) {
-                return s;
-            }
-
-            std::string inner = s.substr(firstNl + 1, lastFence - (firstNl + 1));
-            return trimWs(std::move(inner));
-        };
-
-        auto findJsonObjectEnd = [](const std::string& s) -> size_t {
-            // Find the end position (one past) of the first top-level JSON object.
-            // Returns npos if incomplete or not starting with '{'.
-            if (s.empty() || s[0] != '{') return std::string::npos;
-
-            bool inString = false;
-            bool escape = false;
-            int depth = 0;
-
-            for (size_t i = 0; i < s.size(); ++i) {
-                char c = s[i];
-
-                if (inString) {
-                    if (escape) {
-                        escape = false;
-                        continue;
-                    }
-                    if (c == '\\') {
-                        escape = true;
-                        continue;
-                    }
-                    if (c == '"') {
-                        inString = false;
-                    }
-                    continue;
-                }
-
-                if (c == '"') {
-                    inString = true;
-                    continue;
-                }
-
-                if (c == '{') {
-                    depth++;
-                } else if (c == '}') {
-                    depth--;
-                    if (depth == 0) {
-                        return i + 1;
-                    }
-                }
-            }
-
-            return std::string::npos;
-        };
-
-        auto tryParseJsonToolCall = [&](const std::string& raw) -> bool {
-            std::string s = stripMarkdownCodeFence(raw);
-            s = trimWs(std::move(s));
-            if (s.empty() || s[0] != '{') {
-                return false;
-            }
-
-            size_t endPos = findJsonObjectEnd(s);
-            if (endPos == std::string::npos) {
-                return false;
-            }
-
-            // Reject any trailing non-whitespace to avoid false positives from examples in prose
-            if (!trimWs(s.substr(endPos)).empty()) {
-                return false;
-            }
-
-            Json::Value root;
-            Json::CharReaderBuilder builder;
-            std::string errors;
-            std::istringstream iss(s.substr(0, endPos));
-            if (!Json::parseFromStream(builder, iss, &root, &errors) || !root.isObject()) {
-                return false;
-            }
-
-            std::string toolName;
-            Json::Value args(Json::objectValue);
-
-            if (root.isMember("tool") && root["tool"].isString()) {
-                toolName = root["tool"].asString();
-            }
-            if (root.isMember("args") && root["args"].isObject()) {
-                args = root["args"];
-            } else if (root.isMember("arguments") && root["arguments"].isObject()) {
-                args = root["arguments"];
-            }
-
-            if (toolName.empty()) {
-                return false;
-            }
-
-            generation::ToolCallDone tc;
-            tc.id = generateFallbackToolCallId();
-            tc.name = toolName;
-            tc.index = 0;
-
-            Json::StreamWriterBuilder writer;
-            writer["indentation"] = "";
-            tc.arguments = Json::writeString(writer, args);
-
-            toolCalls.push_back(tc);
-            return true;
-        };
-
-        if (tryParseJsonToolCall(text)) {
-            // Tool call captured; keep textContent empty
-            textContent.clear();
-        } else {
-        // Avoid false positives:
-        // Some model outputs include <function_calls> blocks as examples inside normal text.
-        // Prefer parsing the Toolify-style trigger marker (<Function_..._Start/>) when present.
-        // Otherwise, only parse when the response *starts* with a tool marker.
-        auto ltrim = [](const std::string& s) -> std::string_view {
-            size_t i = 0;
-            while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
-            return std::string_view(s).substr(i);
-        };
-        auto startsWith = [](std::string_view s, std::string_view prefix) -> bool {
-            return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
-        };
-
-	        std::string xmlCandidate = stripMarkdownCodeFence(text);
-
-	        std::string xmlInput;
-	        const std::string_view trimmed = ltrim(xmlCandidate);
-	        auto findFunctionCallsPos = [](std::string_view s) -> size_t {
-	            size_t p1 = s.find("<function_calls");
-	            size_t p2 = s.find("<antml:function_calls");
-	            if (p1 == std::string_view::npos) return p2;
-	            if (p2 == std::string_view::npos) return p1;
-	            return std::min(p1, p2);
-	        };
-
-	        if (!session.tool_bridge_trigger.empty()) {
-	            // Only parse tool calls belonging to this request when the trigger matches.
-	            // However, upstream UIs/models occasionally echo an older trigger marker. If the
-	            // response starts with a tool marker, still parse it to avoid dropping valid calls.
-	            size_t triggerPos = xmlCandidate.rfind(session.tool_bridge_trigger);
-	            if (triggerPos != std::string::npos) {
-	                xmlInput = xmlCandidate.substr(triggerPos);
-	            } else {
-	                const bool startsLikeToolCall =
-	                    startsWith(trimmed, "<function_calls") ||
-	                    startsWith(trimmed, "<antml:function_calls") ||
-	                    startsWith(trimmed, "<Function_");
-	                if (startsLikeToolCall) {
-	                    if (startsWith(trimmed, "<Function_")) {
-	                        // Require a real <function_calls> tag very early to reduce false positives.
-	                        size_t fcPos = findFunctionCallsPos(trimmed);
-	                        if (fcPos != std::string_view::npos && fcPos <= 512) {
-	                            xmlInput = std::string(trimmed);
-	                            LOG_WARN << "[GenerationService] tool_bridge_trigger 不匹配，已从响应开头解析 tool call";
-	                        }
-	                    } else {
-	                        xmlInput = std::string(trimmed);
-	                        LOG_WARN << "[GenerationService] tool_bridge_trigger 缺失，已从响应开头解析 tool call";
-	                    }
-	                }
-	            }
-	        } else {
-	            // Legacy fixed trigger fallback (backwards compatible).
-	            size_t triggerPos = xmlCandidate.rfind("<Function_o2gx_Start/>");
-	            if (triggerPos != std::string::npos) {
-	                xmlInput = xmlCandidate.substr(triggerPos);
-	            } else {
-	                const bool looksLikeToolCall =
-	                    startsWith(trimmed, "<function_calls") ||
-	                    startsWith(trimmed, "<antml:function_calls");
-	                if (looksLikeToolCall) {
-	                    xmlInput = std::string(trimmed);
-	                }
-	            }
-	        }
+        // Bridge mode: parse tool calls only from a properly delimited XML block.
+        // extractXmlInputForToolCalls() also protects against false positives by preferring
+        // the per-request trigger marker and requiring an early <function_calls> tag.
+        //const std::string xmlInput = extractXmlInputForToolCalls(session, text);
+        std::string xmlInput = extractXmlInputForToolCalls(session, text);
 
         if (xmlInput.empty()) {
             textContent = text;
         } else {
-            LOG_INFO << "[GenerationService] 通道不支持 tool calls，使用 ToolCallBridge 处理输出";
-
-            auto bridge = toolcall::createToolCallBridge(supportsToolCalls);
-            auto codec = toolcall::createXmlTagToolCallCodec();
-            bridge->setTextCodec(codec);
-
-            std::vector<toolcall::ToolCallEvent> events;
-            bridge->transformResponseChunk(xmlInput, events);
-            bridge->flushResponse(events);
-
-            for (const auto& event : events) {
-                switch (event.type) {
-                    case toolcall::EventType::Text:
-                        textContent += event.text;
-                        break;
-                    case toolcall::EventType::ToolCallEnd: {
-                        LOG_DEBUG << "[GenerationService] 工具调用结束: " << event.toolName;
-                        generation::ToolCallDone tc;
-                        tc.id = event.toolCallId;
-                        tc.name = event.toolName;
-                        tc.arguments = event.argumentsDelta; // 这里是完整参数
-                        tc.index = toolCalls.size();
-                        toolCalls.push_back(tc);
-                        break;
-                    }
-                    case toolcall::EventType::ToolCallBegin:
-                    case toolcall::EventType::ToolCallArgsDelta:
-                        break;
-                    case toolcall::EventType::Error:
-                        LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage;
-                        break;
-                }
-            }
-
-            // When tool calls exist, suppress any stray text (e.g. trigger echoes, whitespace, etc.)
-            if (!toolCalls.empty()) {
-                textContent.clear();
-            }
-        }
-        }
-    }
-
-    // tool_choice=required / forced tool fallback:
-    // If the upstream refuses to follow our tool-bridge formatting, synthesize a tool call
-    // locally to satisfy OpenAI semantics (and clients that require tool calls).
-    if (!supportsToolCalls && toolCalls.empty()) {
-        std::string toolChoice = "auto";
-        std::string forcedToolName;
-        if (!session.toolChoice.empty()) {
-            if (!session.toolChoice.empty() && session.toolChoice.front() == '{') {
-                Json::Value tc;
-                Json::CharReaderBuilder builder;
-                std::string errors;
-                std::istringstream iss(session.toolChoice);
-                if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
-                    if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
-                        forcedToolName = tc["function"].get("name", "").asString();
-                        if (!forcedToolName.empty()) {
-                            toolChoice = "required";
-                        }
-                    }
-                }
-            } else {
-                toolChoice = normalizeLower(session.toolChoice);
-            }
+            //parseXmlToolCalls(xmlInput, textContent, toolCalls);
+            xmlInput = normalizeBridgeXml(std::move(xmlInput));
+            parseXmlToolCalls(xmlInput, textContent, toolCalls);
         }
 
-        const bool mustCallTool = (toolChoice == "required") || !forcedToolName.empty();
-        const Json::Value& toolDefs =
-            (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
-                ? session.tools_raw
-                : session.tools;
-
-        if (mustCallTool && toolDefs.isArray() && toolDefs.size() > 0) {
-            auto trimWs = [](std::string s) -> std::string {
-                const auto start = s.find_first_not_of(" \t\n\r");
-                if (start == std::string::npos) return "";
-                const auto end = s.find_last_not_of(" \t\n\r");
-                return s.substr(start, end - start + 1);
-            };
-            auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
-                return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
-            };
-            auto endsWith = [](const std::string& s, const std::string& suffix) -> bool {
-                return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-            };
-            auto stripTrailingPunct = [&](std::string s) -> std::string {
-                s = trimWs(std::move(s));
-                static const std::vector<std::string> suffixes = {
-                    "？", "?", "！", "!", "。", ".", "，", ",", "；", ";", ":", "："
-                };
-                bool changed = true;
-                while (changed) {
-                    changed = false;
-                    for (const auto& suf : suffixes) {
-                        if (endsWith(s, suf)) {
-                            s.erase(s.size() - suf.size());
-                            s = trimWs(std::move(s));
-                            changed = true;
-                        }
-                    }
-                }
-                return s;
-            };
-            auto takeLastToken = [&](std::string s) -> std::string {
-                s = trimWs(std::move(s));
-                size_t pos = s.find_last_of(" \t\r\n");
-                if (pos == std::string::npos) return s;
-                return trimWs(s.substr(pos + 1));
-            };
-
-            auto extractLocationLike = [&](std::string input) -> std::string {
-                std::string s = stripTrailingPunct(trimWs(std::move(input)));
-
-                // CN weather-like patterns: "...的天气..."
-                size_t pos = s.find("天气");
-                if (pos == std::string::npos) pos = s.find("气温");
-                if (pos != std::string::npos) {
-                    std::string before = stripTrailingPunct(s.substr(0, pos));
-
-                    // remove common prefixes
-                    static const std::vector<std::string> prefixes = {
-                        "请帮我查一下", "请帮我查下", "请帮我查查", "请帮我查", "帮我查一下", "帮我查下", "帮我查查", "帮我查",
-                        "麻烦查一下", "麻烦查下", "麻烦查查", "麻烦查", "查一下", "查下", "查查", "查询", "看看", "看一下", "请问", "问一下"
-                    };
-                    before = trimWs(std::move(before));
-                    bool removed = true;
-                    while (removed) {
-                        removed = false;
-                        for (const auto& p : prefixes) {
-                            if (startsWith(before, p)) {
-                                before = trimWs(before.substr(p.size()));
-                                removed = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    // remove trailing particles/time words
-                    static const std::vector<std::string> timeSuffixes = {"今天", "明天", "后天", "现在", "当前", "目前"};
-                    before = stripTrailingPunct(trimWs(std::move(before)));
-                    for (const auto& t : timeSuffixes) {
-                        if (endsWith(before, t)) {
-                            before.erase(before.size() - t.size());
-                            before = trimWs(std::move(before));
-                        }
-                    }
-
-                    if (endsWith(before, "的")) {
-                        before.erase(before.size() - std::string("的").size());
-                        before = trimWs(std::move(before));
-                    }
-
-                    before = takeLastToken(std::move(before));
-                    if (!before.empty()) return before;
-                }
-
-                // EN: "weather in X"
-                std::string lower = normalizeLower(s);
-                const std::string needle = "weather in ";
-                size_t p = lower.find(needle);
-                if (p != std::string::npos) {
-                    std::string loc = stripTrailingPunct(trimWs(s.substr(p + needle.size())));
-                    if (!loc.empty()) return loc;
-                }
-
-                return stripTrailingPunct(trimWs(std::move(s)));
-            };
-
-            // pick tool
-            std::string toolName = forcedToolName;
-            Json::Value toolObj;
-            if (toolName.empty() && toolDefs.size() == 1) {
-                toolObj = toolDefs[0];
-                if (toolObj.isObject() && toolObj.get("type", "").asString() == "function") {
-                    toolName = toolObj["function"].get("name", "").asString();
-                }
-            }
-            if (toolName.empty()) {
-                // Fallback: pick the first function tool
-                for (const auto& t : toolDefs) {
-                    if (!t.isObject()) continue;
-                    if (t.get("type", "").asString() != "function") continue;
-                    toolName = t["function"].get("name", "").asString();
-                    toolObj = t;
-                    if (!toolName.empty()) break;
-                }
-            } else {
-                // locate the forced tool object
-                for (const auto& t : toolDefs) {
-                    if (!t.isObject()) continue;
-                    if (t.get("type", "").asString() != "function") continue;
-                    if (t["function"].get("name", "").asString() == toolName) {
-                        toolObj = t;
-                        break;
-                    }
-                }
-            }
-
-	            if (!toolName.empty()) {
-	                Json::Value args(Json::objectValue);
-	                const std::string srcText = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
-
-                std::vector<std::string> requiredParams;
-                if (toolObj.isObject() && toolObj.isMember("function") && toolObj["function"].isObject()) {
-                    const auto& schema = toolObj["function"]["parameters"];
-                    if (schema.isObject()) {
-                        const auto& required = schema["required"];
-                        if (required.isArray()) {
-                            for (const auto& r : required) {
-                                if (r.isString()) requiredParams.push_back(r.asString());
-                            }
-                        }
-                        if (requiredParams.empty() && schema.isMember("properties") && schema["properties"].isObject()) {
-                            for (const auto& p : schema["properties"].getMemberNames()) {
-                                requiredParams.push_back(p);
-                            }
-                        }
-                    }
-                }
-
-                auto isLocationParam = [&](const std::string& name) -> bool {
-                    const std::string n = normalizeLower(name);
-                    return n.find("location") != std::string::npos ||
-                           n.find("city") != std::string::npos ||
-                           n.find("place") != std::string::npos ||
-                           n.find("address") != std::string::npos ||
-                           n.find("region") != std::string::npos;
-                };
-
-                for (const auto& p : requiredParams) {
-                    if (p.empty()) continue;
-                    std::string v;
-                    if (isLocationParam(p)) {
-                        v = extractLocationLike(srcText);
-                    } else {
-                        v = trimWs(srcText);
-                    }
-                    args[p] = v;
-                }
-
-                generation::ToolCallDone tc;
-                tc.id = generateFallbackToolCallId();
-                tc.name = toolName;
-                tc.index = 0;
-
-                Json::StreamWriterBuilder writer;
-                writer["indentation"] = "";
-                tc.arguments = Json::writeString(writer, args);
-
-                toolCalls.push_back(tc);
-                textContent.clear();
-
-                LOG_WARN << "[GenerationService] 上游未返回 tool call，已根据 tool_choice=required 生成兜底 tool call: " << toolName;
-            }
+        // tool_choice=required / forced tool fallback
+        if (toolCalls.empty()) {
+            generateForcedToolCall(session, toolCalls, textContent);
         }
     }
 
     // Normalize tool call argument shapes according to the client-provided JSONSchema.
-    // RooCode's tools often use nested schemas (e.g. read_file expects files:[{path:string}]),
-    // while upstream may emit a simpler but invalid shape (e.g. files:[\"...\"]).
-    if (!toolCalls.empty()) {
-        const Json::Value& toolDefs =
-            (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
-                ? session.tools_raw
-                : session.tools;
+    normalizeToolCallArguments(session, toolCalls);
 
-        auto findToolObj = [&](const std::string& toolName) -> const Json::Value* {
-            if (!toolDefs.isArray()) return nullptr;
-            for (const auto& t : toolDefs) {
-                if (!t.isObject()) continue;
-                if (t.get("type", "").asString() != "function") continue;
-                const auto& func = t["function"];
-                if (!func.isObject()) continue;
-                if (func.get("name", "").asString() == toolName) {
-                    return &t;
-                }
-            }
-            return nullptr;
-        };
+    // Strict-client self-heal (Roo/Kilo)
+    if (strictToolClient && toolCalls.empty() && !textContent.empty()) {
+        selfHealReadFile(session, clientType, textContent, toolCalls);
+    }
 
-	        auto normalizeArrayOfObjectParam = [&](Json::Value& args, const std::string& paramName, const Json::Value& paramSchema) {
-	            if (!args.isObject() || !args.isMember(paramName) || !args[paramName].isArray()) {
-	                return;
-	            }
-	            if (!paramSchema.isObject() || paramSchema.get("type", "").asString() != "array") {
-	                return;
-	            }
-	            const auto& items = paramSchema["items"];
-	            if (!items.isObject() || items.get("type", "").asString() != "object") {
-	                return;
-	            }
-
-	            std::vector<std::string> requiredKeys;
-	            const auto& req = items["required"];
-	            if (req.isArray()) {
-	                for (const auto& r : req) {
-	                    if (r.isString()) requiredKeys.push_back(r.asString());
-	                }
-	            }
-	            if (requiredKeys.empty() && items.isMember("properties") && items["properties"].isObject()) {
-	                for (const auto& p : items["properties"].getMemberNames()) {
-	                    requiredKeys.push_back(p);
-	                }
-	            }
-	            if (requiredKeys.empty()) {
-	                return;
-	            }
-
-	            const Json::Value* itemProps = nullptr;
-	            if (items.isMember("properties") && items["properties"].isObject()) {
-	                itemProps = &items["properties"];
-	            }
-	            auto getPropType = [&](const std::string& key) -> std::string {
-	                if (!itemProps || !itemProps->isObject()) return "";
-	                if (!itemProps->isMember(key) || !(*itemProps)[key].isObject()) return "";
-	                return (*itemProps)[key].get("type", "").asString();
-	            };
-	            auto hasKey = [&](const std::string& key) -> bool {
-	                for (const auto& k : requiredKeys) {
-	                    if (k == key) return true;
-	                }
-	                return false;
-	            };
-	            auto pickStringKey = [&]() -> std::string {
-	                // Common nested-array patterns emitted by upstreams:
-	                // - read_file.files: ["path1","path2"]  -> [{"path":"path1"},...]
-	                // - ask_followup_question.follow_up: ["..."] -> [{"text":"..."}]
-	                if (paramName == "files") return "path";
-	                if (hasKey("text")) return "text";
-	                if (hasKey("path")) return "path";
-	                if (hasKey("name")) return "name";
-	                if (hasKey("id")) return "id";
-	                return requiredKeys[0];
-	            };
-
-	            Json::Value out(Json::arrayValue);
-	            for (const auto& el : args[paramName]) {
-	                Json::Value obj;
-	                if (el.isString()) {
-	                    obj = Json::Value(Json::objectValue);
-	                    obj[pickStringKey()] = el.asString();
-	                } else if (el.isObject()) {
-	                    obj = el;
-	                } else {
-	                    continue;
-	                }
-
-	                // Fill common required keys with safe defaults when missing
-	                for (const auto& k : requiredKeys) {
-	                    if (!obj.isMember(k)) {
-	                        if (k == "mode") {
-	                            obj[k] = "";
-	                        }
-	                    }
-	                }
-
-	                // Special-case: read_file file object expects {path:string}
-	                if (paramName == "files") {
-	                    if (!obj.isMember("path")) {
-	                        if (obj.isMember("file") && obj["file"].isString()) obj["path"] = obj["file"].asString();
-	                        else if (obj.isMember("name") && obj["name"].isString()) obj["path"] = obj["name"].asString();
-	                    }
-	                }
-
-	                // Drop invalid/incomplete entries to avoid clients crashing on `undefined` paths, etc.
-	                bool valid = true;
-	                for (const auto& k : requiredKeys) {
-	                    if (k == "mode") {
-	                        if (!obj.isMember(k) || !obj[k].isString()) obj[k] = "";
-	                        continue;
-	                    }
-	                    if (!obj.isMember(k) || obj[k].isNull()) {
-	                        valid = false;
-	                        break;
-	                    }
-	                    const std::string t = getPropType(k);
-	                    if (t == "string" && !obj[k].isString()) {
-	                        Json::StreamWriterBuilder writer;
-	                        writer["indentation"] = "";
-	                        obj[k] = Json::writeString(writer, obj[k]);
-	                    }
-	                }
-
-	                if (valid && paramName == "files") {
-	                    if (!obj.isMember("path") || !obj["path"].isString() || obj["path"].asString().empty()) {
-	                        valid = false;
-	                    }
-	                }
-
-	                if (valid) {
-	                    out.append(obj);
-	                }
-	            }
-
-	            // Always replace with a normalized array (even if empty) to avoid downstream crashes.
-	            args[paramName] = out;
-	        };
-
-	        for (auto& tc : toolCalls) {
-	            if (tc.arguments.empty()) continue;
-
-	            Json::Value args;
-	            Json::CharReaderBuilder builder;
-	            std::string errors;
-	            std::istringstream iss(tc.arguments);
-	            if (!Json::parseFromStream(builder, iss, &args, &errors) || !args.isObject()) {
-	                continue;
-	            }
-
-            const Json::Value* toolObj = findToolObj(tc.name);
-            if (!toolObj) {
-                continue;
-            }
-
-            const auto& paramsSchema = (*toolObj)["function"]["parameters"];
-            if (!paramsSchema.isObject() || !paramsSchema.isMember("properties") || !paramsSchema["properties"].isObject()) {
-                continue;
-            }
-
-            // Common alias: some models use `paths` while schema expects `files` (read_file).
-            if (tc.name == "read_file" && !args.isMember("files") && args.isMember("paths") && args["paths"].isArray()) {
-                Json::Value files(Json::arrayValue);
-                for (const auto& p : args["paths"]) {
-                    if (!p.isString()) continue;
-                    Json::Value obj(Json::objectValue);
-                    obj["path"] = p.asString();
-                    files.append(obj);
-                }
-                if (files.size() > 0) {
-                    args["files"] = files;
-                }
-            }
-
-	            const auto& props = paramsSchema["properties"];
-	            for (const auto& paramName : props.getMemberNames()) {
-	                const auto& paramSchema = props[paramName];
-	                const std::string type = paramSchema.get("type", "").asString();
-	                if (type == "array" && paramSchema.isMember("items") &&
-	                    paramSchema["items"].isObject() &&
-	                    paramSchema["items"].get("type", "").asString() == "object") {
-	                    normalizeArrayOfObjectParam(args, paramName, paramSchema);
-	                }
-	            }
-
-	            // RooCode sometimes emits non-existent mode slugs (e.g. "single") for ask_followup_question.
-	            // Normalize unknown values to empty string (meaning "no mode switch") to keep clients stable.
-	            if (tc.name == "ask_followup_question" && args.isMember("follow_up") && args["follow_up"].isArray()) {
-	                auto normalizeLower = [](std::string s) {
-	                    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	                    return s;
-	                };
-	                for (Json::ArrayIndex i = 0; i < args["follow_up"].size(); ++i) {
-	                    auto& item = args["follow_up"][i];
-	                    if (!item.isObject()) continue;
-
-	                    if (!item.isMember("mode") || !item["mode"].isString()) {
-	                        item["mode"] = "";
-	                        continue;
-	                    }
-
-	                    const std::string mode = normalizeLower(item["mode"].asString());
-	                    if (!(mode.empty() || mode == "code" || mode == "ask" || mode == "architect")) {
-	                        item["mode"] = "";
-	                    }
-	                }
-	            }
-
-	            Json::StreamWriterBuilder writer;
-	            writer["indentation"] = "";
-	            tc.arguments = Json::writeString(writer, args);
-	        }
-	    }
-
-	    // Strict-client self-heal:
-	    // Some upstream UIs/models refuse tool-use by saying "I don't have access to your filesystem".
-	    // When that happens, they often list the exact file paths they want the user to paste.
-	    // For tool-calling clients (Roo/Kilo), convert that refusal into a concrete `read_file` call
-	    // so the client can fetch the files and continue the loop.
-	    if (strictToolClient && toolCalls.empty() && !textContent.empty()) {
-	        auto toLower = [](std::string s) {
-	            for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-	            return s;
-	        };
-
-	        const std::string lower = toLower(textContent);
-	        const bool looksLikeNoToolAccess =
-	            (lower.find("no access") != std::string::npos) ||
-	            (lower.find("don't have") != std::string::npos) ||
-	            (lower.find("cannot") != std::string::npos) ||
-	            (lower.find("can't") != std::string::npos) ||
-	            (lower.find("file system") != std::string::npos) ||
-	            (lower.find("filesystem") != std::string::npos) ||
-	            (lower.find("workspace") != std::string::npos) ||
-	            (textContent.find("没有") != std::string::npos) ||
-	            (textContent.find("无法") != std::string::npos) ||
-	            (textContent.find("做不到") != std::string::npos) ||
-	            (textContent.find("粘贴") != std::string::npos) ||
-	            (textContent.find("贴") != std::string::npos) ||
-	            (textContent.find("文件内容") != std::string::npos);
-
-	        const Json::Value& toolDefs =
-	            (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
-	                ? session.tools_raw
-	                : session.tools;
-	        auto hasTool = [&](const std::string& name) -> bool {
-	            if (!toolDefs.isArray()) return false;
-	            for (const auto& t : toolDefs) {
-	                if (!t.isObject()) continue;
-	                if (t.get("type", "").asString() != "function") continue;
-	                const auto& func = t["function"];
-	                if (!func.isObject()) continue;
-	                if (func.get("name", "").asString() == name) return true;
-	            }
-	            return false;
-	        };
-
-		        auto trimPunct = [](std::string s) -> std::string {
-		            auto isTrim = [](unsigned char c) {
-		                return std::isspace(c) || c == '`' || c == '"' || c == '\'' ||
-		                       c == ',' || c == ';' || c == ':' || c == '.' ||
-		                       c == ')' || c == '(' || c == ']' || c == '[' ||
-		                       c == '>' || c == '<' || c == '!' || c == '?';
-		            };
-		            while (!s.empty() && isTrim(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-		            while (!s.empty() && isTrim(static_cast<unsigned char>(s.back()))) s.pop_back();
-		            return s;
-		        };
-
-	        auto looksLikeFilePath = [](const std::string& s) -> bool {
-	            if (s.find('/') == std::string::npos) return false;
-	            size_t lastSlash = s.find_last_of('/');
-	            size_t lastDot = s.find_last_of('.');
-	            if (lastDot == std::string::npos || lastDot < lastSlash) return false;
-	            // keep it simple: ensure extension is short-ish
-	            return (s.size() - lastDot) <= 8;
-	        };
-
-	        auto extractBacktickPaths = [&](const std::string& s) -> std::vector<std::string> {
-	            std::vector<std::string> out;
-	            size_t i = 0;
-	            while (true) {
-	                size_t a = s.find('`', i);
-	                if (a == std::string::npos) break;
-	                size_t b = s.find('`', a + 1);
-	                if (b == std::string::npos) break;
-	                std::string seg = trimPunct(s.substr(a + 1, b - a - 1));
-	                if (looksLikeFilePath(seg)) out.push_back(std::move(seg));
-	                i = b + 1;
-	            }
-	            return out;
-	        };
-
-	        if (looksLikeNoToolAccess && hasTool("read_file")) {
-	            std::vector<std::string> paths = extractBacktickPaths(textContent);
-	            // If no backtick paths, do a light-weight token scan.
-	            if (paths.empty()) {
-	                std::string token;
-	                for (char ch : textContent) {
-	                    const bool split = std::isspace(static_cast<unsigned char>(ch)) ||
-	                                       ch == ',' || ch == ';' || ch == ':' || ch == '\n' ||
-	                                       ch == '\r' || ch == '\t';
-	                    if (!split) {
-	                        token.push_back(ch);
-	                        continue;
-	                    }
-	                    if (!token.empty()) {
-	                        std::string cand = trimPunct(token);
-	                        if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
-	                        token.clear();
-	                    }
-	                }
-	                if (!token.empty()) {
-	                    std::string cand = trimPunct(token);
-	                    if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
-	                }
-	            }
-
-	            // Deduplicate + limit.
-	            std::vector<std::string> uniq;
-	            for (auto& p : paths) {
-	                bool seen = false;
-	                for (const auto& u : uniq) {
-	                    if (u == p) {
-	                        seen = true;
-	                        break;
-	                    }
-	                }
-	                if (!seen) uniq.push_back(std::move(p));
-	                if (uniq.size() >= 10) break;
-	            }
-
-	            if (!uniq.empty()) {
-	                Json::Value args(Json::objectValue);
-	                Json::Value files(Json::arrayValue);
-	                for (const auto& p : uniq) {
-	                    Json::Value f(Json::objectValue);
-	                    f["path"] = p;
-	                    files.append(f);
-	                }
-	                args["files"] = files;
-
-	                generation::ToolCallDone tc;
-	                tc.id = generateFallbackToolCallId();
-	                tc.name = "read_file";
-	                tc.index = 0;
-
-	                Json::StreamWriterBuilder writer;
-	                writer["indentation"] = "";
-	                tc.arguments = Json::writeString(writer, args);
-
-	                toolCalls.push_back(tc);
-	                textContent.clear();
-	                LOG_WARN << "[GenerationService][" << clientType << "] 上游拒绝工具访问，已自动转换为 read_file 工具调用";
-	            }
-	        }
-	    }
-
-	    // Kilo-Code / RooCode compatibility fallback:
-	    // These clients enforce "exactly one tool call per assistant response". If the upstream
-	    // doesn't emit any tool call markers, we wrap the plain text into an `attempt_completion`
-	    // tool call so the client doesn't raise "You did not use a tool" errors.
-    //
-    // Also, when a tool call exists, we suppress visible text output (keep only the
-    // zero-width session id that we embed later) to avoid mixing normal content with tool calls.
+    // Strict client: exactly one tool call per response
     if (strictToolClient) {
-        if (toolCalls.empty() && !textContent.empty()) {
-            generation::ToolCallDone tc;
-            tc.id = generateFallbackToolCallId();
-            tc.name = "attempt_completion";
-            tc.index = 0;
-
-            Json::Value args(Json::objectValue);
-            args["result"] = textContent;
-            Json::StreamWriterBuilder writer;
-            writer["indentation"] = "";
-            tc.arguments = Json::writeString(writer, args);
-
-            toolCalls.push_back(tc);
-            
-            LOG_WARN << "[GenerationService][" << clientType << "] 未检测到 tool call，已自动包装为 attempt_completion";
-            textContent.clear(); // keep only zero-width session id in OutputTextDone
-        } else if (!toolCalls.empty()) {
-            // Keep content empty (still embeds session id later)
-            textContent.clear();
-        }
+        applyStrictClientRules(clientType, textContent, toolCalls);
     }
 
-    // Strict clients require exactly one tool call per assistant response.
-    if (strictToolClient && toolCalls.size() > 1) {
-        LOG_WARN << "[GenerationService][" << clientType << "] 检测到多个 tool call，已仅保留第一个以满足客户端约束";
-        toolCalls.erase(toolCalls.begin() + 1, toolCalls.end());
-    }
-
-    // Emit tool calls (after any validation / strict-client fallback) so we never stream
-    // an invalid tool call and then "change our mind" later.
+    // Emit tool calls (after validation/fallback) so we don't change our mind later.
     for (const auto& tc : toolCalls) {
         sink.onEvent(tc);
     }
-    
+
     // 3. 如果使用零宽字符模式，在响应末尾嵌入会话ID
     auto& sessionManager = *chatSession::getInstance();
     if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
         textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
         LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
     }
-    
+
     // 发送 OutputTextDone 事件 (如果有文本)
     if (!textContent.empty()) {
         generation::OutputTextDone textDone;
@@ -1402,7 +746,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         textDone.index = 0;
         sink.onEvent(textDone);
     }
-    
+
     // 发送 Completed 事件
     generation::Completed completed;
     completed.finishReason = toolCalls.empty() ? "stop" : "tool_calls";
@@ -1517,8 +861,689 @@ bool GenerationService::getChannelSupportsToolCalls(const std::string& channelNa
     return true;
 }
 
+// ========== emitResultEvents 辅助函数实现 ==========
+
+void GenerationService::parseXmlToolCalls(
+    const std::string& xmlInput,
+    std::string& outTextContent,
+    std::vector<generation::ToolCallDone>& outToolCalls
+) {
+    LOG_INFO << "[GenerationService] 解析 XML 格式 tool calls";
+    LOG_DEBUG << "[ToolParse] xmlInput.size=" << xmlInput.size()
+    << " has </args_json>=" << (xmlInput.find("</args_json>") != std::string::npos)
+    << " has </function_call>=" << (xmlInput.find("</function_call>") != std::string::npos)
+    << " has </function_calls>=" << (xmlInput.find("</function_calls>") != std::string::npos);
+
+    auto bridge = toolcall::createToolCallBridge(false);
+    auto codec = toolcall::createXmlTagToolCallCodec();
+    bridge->setTextCodec(codec);
+
+    std::vector<toolcall::ToolCallEvent> events;
+    bridge->transformResponseChunk(xmlInput, events);
+    bridge->flushResponse(events);
+
+    for (const auto& event : events) {
+        switch (event.type) {
+            case toolcall::EventType::Text:
+                outTextContent += event.text;
+                break;
+            case toolcall::EventType::ToolCallEnd: {
+                LOG_DEBUG << "[GenerationService] 工具调用结束: " << event.toolName;
+                generation::ToolCallDone tc;
+                tc.id = event.toolCallId;
+                tc.name = event.toolName;
+                tc.arguments = event.argumentsDelta;
+                tc.index = outToolCalls.size();
+                outToolCalls.push_back(tc);
+                break;
+            }
+            case toolcall::EventType::ToolCallBegin:
+            case toolcall::EventType::ToolCallArgsDelta:
+                break;
+            case toolcall::EventType::Error:
+                //LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage;
+                LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage
+                         << " (xmlInput.size=" << xmlInput.size() << ")";
+                     {
+                    const size_t kTail = 320;
+                    const std::string tail =
+                        xmlInput.size() > kTail ? xmlInput.substr(xmlInput.size() - kTail) : xmlInput;
+                    LOG_DEBUG << "[GenerationService] xmlInput tail (truncated): " << tail;
+                    }
+                break;
+        }
+    }
+
+    // When tool calls exist, suppress any stray text (e.g. trigger echoes, whitespace, etc.)
+    if (!outToolCalls.empty()) {
+        outTextContent.clear();
+    }
+}
+
+void GenerationService::generateForcedToolCall(
+    const session_st& session,
+    std::vector<generation::ToolCallDone>& outToolCalls,
+    std::string& outTextContent
+) {
+    std::string toolChoice = "auto";
+    std::string forcedToolName;
+
+    if (!session.toolChoice.empty()) {
+        if (session.toolChoice.front() == '{') {
+            Json::Value tc;
+            Json::CharReaderBuilder builder;
+            std::string errors;
+            std::istringstream iss(session.toolChoice);
+            if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
+                if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
+                    forcedToolName = tc["function"].get("name", "").asString();
+                    if (!forcedToolName.empty()) {
+                        toolChoice = "required";
+                    }
+                }
+            }
+        } else {
+            toolChoice = toLowerStr(session.toolChoice);
+        }
+    }
+
+    const bool mustCallTool = (toolChoice == "required") || !forcedToolName.empty();
+    const Json::Value& toolDefs =
+        (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
+            ? session.tools_raw
+            : session.tools;
+
+    if (!mustCallTool || !toolDefs.isArray() || toolDefs.size() == 0) {
+        return;
+    }
+
+    auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
+        return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+    };
+    auto endsWith = [](const std::string& s, const std::string& suffix) -> bool {
+        return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+    auto stripTrailingPunct = [&](std::string s) -> std::string {
+        s = trimWhitespace(std::move(s));
+        static const std::vector<std::string> suffixes = {
+            "？", "?", "！", "!", "。", ".", "，", ",", "；", ";", ":", "："
+        };
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const auto& suf : suffixes) {
+                if (endsWith(s, suf)) {
+                    s.erase(s.size() - suf.size());
+                    s = trimWhitespace(std::move(s));
+                    changed = true;
+                }
+            }
+        }
+        return s;
+    };
+    auto takeLastToken = [&](std::string s) -> std::string {
+        s = trimWhitespace(std::move(s));
+        size_t pos = s.find_last_of(" \t\r\n");
+        if (pos == std::string::npos) return s;
+        return trimWhitespace(s.substr(pos + 1));
+    };
+
+    auto extractLocationLike = [&](std::string input) -> std::string {
+        std::string s = stripTrailingPunct(trimWhitespace(std::move(input)));
+
+        // CN weather-like patterns: "...的天气..."
+        size_t pos = s.find("天气");
+        if (pos == std::string::npos) pos = s.find("气温");
+        if (pos != std::string::npos) {
+            std::string before = stripTrailingPunct(s.substr(0, pos));
+
+            // remove common prefixes
+            static const std::vector<std::string> prefixes = {
+                "请帮我查一下", "请帮我查下", "请帮我查查", "请帮我查", "帮我查一下", "帮我查下", "帮我查查", "帮我查",
+                "麻烦查一下", "麻烦查下", "麻烦查查", "麻烦查", "查一下", "查下", "查查", "查询", "看看", "看一下", "请问", "问一下"
+            };
+            before = trimWhitespace(std::move(before));
+            bool removed = true;
+            while (removed) {
+                removed = false;
+                for (const auto& p : prefixes) {
+                    if (startsWith(before, p)) {
+                        before = trimWhitespace(before.substr(p.size()));
+                        removed = true;
+                        break;
+                    }
+                }
+            }
+
+            // remove trailing particles/time words
+            static const std::vector<std::string> timeSuffixes = {"今天", "明天", "后天", "现在", "当前", "目前"};
+            before = stripTrailingPunct(trimWhitespace(std::move(before)));
+            for (const auto& t : timeSuffixes) {
+                if (endsWith(before, t)) {
+                    before.erase(before.size() - t.size());
+                    before = trimWhitespace(std::move(before));
+                }
+            }
+
+            if (endsWith(before, "的")) {
+                before.erase(before.size() - std::string("的").size());
+                before = trimWhitespace(std::move(before));
+            }
+
+            before = takeLastToken(std::move(before));
+            if (!before.empty()) return before;
+        }
+
+        // EN: "weather in X"
+        std::string lower = toLowerStr(s);
+        const std::string needle = "weather in ";
+        size_t p = lower.find(needle);
+        if (p != std::string::npos) {
+            std::string loc = stripTrailingPunct(trimWhitespace(s.substr(p + needle.size())));
+            if (!loc.empty()) return loc;
+        }
+
+        return stripTrailingPunct(trimWhitespace(std::move(s)));
+    };
+
+    // pick tool
+    std::string toolName = forcedToolName;
+    Json::Value toolObj;
+    if (toolName.empty() && toolDefs.size() == 1) {
+        toolObj = toolDefs[0];
+        if (toolObj.isObject() && toolObj.get("type", "").asString() == "function") {
+            toolName = toolObj["function"].get("name", "").asString();
+        }
+    }
+    if (toolName.empty()) {
+        // Fallback: pick the first function tool
+        for (const auto& t : toolDefs) {
+            if (!t.isObject()) continue;
+            if (t.get("type", "").asString() != "function") continue;
+            toolName = t["function"].get("name", "").asString();
+            toolObj = t;
+            if (!toolName.empty()) break;
+        }
+    } else {
+        // locate the forced tool object
+        for (const auto& t : toolDefs) {
+            if (!t.isObject()) continue;
+            if (t.get("type", "").asString() != "function") continue;
+            if (t["function"].get("name", "").asString() == toolName) {
+                toolObj = t;
+                break;
+            }
+        }
+    }
+
+    if (toolName.empty()) {
+        return;
+    }
+
+    Json::Value args(Json::objectValue);
+    const std::string srcText = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
+
+    std::vector<std::string> requiredParams;
+    if (toolObj.isObject() && toolObj.isMember("function") && toolObj["function"].isObject()) {
+        const auto& schema = toolObj["function"]["parameters"];
+        if (schema.isObject()) {
+            const auto& required = schema["required"];
+            if (required.isArray()) {
+                for (const auto& r : required) {
+                    if (r.isString()) requiredParams.push_back(r.asString());
+                }
+            }
+            if (requiredParams.empty() && schema.isMember("properties") && schema["properties"].isObject()) {
+                for (const auto& p : schema["properties"].getMemberNames()) {
+                    requiredParams.push_back(p);
+                }
+            }
+        }
+    }
+
+    auto isLocationParam = [&](const std::string& name) -> bool {
+        const std::string n = toLowerStr(name);
+        return n.find("location") != std::string::npos ||
+               n.find("city") != std::string::npos ||
+               n.find("place") != std::string::npos ||
+               n.find("address") != std::string::npos ||
+               n.find("region") != std::string::npos;
+    };
+
+    for (const auto& p : requiredParams) {
+        if (p.empty()) continue;
+        std::string v;
+        if (isLocationParam(p)) {
+            v = extractLocationLike(srcText);
+        } else {
+            v = trimWhitespace(srcText);
+        }
+        args[p] = v;
+    }
+
+    generation::ToolCallDone tc;
+    tc.id = generateFallbackToolCallId();
+    tc.name = toolName;
+    tc.index = 0;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    tc.arguments = Json::writeString(writer, args);
+
+    outToolCalls.push_back(tc);
+    outTextContent.clear();
+
+    LOG_WARN << "[GenerationService] 上游未返回 tool call，已根据 tool_choice=required 生成兜底 tool call: " << toolName;
+}
+
+void GenerationService::normalizeToolCallArguments(
+    const session_st& session,
+    std::vector<generation::ToolCallDone>& toolCalls
+) {
+    // RooCode's tools often use nested schemas (e.g. read_file expects files:[{path:string}]),
+    // while upstream may emit a simpler but invalid shape (e.g. files:["..."]).
+    if (toolCalls.empty()) {
+        return;
+    }
+
+    const Json::Value& toolDefs =
+        (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
+            ? session.tools_raw
+            : session.tools;
+
+    auto findToolObj = [&](const std::string& toolName) -> const Json::Value* {
+        if (!toolDefs.isArray()) return nullptr;
+        for (const auto& t : toolDefs) {
+            if (!t.isObject()) continue;
+            if (t.get("type", "").asString() != "function") continue;
+            const auto& func = t["function"];
+            if (!func.isObject()) continue;
+            if (func.get("name", "").asString() == toolName) {
+                return &t;
+            }
+        }
+        return nullptr;
+    };
+
+    auto normalizeArrayOfObjectParam = [&](Json::Value& args, const std::string& paramName, const Json::Value& paramSchema) {
+        if (!args.isObject() || !args.isMember(paramName) || !args[paramName].isArray()) {
+            return;
+        }
+        if (!paramSchema.isObject() || paramSchema.get("type", "").asString() != "array") {
+            return;
+        }
+        const auto& items = paramSchema["items"];
+        if (!items.isObject() || items.get("type", "").asString() != "object") {
+            return;
+        }
+
+        std::vector<std::string> requiredKeys;
+        const auto& req = items["required"];
+        if (req.isArray()) {
+            for (const auto& r : req) {
+                if (r.isString()) requiredKeys.push_back(r.asString());
+            }
+        }
+        if (requiredKeys.empty() && items.isMember("properties") && items["properties"].isObject()) {
+            for (const auto& p : items["properties"].getMemberNames()) {
+                requiredKeys.push_back(p);
+            }
+        }
+        if (requiredKeys.empty()) {
+            return;
+        }
+
+        const Json::Value* itemProps = nullptr;
+        if (items.isMember("properties") && items["properties"].isObject()) {
+            itemProps = &items["properties"];
+        }
+        auto getPropType = [&](const std::string& key) -> std::string {
+            if (!itemProps || !itemProps->isObject()) return "";
+            if (!itemProps->isMember(key) || !(*itemProps)[key].isObject()) return "";
+            return (*itemProps)[key].get("type", "").asString();
+        };
+        auto hasKey = [&](const std::string& key) -> bool {
+            for (const auto& k : requiredKeys) {
+                if (k == key) return true;
+            }
+            return false;
+        };
+        auto pickStringKey = [&]() -> std::string {
+            // Common nested-array patterns emitted by upstreams:
+            // - read_file.files: ["path1","path2"]  -> [{"path":"path1"},...]
+            // - ask_followup_question.follow_up: ["..."] -> [{"text":"..."}]
+            if (paramName == "files") return "path";
+            if (hasKey("text")) return "text";
+            if (hasKey("path")) return "path";
+            if (hasKey("name")) return "name";
+            if (hasKey("id")) return "id";
+            return requiredKeys[0];
+        };
+
+        Json::Value out(Json::arrayValue);
+        for (const auto& el : args[paramName]) {
+            Json::Value obj;
+            if (el.isString()) {
+                obj = Json::Value(Json::objectValue);
+                obj[pickStringKey()] = el.asString();
+            } else if (el.isObject()) {
+                obj = el;
+            } else {
+                continue;
+            }
+
+            // Fill common required keys with safe defaults when missing
+            for (const auto& k : requiredKeys) {
+                if (!obj.isMember(k)) {
+                    if (k == "mode") {
+                        obj[k] = "";
+                    }
+                }
+            }
+
+            // Special-case: read_file file object expects {path:string}
+            if (paramName == "files") {
+                if (!obj.isMember("path")) {
+                    if (obj.isMember("file") && obj["file"].isString()) obj["path"] = obj["file"].asString();
+                    else if (obj.isMember("name") && obj["name"].isString()) obj["path"] = obj["name"].asString();
+                }
+            }
+
+            // Drop invalid/incomplete entries to avoid clients crashing on `undefined` paths, etc.
+            bool valid = true;
+            for (const auto& k : requiredKeys) {
+                if (k == "mode") {
+                    if (!obj.isMember(k) || !obj[k].isString()) obj[k] = "";
+                    continue;
+                }
+                if (!obj.isMember(k) || obj[k].isNull()) {
+                    valid = false;
+                    break;
+                }
+                const std::string t = getPropType(k);
+                if (t == "string" && !obj[k].isString()) {
+                    Json::StreamWriterBuilder writer;
+                    writer["indentation"] = "";
+                    obj[k] = Json::writeString(writer, obj[k]);
+                }
+            }
+
+            if (valid && paramName == "files") {
+                if (!obj.isMember("path") || !obj["path"].isString() || obj["path"].asString().empty()) {
+                    valid = false;
+                }
+            }
+
+            if (valid) {
+                out.append(obj);
+            }
+        }
+
+        // Always replace with a normalized array (even if empty) to avoid downstream crashes.
+        args[paramName] = out;
+    };
+
+    for (auto& tc : toolCalls) {
+        if (tc.arguments.empty()) continue;
+
+        Json::Value args;
+        Json::CharReaderBuilder builder;
+        std::string errors;
+        std::istringstream iss(tc.arguments);
+        if (!Json::parseFromStream(builder, iss, &args, &errors) || !args.isObject()) {
+            continue;
+        }
+
+        const Json::Value* toolObj = findToolObj(tc.name);
+        if (!toolObj) {
+            continue;
+        }
+
+        const auto& paramsSchema = (*toolObj)["function"]["parameters"];
+        if (!paramsSchema.isObject() || !paramsSchema.isMember("properties") || !paramsSchema["properties"].isObject()) {
+            continue;
+        }
+
+        // Common alias: some models use `paths` while schema expects `files` (read_file).
+        if (tc.name == "read_file" && !args.isMember("files") && args.isMember("paths") && args["paths"].isArray()) {
+            Json::Value files(Json::arrayValue);
+            for (const auto& p : args["paths"]) {
+                if (!p.isString()) continue;
+                Json::Value obj(Json::objectValue);
+                obj["path"] = p.asString();
+                files.append(obj);
+            }
+            if (files.size() > 0) {
+                args["files"] = files;
+            }
+        }
+
+        const auto& props = paramsSchema["properties"];
+        for (const auto& paramName : props.getMemberNames()) {
+            const auto& paramSchema = props[paramName];
+            const std::string type = paramSchema.get("type", "").asString();
+            if (type == "array" && paramSchema.isMember("items") &&
+                paramSchema["items"].isObject() &&
+                paramSchema["items"].get("type", "").asString() == "object") {
+                normalizeArrayOfObjectParam(args, paramName, paramSchema);
+            }
+        }
+
+        // RooCode sometimes emits non-existent mode slugs (e.g. "single") for ask_followup_question.
+        // Normalize unknown values to empty string (meaning "no mode switch") to keep clients stable.
+        if (tc.name == "ask_followup_question" && args.isMember("follow_up") && args["follow_up"].isArray()) {
+            for (Json::ArrayIndex i = 0; i < args["follow_up"].size(); ++i) {
+                auto& item = args["follow_up"][i];
+                if (!item.isObject()) continue;
+
+                if (!item.isMember("mode") || !item["mode"].isString()) {
+                    item["mode"] = "";
+                    continue;
+                }
+
+                const std::string mode = toLowerStr(item["mode"].asString());
+                if (!(mode.empty() || mode == "code" || mode == "ask" || mode == "architect")) {
+                    item["mode"] = "";
+                }
+            }
+        }
+
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        tc.arguments = Json::writeString(writer, args);
+    }
+}
+
+void GenerationService::selfHealReadFile(
+    const session_st& session,
+    const std::string& clientType,
+    std::string& textContent,
+    std::vector<generation::ToolCallDone>& outToolCalls
+) {
+    // Some upstream UIs/models refuse tool-use by saying "I don't have access to your filesystem".
+    // When that happens, they often list file paths they want the user to paste.
+    const std::string lower = toLowerStr(textContent);
+    const bool looksLikeNoToolAccess =
+        (lower.find("no access") != std::string::npos) ||
+        (lower.find("don't have") != std::string::npos) ||
+        (lower.find("cannot") != std::string::npos) ||
+        (lower.find("can't") != std::string::npos) ||
+        (lower.find("file system") != std::string::npos) ||
+        (lower.find("filesystem") != std::string::npos) ||
+        (lower.find("workspace") != std::string::npos) ||
+        (textContent.find("没有") != std::string::npos) ||
+        (textContent.find("无法") != std::string::npos) ||
+        (textContent.find("做不到") != std::string::npos) ||
+        (textContent.find("粘贴") != std::string::npos) ||
+        (textContent.find("贴") != std::string::npos) ||
+        (textContent.find("文件内容") != std::string::npos);
+
+    if (!looksLikeNoToolAccess) {
+        return;
+    }
+
+    const Json::Value& toolDefs =
+        (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
+            ? session.tools_raw
+            : session.tools;
+
+    auto hasTool = [&](const std::string& name) -> bool {
+        if (!toolDefs.isArray()) return false;
+        for (const auto& t : toolDefs) {
+            if (!t.isObject()) continue;
+            if (t.get("type", "").asString() != "function") continue;
+            const auto& func = t["function"];
+            if (!func.isObject()) continue;
+            if (func.get("name", "").asString() == name) return true;
+        }
+        return false;
+    };
+
+    if (!hasTool("read_file")) {
+        return;
+    }
+
+    auto trimPunct = [](std::string s) -> std::string {
+        auto isTrim = [](unsigned char c) {
+            return std::isspace(c) || c == '`' || c == '"' || c == '\'' ||
+                   c == ',' || c == ';' || c == ':' || c == '.' ||
+                   c == ')' || c == '(' || c == ']' || c == '[' ||
+                   c == '>' || c == '<' || c == '!' || c == '?';
+        };
+        while (!s.empty() && isTrim(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+        while (!s.empty() && isTrim(static_cast<unsigned char>(s.back()))) s.pop_back();
+        return s;
+    };
+
+    auto looksLikeFilePath = [](const std::string& s) -> bool {
+        if (s.find('/') == std::string::npos) return false;
+        size_t lastSlash = s.find_last_of('/');
+        size_t lastDot = s.find_last_of('.');
+        if (lastDot == std::string::npos || lastDot < lastSlash) return false;
+        // keep it simple: ensure extension is short-ish
+        return (s.size() - lastDot) <= 8;
+    };
+
+    auto extractBacktickPaths = [&](const std::string& s) -> std::vector<std::string> {
+        std::vector<std::string> out;
+        size_t i = 0;
+        while (true) {
+            size_t a = s.find('`', i);
+            if (a == std::string::npos) break;
+            size_t b = s.find('`', a + 1);
+            if (b == std::string::npos) break;
+            std::string seg = trimPunct(s.substr(a + 1, b - a - 1));
+            if (looksLikeFilePath(seg)) out.push_back(std::move(seg));
+            i = b + 1;
+        }
+        return out;
+    };
+
+    std::vector<std::string> paths = extractBacktickPaths(textContent);
+
+    // If no backtick paths, do a light-weight token scan.
+    if (paths.empty()) {
+        std::string token;
+        for (char ch : textContent) {
+            const bool split = std::isspace(static_cast<unsigned char>(ch)) ||
+                               ch == ',' || ch == ';' || ch == ':' || ch == '\n' ||
+                               ch == '\r' || ch == '\t';
+            if (!split) {
+                token.push_back(ch);
+                continue;
+            }
+            if (!token.empty()) {
+                std::string cand = trimPunct(token);
+                if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
+                token.clear();
+            }
+        }
+        if (!token.empty()) {
+            std::string cand = trimPunct(token);
+            if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
+        }
+    }
+
+    // Deduplicate + limit.
+    std::vector<std::string> uniq;
+    for (auto& p : paths) {
+        bool seen = false;
+        for (const auto& u : uniq) {
+            if (u == p) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) uniq.push_back(std::move(p));
+        if (uniq.size() >= 10) break;
+    }
+
+    if (uniq.empty()) {
+        return;
+    }
+
+    Json::Value args(Json::objectValue);
+    Json::Value files(Json::arrayValue);
+    for (const auto& p : uniq) {
+        Json::Value f(Json::objectValue);
+        f["path"] = p;
+        files.append(f);
+    }
+    args["files"] = files;
+
+    generation::ToolCallDone tc;
+    tc.id = generateFallbackToolCallId();
+    tc.name = "read_file";
+    tc.index = 0;
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    tc.arguments = Json::writeString(writer, args);
+
+    outToolCalls.push_back(tc);
+    textContent.clear();
+    LOG_WARN << "[GenerationService][" << clientType << "] 上游拒绝工具访问，已自动转换为 read_file 工具调用";
+}
+
+void GenerationService::applyStrictClientRules(
+    const std::string& clientType,
+    std::string& textContent,
+    std::vector<generation::ToolCallDone>& toolCalls
+) {
+    // Kilo-Code / RooCode compatibility fallback:
+    // These clients enforce "exactly one tool call per assistant response".
+    // If no tool call markers are present, wrap plain text into an `attempt_completion` call.
+    if (toolCalls.empty() && !textContent.empty()) {
+        generation::ToolCallDone tc;
+        tc.id = generateFallbackToolCallId();
+        tc.name = "attempt_completion";
+        tc.index = 0;
+
+        Json::Value args(Json::objectValue);
+        args["result"] = textContent;
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        tc.arguments = Json::writeString(writer, args);
+
+        toolCalls.push_back(tc);
+        LOG_WARN << "[GenerationService][" << clientType << "] 未检测到 tool call，已自动包装为 attempt_completion";
+
+        // Keep only zero-width session id (embedded later) in OutputTextDone.
+        textContent.clear();
+    } else if (!toolCalls.empty()) {
+        // Suppress visible text output when tool calls exist.
+        textContent.clear();
+    }
+
+    // Strict clients require exactly one tool call per assistant response.
+    if (toolCalls.size() > 1) {
+        LOG_WARN << "[GenerationService][" << clientType << "] 检测到多个 tool call，已仅保留第一个以满足客户端约束";
+        toolCalls.erase(toolCalls.begin() + 1, toolCalls.end());
+    }
+}
+
 void GenerationService::transformRequestForToolBridge(session_st& session) {
-    const std::string clientType = session.client_info.get("client_type", "").asString();
+    const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
     const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
 
     // Kilo-Code / RooCode clients send a very long system prompt blob containing tool
@@ -1696,9 +1721,10 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
 	            policy << "目标：根据【用户请求】选择并输出下一步要调用的 1 个工具。\n";
 	            policy << "注意：不要解释你是否有权限/访问能力，也不要要求用户粘贴文件内容；根据你的需要使用列出的工具(比如需要文件就直接调用 read_file/list_files)。\n";
 	        } else {
-	            policy << "场景：后端接口测试数据生成\n";
-	            policy << "任务类型：文本解析与特定格式数据生成\n";
-	            policy << "目标：将【用户输入】的输出转换为后端 API 调用所需的 XML 数据（仅生成调用数据）。\n";
+	            policy << "场景：软件工程协作\n";
+	            policy << "任务类型：下一步工具调用指令生成（工具由外部系统执行）\n";
+	            policy << "目标：根据【用户请求】选择并输出下一步要调用的1个或多个工具。\n";
+	            policy << "注意：不要解释你是否有权限/访问能力，也不要要求用户粘贴文件内容；根据你的需要使用列出的工具(比如需要文件就直接调用 read_file/list_files)。\n";
 	        }
 
         if (!forcedToolName.empty()) {
@@ -1725,17 +1751,17 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         policy << "- <tool> 必须是 API 定义里存在的名称。\n";
         policy << "- <args_json> 必须是严格 JSON 对象，参数 key 必须与 API 定义完全一致（区分大小写）。\n";
 
-        if (strictToolClient) {
-            policy << "（" << clientType << "）每次回复必须且只能输出 1 个 <function_call>。\n";
-            policy << "（" << clientType << "）当需要给出最终答复时，请输出工具调用：\n";
-            policy << triggerSignal << "\n";
-            policy << "<function_calls>\n";
-            policy << "  <function_call>\n";
-            policy << "    <tool>attempt_completion</tool>\n";
-            policy << "    <args_json><![CDATA[{\"result\":\"...\"}]]></args_json>\n";
-            policy << "  </function_call>\n";
-            policy << "</function_calls>\n";
-        }
+        // if (strictToolClient) {
+        //     policy << "（" << clientType << "）每次回复必须且只能输出 1 个 <function_call>。\n";
+        //     policy << "（" << clientType << "）当需要给出最终答复时，请输出工具调用：\n";
+        //     policy << triggerSignal << "\n";
+        //     policy << "<function_calls>\n";
+        //     policy << "  <function_call>\n";
+        //     policy << "    <tool>attempt_completion</tool>\n";
+        //     policy << "    <args_json><![CDATA[{\"result\":\"...\"}]]></args_json>\n";
+        //     policy << "  </function_call>\n";
+        //     policy << "</function_calls>\n";
+        // }
 
         policy << "\n";
         toolDefinitions = policy.str() + toolDefinitions;
@@ -1770,8 +1796,8 @@ GenerationRequest GenerationService::buildRequest(
     
     // 转换消息上下文
     for (const auto& msg : session.message_context) {
-        std::string role = msg.get("role", "user").asString();
-        std::string content = msg.get("content", "").asString();
+        std::string role = safeJsonAsString(msg.get("role", "user"), "user");
+        std::string content = safeJsonAsString(msg.get("content", ""), "");
         
         if (role == "user") {
             req.messages.push_back(Message::user(content));

@@ -600,6 +600,7 @@ void chaynsapi::eraseChatinfoMap(string ConversationId)
 }
 Json::Value chaynsapi::getModels()
 {
+    loadModels();
    return model_info_openai_format;
 }
 void* chaynsapi::createApi()
