@@ -19,13 +19,19 @@ static const std::string TAG_TOOL = "tool";
 static const std::string TAG_ARGS_JSON = "args_json";
 static const std::string TAG_TOOL_RESULT = "tool_result";
 
-// 哨兵标记
-static const std::string SENTINEL_START = "<Function_o2gx_Start/>";
-
+// 哨兵标记（Toolify-style trigger marker）
+// NOTE: The trigger is generated per-request in GenerationService (e.g. <Function_AB1c_Start/>).
+// The codec must not rely on a fixed string; it should accept any <Function_..._Start/> marker.
+// For documentation/examples we show a placeholder.
+static const std::string SENTINEL_EXAMPLE = "<Function_XXXX_Start/>";
+static const std::string SENTINEL_PREFIX = "<Function_";
+static const std::string SENTINEL_SUFFIX = "_Start/>";
 XmlTagToolCallCodec::XmlTagToolCallCodec()
     : state_(XmlParserState::Text)
     , currentParamEndTag_()
-    , toolCallCounter_(0) {
+    , toolCallCounter_(0)
+    , sentinelMatched_(false) {  // 初始化
+         
 }
 
 std::string XmlTagToolCallCodec::generateToolCallId() {
@@ -167,7 +173,7 @@ std::string XmlTagToolCallCodec::encodeToolDefinitions(const Json::Value& tools)
     // be injected by higher-level logic that knows the client type).
     oss << "In this environment you have access to a set of tools you can use to answer the user's question.\n\n";
     oss << "To invoke a tool, output ONLY the following XML format:\n\n";
-    oss << SENTINEL_START << "\n";
+    oss << SENTINEL_EXAMPLE << "\n";
     oss << "<" << TAG_FUNCTION_CALLS_PLAIN << ">\n";
     oss << "<" << TAG_FUNCTION_CALL << ">\n";
     oss << "<" << TAG_TOOL << ">$FUNCTION_NAME</" << TAG_TOOL << ">\n";
@@ -223,7 +229,7 @@ bool XmlTagToolCallCodec::decodeIncremental(const std::string& chunk, std::vecto
     processBuffer(events);
     return true;
 }
-
+/*
 void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
     auto trimWs = [](std::string s) -> std::string {
         const auto start = s.find_first_not_of(" \t\n\r");
@@ -236,7 +242,8 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
         switch (state_) {
             case XmlParserState::Text: {
                 // 查找哨兵或 function_calls 开始标签
-                size_t sentinelPos = buffer_.find(SENTINEL_START);
+                // Accept any Toolify-style trigger marker: <Function_..._Start/>
+                size_t sentinelPos = buffer_.find(SENTINEL_PREFIX);
                 size_t tagPosAntml = buffer_.find("<" + TAG_FUNCTION_CALLS);
                 size_t tagPosPlain = buffer_.find("<" + TAG_FUNCTION_CALLS_PLAIN);
 
@@ -279,8 +286,13 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 }
                 
                 if (foundSentinel) {
-                    // 跳过哨兵
-                    buffer_ = buffer_.substr(startPos + SENTINEL_START.length());
+                    // 跳过哨兵（可能分片到达，需确保完整 _Start/> 已收到）
+                    size_t endPos = buffer_.find(SENTINEL_SUFFIX, startPos);
+                    if (endPos == std::string::npos) {
+                        return; // 等待更多数据
+                    }
+                    endPos += SENTINEL_SUFFIX.length();
+                    buffer_ = buffer_.substr(endPos);
                     // 继续查找 function_calls
                 } else {
                     // 找到 function_calls 开始
@@ -550,7 +562,367 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
         }
     }
 }
+*/
+void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
+    auto trimWs = [](std::string s) -> std::string {
+        const auto start = s.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) return "";
+        const auto end = s.find_last_not_of(" \t\n\r");
+        return s.substr(start, end - start + 1);
+    };
 
+    while (!buffer_.empty()) {
+        switch (state_) {
+            case XmlParserState::Text: {
+                // ============== Sentinel 严格匹配逻辑 ==============
+                if (!sentinelMatched_) {
+                    size_t sPos = buffer_.find(sentinel_);
+                    if (sPos == std::string::npos) {
+                        // 如果缓冲区还没有出现 Sentinel
+                        // 检查缓冲区末尾是否是 Sentinel 的一部分（防止截断）
+                        if (buffer_.size() > sentinel_.size() * 2) {
+                             // 缓冲区很长仍未找到，视为普通文本输出
+                             emitTextEvent(buffer_, events);
+                             buffer_.clear();
+                        }
+                        return; // 等待更多数据
+                    }
+                    
+                    // 找到了 Sentinel
+                    // 输出 Sentinel 之前的所有文本
+                    if (sPos > 0) {
+                        emitTextEvent(buffer_.substr(0, sPos), events);
+                    }
+                    
+                    // 消耗 Sentinel，标记为已匹配
+                    buffer_ = buffer_.substr(sPos + sentinel_.size());
+                    sentinelMatched_ = true;
+                    
+                    // 继续循环，现在 sentinelMatched_ 为 true，会进入下方的 XML 解析逻辑
+                    continue; 
+                }
+                // =======================================================
+
+                // 查找 function_calls 开始标签
+                size_t tagPosAntml = buffer_.find("<" + TAG_FUNCTION_CALLS);
+                size_t tagPosPlain = buffer_.find("<" + TAG_FUNCTION_CALLS_PLAIN);
+
+                auto minPos = [](size_t a, size_t b) -> size_t {
+                    if (a == std::string::npos) return b;
+                    if (b == std::string::npos) return a;
+                    return std::min(a, b);
+                };
+                size_t tagPos = minPos(tagPosAntml, tagPosPlain);
+                
+                if (tagPos == std::string::npos) {
+                    // 检查是否可能有不完整的标签 (e.g. "<func")
+                    size_t lastAngle = buffer_.rfind('<');
+                    if (lastAngle != std::string::npos && lastAngle > buffer_.size() - 40) {
+                        // 保留可能的不完整标签，输出前面的文本
+                        if (lastAngle > 0) {
+                            emitTextEvent(buffer_.substr(0, lastAngle), events);
+                            buffer_ = buffer_.substr(lastAngle);
+                        }
+                    } else {
+                        // 确实是普通文本
+                        emitTextEvent(buffer_, events);
+                        buffer_.clear();
+                    }
+                    return;
+                }
+                
+                // 输出标签前的文本
+                if (tagPos > 0) {
+                    emitTextEvent(buffer_.substr(0, tagPos), events);
+                }
+                
+                // 查找标签结束符 '>'
+                size_t endTagPos = buffer_.find('>', tagPos);
+                if (endTagPos == std::string::npos) {
+                    return; // 等待更多数据
+                }
+                
+                // 进入 FunctionCalls 状态
+                buffer_ = buffer_.substr(endTagPos + 1);
+                state_ = XmlParserState::InFunctionCalls;
+                break;
+            }
+            
+            case XmlParserState::InFunctionCalls: {
+                // 跳过空白
+                size_t nonWhitespace = buffer_.find_first_not_of(" \t\n\r");
+                if (nonWhitespace == std::string::npos) {
+                    buffer_.clear(); // 全是空白，丢弃
+                    return;
+                }
+                if (nonWhitespace > 0) {
+                    buffer_ = buffer_.substr(nonWhitespace);
+                }
+                
+                // 查找闭合标签 </function_calls>
+                if (buffer_.substr(0, 2) == "</") {
+                    size_t endTag = buffer_.find('>');
+                    if (endTag == std::string::npos) return;
+                    
+                    buffer_ = buffer_.substr(endTag + 1);
+                    state_ = XmlParserState::Text; // 回到文本状态
+                    // 注意：sentinelMatched_ 保持为 true，允许同一个块后续还有内容
+                    // 如果需要每次块都重新匹配 Sentinel，这里应设为 false
+                    break;
+                }
+                
+                const std::string invokePrefixAntml = "<" + TAG_INVOKE;
+                const std::string invokePrefixPlain = "<" + TAG_INVOKE_PLAIN;
+                const std::string functionCallPrefix = "<" + TAG_FUNCTION_CALL;
+
+                auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
+                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                };
+
+                // Toolify 风格: <function_call>
+                if (startsWith(buffer_, functionCallPrefix)) {
+                    size_t callEnd = buffer_.find('>');
+                    if (callEnd == std::string::npos) return;
+
+                    currentContext_ = ToolCallParseContext();
+                    currentContext_.toolCallId = generateToolCallId();
+                    currentParamEndTag_.clear();
+
+                    buffer_ = buffer_.substr(callEnd + 1);
+                    state_ = XmlParserState::InFunctionCall;
+                    break;
+                }
+
+                // Antml 风格: <invoke>
+                if (startsWith(buffer_, invokePrefixAntml) || startsWith(buffer_, invokePrefixPlain)) {
+                    size_t invokeEnd = buffer_.find('>');
+                    if (invokeEnd == std::string::npos) return;
+
+                    std::string invokeTag = buffer_.substr(0, invokeEnd + 1);
+                    currentContext_ = ToolCallParseContext();
+                    currentContext_.toolName = extractAttribute(invokeTag, "name");
+                    currentContext_.toolCallId = generateToolCallId();
+                    currentParamEndTag_.clear();
+
+                    emitToolCallBegin(events);
+
+                    buffer_ = buffer_.substr(invokeEnd + 1);
+                    state_ = XmlParserState::InInvoke;
+                    break;
+                }
+
+                // 未知内容，丢弃一个字符尝试重新同步
+                buffer_ = buffer_.substr(1);
+                break;
+            }
+            
+            case XmlParserState::InInvoke: {
+                // 跳过空白
+                size_t nonWhitespace = buffer_.find_first_not_of(" \t\n\r");
+                if (nonWhitespace == std::string::npos) {
+                    buffer_.clear();
+                    return;
+                }
+                if (nonWhitespace > 0) {
+                    buffer_ = buffer_.substr(nonWhitespace);
+                }
+                
+                // 查找 parameter 或 invoke 结束
+                if (buffer_.substr(0, 2) == "</") {
+                    size_t endTag = buffer_.find('>');
+                    if (endTag == std::string::npos) return;
+                    
+                    // invoke 结束，发送完整参数
+                    emitToolCallEnd(events);
+                    
+                    buffer_ = buffer_.substr(endTag + 1);
+                    state_ = XmlParserState::InFunctionCalls;
+                    break;
+                }
+                
+                const std::string paramPrefixAntml = "<" + TAG_PARAMETER;
+                const std::string paramPrefixPlain = "<" + TAG_PARAMETER_PLAIN;
+
+                auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
+                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                };
+
+                std::string paramTagName;
+                if (startsWith(buffer_, paramPrefixAntml)) {
+                    paramTagName = TAG_PARAMETER;
+                } else if (startsWith(buffer_, paramPrefixPlain)) {
+                    paramTagName = TAG_PARAMETER_PLAIN;
+                } else {
+                    // 未知标签，跳过
+                    buffer_ = buffer_.substr(1);
+                    return;
+                }
+
+                size_t paramEnd = buffer_.find('>');
+                if (paramEnd == std::string::npos) return;
+
+                std::string paramTag = buffer_.substr(0, paramEnd + 1);
+                currentContext_.currentParamName = extractAttribute(paramTag, "name");
+                currentContext_.currentParamValue.clear();
+                currentParamEndTag_ = "</" + paramTagName + ">";
+                
+                buffer_ = buffer_.substr(paramEnd + 1);
+                state_ = XmlParserState::InParameter;
+                break;
+            }
+            
+            case XmlParserState::InParameter: {
+                // 查找参数结束标签
+                const std::string endTag = currentParamEndTag_.empty()
+                    ? ("</" + TAG_PARAMETER + ">")
+                    : currentParamEndTag_;
+                size_t endPos = buffer_.find(endTag);
+                
+                if (endPos == std::string::npos) {
+                    // 累积参数值
+                    currentContext_.currentParamValue += buffer_;
+                    buffer_.clear();
+                    return;
+                }
+                
+                currentContext_.currentParamValue += buffer_.substr(0, endPos);
+                currentContext_.parameters[currentContext_.currentParamName] = 
+                    unescapeXml(currentContext_.currentParamValue);
+                
+                // 发送参数增量事件
+                ToolCallEvent argEvent;
+                argEvent.type = EventType::ToolCallArgsDelta;
+                argEvent.toolCallId = currentContext_.toolCallId;
+                argEvent.toolName = currentContext_.toolName;
+                
+                // 构建参数 JSON 片段
+                Json::Value paramJson;
+                paramJson[currentContext_.currentParamName] = currentContext_.parameters[currentContext_.currentParamName];
+                Json::StreamWriterBuilder writer;
+                writer["indentation"] = "";
+                argEvent.argumentsDelta = Json::writeString(writer, paramJson);
+                events.push_back(std::move(argEvent));
+                
+                buffer_ = buffer_.substr(endPos + endTag.length());
+                state_ = XmlParserState::InInvoke;
+                break;
+            }
+
+            case XmlParserState::InFunctionCall: {
+                // 跳过空白
+                size_t nonWhitespace = buffer_.find_first_not_of(" \t\n\r");
+                if (nonWhitespace == std::string::npos) {
+                    buffer_.clear();
+                    return;
+                }
+                if (nonWhitespace > 0) {
+                    buffer_ = buffer_.substr(nonWhitespace);
+                }
+
+                // function_call 结束
+                if (buffer_.substr(0, 2) == "</") {
+                    size_t endTag = buffer_.find('>');
+                    if (endTag == std::string::npos) return;
+
+                    emitToolCallEnd(events);
+                    buffer_ = buffer_.substr(endTag + 1);
+                    state_ = XmlParserState::InFunctionCalls;
+                    break;
+                }
+
+                const std::string toolPrefix = "<" + TAG_TOOL;
+                const std::string argsPrefix = "<" + TAG_ARGS_JSON;
+
+                auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
+                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                };
+
+                // <tool>
+                if (startsWith(buffer_, toolPrefix)) {
+                    size_t tagEnd = buffer_.find('>');
+                    if (tagEnd == std::string::npos) return;
+                    currentContext_.currentParamValue.clear();
+                    buffer_ = buffer_.substr(tagEnd + 1);
+                    state_ = XmlParserState::InToolTag;
+                    break;
+                }
+
+                // <args_json>
+                if (startsWith(buffer_, argsPrefix)) {
+                    size_t tagEnd = buffer_.find('>');
+                    if (tagEnd == std::string::npos) return;
+                    currentContext_.currentParamValue.clear();
+                    buffer_ = buffer_.substr(tagEnd + 1);
+                    state_ = XmlParserState::InArgsJson;
+                    break;
+                }
+
+                // 未识别到期望的标签，丢弃一个字符重试
+                buffer_ = buffer_.substr(1);
+                break;
+            }
+
+            case XmlParserState::InToolTag: {
+                const std::string endTag = "</" + TAG_TOOL + ">";
+                size_t endPos = buffer_.find(endTag);
+
+                if (endPos == std::string::npos) {
+                    currentContext_.currentParamValue += buffer_;
+                    buffer_.clear();
+                    return;
+                }
+
+                currentContext_.currentParamValue += buffer_.substr(0, endPos);
+                currentContext_.toolName = trimWs(unescapeXml(currentContext_.currentParamValue));
+                buffer_ = buffer_.substr(endPos + endTag.length());
+                state_ = XmlParserState::InFunctionCall;
+                break;
+            }
+
+            case XmlParserState::InArgsJson: {
+                const std::string endTag = "</" + TAG_ARGS_JSON + ">";
+                size_t endPos = buffer_.find(endTag);
+
+                if (endPos == std::string::npos) {
+                    currentContext_.currentParamValue += buffer_;
+                    buffer_.clear();
+                    return;
+                }
+
+                currentContext_.currentParamValue += buffer_.substr(0, endPos);
+                std::string payload = trimWs(currentContext_.currentParamValue);
+
+                // Strip optional CDATA wrapper
+                // CDATA 内容是原始 JSON，不应该进行 unescapeXml 处理，否则破坏 JSON 结构
+                const std::string cdataStart = "<![CDATA[";
+                const std::string cdataEnd = "]]>";
+                if (payload.size() >= cdataStart.size() + cdataEnd.size() &&
+                    payload.compare(0, cdataStart.size(), cdataStart) == 0) {
+                    size_t contentLen = payload.size() - cdataStart.size();
+                    if (payload.compare(payload.size() - cdataEnd.size(), cdataEnd.size(), cdataEnd) == 0) {
+                        contentLen -= cdataEnd.size();
+                    }
+                    payload = payload.substr(cdataStart.size(), contentLen);
+                    // CDATA 内部不需要 unescapeXml
+                } else {
+                    // 没有 CDATA 包装，进行常规 unescape
+                    payload = unescapeXml(payload);
+                }
+
+                currentContext_.rawArgumentsJson = trimWs(payload);
+                buffer_ = buffer_.substr(endPos + endTag.length());
+                state_ = XmlParserState::InFunctionCall;
+                break;
+            }
+            
+            default:
+                // 异常状态恢复
+                state_ = XmlParserState::Text;
+                buffer_.clear();
+                return;
+        }
+    }
+}
 void XmlTagToolCallCodec::emitTextEvent(const std::string& text, std::vector<ToolCallEvent>& events) {
     if (text.empty()) return;
     
@@ -658,6 +1030,7 @@ void XmlTagToolCallCodec::reset() {
     pendingText_.clear();
     currentContext_ = ToolCallParseContext();
     currentParamEndTag_.clear();
+    sentinelMatched_ = sentinel_.empty(); // 重置匹配状态
 }
 
 std::shared_ptr<XmlTagToolCallCodec> createXmlTagToolCallCodec() {

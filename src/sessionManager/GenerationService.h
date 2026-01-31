@@ -260,7 +260,8 @@ private:
      static void parseXmlToolCalls(
          const std::string& xmlInput,
          std::string& outTextContent,
-         std::vector<generation::ToolCallDone>& outToolCalls
+         std::vector<generation::ToolCallDone>& outToolCalls,
+         const std::string& sentinel
      );
     
     /**

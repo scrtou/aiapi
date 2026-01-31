@@ -40,6 +40,10 @@ public:
     bool decodeIncremental(const std::string& chunk, std::vector<ToolCallEvent>& events) override;
     void flush(std::vector<ToolCallEvent>& events) override;
     void reset() override;
+    void setSentinel(const std::string& sentinel) { 
+        sentinel_ = sentinel; 
+        sentinelMatched_ = sentinel.empty(); // 如果为空则视为不需要匹配
+    }
     
 private:
     XmlParserState state_;
@@ -48,6 +52,9 @@ private:
     ToolCallParseContext currentContext_;
     std::string currentParamEndTag_;
     int toolCallCounter_;
+    // [新增] 成员变量
+    std::string sentinel_;
+    bool sentinelMatched_ = false;
     
     void processBuffer(std::vector<ToolCallEvent>& events);
     void emitTextEvent(const std::string& text, std::vector<ToolCallEvent>& events);
@@ -57,6 +64,8 @@ private:
     std::string extractAttribute(const std::string& tag, const std::string& attrName);
     std::string escapeXml(const std::string& text);
     std::string unescapeXml(const std::string& text);
+    // [新增] 设置本次会话期望的 Sentinel（触发标记）
+    
 };
 
 std::shared_ptr<XmlTagToolCallCodec> createXmlTagToolCallCodec();

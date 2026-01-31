@@ -48,7 +48,10 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
         }
         else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
             // 发送 tool_calls delta
-            std::string json = buildToolCallChunkJson(arg, "", firstChunk_);
+            // IMPORTANT: For ChatCompletions streaming, some clients only execute tools when
+            // tool_calls and finish_reason="tool_calls" appear together in the same chunk.
+            // Emit finish_reason here (and avoid emitting a separate trailing finish chunk).
+            std::string json = buildToolCallChunkJson(arg, "tool_calls", firstChunk_);
             sendSseEvent(json);
             firstChunk_ = false;
         }
@@ -69,9 +72,14 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
                 }
             }
 
-            // 发送带有 finish_reason 的最后一个 chunk
-            std::string json = buildChunkJson("", arg.finishReason.empty() ? "stop" : arg.finishReason, false);
-            sendSseEvent(json);
+            // When tool calls are present, we already emitted a chunk that contains BOTH
+            // tool_calls and finish_reason="tool_calls". Do not emit an extra trailing
+            // empty finish chunk that would separate them again.
+            const std::string finish = arg.finishReason.empty() ? "stop" : arg.finishReason;
+            if (finish != "tool_calls") {
+                std::string json = buildChunkJson("", finish, false);
+                sendSseEvent(json);
+            }
 
             // 发送 usage chunk（非标准 OpenAI chunk，但满足“流式返回 usage”的需求）
             if (usage_.has_value()) {

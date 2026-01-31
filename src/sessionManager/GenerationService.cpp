@@ -102,7 +102,7 @@ size_t findFunctionCallsPos(std::string_view s) {
     if (p2 == std::string_view::npos) return p1;
     return (p1 < p2) ? p1 : p2;
 }
-
+/*
 std::string extractXmlInputForToolCalls(const session_st& session, const std::string& rawText) {
     // Avoid false positives:
     // Some model outputs include <function_calls> blocks as examples inside normal text.
@@ -185,7 +185,34 @@ std::string extractXmlInputForToolCalls(const session_st& session, const std::st
 
     return xmlInput;
 }
+*/
+// GenerationService.cpp 中的 helper 函数
 
+std::string extractXmlInputForToolCalls(const session_st& session, const std::string& rawText) {
+    std::string xmlCandidate = stripMarkdownCodeFence(rawText);
+    const std::string_view trimmed = ltrimView(xmlCandidate);
+
+    // 1. 如果有随机 Trigger，优先使用它定位
+    if (!session.tool_bridge_trigger.empty()) {
+        size_t triggerPos = trimmed.find(session.tool_bridge_trigger);
+        if (triggerPos != std::string::npos) {
+            // [关键修改] 直接返回包含 Trigger 的子串，不要在后面把 Trigger 切掉！
+            // 这样 Codec 才能读到 "<Function_.../>" 并进行匹配
+            return std::string(trimmed.substr(triggerPos));
+        }
+    }
+
+    // 2. 兜底逻辑：如果找不到 Trigger，尝试直接找 <function_calls>
+    // 这种情况下，返回的字符串不含 Sentinel，Codec 的 setSentinel 应该传入空，或者 Codec 发现不匹配时回退
+    size_t tagPos = trimmed.find("<function_calls"); // 简略匹配
+    if (tagPos == std::string::npos) tagPos = trimmed.find("<antml:function_calls");
+    
+    if (tagPos != std::string::npos) {
+        return std::string(trimmed.substr(tagPos));
+    }
+
+    return "";
+}
 std::string generateFallbackToolCallId() {
     // Keep the same "call_xxx" style as common tool call ids
     std::ostringstream oss;
@@ -705,7 +732,18 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         } else {
             //parseXmlToolCalls(xmlInput, textContent, toolCalls);
             xmlInput = normalizeBridgeXml(std::move(xmlInput));
-            parseXmlToolCalls(xmlInput, textContent, toolCalls);
+            // [修改] 传入 session.tool_bridge_trigger
+            // 注意：extractXmlInputForToolCalls 返回的字符串如果是通过 Trigger 找到的，它就包含 Trigger。
+            // 如果是通过 <function_calls> 兜底找到的，它就不包含 Trigger。
+            // 我们需要简单判断一下是否真的要把 Trigger 传进去进行严格匹配。
+            
+            std::string expectedSentinel = "";
+            if (!session.tool_bridge_trigger.empty() && 
+                xmlInput.find(session.tool_bridge_trigger) != std::string::npos) {
+                expectedSentinel = session.tool_bridge_trigger;
+            }
+            //parseXmlToolCalls(xmlInput, textContent, toolCalls);
+            parseXmlToolCalls(xmlInput, textContent, toolCalls, expectedSentinel);
         }
 
         // tool_choice=required / forced tool fallback
@@ -727,16 +765,33 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         applyStrictClientRules(clientType, textContent, toolCalls);
     }
 
+    // 3. 零宽字符模式：确保会话ID在 tool_calls 之前就发送出去。
+    //    说明：ChatCompletions 流式场景下，部分客户端可能在收到包含
+    //    finish_reason="tool_calls" 的 chunk 后就停止处理后续 chunk。
+    //    若会话ID放在 tool_calls 之后，客户端侧可能丢失该 ID，导致下一轮无法续聊。
+    auto& sessionManager = *chatSession::getInstance();
+
+    if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
+        if (!toolCalls.empty()) {
+            // tool_calls 场景：单独发送“仅含零宽会话ID”的文本 chunk（在 tool_calls 之前）
+            std::string zwOnly = chatSession::embedSessionIdInText("", session.curConversationId);
+            if (!zwOnly.empty()) {
+                generation::OutputTextDone zwDone;
+                zwDone.text = zwOnly;
+                zwDone.index = 0;
+                sink.onEvent(zwDone);
+                LOG_DEBUG << "[生成服务] 已在 tool_calls 前发送零宽会话ID: " << session.curConversationId;
+            }
+        } else {
+            // 普通文本场景：在文本末尾嵌入会话ID
+            textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
+            LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
+        }
+    }
+
     // Emit tool calls (after validation/fallback) so we don't change our mind later.
     for (const auto& tc : toolCalls) {
         sink.onEvent(tc);
-    }
-
-    // 3. 如果使用零宽字符模式，在响应末尾嵌入会话ID
-    auto& sessionManager = *chatSession::getInstance();
-    if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
-        textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
-        LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
     }
 
     // 发送 OutputTextDone 事件 (如果有文本)
@@ -866,9 +921,10 @@ bool GenerationService::getChannelSupportsToolCalls(const std::string& channelNa
 void GenerationService::parseXmlToolCalls(
     const std::string& xmlInput,
     std::string& outTextContent,
-    std::vector<generation::ToolCallDone>& outToolCalls
+    std::vector<generation::ToolCallDone>& outToolCalls,
+    const std::string& sentinel // [新增]
 ) {
-    LOG_INFO << "[GenerationService] 解析 XML 格式 tool calls";
+    LOG_INFO << "[GenerationService] 解析 XML 格式 tool calls, sentinel: " << (sentinel.empty() ? "NONE" : sentinel);
     LOG_DEBUG << "[ToolParse] xmlInput.size=" << xmlInput.size()
     << " has </args_json>=" << (xmlInput.find("</args_json>") != std::string::npos)
     << " has </function_call>=" << (xmlInput.find("</function_call>") != std::string::npos)
@@ -876,6 +932,11 @@ void GenerationService::parseXmlToolCalls(
 
     auto bridge = toolcall::createToolCallBridge(false);
     auto codec = toolcall::createXmlTagToolCallCodec();
+
+    // [新增] 将 Sentinel 传给 Codec
+    if (!sentinel.empty()) {
+        codec->setSentinel(sentinel);
+    }
     bridge->setTextCodec(codec);
 
     std::vector<toolcall::ToolCallEvent> events;
