@@ -772,7 +772,8 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     auto& sessionManager = *chatSession::getInstance();
 
     if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
-        if (!toolCalls.empty()) {
+        const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
+        if (!toolCalls.empty()&&clientType=="claudecode") {
             // tool_calls 场景：单独发送“仅含零宽会话ID”的文本 chunk（在 tool_calls 之前）
             std::string zwOnly = chatSession::embedSessionIdInText("", session.curConversationId);
             if (!zwOnly.empty()) {
