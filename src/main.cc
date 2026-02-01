@@ -9,7 +9,7 @@ int main() {
     //Load config file
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
-
+    LOG_INFO << "version: 1.0 更新时间：2026/0201/1615";
     // 读取会话追踪模式配置
     auto customConfig = drogon::app().getCustomConfig();
     if (customConfig.isMember("session_tracking")) {
