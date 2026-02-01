@@ -144,28 +144,50 @@ void AccountManager::loadAccountFromConfig()
     }
     LOG_INFO << "[账户管理] 从配置文件加载账户完成";
 }
-void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType)
+void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType,string status)
 {
-    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType);
+    std::lock_guard<std::mutex> lock(accountListMutex);
+    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType,status);
     accountList[apiName][userName] = account;
-    if(accountPoolMap[apiName] == nullptr)
-    {
-        accountPoolMap[apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
+    
+    // 只有 active 状态的账号才加入账号池
+    if (status == AccountStatus::ACTIVE) {
+        if(accountPoolMap[apiName] == nullptr)
+        {
+            accountPoolMap[apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
+        }
+        accountPoolMap[apiName]->push(account);
+    } else {
+        LOG_INFO << "[账户管理] 账号 " << userName << " 状态为 " << status << ", 不加入账号池";
     }
-    accountPoolMap[apiName]->push(account);
 }
 bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if(accountList[accountinfo.apiName].find(accountinfo.userName) != accountList[accountinfo.apiName].end())
     {
         return false;
     }
-    addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType);
+    // 注意：这里不能调用 addAccount，因为它也会获取锁，会导致死锁
+    auto account = make_shared<Accountinfo_st>(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
+    accountList[accountinfo.apiName][accountinfo.userName] = account;
+    
+    // 只有 active 状态的账号才加入账号池
+    if (accountinfo.status == AccountStatus::ACTIVE) {
+        if(accountPoolMap[accountinfo.apiName] == nullptr)
+        {
+            accountPoolMap[accountinfo.apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
+        }
+        accountPoolMap[accountinfo.apiName]->push(account);
+    } else {
+        LOG_INFO << "[账户管理] 账号 " << accountinfo.userName << " 状态为 " << accountinfo.status << ", 不加入账号池";
+    }
     return true;
 }
 bool AccountManager::updateAccount(Accountinfo_st accountinfo)
 {
-    if(accountList.find(accountinfo.apiName) == accountList.end() || 
+    std::lock_guard<std::mutex> lock(accountListMutex);
+    if(accountList.find(accountinfo.apiName) == accountList.end() ||
        accountList[accountinfo.apiName].find(accountinfo.userName) == accountList[accountinfo.apiName].end())
     {
         return false;
@@ -179,11 +201,12 @@ bool AccountManager::updateAccount(Accountinfo_st accountinfo)
     account->userTobitId = accountinfo.userTobitId;
     account->personId = accountinfo.personId;
     account->accountType = accountinfo.accountType;
+    account->status = accountinfo.status;
     return true;
 }
 bool AccountManager::deleteAccountbyPost(string apiName,string userName)
 {
-
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->tokenStatus = false;
@@ -191,10 +214,11 @@ bool AccountManager::deleteAccountbyPost(string apiName,string userName)
         accountList[apiName].erase(userName);
         return true;
     }
-    return false;   
+    return false;
 }
 void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType)
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if(accountPoolMap.find(apiName) == accountPoolMap.end() || accountPoolMap[apiName] == nullptr || accountPoolMap[apiName]->empty())
     {
         LOG_ERROR << "[账户管理] 账户池 [" << apiName << "] 为空或未找到";
@@ -208,8 +232,10 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         {
             account->useCount++;
             LOG_INFO << "[账户管理] 使用次数已增加: " << account->userName << ", 新值: " << account->useCount;
-            LOG_INFO << "[账户管理] 账户列表已更新: " << accountList[apiName][account->userName]->userName << ", 新值: " << accountList[apiName][account->userName]->useCount;
-
+            if (accountList.find(apiName) != accountList.end() &&
+                accountList[apiName].find(account->userName) != accountList[apiName].end()) {
+                LOG_INFO << "[账户管理] 账户列表已更新: " << accountList[apiName][account->userName]->userName << ", 新值: " << accountList[apiName][account->userName]->useCount;
+            }
         }
         accountPoolMap[apiName]->push(account);
     } else {
@@ -245,6 +271,7 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
 }
 void AccountManager::getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account)
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if (accountList.find(apiName) != accountList.end() &&
         accountList[apiName].find(userName) != accountList[apiName].end()) {
         account = accountList[apiName][userName];
@@ -371,23 +398,34 @@ void AccountManager::checkToken()
 {
     LOG_INFO << "checkToken start";
     LOG_INFO << "checkToken function map size: " << checkTokenMap.size();
-    for(auto apiName:accountList)
-    {   
-        for(auto& userName:apiName.second)
+    
+    // 先复制需要检查的账号列表，避免长时间持有锁
+    std::vector<shared_ptr<Accountinfo_st>> accountsToCheck;
+    {
+        std::lock_guard<std::mutex> lock(accountListMutex);
+        for(auto& apiName : accountList)
         {
-            LOG_INFO << "checkToken accountinfo: " << userName.second->apiName << " " << userName.second->userName;
-            if(checkTokenMap[userName.second->apiName])
+            for(auto& userName : apiName.second)
             {
-                bool result = (this->*checkTokenMap[userName.second->apiName])(userName.second->authToken);
-                LOG_INFO << "checkToken result: " << result;
-                setStatusTokenStatus(userName.second->apiName,userName.second->userName,result);
-                
+                accountsToCheck.push_back(userName.second);
             }
-            else
-            {
-                LOG_ERROR << "apiName: " << userName.second->apiName << " is not supported";
-            }
-        }   
+        }
+    }
+    
+    // 在锁外进行检查操作
+    for(auto& account : accountsToCheck)
+    {
+        LOG_INFO << "checkToken accountinfo: " << account->apiName << " " << account->userName;
+        if(checkTokenMap[account->apiName])
+        {
+            bool result = (this->*checkTokenMap[account->apiName])(account->authToken);
+            LOG_INFO << "checkToken result: " << result;
+            setStatusTokenStatus(account->apiName, account->userName, result);
+        }
+        else
+        {
+            LOG_ERROR << "apiName: " << account->apiName << " is not supported";
+        }
     }
     LOG_INFO << "checkToken end";
 }
@@ -395,30 +433,41 @@ void AccountManager::checkToken()
 void AccountManager::updateToken()
 {
     LOG_INFO << "updateToken start";
-    for(auto apiName:accountList)
+    
+    // 先复制需要更新的账号列表，避免长时间持有锁
+    std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
     {
-        for(auto& userName:apiName.second)
+        std::lock_guard<std::mutex> lock(accountListMutex);
+        for(auto& apiName : accountList)
         {
-            if(!userName.second->tokenStatus||userName.second->authToken.empty())
+            for(auto& userName : apiName.second)
             {
-                if(updateTokenMap[userName.second->apiName])
-           {
-                (this->*updateTokenMap[userName.second->apiName])(userName.second);
-                if(userName.second->tokenStatus)
+                if(!userName.second->tokenStatus || userName.second->authToken.empty())
                 {
-                    accountDbManager->updateAccount(*(userName.second.get()));
-                    refreshAccountQueue(userName.second->apiName);
-                }
-           }
-           else
-                {
-                    LOG_ERROR << "apiName: " << userName.second->apiName << " is not supported";
+                    accountsToUpdate.push_back(userName.second);
                 }
             }
         }
     }
+    
+    // 在锁外进行更新操作
+    for(auto& account : accountsToUpdate)
+    {
+        if(updateTokenMap[account->apiName])
+        {
+            (this->*updateTokenMap[account->apiName])(account);
+            if(account->tokenStatus)
+            {
+                accountDbManager->updateAccount(*account);
+                refreshAccountQueue(account->apiName);
+            }
+        }
+        else
+        {
+            LOG_ERROR << "apiName: " << account->apiName << " is not supported";
+        }
+    }
     LOG_INFO << "updateToken end";
-
 }
 
 void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
@@ -492,8 +541,8 @@ void AccountManager::loadAccountFromDatebase()
     auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
-        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime;
-        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType);
+        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime << ", status: " << accountinfo.status;
+        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
     }
     LOG_INFO << "loadDatebase end size "<<accountDBList.size();
 }
@@ -512,10 +561,12 @@ void AccountManager::saveAccountToDatebase()
 
 map<string,map<string,shared_ptr<Accountinfo_st>>> AccountManager::getAccountList()
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     return accountList;
 }
 void AccountManager::setStatusAccountStatus(string apiName,string userName,bool status)
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->accountStatus = status;
@@ -523,12 +574,13 @@ void AccountManager::setStatusAccountStatus(string apiName,string userName,bool 
 }
 void AccountManager::setStatusTokenStatus(string apiName,string userName,bool status)
 {
+    std::lock_guard<std::mutex> lock(accountListMutex);
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->tokenStatus = status;
         if(!status)
             {
-                std::lock_guard<std::mutex> lock(accountListNeedUpdateMutex);
+                std::lock_guard<std::mutex> lock2(accountListNeedUpdateMutex);
                 accountListNeedUpdate.push_back(accountList[apiName][userName]);
                 accountListNeedUpdateCondition.notify_one();
             }
@@ -617,14 +669,10 @@ void AccountManager::checkChannelAccountCounts()
     {
         if(channel.accountCount > 0)
         {
-            int currentCount = 0;
-            // Count accounts for this channel (apiName)
-            if(accountList.find(channel.channelName) != accountList.end())
-            {
-                currentCount = accountList[channel.channelName].size();
-            }
+            // 使用数据库统计，包含pending状态的账号
+            int currentCount = accountDbManager->countAccountsByChannel(channel.channelName, true);
 
-            LOG_INFO << "Channel: " << channel.channelName << ", Target: " << channel.accountCount << ", Current: " << currentCount;
+            LOG_INFO << "Channel: " << channel.channelName << ", Target: " << channel.accountCount << ", Current (including pending): " << currentCount;
 
             if(currentCount < channel.accountCount)
             {
@@ -653,7 +701,34 @@ std::string generateRandomString(int length) {
 
 void AccountManager::autoRegisterAccount(string apiName)
 {
-    LOG_INFO << "Starting auto-registration for channel: " << apiName;
+    LOG_INFO << "[自动注册] 开始为渠道 " << apiName << " 自动注册账号";
+    
+    // Step 1: 创建待注册记录，预占位置
+    int waitingId = accountDbManager->createWaitingAccount(apiName);
+    if (waitingId < 0) {
+        LOG_ERROR << "[自动注册] 创建待注册记录失败: " << apiName;
+        return;
+    }
+    LOG_INFO << "[自动注册] 创建待注册账号成功, ID: " << waitingId;
+    
+    // Step 2: 标记为注册中状态，并加入内存追踪集合
+    {
+        std::lock_guard<std::mutex> lock(registeringMutex_);
+        registeringAccountIds_.insert(waitingId);
+    }
+    accountDbManager->updateAccountStatusById(waitingId, AccountStatus::REGISTERING);
+    LOG_INFO << "[自动注册] 账号状态已更新为注册中, ID: " << waitingId;
+    
+    // 使用 RAII 确保无论如何都会从追踪集合中移除
+    struct RegisteringGuard {
+        AccountManager* manager;
+        int id;
+        ~RegisteringGuard() {
+            std::lock_guard<std::mutex> lock(manager->registeringMutex_);
+            manager->registeringAccountIds_.erase(id);
+            LOG_INFO << "[自动注册] 从注册中追踪集合移除, ID: " << id;
+        }
+    } guard{this, waitingId};
     
     string firstName = "User" + generateRandomString(5);
     string lastName = "Auto" + generateRandomString(5);
@@ -666,7 +741,9 @@ void AccountManager::autoRegisterAccount(string apiName)
 
     const string fullUrl = getRegistServiceUrl("chaynsapi");
     if (fullUrl.empty()) {
-        LOG_ERROR << "login_service_url for 'chaynsapi' not found.";
+        LOG_ERROR << "[自动注册] 未找到 chaynsapi 的注册服务URL";
+        // 注册失败，删除待注册记录
+        accountDbManager->deleteWaitingAccount(waitingId);
         return;
     }
 
@@ -674,7 +751,8 @@ void AccountManager::autoRegisterAccount(string apiName)
     string baseUrl, path;
     size_t protocolPos = fullUrl.find("://");
     if (protocolPos == string::npos) {
-        LOG_ERROR << "Invalid login service URL format: " << fullUrl;
+        LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
+        accountDbManager->deleteWaitingAccount(waitingId);
         return ;
     }
     size_t pathPos = fullUrl.find('/', protocolPos + 3);
@@ -685,7 +763,7 @@ void AccountManager::autoRegisterAccount(string apiName)
         baseUrl = fullUrl.substr(0, pathPos);
         path = fullUrl.substr(pathPos);
     }
-    LOG_INFO << "baseUrl： "<<baseUrl;
+    LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
 
     auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
@@ -694,13 +772,16 @@ void AccountManager::autoRegisterAccount(string apiName)
     request->setContentTypeString("application/json");
     request->setBody(requestBody.toStyledString());
     
-    LOG_INFO << "Sending auto-register request...";
+    LOG_INFO << "[自动注册] 发送注册请求...";
     auto [result, response] = client->sendRequest(request, 300.0);
 
     if (result != ReqResult::Ok || response->getStatusCode() != 200) {
-        LOG_ERROR << "Auto-registration failed. Result: " << (int)result
+        LOG_ERROR << "[自动注册] 注册请求失败. Result: " << (int)result
                   << ", Status: " << (response ? response->getStatusCode() : 0)
                   << ", Body: " << (response ? response->getBody() : "");
+        // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
         return;
     }
 
@@ -711,7 +792,10 @@ void AccountManager::autoRegisterAccount(string apiName)
     std::istringstream s(responseBody);
     
     if (!Json::parseFromStream(reader, s, &jsonResponse, &errs)) {
-        LOG_ERROR << "Failed to parse auto-register response: " << errs;
+        LOG_ERROR << "[自动注册] 解析注册响应失败: " << errs;
+        // 解析失败，删除待注册记录
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
         return;
     }
 
@@ -725,26 +809,36 @@ void AccountManager::autoRegisterAccount(string apiName)
         hasProAccess = true;
     }
 
-    LOG_INFO << "Auto-registration successful for " << email;
+    LOG_INFO << "[自动注册] 注册成功: " << email;
     
     string createTime = trantor::Date::now().toDbStringLocal();
     string accountType = hasProAccess ? "pro" : "free";
 
-    Accountinfo_st newAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType);
+    // Step 3: 注册成功，激活账号记录
+    Accountinfo_st newAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
     
-    if (accountDbManager->addAccount(newAccount)) {
-        LOG_INFO << "New account added to database.";
-        addAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType);
+    if (accountDbManager->activateAccount(waitingId, newAccount)) {
+        LOG_INFO << "[自动注册] 账号激活成功: " << email;
+        addAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
         
         // 自动注册账号后，检查并更新该账号的 accountType
-        if (accountList.find(apiName) != accountList.end() &&
-            accountList[apiName].find(email) != accountList[apiName].end()) {
-            auto newAccountPtr = accountList[apiName][email];
-            LOG_INFO << "Auto-registered account, checking accountType for " << email;
+        shared_ptr<Accountinfo_st> newAccountPtr;
+        {
+            std::lock_guard<std::mutex> lock(accountListMutex);
+            if (accountList.find(apiName) != accountList.end() &&
+                accountList[apiName].find(email) != accountList[apiName].end()) {
+                newAccountPtr = accountList[apiName][email];
+            }
+        }
+        if (newAccountPtr) {
+            LOG_INFO << "[自动注册] 检查账号类型: " << email;
             updateAccountType(newAccountPtr);
         }
     } else {
-        LOG_ERROR << "Failed to add new account to database.";
+        LOG_ERROR << "[自动注册] 账号激活失败, ID: " << waitingId;
+        // 激活失败，删除待注册记录（以防万一）
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
     }
 }
 
@@ -836,18 +930,26 @@ void AccountManager::updateAllAccountTypes()
 {
     LOG_INFO << "updateAllAccountTypes start";
     
-    for (auto& apiName : accountList) {
-        for (auto& userName : apiName.second) {
-            auto account = userName.second;
-            
-            // 只更新 token 有效的账号
-            if (account && account->tokenStatus && !account->authToken.empty()) {
-                updateAccountType(account);
-                
-                // 添加短暂延迟，避免请求过于频繁
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // 先复制需要更新的账号列表，避免长时间持有锁
+    std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
+    {
+        std::lock_guard<std::mutex> lock(accountListMutex);
+        for (auto& apiName : accountList) {
+            for (auto& userName : apiName.second) {
+                auto account = userName.second;
+                // 只更新 token 有效的账号
+                if (account && account->tokenStatus && !account->authToken.empty()) {
+                    accountsToUpdate.push_back(account);
+                }
             }
         }
+    }
+    
+    // 在锁外进行更新操作
+    for (auto& account : accountsToUpdate) {
+        updateAccountType(account);
+        // 添加短暂延迟，避免请求过于频繁
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     
     LOG_INFO << "updateAllAccountTypes end";
@@ -870,5 +972,20 @@ void AccountManager::checkAccountTypeThread()
     });
     t.detach();
     LOG_INFO << "checkAccountTypeThread started";
+}
+
+// 检查账号是否正在注册中（通过ID）
+bool AccountManager::isAccountRegistering(int pendingId)
+{
+    std::lock_guard<std::mutex> lock(registeringMutex_);
+    return registeringAccountIds_.find(pendingId) != registeringAccountIds_.end();
+}
+
+// 检查账号是否正在注册中（通过用户名）
+bool AccountManager::isAccountRegisteringByUsername(const string& userName)
+{
+    // 检查数据库中的状态
+    string status = accountDbManager->getAccountStatusByUsername("chaynsapi", userName);
+    return status == AccountStatus::REGISTERING;
 }
 

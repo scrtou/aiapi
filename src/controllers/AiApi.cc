@@ -8,6 +8,7 @@
 #include <apiManager/ApiManager.h>
 #include <accountManager/accountManager.h>
 #include <dbManager/account/accountDbManager.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
 #include <channelManager/channelManager.h>
 #include <sessionManager/Session.h>
 #include <sessionManager/ClientOutputSanitizer.h>
@@ -397,6 +398,15 @@ void AiApi::accountDelete(const HttpRequestPtr &req, std::function<void(const Ht
         accountinfo.userName=item["username"].asString();
         responseitem["apiname"]=accountinfo.apiName;
         responseitem["username"]=accountinfo.userName;
+
+        // 检查账号是否正在注册中，如果是则拒绝删除
+        if (AccountManager::getInstance().isAccountRegisteringByUsername(accountinfo.userName)) {
+            responseitem["status"] = "failed";
+            responseitem["error"] = "Account is currently being registered, cannot delete";
+            LOG_WARN << "[API接口] 账号 " << accountinfo.userName << " 正在注册中，无法删除";
+            response.append(responseitem);
+            continue;
+        }
 
         if(AccountManager::getInstance().deleteAccountbyPost(accountinfo.apiName,accountinfo.userName))
         {
@@ -1108,4 +1118,243 @@ void AiApi::responsesDelete(const HttpRequestPtr &req, std::function<void(const 
     callback(resp);
     
     LOG_INFO << "[API接口] 删除响应完成, 响应ID: " << response_id;
+}
+
+// ========== 错误统计 API ==========
+
+void AiApi::getRequestsSeries(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取请求时序统计";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    
+    // 默认时间范围：最近 24 小时
+    if (from.empty() || to.empty()) {
+        auto now = std::chrono::system_clock::now();
+        auto yesterday = now - std::chrono::hours(24);
+        
+        auto formatTime = [](std::chrono::system_clock::time_point tp) -> std::string {
+            auto tt = std::chrono::system_clock::to_time_t(tp);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
+            return std::string(buf);
+        };
+        
+        if (from.empty()) from = formatTime(yesterday);
+        if (to.empty()) to = formatTime(now);
+    }
+    
+    metrics::QueryParams params;
+    params.from = from;
+    params.to = to;
+    
+    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
+    auto series = dbManager->queryRequestSeries(params);
+    
+    Json::Value response(Json::objectValue);
+    response["from"] = from;
+    response["to"] = to;
+    
+    Json::Value data(Json::arrayValue);
+    for (const auto& bucket : series) {
+        Json::Value item;
+        item["bucket_start"] = bucket.bucketStart;
+        item["count"] = static_cast<Json::Int64>(bucket.count);
+        data.append(item);
+    }
+    response["data"] = data;
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+void AiApi::getErrorsSeries(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取错误时序统计";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    std::string severity = req->getParameter("severity");
+    std::string domain = req->getParameter("domain");
+    std::string type = req->getParameter("type");
+    std::string provider = req->getParameter("provider");
+    std::string model = req->getParameter("model");
+    std::string clientType = req->getParameter("client_type");
+    
+    // 默认时间范围：最近 24 小时
+    if (from.empty() || to.empty()) {
+        auto now = std::chrono::system_clock::now();
+        auto yesterday = now - std::chrono::hours(24);
+        
+        auto formatTime = [](std::chrono::system_clock::time_point tp) -> std::string {
+            auto tt = std::chrono::system_clock::to_time_t(tp);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
+            return std::string(buf);
+        };
+        
+        if (from.empty()) from = formatTime(yesterday);
+        if (to.empty()) to = formatTime(now);
+    }
+    
+    metrics::QueryParams params;
+    params.from = from;
+    params.to = to;
+    params.severity = severity;
+    params.domain = domain;
+    params.type = type;
+    params.provider = provider;
+    params.model = model;
+    params.clientType = clientType;
+    
+    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
+    auto series = dbManager->queryErrorSeries(params);
+    
+    Json::Value response(Json::objectValue);
+    response["from"] = from;
+    response["to"] = to;
+    if (!severity.empty()) response["severity"] = severity;
+    if (!domain.empty()) response["domain"] = domain;
+    if (!type.empty()) response["type"] = type;
+    if (!provider.empty()) response["provider"] = provider;
+    if (!model.empty()) response["model"] = model;
+    if (!clientType.empty()) response["client_type"] = clientType;
+    
+    Json::Value data(Json::arrayValue);
+    for (const auto& bucket : series) {
+        Json::Value item;
+        item["bucket_start"] = bucket.bucketStart;
+        item["count"] = static_cast<Json::Int64>(bucket.count);
+        data.append(item);
+    }
+    response["data"] = data;
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+void AiApi::getErrorsEvents(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取错误事件列表";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    int limit = 100;
+    int offset = 0;
+    
+    std::string limitStr = req->getParameter("limit");
+    std::string offsetStr = req->getParameter("offset");
+    if (!limitStr.empty()) {
+        try { limit = std::stoi(limitStr); } catch (...) {}
+    }
+    if (!offsetStr.empty()) {
+        try { offset = std::stoi(offsetStr); } catch (...) {}
+    }
+    
+    // 限制最大返回数量
+    if (limit > 1000) limit = 1000;
+    if (limit < 1) limit = 1;
+    if (offset < 0) offset = 0;
+    
+    // 默认时间范围：最近 24 小时
+    if (from.empty() || to.empty()) {
+        auto now = std::chrono::system_clock::now();
+        auto yesterday = now - std::chrono::hours(24);
+        
+        auto formatTime = [](std::chrono::system_clock::time_point tp) -> std::string {
+            auto tt = std::chrono::system_clock::to_time_t(tp);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
+            return std::string(buf);
+        };
+        
+        if (from.empty()) from = formatTime(yesterday);
+        if (to.empty()) to = formatTime(now);
+    }
+    
+    metrics::QueryParams params;
+    params.from = from;
+    params.to = to;
+    
+    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
+    auto events = dbManager->queryEvents(params, limit, offset);
+    
+    Json::Value response(Json::objectValue);
+    response["from"] = from;
+    response["to"] = to;
+    response["limit"] = limit;
+    response["offset"] = offset;
+    
+    Json::Value data(Json::arrayValue);
+    for (const auto& ev : events) {
+        Json::Value item;
+        item["id"] = static_cast<Json::Int64>(ev.id);
+        item["ts"] = ev.ts;
+        item["severity"] = ev.severity;
+        item["domain"] = ev.domain;
+        item["type"] = ev.type;
+        item["provider"] = ev.provider;
+        item["model"] = ev.model;
+        item["client_type"] = ev.clientType;
+        item["api_kind"] = ev.apiKind;
+        item["stream"] = ev.stream;
+        item["http_status"] = ev.httpStatus;
+        item["request_id"] = ev.requestId;
+        item["message"] = ev.message;
+        data.append(item);
+    }
+    response["data"] = data;
+    response["count"] = static_cast<Json::UInt64>(events.size());
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+void AiApi::getErrorsEventById(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, int64_t id)
+{
+    LOG_INFO << "[API接口] 获取错误事件详情 - ID: " << id;
+    
+    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
+    auto eventOpt = dbManager->queryEventById(id);
+    
+    if (!eventOpt.has_value()) {
+        Json::Value error;
+        error["error"]["message"] = "Event not found";
+        error["error"]["type"] = "invalid_request_error";
+        error["error"]["code"] = "event_not_found";
+        auto resp = HttpResponse::newHttpJsonResponse(error);
+        resp->setStatusCode(HttpStatusCode::k404NotFound);
+        callback(resp);
+        return;
+    }
+    
+    const auto& ev = eventOpt.value();
+    
+    Json::Value response;
+    response["id"] = static_cast<Json::Int64>(ev.id);
+    response["ts"] = ev.ts;
+    response["severity"] = ev.severity;
+    response["domain"] = ev.domain;
+    response["type"] = ev.type;
+    response["provider"] = ev.provider;
+    response["model"] = ev.model;
+    response["client_type"] = ev.clientType;
+    response["api_kind"] = ev.apiKind;
+    response["stream"] = ev.stream;
+    response["http_status"] = ev.httpStatus;
+    response["request_id"] = ev.requestId;
+    response["message"] = ev.message;
+    response["detail_json"] = ev.detailJson;
+    response["raw_snippet"] = ev.rawSnippet;
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
 }

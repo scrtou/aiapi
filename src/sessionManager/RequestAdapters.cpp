@@ -178,6 +178,9 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
         clientType = "Kilo-Code";
     } else if (userAgent.find("RooCode") != std::string::npos) {
         clientType = "RooCode";
+    }else
+    {
+        clientType =userAgent;
     }
     
     clientInfo["client_type"] = clientType;
@@ -201,7 +204,7 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     stripBearer(auth);
     clientInfo["client_authorization"] = auth;
     
-    LOG_INFO << "[RequestAdapters] 识别到客户端类型: " << (clientType.empty() ? "Unknown" : clientType);
+    LOG_INFO << "[RequestAdapters] 识别到客户端类型: " << clientType;
     LOG_INFO << "[RequestAdapters] 识别到客户 authorization: " << (auth.empty() ? "empty" : auth);
     
     return clientInfo;

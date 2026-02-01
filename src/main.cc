@@ -3,6 +3,7 @@
 #include<apiManager/ApiManager.h>
 #include<channelManager/channelManager.h>
 #include<sessionManager/Session.h>
+#include<metrics/ErrorStatsService.h>
 int main() {
     //Set HTTP listener address and port
     //drogon::app().addListener("0.0.0.0", 5555);
@@ -56,6 +57,10 @@ int main() {
             ChannelManager::getInstance().init();
             AccountManager::getInstance().init();
             ApiManager::getInstance().init();
+            // 初始化错误统计服务（使用默认配置）
+            metrics::ErrorStatsConfig statsConfig;
+            metrics::ErrorStatsService::getInstance().init(statsConfig);
+
         });
         t1.detach();
     });

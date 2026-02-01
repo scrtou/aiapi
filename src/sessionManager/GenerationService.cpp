@@ -7,6 +7,8 @@
 #include <apipoint/ProviderResult.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <dbManager/channel/channelDbManager.h>
+#include <metrics/ErrorStatsService.h>
+#include <metrics/ErrorEvent.h>
 #include <drogon/drogon.h>
 #include <iomanip>
 #include <random>
@@ -248,6 +250,98 @@ std::string generateRandomTriggerSignal() {
 
     return "<Function_" + randomStr + "_Start/>";
 }
+
+// ========== 错误统计辅助函数 ==========
+
+/**
+ * @brief 从 session 中提取客户端类型
+ */
+std::string getClientTypeFromSession(const session_st& session) {
+    return safeJsonAsString(session.client_info.get("client_type", ""), "");
+}
+
+/**
+ * @brief 获取 API 类型字符串
+ */
+std::string getApiKindFromSession(const session_st& session) {
+    return session.is_response_api ? "responses" : "chat_completions";
+}
+
+/**
+ * @brief 记录错误事件到统计服务
+ */
+void recordErrorStat(
+    const session_st& session,
+    metrics::Domain domain,
+    const std::string& type,
+    const std::string& message,
+    int httpStatus = 0,
+    const Json::Value& detail = Json::Value(),
+    const std::string& rawSnippet = "",
+    const std::string& toolName = ""
+) {
+    metrics::ErrorStatsService::getInstance().recordError(
+        domain,
+        type,
+        message,
+        session.request_id,
+        session.selectapi,
+        session.selectmodel,
+        getClientTypeFromSession(session),
+        getApiKindFromSession(session),
+        false,  // stream - 暂时设为 false
+        httpStatus,
+        detail,
+        rawSnippet,
+        toolName
+    );
+}
+
+/**
+ * @brief 记录警告事件到统计服务
+ */
+void recordWarnStat(
+    const session_st& session,
+    metrics::Domain domain,
+    const std::string& type,
+    const std::string& message,
+    const Json::Value& detail = Json::Value(),
+    const std::string& rawSnippet = "",
+    const std::string& toolName = ""
+) {
+    metrics::ErrorStatsService::getInstance().recordWarn(
+        domain,
+        type,
+        message,
+        session.request_id,
+        session.selectapi,
+        session.selectmodel,
+        getClientTypeFromSession(session),
+        getApiKindFromSession(session),
+        false,  // stream
+        0,      // httpStatus
+        detail,
+        rawSnippet,
+        toolName
+    );
+}
+
+/**
+ * @brief 记录请求完成事件
+ */
+void recordRequestCompletedStat(const session_st& session, int httpStatus) {
+    metrics::RequestCompletedData data;
+    data.provider = session.selectapi;
+    data.model = session.selectmodel;
+    data.clientType = getClientTypeFromSession(session);
+    data.apiKind = getApiKindFromSession(session);
+    data.stream = false;  // 暂时设为 false
+    data.httpStatus = httpStatus;
+    data.ts = std::chrono::system_clock::now();
+    
+    metrics::ErrorStatsService::getInstance().recordRequestCompleted(data);
+}
+
 } // namespace
 
 std::string GenerationService::computeExecutionKey(const session_st& session) {
@@ -350,6 +444,14 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         GateResult result = guard.getResult();
         if (result == GateResult::Rejected) {
             LOG_WARN << "[生成服务] 因并发执行被拒绝, 会话密钥: " << sessionKey;
+            // 记录 SESSION_GATE 错误统计
+            recordErrorStat(
+                session,
+                metrics::Domain::SESSION_GATE,
+                metrics::EventType::SESSIONGATE_REJECTED_CONFLICT,
+                "Request rejected due to concurrent execution",
+                409  // HTTP 409 Conflict
+            );
             return AppError::conflict("Another request is already in progress for this session");
         }
         // 其他情况理论上不应该发生
@@ -393,6 +495,13 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         // 2. 检查取消状态
         if (guard.isCancelled()) {
             LOG_INFO << "[生成服务] 调用提供者前请求被取消";
+            // 记录 SESSION_GATE 取消统计
+            recordWarnStat(
+                session,
+                metrics::Domain::SESSION_GATE,
+                metrics::EventType::SESSIONGATE_CANCELLED,
+                "Request cancelled before provider call"
+            );
             emitError(generation::ErrorCode::Cancelled, "Request cancelled", sink);
             sink.onClose();
             return AppError::cancelled("Request was cancelled");
@@ -400,18 +509,37 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         
         // 3. 调用 Provider
         if (!executeProvider(session)) {
+            // 记录 UPSTREAM 错误统计（Provider 错误）
+            int httpStatus = session.responsemessage.get("statusCode", 0).asInt();
+            std::string errorMsg = safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error");
+            recordErrorStat(
+                session,
+                metrics::Domain::UPSTREAM,
+                metrics::EventType::UPSTREAM_HTTP_ERROR,
+                errorMsg,
+                httpStatus
+            );
             emitError(
                 generation::ErrorCode::ProviderError,
-                safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
+                errorMsg,
                 sink
             );
             sink.onClose();
+            // 记录请求完成（失败）
+            recordRequestCompletedStat(session, httpStatus);
             return std::nullopt;  // Provider 错误已通过 sink 发送
         }
         
         // 4. 检查取消状态
         if (guard.isCancelled()) {
             LOG_INFO << "[生成服务] 调用提供者后请求被取消";
+            // 记录 SESSION_GATE 取消统计
+            recordWarnStat(
+                session,
+                metrics::Domain::SESSION_GATE,
+                metrics::EventType::SESSIONGATE_CANCELLED,
+                "Request cancelled after provider call"
+            );
             emitError(generation::ErrorCode::Cancelled, "Request cancelled", sink);
             sink.onClose();
             return AppError::cancelled("Request was cancelled");
@@ -433,11 +561,30 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             api->afterResponseProcess(session);
         }
         
+        // 8. 记录请求完成（成功）
+        recordRequestCompletedStat(session, 200);
+        
     } catch (const std::exception& e) {
         LOG_ERROR << "[生成服务] 执行门控会话异常: " << e.what();
+        // 记录 INTERNAL 异常统计
+        recordErrorStat(
+            session,
+            metrics::Domain::INTERNAL,
+            metrics::EventType::INTERNAL_EXCEPTION,
+            e.what(),
+            500
+        );
         emitError(generation::ErrorCode::Internal, e.what(), sink);
     } catch (...) {
         LOG_ERROR << "[生成服务] 执行门控会话未知异常";
+        // 记录 INTERNAL 未知异常统计
+        recordErrorStat(
+            session,
+            metrics::Domain::INTERNAL,
+            metrics::EventType::INTERNAL_UNKNOWN,
+            "Unknown error occurred",
+            500
+        );
         emitError(generation::ErrorCode::Internal, "Unknown error occurred", sink);
     }
     
@@ -782,6 +929,18 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         if (xmlInput.empty()) {
             // 没有找到工具调用 XML，全部当作普通文本
             textContent = text;
+            // 记录 TOOL_BRIDGE 警告：未找到 XML 工具调用
+            if (!session.tools.isNull() && session.tools.isArray() && session.tools.size() > 0) {
+                // 只有在有工具定义时才记录警告
+                recordWarnStat(
+                    session,
+                    metrics::Domain::TOOL_BRIDGE,
+                    metrics::EventType::TOOLBRIDGE_XML_NOT_FOUND,
+                    "No XML tool calls found in response",
+                    Json::Value(),
+                    text.substr(0, std::min(text.size(), size_t(1024)))  // 截取前 1KB 作为原始片段
+                );
+            }
         } else {
             // 步骤 2.2: 规范化 XML（处理特殊空格、换行符等）
             xmlInput = normalizeBridgeXml(std::move(xmlInput));
@@ -874,6 +1033,19 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
                 LOG_WARN << "[GenerationService] 通过 Schema 校验过滤了 " << removedCount
                          << " 个无效的工具调用";
                 
+                // 记录 TOOL_BRIDGE 警告：校验过滤了无效的工具调用
+                Json::Value filterDetail;
+                filterDetail["removed_count"] = static_cast<Json::UInt64>(removedCount);
+                filterDetail["validation_mode"] = static_cast<int>(validationMode);
+                recordWarnStat(
+                    session,
+                    metrics::Domain::TOOL_BRIDGE,
+                    metrics::EventType::TOOLBRIDGE_VALIDATION_FILTERED,
+                    "Filtered " + std::to_string(removedCount) + " invalid tool calls",
+                    filterDetail,
+                    discardedText.substr(0, std::min(discardedText.size(), size_t(2048)))
+                );
+                
                 // Stage C: 根据客户端类型应用降级策略
                 // 如果所有工具调用都被过滤掉了，需要决定如何处理
                 if (toolCalls.empty()) {
@@ -881,6 +1053,14 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
                     // - 非严格客户端：仅丢弃，保留文本输出
                     // - 严格客户端（Roo/Kilo）：将文本包装为 attempt_completion
                     toolcall::applyValidationFallback(clientType, toolCalls, textContent, discardedText);
+                    
+                    // 记录 TOOL_BRIDGE 警告：应用了降级策略
+                    recordWarnStat(
+                        session,
+                        metrics::Domain::TOOL_BRIDGE,
+                        metrics::EventType::TOOLBRIDGE_VALIDATION_FALLBACK_APPLIED,
+                        "Applied validation fallback for client: " + clientType
+                    );
                 }
             }
         }
@@ -895,7 +1075,27 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // - 如果有多个工具调用 → 只保留第一个
     // - 如果有工具调用 → 清空文本内容（避免重复输出）
     if (strictToolClient) {
+        // 记录应用严格客户端规则前的状态
+        size_t toolCallsBeforeStrict = toolCalls.size();
+        bool hadTextBeforeStrict = !textContent.empty();
+        
         applyStrictClientRules(clientType, textContent, toolCalls);
+        
+        // 如果规则导致了变化，记录统计
+        if (toolCallsBeforeStrict != toolCalls.size() ||
+            (hadTextBeforeStrict && textContent.empty() && !toolCalls.empty())) {
+            Json::Value strictDetail;
+            strictDetail["original_tool_calls"] = static_cast<Json::UInt64>(toolCallsBeforeStrict);
+            strictDetail["final_tool_calls"] = static_cast<Json::UInt64>(toolCalls.size());
+            strictDetail["text_cleared"] = hadTextBeforeStrict && textContent.empty();
+            recordWarnStat(
+                session,
+                metrics::Domain::TOOL_BRIDGE,
+                metrics::EventType::TOOLBRIDGE_STRICT_CLIENT_RULE_APPLIED,
+                "Applied strict client rules for: " + clientType,
+                strictDetail
+            );
+        }
     }
 
     // ==================== 步骤 7: 零宽字符会话ID嵌入 ====================
@@ -1378,6 +1578,21 @@ void GenerationService::generateForcedToolCall(
     outTextContent.clear();
 
     LOG_WARN << "[GenerationService] 上游未返回 tool call，已根据 tool_choice=required 生成兜底 tool call: " << toolName;
+    
+    // 记录 TOOL_BRIDGE 警告：生成了强制工具调用
+    Json::Value forcedDetail;
+    forcedDetail["tool_name"] = toolName;
+    forcedDetail["tool_choice"] = session.toolChoice;
+    forcedDetail["generated_args"] = args;
+    recordWarnStat(
+        session,
+        metrics::Domain::TOOL_BRIDGE,
+        metrics::EventType::TOOLBRIDGE_FORCED_TOOLCALL_GENERATED,
+        "Generated forced tool call: " + toolName,
+        forcedDetail,
+        srcText.substr(0, std::min(srcText.size(), size_t(512))),
+        toolName
+    );
 }
 
 /**
@@ -1936,6 +2151,21 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
 
     // 清除 tools，避免后续流程再次处理
     session.tools = Json::Value(Json::nullValue);
+    
+    // 记录 TOOL_BRIDGE 警告：注入了工具定义
+    Json::Value injectDetail;
+    injectDetail["tool_count"] = session.tools_raw.isArray() ? static_cast<Json::UInt64>(session.tools_raw.size()) : 0;
+    injectDetail["trigger_signal"] = triggerSignal;
+    injectDetail["tool_choice"] = toolChoice;
+    injectDetail["forced_tool_name"] = forcedToolName;
+    injectDetail["strict_client"] = strictToolClient;
+    recordWarnStat(
+        session,
+        metrics::Domain::TOOL_BRIDGE,
+        metrics::EventType::TOOLBRIDGE_TRANSFORM_INJECTED,
+        "Injected tool definitions for bridge mode",
+        injectDetail
+    );
 }
 
 GenerationRequest GenerationService::buildRequest(

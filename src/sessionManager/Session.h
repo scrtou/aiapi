@@ -72,6 +72,9 @@ struct session_st
   bool is_response_api=false;           // 标记此会话是否由 Response API 创建
   bool has_previous_response_id=false;  // 标记客户端是否携带了 previous_response_id
   
+  // ========== 错误统计追踪字段 ==========
+  std::string request_id="";            // 请求唯一 ID（用于错误追踪，格式：req_xxx）
+  
   // ========== 现有方法 ==========
   void clearMessageContext()
   {

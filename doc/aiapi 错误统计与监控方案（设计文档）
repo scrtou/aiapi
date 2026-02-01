@@ -1,0 +1,463 @@
+# aiapi 错误统计与监控方案（设计文档）
+
+版本：v1.1
+日期：2026-02-01
+作者：Sidekick（架构设计草案）
+
+---
+
+## 1. 背景与目标
+
+aiapi 是基于 Drogon 的 OpenAI 兼容网关，当前错误主要散落在日志中（LOG_WARN/LOG_ERROR），缺少：
+- 可查询（API 查询并在前端展示）的结构化统计
+- 按维度聚合（类型 / Provider / Model / Client 等）
+- 对"文本转工具（Tool Bridge）"产生的 Warning 全量统计（只要发生就计数）
+- 事件明细持久化（时间、请求ID、错误详情），便于后续优化代码
+
+本方案目标：
+1) 统一定义"错误/告警事件"模型（Error + Warning），并覆盖：上游请求错误、桥接/工具解析/校验问题、内部异常、并发门控等。
+2) 三通道输出：
+   - Prometheus 指标（实时监控/告警/趋势）
+   - DB 持久化明细与聚合（前端可查询、可回溯）
+   - 以 DB 为准的前端统计接口（支撑错误率、趋势等图表）
+3) 对性能影响可控：写入异步、可配置采样（预留）、可配置明细保留周期。
+
+非目标（v1 不做）：
+- 分布式链路追踪（OTel trace/span）完整接入（可后续扩展）
+- 对所有 provider 进行深度结构化解析（先以通用错误码 + 原始片段为主）
+- 细粒度 RBAC/API 权限体系（当前按"所有已认证用户可访问"）
+
+---
+
+## 1.1 已确认口径（实现约束）
+
+以下口径已与需求方确认，v1 实现严格遵循：
+
+### 1.1.1 并发门控口径
+- "并发门控 409 Conflict（RejectedConcurrent）"计为 **ERROR**
+- "取消状态（CancelPrevious / 用户取消 / 策略取消）"计为 **WARN**
+
+### 1.1.2 保留策略默认值
+- 明细 error_event 默认保留 **30 天**（可配置）
+- 小时聚合 error_agg_hour 默认保留 **30 天**（可配置）
+- 请求总数聚合 request_agg_hour 默认保留 **30 天**（可配置，见 4.2.3）
+
+### 1.1.3 raw_snippet 存储策略
+- 允许存储 raw_snippet
+- 不考虑脱敏策略与权限控制（完全存储，按需求方要求）
+- 仍必须有硬上限防止 DB 膨胀：默认 **32KB**（可配置），超出部分截断，并在 detail_json 记录截断信息（见 5.3）。
+
+### 1.1.4 API 访问范围
+- 统计查询 API 面向 **所有已认证用户**
+
+### 1.1.5 前端 v1 优先展示
+- A) 24 小时错误率（ERROR / 总请求数）
+- B) ToolBridge WARN 趋势
+
+---
+
+## 2. 术语与事件分类
+
+### 2.1 事件等级（severity）
+- ERROR：请求失败或返回 error::AppError / generation::Error 语义的终止错误
+- WARN：请求可能成功，但出现"异常/降级/自愈/不符合预期"的情况（重点：文本转工具产生的任何 warning 都算 WARN）
+
+### 2.2 事件域（domain）
+- UPSTREAM：向 Provider 发起请求/处理 Provider 响应的错误（网络/超时/限流/鉴权/状态码异常等）
+- TOOL_BRIDGE：文本转工具链路（注入、sentinel、XML 解析、参数归一、校验、降级、自愈等）
+- TOOL_VALIDATION：ToolCallValidator 校验相关（缺字段/类型不匹配/JSON 不可解析/工具不存在等）
+- SESSION_GATE：并发门控（409 RejectConcurrent、CancelPrevious 取消等）
+- INTERNAL：内部异常（catch std::exception / unknown、逻辑不一致等）
+- REQUEST：请求输入不合法（BadRequest/Unauthorized 等）
+
+> 说明：domain 用于前端快速过滤与 Prom 维度。
+
+### 2.3 事件类型（type）建议枚举
+建议建立稳定枚举（字符串），便于聚合：
+- upstream.network_error
+- upstream.timeout
+- upstream.rate_limited
+- upstream.auth_error
+- upstream.http_error
+- upstream.service_unavailable
+- toolbridge.transform_injected
+- toolbridge.trigger_missing
+- toolbridge.trigger_mismatch_fallback
+- toolbridge.xml_not_found
+- toolbridge.xml_parse_error
+- toolbridge.sentinel_mismatch
+- toolbridge.args_json_parse_error
+- toolbridge.normalize_applied
+- toolbridge.forced_toolcall_generated
+- toolbridge.validation_filtered
+- toolbridge.validation_fallback_applied
+- toolbridge.selfheal_read_file_applied
+- toolbridge.strict_client_rule_applied
+- toolvalidation.tool_not_found
+- toolvalidation.arguments_not_object
+- toolvalidation.required_field_missing
+- toolvalidation.field_type_mismatch
+- toolvalidation.critical_field_empty
+- sessiongate.rejected_conflict
+- sessiongate.cancelled
+- internal.exception
+- internal.unknown
+
+> 注意：类型要"少而稳定"，细节放到 detail。
+
+---
+
+## 3. 统计维度（聚合维度）
+
+按需求，聚合粒度需要支持：类型/Provider/Model/Client，并建议补充一些常用维度：
+- provider：session.selectapi（如 chaynsapi）
+- model：session.selectmodel（如 GPT-4o 等）
+- client_type：session.client_info["client_type"]（如 Kilo-Code / RooCode / claudecode / 其他）
+- api_kind：chat_completions | responses（session.is_response_api）
+- stream：true/false
+- http_status：最终对外 HTTP 状态（可从 AppError/http 或 ProviderResult.statusCode 推导）
+- validation_mode：none/relaxed/strict（toolcall::getRecommendedValidationMode 的结果）
+
+请求级字段（用于明细，不建议作为 Prom 标签，以免高基数）：
+- request_id：每次请求唯一（强烈建议新增，见第 5.1）
+- session_key/response_id：用于排查（可哈希化；但本方案按需求方要求不强制哈希）
+- tool_name：工具名（一般低基数，可选作为维度；若工具过多则放明细）
+
+---
+
+## 4. 数据落库设计（持久化）
+
+### 4.1 DB 选择
+当前项目已接入 drogon DbClient（默认 PostgreSQL，可能还有 SQLite/MySQL）。建议 v1：
+- 支持 PostgreSQL（主推）
+- 同步支持 SQLite（开发/单机）
+MySQL 可后续按需补齐。
+
+### 4.2 三张核心表（明细 + 错误聚合 + 请求聚合）
+
+#### 4.2.1 error_event（明细表）
+用途：用于前端查询"最近 N 条错误/告警"，并可按维度过滤。
+
+字段建议：
+- id (bigserial / integer autoincrement)
+- ts (timestamptz / datetime) 事件时间（UTC）
+- severity (varchar) 'ERROR'|'WARN'
+- domain (varchar)
+- type (varchar) 事件类型（枚举字符串）
+- provider (varchar)
+- model (varchar)
+- client_type (varchar)
+- api_kind (varchar)
+- stream (bool)
+- http_status (int)
+- request_id (varchar) 重要：请求唯一 ID
+- response_id (varchar)（Responses API）或 curConversationId（Chat）可选
+- tool_name (varchar, nullable)
+- message (text) 简短信息（可展示）
+- detail_json (jsonb / text) 结构化详情（错误上下文）
+- raw_snippet (text, nullable) 原始片段（如 XML 输入/args_json），默认允许存储，仍需长度限制（见 5.3）
+- created_at (ts) 可用 ts 代替
+
+索引建议：
+- idx_error_event_ts (ts desc)
+- idx_error_event_filter (domain, type, severity, provider, model, client_type, ts desc)
+- idx_error_event_request (request_id)
+
+保留策略：
+- 明细默认保留 30 天（可配置），定时清理
+- raw_snippet 默认上限 32KB（可配置）
+
+#### 4.2.2 error_agg_hour（错误聚合表：按小时滚动）
+用途：用于前端快速绘图/统计，不用扫明细表。
+
+字段建议：
+- bucket_start (timestamptz) 小时起始时间（对齐整点）
+- severity (varchar)
+- domain (varchar)
+- type (varchar)
+- provider (varchar)
+- model (varchar)
+- client_type (varchar)
+- api_kind (varchar)
+- stream (bool)
+- http_status (int)
+- count (bigint)
+- last_event_ts (timestamptz)
+
+主键/唯一键：
+- unique(bucket_start, severity, domain, type, provider, model, client_type, api_kind, stream, http_status)
+
+写入策略：
+- 写明细时，同步/异步做 upsert 聚合（推荐异步批量 upsert）
+
+> 说明：按小时是折中：足够细、数据量可控。
+
+#### 4.2.3 request_agg_hour（请求总数聚合表：按小时滚动）
+用途：支撑前端"错误率（ERROR / 总请求数）"的分母查询，避免依赖 Prom 或从事件表反推。
+
+字段建议：
+- bucket_start (timestamptz) 小时起始时间（对齐整点）
+- provider (varchar)
+- model (varchar)
+- client_type (varchar)
+- api_kind (varchar)
+- stream (bool)
+- http_status (int)
+- count (bigint)
+- last_request_ts (timestamptz)
+
+主键/唯一键：
+- unique(bucket_start, provider, model, client_type, api_kind, stream, http_status)
+
+写入策略：
+- 每个请求结束时 upsert +1（推荐异步批量）
+
+保留策略：
+- 默认 30 天（可配置），定时清理
+
+---
+
+## 5. 请求标识与上下文采集
+
+### 5.1 request_id
+必须新增一个"请求唯一 ID"，贯穿：Controller -> GenerationService -> Provider -> Sink。
+建议来源：
+- 若客户端 header 提供（如 x-request-id），则优先使用
+- 否则网关生成（UUIDv4 / 128-bit 随机）
+
+### 5.2 注入位置
+- AiApi Controller 在收到请求时生成 request_id，并写入：
+  - req->attributes（Drogon 支持）或
+  - GenerationRequest 新增字段 requestId
+- GenerationService::materializeSession 将 request_id 写入 session_st（新增字段 session.request_id）
+
+### 5.3 raw_snippet 截断规则（硬上限）
+即便按需求"完全存储，不做脱敏/权限"，仍需容量保护：
+- raw_snippet_max_len 默认 32768（32KB），可配置
+- 若原始片段长度 > max_len：
+  - raw_snippet 仅存前 max_len
+  - detail_json 附加：
+    - raw_truncated: true
+    - raw_original_len: <原始长度>
+
+---
+
+## 6. 采集点（Instrumentation Points）
+
+基于当前代码结构，v1 重点改动点如下。
+
+### 6.1 上游请求错误（UPSTREAM）
+位置：GenerationService::executeProvider(session)
+- 目前 api->generate(session) 返回 ProviderResult
+- 若 !result.isSuccess()：记录 ERROR 事件
+
+建议补充：
+- 将 ProviderResult.error.code / httpStatusCode / providerCode 写入 detail_json
+- 将 result.statusCode 作为 http_status
+- message：result.error.message
+
+### 6.2 并发门控（SESSION_GATE）
+位置：GenerationService::executeGuardedWithSession
+- guard.getResult()==Rejected -> 返回 AppError::conflict
+- guard.isCancelled() 前后检查 -> Cancelled
+
+口径（已确认）：
+- Rejected(409) 记 ERROR（type=sessiongate.rejected_conflict）
+- Cancelled 记 WARN（type=sessiongate.cancelled）
+
+### 6.3 文本转工具链路（TOOL_BRIDGE / TOOL_VALIDATION）
+位置：GenerationService::emitResultEvents（你已明确步骤 2~6）
+需要把以下情况都打点（只要发生就统计一条 WARN）：
+- 提取 XML：xmlInput.empty()（toolbridge.xml_not_found）
+- normalizeBridgeXml 生效（检查替换前后是否变化）：toolbridge.normalize_applied
+- parseXmlToolCalls 解析异常/失败：toolbridge.xml_parse_error
+- expectedSentinel 为空/不匹配导致回退：toolbridge.trigger_missing / toolbridge.sentinel_mismatch
+- generateForcedToolCall 触发：toolbridge.forced_toolcall_generated
+- ToolCallValidator.filterInvalidToolCalls removedCount>0：toolbridge.validation_filtered
+- applyValidationFallback 被调用：toolbridge.validation_fallback_applied
+- selfHealReadFile 触发：toolbridge.selfheal_read_file_applied
+- applyStrictClientRules 做了 wrap/截断：toolbridge.strict_client_rule_applied
+
+关键点：
+- 需求明确"文本转换成工具的 Warning，只要发生就统计"，因此上述任何一次发生都必须记录一条 WARN 事件（并增计数）。
+
+### 6.4 内部异常（INTERNAL）
+位置：GenerationService::executeGuardedWithSession catch 块
+- std::exception => internal.exception（ERROR）
+- ... => internal.unknown（ERROR）
+
+### 6.5 请求结束（用于请求总数/错误率分母）
+位置：请求最终完成/返回前（Controller 或 GenerationService Completed 事件处）
+- 更新 Prom 的 aiapi_requests_total
+- 同时 upsert request_agg_hour +1（用于前端错误率分母）
+
+---
+
+## 7. 指标体系（Prometheus）
+
+项目已启用 drogon::plugin::PromExporter（/metrics）。建议新增以下指标（低基数标签）：
+
+1) 计数器：aiapi_error_events_total
+labels：severity, domain, type, provider, model, client_type, api_kind, stream
+- 每记录一条事件（WARN/ERROR）就 +1
+
+2) 计数器：aiapi_requests_total
+labels：provider, model, client_type, api_kind, stream, http_status
+- 每个请求结束时 +1（用于错误率分母）
+
+3) 计数器：aiapi_error_events_dropped_total
+labels：reason
+- 异步队列满/DB失败等导致事件丢弃 +1
+
+4) 直方图：aiapi_request_latency_seconds
+labels：provider, api_kind, stream
+- 可选（如果你已有别的延迟指标，可不做）
+
+Prom 注意事项：
+- 不要把 request_id 放到标签（高基数会炸 Prom）
+- tool_name 如果工具数量不大可以加；否则只进 DB 明细
+
+---
+
+## 8. 对外 API 设计（供前端查询）
+
+在 AiApi Controller 中新增一组 endpoints（/aichat/metrics/*）。按前端 v1 优先级（A+B），接口优先提供"按小时 series"。
+
+### 8.1 A：请求总数（分母）时间序列
+GET /aichat/metrics/requests/series
+query：
+- from, to（ISO 时间）
+- bucket=hour（v1 固定 hour）
+- provider? model? client_type? api_kind? stream? http_status?
+返回：
+- [{bucket_start, count}]
+
+数据来源：request_agg_hour。
+
+### 8.2 A：错误（分子）时间序列
+GET /aichat/metrics/errors/series
+query：
+- from, to
+- bucket=hour（v1 固定 hour）
+- severity?（默认 ERROR）
+- domain? type? provider? model? client_type? api_kind? stream? http_status?
+返回：
+- [{bucket_start, count}]
+
+数据来源：error_agg_hour。
+
+> 前端 24h 错误率 = errors(series, severity=ERROR) / requests(series)。
+
+### 8.3 B：ToolBridge WARN 趋势
+同 8.2，只是固定过滤：
+- severity=WARN
+- domain=TOOL_BRIDGE（并可选 type 进一步筛选）
+
+### 8.4 TopN（可选，v1.1 预留）
+GET /aichat/metrics/errors/top
+query：from,to, group_by=type|provider|model|client_type|domain, limit
+返回：[{key, count}]
+
+### 8.5 明细列表（调试/排查）
+GET /aichat/metrics/errors/events
+query：
+- from?, to?, severity?, domain?, type?, provider?, model?, client_type?
+- limit, offset
+返回：[{ts, severity, domain, type, provider, model, client_type, request_id, http_status, message, detail_json}]
+
+### 8.6 单条明细（调试/排查）
+GET /aichat/metrics/errors/events/{id}
+返回完整 detail_json / raw_snippet（若启用）
+
+> 鉴于当前不做权限分级：这些 API 将面向所有已认证用户开放。
+
+---
+
+## 9. 写入路径与性能
+
+### 9.1 异步写入
+建议实现 ErrorStatsService（单例）：
+- 接收 recordEvent(event)
+- 接收 recordRequestCompleted(...)
+- 将事件推入有界队列
+- 后台线程批量写 DB（每 N 条或每 T ms flush）
+- 同时更新 Prom counters
+
+### 9.2 失败降级
+- DB 写失败：不影响主请求返回；只记录一条 LOG_ERROR，并累加 aiapi_error_events_dropped_total
+- 队列满：丢弃最旧/最新（可配置），并计数 aiapi_error_events_dropped_total{reason="queue_full"}
+
+### 9.3 配置项（custom_config 建议，针对每项做出注释）
+custom_config.error_stats：
+- enabled: true
+- persist_detail: true
+- persist_agg: true
+- persist_request_agg: true
+- retention_days_detail: 30
+- retention_days_agg: 30
+- retention_days_request_agg: 30
+- raw_snippet_enabled: true
+- raw_snippet_max_len: 32768
+- async_batch_size: 200
+- async_flush_ms: 200
+- drop_policy: drop_oldest
+
+---
+
+## 10. 代码结构建议（模块划分）
+
+新增目录：aiapi/src/metrics/ 或 aiapi/src/monitoring/
+
+核心组件：
+1) ErrorEvent（结构体/类）
+2) ErrorStatsService
+   - recordWarn(...)
+   - recordError(...)
+   - recordRequestCompleted(...)
+3) ErrorStatsDbManager（类似 AccountDbManager 风格）
+   - createTablesIfNotExist / upgrade
+   - insertEvents(batch)
+   - upsertAggHour(batch)
+   - querySeries/queryEvents
+4) RequestAggDbManager（或合并到同一个 DbManager）
+   - upsertRequestAggHour(batch)
+   - queryRequestSeries
+5) ErrorStatsController（可直接放 AiApi 里，也可单独 Controller）
+
+与现有代码集成：
+- GenerationService：在关键分支调用 ErrorStatsService
+- ToolCallValidator：校验失败时可返回原因给 GenerationService，由 GenerationService 统一 record（避免重复计数）
+
+---
+
+## 11. 关键边界与口径（避免统计混乱）
+
+1) 一次请求可能产生多个 WARN（例如：normalize + filtered + fallback），都要分别记录（需求明确：只要发生就统计）。
+2) ERROR 事件口径：以"请求最终失败"为主，但也允许在失败前记录 WARN。
+3) 严格客户端（Roo/Kilo）的降级：
+   - applyStrictClientRules 将文本包 attempt_completion 也属于 WARN（因为发生了格式修正/降级）。
+4) 避免重复：
+   - 同一处逻辑不要同时 LOG_ERROR+recordError+再次 recordError；建议 record 是结构化主线，日志作为补充。
+
+---
+
+## 12. 交付物（v1）
+
+- DB：error_event、error_agg_hour、request_agg_hour 表 + 自动建表/升级
+- Prom：新增 counters（events_total / requests_total / dropped_total）+ 可选 histogram
+- API：
+  - /aichat/metrics/requests/series
+  - /aichat/metrics/errors/series
+  - /aichat/metrics/errors/events（调试）
+  - /aichat/metrics/errors/events/{id}（调试）
+- 采集：GenerationService 的全链路 instrumentation
+- 配置：custom_config.error_stats
+
+---
+
+## 13. 后续可选增强（v1.1+）
+
+- TopN 接口与图表（/errors/top）
+- 更长周期（日/周）二级聚合（error_agg_day / request_agg_day）
+- OTel trace/span 接入（非 v1）
+- 细粒度权限与字段脱敏（按未来产品安全要求再做）

@@ -27,6 +27,11 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::responsesCreate, "/chaynsapi/v1/responses", Post); // 创建响应
     ADD_METHOD_TO(AiApi::responsesGet, "/chaynsapi/v1/responses/{1}", Get); // 获取响应
     ADD_METHOD_TO(AiApi::responsesDelete, "/chaynsapi/v1/responses/{1}", Delete); // 删除响应
+    // 错误统计 API
+    ADD_METHOD_TO(AiApi::getRequestsSeries, "/aichat/metrics/requests/series", Get); // 请求时序统计
+    ADD_METHOD_TO(AiApi::getErrorsSeries, "/aichat/metrics/errors/series", Get); // 错误时序统计
+    ADD_METHOD_TO(AiApi::getErrorsEvents, "/aichat/metrics/errors/events", Get); // 错误事件列表
+    ADD_METHOD_TO(AiApi::getErrorsEventById, "/aichat/metrics/errors/events/{1}", Get); // 错误事件详情
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -47,6 +52,11 @@ class AiApi : public drogon::HttpController<AiApi>
     void responsesCreate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void responsesGet(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id);
     void responsesDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id);
+    // 错误统计 API
+    void getRequestsSeries(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void getErrorsSeries(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void getErrorsEvents(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void getErrorsEventById(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, int64_t id);
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);

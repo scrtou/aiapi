@@ -1,5 +1,6 @@
 #include "accountDbManager.h"
 #include <algorithm>  // for std::transform
+#include <chrono>     // for std::chrono in createPendingAccount
 //pg create table
 std::string tableName = "account";
 std::string createTablePgSql = R"(
@@ -16,7 +17,8 @@ std::string createTablePgSql = R"(
         accountstatus BOOLEAN,
         usertobitid INTEGER,
         personid VARCHAR(255),
-        accounttype VARCHAR(50) DEFAULT 'free'
+        accounttype VARCHAR(50) DEFAULT 'free',
+        status VARCHAR(20) DEFAULT 'active'
     );
 )";
 std::string createTableSqlMysql=R"(
@@ -33,7 +35,8 @@ std::string createTableSqlMysql=R"(
     accountstatus TINYINT(1),
     usertobitid INT,
     personid VARCHAR(255),
-    accounttype VARCHAR(50) DEFAULT 'free'
+    accounttype VARCHAR(50) DEFAULT 'free',
+    status VARCHAR(20) DEFAULT 'active'
 ) ENGINE=InnoDB;)";
 
 std::string createTableSqlite3 = R"(
@@ -50,7 +53,8 @@ std::string createTableSqlite3 = R"(
         accountstatus INTEGER,
         usertobitid INTEGER,
         personid TEXT,
-        accounttype TEXT DEFAULT 'free'
+        accounttype TEXT DEFAULT 'free',
+        status TEXT DEFAULT 'active'
     );
 )";
 
@@ -91,6 +95,7 @@ void AccountDbManager::init()
 void AccountDbManager::checkAndUpgradeTable()
 {
     bool hasAccountType = false;
+    bool hasStatus = false;
     
     if (dbType == DbType::SQLite3)
     {
@@ -99,10 +104,14 @@ void AccountDbManager::checkAndUpgradeTable()
         auto result = dbClient->execSqlSync(checkSql);
         for (const auto& row : result)
         {
-            if (row["name"].as<std::string>() == "accounttype")
+            std::string colName = row["name"].as<std::string>();
+            if (colName == "accounttype")
             {
                 hasAccountType = true;
-                break;
+            }
+            if (colName == "status")
+            {
+                hasStatus = true;
             }
         }
     }
@@ -112,6 +121,10 @@ void AccountDbManager::checkAndUpgradeTable()
         std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
         auto result = dbClient->execSqlSync(checkSql);
         hasAccountType = (result.size() > 0);
+        
+        std::string checkStatusSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='status'";
+        auto resultStatus = dbClient->execSqlSync(checkStatusSql);
+        hasStatus = (resultStatus.size() > 0);
     }
     
     if (!hasAccountType)
@@ -128,13 +141,34 @@ void AccountDbManager::checkAndUpgradeTable()
             LOG_ERROR << "[账户数据库] 添加列'accounttype'失败: " << e.what();
         }
     }
+    
+    if (!hasStatus)
+    {
+        LOG_INFO << "[账户数据库] 表'account'中缺少列'status', 正在添加...";
+        try {
+            if (dbType == DbType::SQLite3) {
+                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status TEXT DEFAULT 'active'");
+            } else {
+                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status VARCHAR(20) DEFAULT 'active'");
+            }
+            LOG_INFO << "[账户数据库] 列'status'添加成功";
+        } catch(const std::exception& e) {
+            LOG_ERROR << "[账户数据库] 添加列'status'失败: " << e.what();
+        }
+    }
 }
 
 bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 {
     std::string selectsql = "select * from account where apiname=$1 and username=$2";
-    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8 where apiname=$9 and username=$10";
+    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,status=$9 where apiname=$10 and username=$11";
+    
+    // 如果status为空，默认设置为active
+    if (accountinfo.status.empty()) {
+        accountinfo.status = AccountStatus::ACTIVE;
+    }
+    
     auto result = dbClient->execSqlSync(selectsql,accountinfo.apiName,accountinfo.userName);
     if(result.size()!=0)
     {
@@ -143,7 +177,7 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
     }
     else
     {
-         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType);
+         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
         if(result1.affectedRows()!=0)
         {
             LOG_INFO << "账号 " << accountinfo.userName << " 添加成功";
@@ -158,8 +192,8 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 }
 bool AccountDbManager::updateAccount(struct Accountinfo_st accountinfo)
 {
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8 where apiname=$9 and username=$10";
-    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.accountType,accountinfo.apiName,accountinfo.userName);
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,status=$9 where apiname=$10 and username=$11";
+    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.accountType,accountinfo.status,accountinfo.apiName,accountinfo.userName);
     if(result.affectedRows()!=0)
     {
         LOG_INFO << "账号 " << accountinfo.userName << " 更新成功";
@@ -189,7 +223,7 @@ bool AccountDbManager::deleteAccount(string apiName,string userName)
 }
 list<Accountinfo_st> AccountDbManager::getAccountDBList()
 {
-    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,COALESCE(accounttype,'free') as accounttype from account";
+    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,COALESCE(accounttype,'free') as accounttype,COALESCE(status,'active') as status from account";
     auto result = dbClient->execSqlSync(selectsql);
     list<Accountinfo_st> accountDBList;
     for(auto& item:result)
@@ -202,7 +236,11 @@ list<Accountinfo_st> AccountDbManager::getAccountDBList()
         if (!item["accounttype"].isNull()) {
             accountTypeStr = item["accounttype"].as<std::string>();
         }
-        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr,accountTypeStr);
+        std::string statusStr = AccountStatus::ACTIVE;
+        if (!item["status"].isNull()) {
+            statusStr = item["status"].as<std::string>();
+        }
+        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr,accountTypeStr,statusStr);
         accountDBList.push_back(accountinfo);
     }
     return accountDBList;
@@ -240,4 +278,237 @@ void AccountDbManager::createTable()
     {
         LOG_ERROR << "[账户数据库] 创建表错误: " << e.what();
     }
+}
+
+// ==================== 状态预占相关方法 ====================
+
+int AccountDbManager::createWaitingAccount(string apiName)
+{
+    LOG_INFO << "[账户数据库] 创建待注册账号: " << apiName;
+    
+    // 生成一个临时的占位用户名
+    std::string waitingUsername = "waiting_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    
+    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
+    
+    try {
+        auto result = dbClient->execSqlSync(insertsql,
+            apiName,
+            waitingUsername,
+            "",  // password
+            "",  // authtoken
+            0,   // usecount
+            false, // tokenstatus
+            false, // accountstatus
+            0,   // usertobitid
+            "",  // personid
+            "",  // createtime
+            "free", // accounttype
+            AccountStatus::WAITING  // status = waiting (待注册)
+        );
+        
+        if(result.affectedRows() != 0)
+        {
+            // 获取插入的ID
+            std::string getIdSql;
+            if (dbType == DbType::SQLite3) {
+                getIdSql = "SELECT last_insert_rowid() as id";
+            } else if (dbType == DbType::MySQL) {
+                getIdSql = "SELECT LAST_INSERT_ID() as id";
+            } else {
+                getIdSql = "SELECT currval(pg_get_serial_sequence('account','id')) as id";
+            }
+            auto idResult = dbClient->execSqlSync(getIdSql);
+            if (idResult.size() > 0) {
+                int waitingId = idResult[0]["id"].as<int>();
+                LOG_INFO << "[账户数据库] 待注册账号创建成功, ID: " << waitingId;
+                return waitingId;
+            }
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 创建待注册账号失败: " << e.what();
+    }
+    
+    return -1;
+}
+
+bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st accountinfo)
+{
+    LOG_INFO << "[账户数据库] 激活账号, ID: " << waitingId << ", 用户名: " << accountinfo.userName;
+    
+    // 支持从 waiting 或 registering 状态激活
+    std::string updatesql = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10,createtime=$11 where id=$12 and (status=$13 or status=$14)";
+    
+    try {
+        auto result = dbClient->execSqlSync(updatesql,
+            accountinfo.userName,
+            accountinfo.passwd,
+            accountinfo.authToken,
+            accountinfo.useCount,
+            accountinfo.tokenStatus,
+            accountinfo.accountStatus,
+            accountinfo.userTobitId,
+            accountinfo.personId,
+            accountinfo.accountType,
+            AccountStatus::ACTIVE,  // 激活为active状态
+            accountinfo.createTime,
+            waitingId,
+            AccountStatus::WAITING,     // 从待注册状态激活
+            AccountStatus::REGISTERING  // 从注册中状态激活
+        );
+        
+        if(result.affectedRows() != 0)
+        {
+            LOG_INFO << "[账户数据库] 账号激活成功: " << accountinfo.userName;
+            return true;
+        }
+        else
+        {
+            LOG_ERROR << "[账户数据库] 账号激活失败: 未找到待注册/注册中记录或已被激活";
+            return false;
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 激活账号异常: " << e.what();
+        return false;
+    }
+}
+
+bool AccountDbManager::deleteWaitingAccount(int waitingId)
+{
+    LOG_INFO << "[账户数据库] 删除待注册账号, ID: " << waitingId;
+    
+    // 只能删除 waiting 状态的账号，不能删除 registering 状态的
+    std::string deletesql = "delete from account where id=$1 and status=$2";
+    
+    try {
+        auto result = dbClient->execSqlSync(deletesql, waitingId, AccountStatus::WAITING);
+        
+        if(result.affectedRows() != 0)
+        {
+            LOG_INFO << "[账户数据库] 待注册账号删除成功";
+            return true;
+        }
+        else
+        {
+            LOG_WARN << "[账户数据库] 待注册账号删除失败: 未找到记录或状态不是待注册";
+            return false;
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 删除待注册账号异常: " << e.what();
+        return false;
+    }
+}
+
+int AccountDbManager::countAccountsByChannel(string apiName, bool includeWaiting)
+{
+    std::string countsql;
+    if (includeWaiting) {
+        countsql = "select count(*) as cnt from account where apiname=$1";
+    } else {
+        // 排除 waiting, registering, pending 状态
+        countsql = "select count(*) as cnt from account where apiname=$1 and status=$2";
+    }
+    
+    try {
+        int count = 0;
+        if (includeWaiting) {
+            auto result = dbClient->execSqlSync(countsql, apiName);
+            if (result.size() > 0) {
+                count = result[0]["cnt"].as<int>();
+            }
+        } else {
+            auto result = dbClient->execSqlSync(countsql, apiName, AccountStatus::ACTIVE);
+            if (result.size() > 0) {
+                count = result[0]["cnt"].as<int>();
+            }
+        }
+        
+        LOG_DEBUG << "[账户数据库] 渠道 " << apiName << " 账号数量: " << count << " (includeWaiting=" << includeWaiting << ")";
+        return count;
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 统计账号数量异常: " << e.what();
+        return 0;
+    }
+}
+
+bool AccountDbManager::updateAccountStatus(string apiName, string userName, string status)
+{
+    LOG_INFO << "[账户数据库] 更新账号状态: " << apiName << "/" << userName << " -> " << status;
+    
+    std::string updatesql = "update account set status=$1 where apiname=$2 and username=$3";
+    
+    try {
+        auto result = dbClient->execSqlSync(updatesql, status, apiName, userName);
+        
+        if(result.affectedRows() != 0)
+        {
+            LOG_INFO << "[账户数据库] 账号状态更新成功";
+            return true;
+        }
+        else
+        {
+            LOG_ERROR << "[账户数据库] 账号状态更新失败: 未找到账号";
+            return false;
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 更新账号状态异常: " << e.what();
+        return false;
+    }
+}
+
+bool AccountDbManager::updateAccountStatusById(int id, string status)
+{
+    LOG_INFO << "[账户数据库] 根据ID更新账号状态: ID=" << id << " -> " << status;
+    
+    std::string updatesql = "update account set status=$1 where id=$2";
+    
+    try {
+        auto result = dbClient->execSqlSync(updatesql, status, id);
+        
+        if(result.affectedRows() != 0)
+        {
+            LOG_INFO << "[账户数据库] 账号状态更新成功";
+            return true;
+        }
+        else
+        {
+            LOG_ERROR << "[账户数据库] 账号状态更新失败: 未找到账号ID=" << id;
+            return false;
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 更新账号状态异常: " << e.what();
+        return false;
+    }
+}
+
+string AccountDbManager::getAccountStatusById(int id)
+{
+    std::string selectsql = "select status from account where id=$1";
+    
+    try {
+        auto result = dbClient->execSqlSync(selectsql, id);
+        if (result.size() > 0 && !result[0]["status"].isNull()) {
+            return result[0]["status"].as<std::string>();
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 获取账号状态异常: " << e.what();
+    }
+    
+    return "";
+}
+
+string AccountDbManager::getAccountStatusByUsername(string apiName, string userName)
+{
+    std::string selectsql = "select status from account where apiname=$1 and username=$2";
+    
+    try {
+        auto result = dbClient->execSqlSync(selectsql, apiName, userName);
+        if (result.size() > 0 && !result[0]["status"].isNull()) {
+            return result[0]["status"].as<std::string>();
+        }
+    } catch(const std::exception& e) {
+        LOG_ERROR << "[账户数据库] 获取账号状态异常: " << e.what();
+    }
+    
+    return "";
 }
