@@ -9,21 +9,7 @@ int main() {
     //Load config file
     drogon::app().loadConfigFile("../config.json");
     //drogon::app().loadConfigFile("../config.yaml");
-    LOG_INFO << "version: 1.0 更新时间：2026/0201/1615";
-    // 读取会话追踪模式配置
-    auto customConfig = drogon::app().getCustomConfig();
-    if (customConfig.isMember("session_tracking")) {
-        std::string mode = customConfig["session_tracking"].get("mode", "hash").asString();
-        if (mode == "zerowidth" || mode == "zero_width") {
-            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
-            LOG_INFO << "会话追踪模式: ZeroWidth (零宽字符嵌入)";
-        } else {
-            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
-            LOG_INFO << "会话追踪模式: Hash (内容哈希)";
-        }
-    } else {
-        LOG_INFO << "会话追踪模式: Hash (默认)";
-    }
+   
 
     drogon::app().registerPreRoutingAdvice(
         [](const drogon::HttpRequestPtr &req,
@@ -52,6 +38,21 @@ int main() {
     // 在事件循环开始后立即执行
     app().getLoop()->queueInLoop([](){
         std::thread t1([]{
+            LOG_INFO << "==================【version: 1.0 更新时间：2026/0201/1615】===================";
+             // 读取会话追踪模式配置
+        auto customConfig = drogon::app().getCustomConfig();
+    if (customConfig.isMember("session_tracking")) {
+        std::string mode = customConfig["session_tracking"].get("mode", "hash").asString();
+        if (mode == "zerowidth" || mode == "zero_width") {
+            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
+            LOG_INFO << "会话追踪模式: ZeroWidth (零宽字符嵌入)";
+        } else {
+            chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
+            LOG_INFO << "会话追踪模式: Hash (内容哈希)";
+        }
+    } else {
+        LOG_INFO << "会话追踪模式: Hash (默认)";
+    }
             ChannelManager::getInstance().init();
             AccountManager::getInstance().init();
             ApiManager::getInstance().init();
