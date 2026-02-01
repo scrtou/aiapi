@@ -4,7 +4,7 @@ services:
     environment:
       - DUMMY_VAR=true
     volumes:
-      - ./logs:/usr/src/app/build/logs
-      - ./config.json:/usr/src/app/build/config.json
+      - ./logs:/usr/aiapi/src/build/logs
+      - ./config.json:/usr/aiapi/src/build/config.json
     network_mode: "host"
     # 使用 host 网络模式，服务直接监听宿主机端口 5555

@@ -310,10 +310,3 @@ plugins:
       # custom_time_format: ''
       # use_real_ip: false
 # custom_config: custom configuration for users. This object can be get by the app().getCustomConfig() method. 
-custom_config: 
-  chaynsapi:
-    username: "YOUR_API_USERNAME"
-    passwd: "YOUR_API_PASSWORD"
-    user_tobit_id: 5139275
-    bearer_token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInZlciI6MSwia2lkIjoibmt5M21kYmcifQ.eyJqdGkiOiIxMzg3ZTg0Yy01ODY0LTRlMWYtOTYyOC04YWRiOGVjZjgxYjIiLCJzdWIiOiJYOFYtM1JTVTciLCJ0eXBlIjoxLCJleHAiOiIyMDI1LTAyLTA4VDE1OjAzOjAxWiIsImlhdCI6IjIwMjUtMDItMDRUMTU6MDM6MDFaIiwiTG9jYXRpb25JRCI6Mzc4LCJTaXRlSUQiOiI2MDAyMS0wODk4OSIsIklzQWRtaW4iOmZhbHNlLCJUb2JpdFVzZXJJRCI6NTEzOTI3NSwiUGVyc29uSUQiOiJYOFYtM1JTVTciLCJGaXJzdE5hbWUiOiJ5eCIsIkxhc3ROYW1lIjoieHkiLCJSb2xlcyI6WyJzd2l0Y2hfbG9jYXRpb24iXSwicHJvdiI6MH0.MCEglf5a4FLW6MPh8K2Kn_nHbD719-sX0F6Zd99oM_PIONiNltEq2wFIGds0J4w2skqp95t1_oXj9wAmYUUGz8A_P3l-bOx8-KoRH0gWxL1EgYnsi86y0rhEM8drJ3tfgKl1u_xbPpk29yD64jB3pF0FAv2Cexo0UzwUkr1cpjqAKbiGJQv3dW0d7fUPjB6wYKvd7XicT0sX1LBXuhyrUSEgv7IW0gWFjcydeTvGRdlyB0bJsoGmYjMZDu-OeC3YpJOvcMH8sBSeTZMI9f2IyIAdT7VwFcsq083I9CpkdW5pxuIPY2yg7SXZARCSQQCcT9kpoUI_LDsensysaQ2BLQ"
-
