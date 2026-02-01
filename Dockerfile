@@ -47,15 +47,15 @@ RUN make install
 RUN ldconfig
 
 # 设置工作目录
-WORKDIR /usr/src/app
+WORKDIR /usr/src/aiapi
 
 # 复制项目文件
 COPY . .
 
 # 创建启动脚本
-RUN cat <<'EOF' > /usr/src/app/docker-entrypoint.sh
+RUN cat <<'EOF' > /usr/src/aiapi/docker-entrypoint.sh
 #!/bin/bash
-CONFIG_PATH="/usr/src/app/build/config.json"
+CONFIG_PATH="/usr/src/aiapi/src/build/config.json"
 if [ ! -z "$CONFIG_JSON" ]; then
     echo "$CONFIG_JSON" > "$CONFIG_PATH"
 fi
@@ -63,28 +63,28 @@ if [ ! -z "$CUSTOM_CONFIG" ]; then
     TMP_CONFIG=$(mktemp)
     jq -s ".[0] * .[1]" <(echo "$CUSTOM_CONFIG") "$CONFIG_PATH" > "$TMP_CONFIG" && mv "$TMP_CONFIG" "$CONFIG_PATH"
 fi
-cd /usr/src/app/build && exec "$@"
+cd /usr/src/aiapi/src/build && exec "$@"
 EOF
 
-RUN chmod +x /usr/src/app/docker-entrypoint.sh
+RUN chmod +x /usr/src/aiapi/docker-entrypoint.sh
 
 # 创建构建目录
-RUN mkdir -p build
-RUN mkdir -p build/logs
-WORKDIR /usr/src/app/build
+RUN mkdir -p src/build
+RUN mkdir -p src/build/logs
+WORKDIR /usr/src/aiapi/src/build
 
 # 构建项目
 RUN cmake ..
 RUN make -j $(nproc)
 
 # 复制默认配置文件
-RUN cp /usr/src/app/config.example.json /usr/src/app/build/config.json
+RUN cp /usr/src/aiapi/config.example.json /usr/src/aiapi/src/build/config.json
 
 # 暴露端口
 EXPOSE 5555 5556
 
 # 设置入口点
-ENTRYPOINT ["/usr/src/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/src/aiapi/docker-entrypoint.sh"]
 
 # 运行应用
 CMD ["./aiapi"]

@@ -31,12 +31,16 @@ add_executable(${PROJECT_NAME}
     src/controllers/sinks/ChatSseSink.cpp
     src/controllers/sinks/ChatJsonSink.cpp
     src/controllers/sinks/ResponsesSseSink.cpp
+    src/controllers/sinks/ResponsesJsonSink.cpp
     src/dbManager/account/accountDbManager.cpp
     src/dbManager/channel/channelDbManager.cpp
     src/sessionManager/Session.cpp
     src/sessionManager/ClientOutputSanitizer.cpp
     src/sessionManager/GenerationService.cpp
     src/sessionManager/RequestAdapters.cpp
+    src/sessionManager/ToolCallBridge.cpp
+    src/sessionManager/ToolCallValidator.cpp
+    src/sessionManager/XmlTagToolCallCodec.cpp
     src/tools/ZeroWidthEncoder.cpp
 )
 
