@@ -1,6 +1,7 @@
 #include "GenerationService.h"
 #include "ClientOutputSanitizer.h"
 #include "ToolCallBridge.h"
+#include "ToolCallValidator.h"
 #include "XmlTagToolCallCodec.h"
 #include <apiManager/ApiManager.h>
 #include <apipoint/ProviderResult.h>
@@ -10,6 +11,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <unordered_set>
 
 using namespace drogon;
 using namespace provider;
@@ -364,7 +366,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	        
 	        // 0. 检查通道是否支持 tool calls，如果不支持则注入工具定义到 systemprompt 和 requestmessage
 	        bool supportsToolCalls = getChannelSupportsToolCalls(session.selectapi);
-	        LOG_DEBUG<<" supportsToolCalls"<<supportsToolCalls<<" session.tools.isNull()"<<session.tools.isNull()<<"session.tools.isArray()"<<session.tools.isArray()<<"session.tools.size()"<<session.tools.size();
+	        LOG_INFO<<" supportsToolCalls"<<supportsToolCalls<<" session.tools.isNull()"<<session.tools.isNull()<<"session.tools.isArray()"<<session.tools.isArray()<<"session.tools.size()"<<session.tools.size();
 	        const Json::Value& toolsForBridge =
 	            (!session.tools.isNull() && session.tools.isArray() && session.tools.size() > 0)
 	                ? session.tools
@@ -697,105 +699,245 @@ bool GenerationService::executeProvider(session_st& session) {
     return true;
 }
 
+/**
+ * @brief 发送生成结果事件到客户端
+ *
+ * 这是响应处理的核心函数，负责将上游模型的原始输出转换为客户端可理解的事件流。
+ *
+ * 【处理流程概览】
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │  1. 文本清洗 (sanitizeOutput)                                           │
+ * │     ↓                                                                   │
+ * │  2. Tool Call 解析 (Bridge模式: extractXmlInputForToolCalls + parseXml) │
+ * │     ↓                                                                   │
+ * │  3. 参数形状规范化 (normalizeToolCallArguments)                          │
+ * │     ↓                                                                   │
+ * │  4. Schema校验 + 过滤无效调用 (ToolCallValidator)  ← 防止 missing nativeArgs │
+ * │     ↓                                                                   │
+ * │  5. 自愈逻辑 (selfHealReadFile) - 仅 Roo/Kilo                           │
+ * │     ↓                                                                   │
+ * │  6. 严格客户端规则 (applyStrictClientRules) - 仅 Roo/Kilo               │
+ * │     ↓                                                                   │
+ * │  7. 零宽字符会话ID嵌入                                                   │
+ * │     ↓                                                                   │
+ * │  8. 发送事件: ToolCallDone → OutputTextDone → Completed                 │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * @param session 会话状态，包含请求/响应数据、工具定义等
+ * @param sink 事件接收器，负责将事件序列化并发送给客户端
+ */
 void GenerationService::emitResultEvents(const session_st& session, IResponseSink& sink) {
-    // 获取输出文本
+    // ==================== 步骤 0: 初始化 ====================
+    // 从 session.responsemessage 中提取上游模型返回的原始文本
     std::string text = safeJsonAsString(session.responsemessage.get("message", ""), "");
+    
+    // 获取客户端类型，用于后续的客户端特定处理
     const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
+    
+    // 判断是否为"严格工具客户端"（Roo/Kilo）
+    // 这类客户端要求：每次响应必须且只能包含 1 个 tool call
     const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
 
-    // 1. 应用基础文本清洗（标签纠错、控制字符等）
+    // ==================== 步骤 1: 文本清洗 ====================
+    // 调用 sanitizeOutput() 进行基础文本清洗：
+    // - 修复常见的 XML/HTML 标签错误
+    // - 移除不可见控制字符
+    // - 针对特定客户端的输出格式调整
     text = sanitizeOutput(session.client_info, text);
 
-    // 2. 根据通道能力处理 tool calls（如果通道不支持，则使用 Bridge 解析）
+    // ==================== 步骤 2: Tool Call 解析 ====================
+    // 检查当前通道是否原生支持 tool calls
+    // 如果支持，上游会直接返回结构化的 tool_calls，无需从文本中解析
     const bool supportsToolCalls = getChannelSupportsToolCalls(session.selectapi);
+    
+    // 检查 tool_choice 是否为 "none"（禁用工具调用）
     const bool toolChoiceNone = (toLowerStr(session.toolChoice) == "none");
 
-    std::string textContent;
-    std::vector<generation::ToolCallDone> toolCalls;
+    // 用于存储解析结果
+    std::string textContent;                              // 普通文本内容
+    std::vector<generation::ToolCallDone> toolCalls;      // 解析出的工具调用列表
 
-    // Parsing policy (simplified):
-    // - When the channel supports native tool calls, we do NOT parse tool calls from text.
-    // - When tool_choice=none, treat everything as text.
-    // - Otherwise (bridge mode), we ONLY accept the Toolify-style XML bridge format.
-    //   (Single-format bridge keeps the parser predictable and reduces accidental parses.)
+    // 【解析策略】
+    // - 通道原生支持 tool calls → 不从文本解析，直接使用原始文本
+    // - tool_choice=none → 禁用工具，全部当作普通文本
+    // - 其他情况（Bridge 模式）→ 从文本中解析 XML 格式的工具调用
     if (supportsToolCalls || toolChoiceNone) {
+        // 通道支持原生 tool calls 或禁用工具：直接使用原始文本
         textContent = text;
     } else {
-        // Bridge mode: parse tool calls only from a properly delimited XML block.
-        // extractXmlInputForToolCalls() also protects against false positives by preferring
-        // the per-request trigger marker and requiring an early <function_calls> tag.
-        //const std::string xmlInput = extractXmlInputForToolCalls(session, text);
+        // ========== Bridge 模式：从文本中解析 XML 格式的工具调用 ==========
+        //
+        // 【为什么需要 Bridge 模式？】
+        // 某些上游通道（如部分 OpenAI 兼容 API）不支持原生 tool_calls，
+        // 我们通过在 prompt 中注入工具定义，让模型以 XML 格式输出工具调用，
+        // 然后在这里解析 XML 并转换为标准的 tool_calls 结构。
+        
+        // 步骤 2.1: 提取 XML 输入
+        // extractXmlInputForToolCalls() 会：
+        // - 优先查找本次请求的随机触发标记 (session.tool_bridge_trigger)
+        // - 如果找到触发标记，返回从触发标记开始的子串
+        // - 如果没找到，尝试查找 <function_calls> 标签作为兜底
         std::string xmlInput = extractXmlInputForToolCalls(session, text);
 
         if (xmlInput.empty()) {
+            // 没有找到工具调用 XML，全部当作普通文本
             textContent = text;
         } else {
-            //parseXmlToolCalls(xmlInput, textContent, toolCalls);
+            // 步骤 2.2: 规范化 XML（处理特殊空格、换行符等）
             xmlInput = normalizeBridgeXml(std::move(xmlInput));
-            // [修改] 传入 session.tool_bridge_trigger
-            // 注意：extractXmlInputForToolCalls 返回的字符串如果是通过 Trigger 找到的，它就包含 Trigger。
-            // 如果是通过 <function_calls> 兜底找到的，它就不包含 Trigger。
-            // 我们需要简单判断一下是否真的要把 Trigger 传进去进行严格匹配。
             
+            // 步骤 2.3: 确定是否使用 Sentinel 严格匹配
+            // 【Sentinel 机制说明】
+            // 每次请求会生成一个随机的触发标记（如 <Function_Ab1c_Start/>），
+            // 只有包含该标记的 XML 块才会被解析，避免误解析历史消息或示例中的 XML。
             std::string expectedSentinel = "";
-            if (!session.tool_bridge_trigger.empty() && 
+            if (!session.tool_bridge_trigger.empty() &&
                 xmlInput.find(session.tool_bridge_trigger) != std::string::npos) {
+                // XML 中包含本次请求的触发标记，启用严格匹配
                 expectedSentinel = session.tool_bridge_trigger;
             }
-            //parseXmlToolCalls(xmlInput, textContent, toolCalls);
+            
+            // 步骤 2.4: 解析 XML 工具调用
+            // parseXmlToolCalls() 会：
+            // - 使用 XmlTagToolCallCodec 解析 <function_calls>/<function_call> 结构
+            // - 提取 <tool> 和 <args_json> 内容
+            // - 将解析结果填充到 toolCalls 向量
+            // - 非工具调用的文本会填充到 textContent
             parseXmlToolCalls(xmlInput, textContent, toolCalls, expectedSentinel);
         }
 
-        // tool_choice=required / forced tool fallback
+        // 步骤 2.5: 强制工具调用兜底
+        // 如果 tool_choice=required 但上游没有返回工具调用，
+        // 尝试根据用户输入自动生成一个工具调用
         if (toolCalls.empty()) {
             generateForcedToolCall(session, toolCalls, textContent);
         }
     }
 
-    // Normalize tool call argument shapes according to the client-provided JSONSchema.
+    // ==================== 步骤 3: 参数形状规范化 ====================
+    // normalizeToolCallArguments() 会：
+    // - 修复常见的参数格式问题（如 files:["path"] → files:[{path:"path"}]）
+    // - 处理参数别名（如 paths → files）
+    // - 填充缺失的可选字段默认值
+    // - 规范化 ask_followup_question 的 mode 字段
     normalizeToolCallArguments(session, toolCalls);
 
-    // Strict-client self-heal (Roo/Kilo)
-    if (strictToolClient && toolCalls.empty() && !textContent.empty()) {
-        selfHealReadFile(session, clientType, textContent, toolCalls);
+    // ==================== 步骤 4: Schema 校验 + 过滤无效调用 ====================
+    // 【这是防止 "missing nativeArgs" 错误的关键步骤】
+    //
+    // 【问题背景】
+    // 当上游模型输出不完整的工具调用（如参数 JSON 截断、必填字段缺失）时，
+    // 客户端执行层会报错 "Invalid tool call: missing nativeArgs"。
+    //
+    // 【解决方案】
+    // 在发送给客户端之前，使用 ToolCallValidator 进行多层校验：
+    // - Stage A: 工具名存在性 + JSON 可解析 + required 字段 + 类型匹配
+    // - Stage B: 关键字段非空（path/diff/content 等）
+    // - Stage C: 校验失败后的降级策略（按客户端类型）
+    {
+        // 获取工具定义（优先使用 tools_raw，它保存了原始的客户端工具定义）
+        const Json::Value& toolDefs =
+            (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
+                ? session.tools_raw
+                : session.tools;
+        
+        // 只有在有工具调用且有工具定义时才进行校验
+        if (!toolCalls.empty() && toolDefs.isArray() && toolDefs.size() > 0) {
+            // 创建校验器，传入工具定义和客户端类型
+            // 客户端类型用于选择不同的关键字段集合：
+            // - RooCode/Kilo-Code: 使用完整的关键字段集合
+            // - 其他客户端: 使用最小关键字段集合
+            toolcall::ToolCallValidator validator(toolDefs, clientType);
+            
+            // 用于收集被丢弃的工具调用信息（供降级策略使用）
+            std::string discardedText;
+            
+            // 【校验模式选择】
+            // 根据客户端类型自动选择推荐的校验模式：
+            // - RooCode/Kilo-Code: Relaxed 模式（校验关键字段）
+            // - 其他客户端: None 模式（不校验，信任 AI 输出）
+            //
+            // 原因：
+            // 1. Roo/Kilo 客户端对工具调用格式要求严格，需要提前过滤明显错误
+            // 2. 其他客户端使用宽松策略，避免误报（如 mode 字段问题）
+            // 3. prompt 中已经明确告诉 AI 哪些参数是 required
+            toolcall::ValidationMode validationMode = toolcall::getRecommendedValidationMode(clientType);
+            
+            // 执行校验并过滤无效的工具调用
+            // filterInvalidToolCalls() 会：
+            // - 遍历所有工具调用，逐个校验
+            // - 移除不通过校验的工具调用
+            // - 返回被移除的数量
+            size_t removedCount = validator.filterInvalidToolCalls(toolCalls, discardedText, validationMode);
+            
+            if (removedCount > 0) {
+                LOG_WARN << "[GenerationService] 通过 Schema 校验过滤了 " << removedCount
+                         << " 个无效的工具调用";
+                
+                // Stage C: 根据客户端类型应用降级策略
+                // 如果所有工具调用都被过滤掉了，需要决定如何处理
+                if (toolCalls.empty()) {
+                    // applyValidationFallback() 会：
+                    // - 非严格客户端：仅丢弃，保留文本输出
+                    // - 严格客户端（Roo/Kilo）：将文本包装为 attempt_completion
+                    toolcall::applyValidationFallback(clientType, toolCalls, textContent, discardedText);
+                }
+            }
+        }
     }
 
-    // Strict client: exactly one tool call per response
+    // ==================== 步骤 5: 严格客户端规则（仅 Roo/Kilo）====================
+    // 【规则说明】
+    // Roo/Kilo 客户端要求每次响应必须且只能包含 1 个工具调用。
+    //
+    // applyStrictClientRules() 会：
+    // - 如果没有工具调用但有文本 → 包装为 attempt_completion
+    // - 如果有多个工具调用 → 只保留第一个
+    // - 如果有工具调用 → 清空文本内容（避免重复输出）
     if (strictToolClient) {
         applyStrictClientRules(clientType, textContent, toolCalls);
     }
 
-    // 3. 零宽字符模式：确保会话ID在 tool_calls 之前就发送出去。
-    //    说明：ChatCompletions 流式场景下，部分客户端可能在收到包含
-    //    finish_reason="tool_calls" 的 chunk 后就停止处理后续 chunk。
-    //    若会话ID放在 tool_calls 之后，客户端侧可能丢失该 ID，导致下一轮无法续聊。
+    // ==================== 步骤 7: 零宽字符会话ID嵌入 ====================
+    // 【功能说明】
+    // 使用零宽字符将会话ID嵌入到响应文本中，客户端下次请求时可以提取该ID实现续聊。
+    //
+    // 【特殊处理】
+    // 对于 tool_calls 场景，部分客户端在收到 finish_reason="tool_calls" 后
+    // 会停止处理后续内容，因此需要在 tool_calls 之前发送会话ID。
     auto& sessionManager = *chatSession::getInstance();
 
     if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
         const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
-        if (!toolCalls.empty()&&clientType=="claudecode") {
-            // tool_calls 场景：单独发送“仅含零宽会话ID”的文本 chunk（在 tool_calls 之前）
+        if (!toolCalls.empty() && clientType == "claudecode") {
+            // Claude Code 客户端 + 有工具调用：单独发送零宽会话ID
             std::string zwOnly = chatSession::embedSessionIdInText("", session.curConversationId);
             if (!zwOnly.empty()) {
                 generation::OutputTextDone zwDone;
                 zwDone.text = zwOnly;
                 zwDone.index = 0;
                 sink.onEvent(zwDone);
-                LOG_DEBUG << "[生成服务] 已在 tool_calls 前发送零宽会话ID: " << session.curConversationId;
+                LOG_INFO << "[生成服务] 已在 tool_calls 前发送零宽会话ID: " << session.curConversationId;
             }
         } else {
-            // 普通文本场景：在文本末尾嵌入会话ID
+            // 其他情况：在文本末尾嵌入会话ID
             textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
-            LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
+            LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
         }
     }
 
-    // Emit tool calls (after validation/fallback) so we don't change our mind later.
+    // ==================== 步骤 8: 发送事件 ====================
+    // 【事件发送顺序】
+    // 1. ToolCallDone 事件（如果有工具调用）
+    // 2. OutputTextDone 事件（如果有文本内容）
+    // 3. Completed 事件（标记响应结束）
+    
+    // 发送所有工具调用事件
     for (const auto& tc : toolCalls) {
         sink.onEvent(tc);
     }
 
-    // 发送 OutputTextDone 事件 (如果有文本)
+    // 发送文本内容事件（如果有）
     if (!textContent.empty()) {
         generation::OutputTextDone textDone;
         textDone.text = textContent;
@@ -803,7 +945,8 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         sink.onEvent(textDone);
     }
 
-    // 发送 Completed 事件
+    // 发送完成事件
+    // finish_reason: "stop"（普通文本结束）或 "tool_calls"（工具调用结束）
     generation::Completed completed;
     completed.finishReason = toolCalls.empty() ? "stop" : "tool_calls";
     sink.onEvent(completed);
@@ -837,7 +980,7 @@ void GenerationService::processOutputWithBridge(
     std::vector<generation::ToolCallDone> toolCalls;
 
     if (supportsToolCalls) {
-        LOG_DEBUG << "[GenerationService] 通道支持 tool calls，跳过 Bridge 处理";
+        LOG_INFO << "[GenerationService] 通道支持 tool calls，跳过 Bridge 处理";
         textContent = text;
     } else {
         // 使用 ToolCallBridge 处理文本中的工具调用
@@ -858,7 +1001,7 @@ void GenerationService::processOutputWithBridge(
                     textContent += event.text;
                     break;
                 case toolcall::EventType::ToolCallEnd: {
-                    LOG_DEBUG << "[GenerationService] 工具调用结束: " << event.toolName;
+                    LOG_INFO << "[GenerationService] 工具调用结束: " << event.toolName;
                     generation::ToolCallDone tc;
                     tc.id = event.toolCallId;
                     tc.name = event.toolName;
@@ -884,7 +1027,7 @@ void GenerationService::processOutputWithBridge(
     auto& sessionManager = *chatSession::getInstance();
     if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
         textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
-        LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
+        LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
     }
     
     // 发送 OutputTextDone 事件 (如果有文本)
@@ -907,7 +1050,7 @@ bool GenerationService::getChannelSupportsToolCalls(const std::string& channelNa
     Channelinfo_st channelInfo;
     
     if (channelManager->getChannel(channelName, channelInfo)) {
-        LOG_DEBUG << "[GenerationService] 通道 " << channelName
+        LOG_INFO << "[GenerationService] 通道 " << channelName
                   << " supportsToolCalls: " << channelInfo.supportsToolCalls;
         return channelInfo.supportsToolCalls;
     }
@@ -919,64 +1062,103 @@ bool GenerationService::getChannelSupportsToolCalls(const std::string& channelNa
 
 // ========== emitResultEvents 辅助函数实现 ==========
 
+/**
+ * @brief 解析 XML 格式的工具调用
+ *
+ * 【功能说明】
+ * 从 XML 文本中解析出工具调用信息。这是 Bridge 模式的核心解析函数。
+ *
+ * 【XML 格式示例】
+ * <Function_Ab1c_Start/>          ← 触发标记（Sentinel）
+ * <function_calls>
+ *   <function_call>
+ *     <tool>read_file</tool>
+ *     <args_json><![CDATA[{"path":"src/main.cpp"}]]></args_json>
+ *   </function_call>
+ * </function_calls>
+ *
+ * 【Sentinel 机制】
+ * - 每次请求生成唯一的触发标记（如 <Function_Ab1c_Start/>）
+ * - 只有包含该标记的 XML 块才会被解析
+ * - 防止误解析历史消息或示例中的 XML
+ *
+ * @param xmlInput 待解析的 XML 文本
+ * @param outTextContent [输出] 非工具调用的普通文本
+ * @param outToolCalls [输出] 解析出的工具调用列表
+ * @param sentinel 期望的触发标记，为空则不做严格匹配
+ */
 void GenerationService::parseXmlToolCalls(
     const std::string& xmlInput,
     std::string& outTextContent,
     std::vector<generation::ToolCallDone>& outToolCalls,
-    const std::string& sentinel // [新增]
+    const std::string& sentinel
 ) {
     LOG_INFO << "[GenerationService] 解析 XML 格式 tool calls, sentinel: " << (sentinel.empty() ? "NONE" : sentinel);
-    LOG_DEBUG << "[ToolParse] xmlInput.size=" << xmlInput.size()
-    << " has </args_json>=" << (xmlInput.find("</args_json>") != std::string::npos)
-    << " has </function_call>=" << (xmlInput.find("</function_call>") != std::string::npos)
-    << " has </function_calls>=" << (xmlInput.find("</function_calls>") != std::string::npos);
+    LOG_INFO << "[ToolParse] xmlInput.size=" << xmlInput.size()
+              << " has </args_json>=" << (xmlInput.find("</args_json>") != std::string::npos)
+              << " has </function_call>=" << (xmlInput.find("</function_call>") != std::string::npos)
+              << " has </function_calls>=" << (xmlInput.find("</function_calls>") != std::string::npos);
 
+    // 创建 ToolCallBridge 和 XmlTagToolCallCodec
+    // - ToolCallBridge: 负责协调请求/响应的转换
+    // - XmlTagToolCallCodec: 负责 XML 格式的编解码
     auto bridge = toolcall::createToolCallBridge(false);
     auto codec = toolcall::createXmlTagToolCallCodec();
 
-    // [新增] 将 Sentinel 传给 Codec
+    // 设置 Sentinel（触发标记）
+    // 如果设置了 Sentinel，Codec 只会解析包含该标记的 XML 块
     if (!sentinel.empty()) {
         codec->setSentinel(sentinel);
     }
     bridge->setTextCodec(codec);
 
+    // 执行解析
     std::vector<toolcall::ToolCallEvent> events;
-    bridge->transformResponseChunk(xmlInput, events);
-    bridge->flushResponse(events);
+    bridge->transformResponseChunk(xmlInput, events);  // 增量解析
+    bridge->flushResponse(events);                      // 刷新剩余内容
 
+    // 处理解析事件
     for (const auto& event : events) {
         switch (event.type) {
             case toolcall::EventType::Text:
+                // 普通文本事件：累积到 outTextContent
                 outTextContent += event.text;
                 break;
+                
             case toolcall::EventType::ToolCallEnd: {
-                LOG_DEBUG << "[GenerationService] 工具调用结束: " << event.toolName;
+                // 工具调用结束事件：创建 ToolCallDone 结构
+                LOG_INFO << "[GenerationService] 工具调用结束: " << event.toolName;
                 generation::ToolCallDone tc;
-                tc.id = event.toolCallId;
-                tc.name = event.toolName;
-                tc.arguments = event.argumentsDelta;
-                tc.index = outToolCalls.size();
+                tc.id = event.toolCallId;           // 工具调用 ID（如 call_xxx）
+                tc.name = event.toolName;           // 工具名称（如 read_file）
+                tc.arguments = event.argumentsDelta; // 参数 JSON 字符串
+                tc.index = outToolCalls.size();     // 在列表中的索引
                 outToolCalls.push_back(tc);
                 break;
             }
+            
             case toolcall::EventType::ToolCallBegin:
             case toolcall::EventType::ToolCallArgsDelta:
+                // 这些是流式解析的中间状态，非流式场景下忽略
                 break;
+                
             case toolcall::EventType::Error:
-                //LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage;
+                // 解析错误：记录日志但不中断处理
                 LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage
                          << " (xmlInput.size=" << xmlInput.size() << ")";
-                     {
+                {
+                    // 输出 XML 尾部用于调试
                     const size_t kTail = 320;
                     const std::string tail =
                         xmlInput.size() > kTail ? xmlInput.substr(xmlInput.size() - kTail) : xmlInput;
-                    LOG_DEBUG << "[GenerationService] xmlInput tail (truncated): " << tail;
-                    }
+                    LOG_INFO << "[GenerationService] xmlInput tail (truncated): " << tail;
+                }
                 break;
         }
     }
 
-    // When tool calls exist, suppress any stray text (e.g. trigger echoes, whitespace, etc.)
+    // 【重要】如果解析出了工具调用，清空文本内容
+    // 避免触发标记、空白字符等被当作普通文本输出
     if (!outToolCalls.empty()) {
         outTextContent.clear();
     }
@@ -1198,12 +1380,33 @@ void GenerationService::generateForcedToolCall(
     LOG_WARN << "[GenerationService] 上游未返回 tool call，已根据 tool_choice=required 生成兜底 tool call: " << toolName;
 }
 
+/**
+ * @brief 规范化工具调用参数的形状
+ *
+ * 【功能说明】
+ * 上游模型输出的参数格式可能与客户端期望的 JSONSchema 不完全匹配。
+ * 此函数负责将参数转换为正确的形状，避免客户端解析失败。
+ *
+ * 【常见问题示例】
+ * 1. 数组元素类型错误：
+ *    - 上游输出: files: ["src/main.cpp", "src/util.cpp"]
+ *    - 期望格式: files: [{path: "src/main.cpp"}, {path: "src/util.cpp"}]
+ *
+ * 2. 参数别名：
+ *    - 上游输出: paths: ["src/main.cpp"]
+ *    - 期望格式: files: [{path: "src/main.cpp"}]
+ *
+ * 3. 缺失可选字段：
+ *    - 上游输出: follow_up: [{text: "Yes"}]
+ *    - 期望格式: follow_up: [{text: "Yes", mode: ""}]
+ *
+ * @param session 会话状态，包含工具定义
+ * @param toolCalls [输入/输出] 待规范化的工具调用列表
+ */
 void GenerationService::normalizeToolCallArguments(
     const session_st& session,
     std::vector<generation::ToolCallDone>& toolCalls
 ) {
-    // RooCode's tools often use nested schemas (e.g. read_file expects files:[{path:string}]),
-    // while upstream may emit a simpler but invalid shape (e.g. files:["..."]).
     if (toolCalls.empty()) {
         return;
     }
@@ -1416,165 +1619,37 @@ void GenerationService::normalizeToolCallArguments(
     }
 }
 
-void GenerationService::selfHealReadFile(
-    const session_st& session,
-    const std::string& clientType,
-    std::string& textContent,
-    std::vector<generation::ToolCallDone>& outToolCalls
-) {
-    // Some upstream UIs/models refuse tool-use by saying "I don't have access to your filesystem".
-    // When that happens, they often list file paths they want the user to paste.
-    const std::string lower = toLowerStr(textContent);
-    const bool looksLikeNoToolAccess =
-        (lower.find("no access") != std::string::npos) ||
-        (lower.find("don't have") != std::string::npos) ||
-        (lower.find("cannot") != std::string::npos) ||
-        (lower.find("can't") != std::string::npos) ||
-        (lower.find("file system") != std::string::npos) ||
-        (lower.find("filesystem") != std::string::npos) ||
-        (lower.find("workspace") != std::string::npos) ||
-        (textContent.find("没有") != std::string::npos) ||
-        (textContent.find("无法") != std::string::npos) ||
-        (textContent.find("做不到") != std::string::npos) ||
-        (textContent.find("粘贴") != std::string::npos) ||
-        (textContent.find("贴") != std::string::npos) ||
-        (textContent.find("文件内容") != std::string::npos);
-
-    if (!looksLikeNoToolAccess) {
-        return;
-    }
-
-    const Json::Value& toolDefs =
-        (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
-            ? session.tools_raw
-            : session.tools;
-
-    auto hasTool = [&](const std::string& name) -> bool {
-        if (!toolDefs.isArray()) return false;
-        for (const auto& t : toolDefs) {
-            if (!t.isObject()) continue;
-            if (t.get("type", "").asString() != "function") continue;
-            const auto& func = t["function"];
-            if (!func.isObject()) continue;
-            if (func.get("name", "").asString() == name) return true;
-        }
-        return false;
-    };
-
-    if (!hasTool("read_file")) {
-        return;
-    }
-
-    auto trimPunct = [](std::string s) -> std::string {
-        auto isTrim = [](unsigned char c) {
-            return std::isspace(c) || c == '`' || c == '"' || c == '\'' ||
-                   c == ',' || c == ';' || c == ':' || c == '.' ||
-                   c == ')' || c == '(' || c == ']' || c == '[' ||
-                   c == '>' || c == '<' || c == '!' || c == '?';
-        };
-        while (!s.empty() && isTrim(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-        while (!s.empty() && isTrim(static_cast<unsigned char>(s.back()))) s.pop_back();
-        return s;
-    };
-
-    auto looksLikeFilePath = [](const std::string& s) -> bool {
-        if (s.find('/') == std::string::npos) return false;
-        size_t lastSlash = s.find_last_of('/');
-        size_t lastDot = s.find_last_of('.');
-        if (lastDot == std::string::npos || lastDot < lastSlash) return false;
-        // keep it simple: ensure extension is short-ish
-        return (s.size() - lastDot) <= 8;
-    };
-
-    auto extractBacktickPaths = [&](const std::string& s) -> std::vector<std::string> {
-        std::vector<std::string> out;
-        size_t i = 0;
-        while (true) {
-            size_t a = s.find('`', i);
-            if (a == std::string::npos) break;
-            size_t b = s.find('`', a + 1);
-            if (b == std::string::npos) break;
-            std::string seg = trimPunct(s.substr(a + 1, b - a - 1));
-            if (looksLikeFilePath(seg)) out.push_back(std::move(seg));
-            i = b + 1;
-        }
-        return out;
-    };
-
-    std::vector<std::string> paths = extractBacktickPaths(textContent);
-
-    // If no backtick paths, do a light-weight token scan.
-    if (paths.empty()) {
-        std::string token;
-        for (char ch : textContent) {
-            const bool split = std::isspace(static_cast<unsigned char>(ch)) ||
-                               ch == ',' || ch == ';' || ch == ':' || ch == '\n' ||
-                               ch == '\r' || ch == '\t';
-            if (!split) {
-                token.push_back(ch);
-                continue;
-            }
-            if (!token.empty()) {
-                std::string cand = trimPunct(token);
-                if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
-                token.clear();
-            }
-        }
-        if (!token.empty()) {
-            std::string cand = trimPunct(token);
-            if (looksLikeFilePath(cand)) paths.push_back(std::move(cand));
-        }
-    }
-
-    // Deduplicate + limit.
-    std::vector<std::string> uniq;
-    for (auto& p : paths) {
-        bool seen = false;
-        for (const auto& u : uniq) {
-            if (u == p) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) uniq.push_back(std::move(p));
-        if (uniq.size() >= 10) break;
-    }
-
-    if (uniq.empty()) {
-        return;
-    }
-
-    Json::Value args(Json::objectValue);
-    Json::Value files(Json::arrayValue);
-    for (const auto& p : uniq) {
-        Json::Value f(Json::objectValue);
-        f["path"] = p;
-        files.append(f);
-    }
-    args["files"] = files;
-
-    generation::ToolCallDone tc;
-    tc.id = generateFallbackToolCallId();
-    tc.name = "read_file";
-    tc.index = 0;
-
-    Json::StreamWriterBuilder writer;
-    writer["indentation"] = "";
-    tc.arguments = Json::writeString(writer, args);
-
-    outToolCalls.push_back(tc);
-    textContent.clear();
-    LOG_WARN << "[GenerationService][" << clientType << "] 上游拒绝工具访问，已自动转换为 read_file 工具调用";
-}
-
+/**
+ * @brief 应用严格客户端规则（仅 Roo/Kilo）
+ *
+ * 【规则说明】
+ * Roo/Kilo 客户端对响应格式有严格要求：
+ * - 每次响应必须且只能包含 1 个工具调用
+ * - 不允许纯文本响应（必须包装为 attempt_completion）
+ * - 不允许多个工具调用（只保留第一个）
+ *
+ * 【处理逻辑】
+ * 1. 如果没有工具调用但有文本 → 包装为 attempt_completion
+ * 2. 如果有工具调用 → 清空文本内容（避免重复输出）
+ * 3. 如果有多个工具调用 → 只保留第一个
+ *
+ * 【为什么需要这个规则？】
+ * Roo/Kilo 客户端的工作流设计为：
+ * - 每轮对话，AI 必须执行一个动作（工具调用）
+ * - 客户端根据工具调用类型决定下一步操作
+ * - 如果没有工具调用，客户端无法继续工作流
+ *
+ * @param clientType 客户端类型（用于日志）
+ * @param textContent [输入/输出] 文本内容，处理后可能被清空
+ * @param toolCalls [输入/输出] 工具调用列表，可能被修改
+ */
 void GenerationService::applyStrictClientRules(
     const std::string& clientType,
     std::string& textContent,
     std::vector<generation::ToolCallDone>& toolCalls
 ) {
-    // Kilo-Code / RooCode compatibility fallback:
-    // These clients enforce "exactly one tool call per assistant response".
-    // If no tool call markers are present, wrap plain text into an `attempt_completion` call.
+    // 规则 1: 如果没有工具调用但有文本，包装为 attempt_completion
+    // attempt_completion 是 Roo/Kilo 的"完成任务"工具，用于输出最终结果
     if (toolCalls.empty() && !textContent.empty()) {
         generation::ToolCallDone tc;
         tc.id = generateFallbackToolCallId();
@@ -1590,14 +1665,17 @@ void GenerationService::applyStrictClientRules(
         toolCalls.push_back(tc);
         LOG_WARN << "[GenerationService][" << clientType << "] 未检测到 tool call，已自动包装为 attempt_completion";
 
-        // Keep only zero-width session id (embedded later) in OutputTextDone.
+        // 清空文本内容（已包装到 attempt_completion 中）
+        // 注意：零宽会话ID会在后续步骤单独嵌入
         textContent.clear();
     } else if (!toolCalls.empty()) {
-        // Suppress visible text output when tool calls exist.
-        textContent.clear();
+        // // 规则 2: 如果有工具调用，清空文本内容
+        // // 避免工具调用和文本同时输出导致客户端混淆
+        // textContent.clear();
     }
 
-    // Strict clients require exactly one tool call per assistant response.
+    // 规则 3: 如果有多个工具调用，只保留第一个
+    // Roo/Kilo 客户端每次只能处理一个工具调用
     if (toolCalls.size() > 1) {
         LOG_WARN << "[GenerationService][" << clientType << "] 检测到多个 tool call，已仅保留第一个以满足客户端约束";
         toolCalls.erase(toolCalls.begin() + 1, toolCalls.end());
@@ -1634,6 +1712,21 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             return oss.str();
         };
 
+        // Collect required field names from schema
+        auto getRequiredSet = [](const Json::Value& schema) -> std::unordered_set<std::string> {
+            std::unordered_set<std::string> requiredSet;
+            if (!schema.isObject()) return requiredSet;
+
+            const auto& required = schema["required"];
+            if (required.isArray()) {
+                for (const auto& r : required) {
+                    if (r.isString()) requiredSet.insert(r.asString());
+                }
+            }
+            return requiredSet;
+        };
+
+        // Collect all property names from schema (for nested objects)
         auto collectSchemaKeys = [](const Json::Value& schema) -> std::vector<std::string> {
             std::vector<std::string> keys;
             if (!schema.isObject()) return keys;
@@ -1680,7 +1773,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         };
 
         std::ostringstream oss;
-        oss << "API 定义（Schema）：\n";
+        // Note: The header "API Definitions (* = required, ? = optional):" is now in the policy section
         for (const auto& tool : tools) {
             if (!tool.isObject()) continue;
             if (tool.get("type", "").asString() != "function") continue;
@@ -1694,15 +1787,21 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             std::vector<std::string> params;
             const auto& schema = func["parameters"];
             if (schema.isObject()) {
-                const auto requiredKeys = collectSchemaKeys(schema);
+                const auto requiredSet = getRequiredSet(schema);
                 const auto& props = schema["properties"];
 
-                for (const auto& key : requiredKeys) {
-                    if (!props.isObject() || !props.isMember(key) || !props[key].isObject()) {
-                        params.push_back(key);
-                        continue;
+                // Iterate over all properties, not just required ones
+                if (props.isObject()) {
+                    for (const auto& key : props.getMemberNames()) {
+                        const bool isRequired = requiredSet.find(key) != requiredSet.end();
+                        const std::string marker = isRequired ? "*" : "?";
+                        
+                        if (!props[key].isObject()) {
+                            params.push_back(key + marker);
+                            continue;
+                        }
+                        params.push_back(key + marker + ": " + describeSchema(props[key]));
                     }
-                    params.push_back(key + ":" + describeSchema(props[key]));
                 }
             }
 
@@ -1771,38 +1870,46 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     session.tool_bridge_trigger = generateRandomTriggerSignal();
     const std::string& triggerSignal = session.tool_bridge_trigger;
 
-    // Low-friction "task" prompt:
+    // Low-friction "task" prompt (English for better model compatibility):
     // Modern RLHF-aligned models may reject "system override" style tool instructions.
     // We present this as a formatting/extraction task and ask the model to output
     // a strictly delimited XML block (Toolify-style) when an action/tool call is needed.
-	    {
-	        std::ostringstream policy;
-	        if (strictToolClient) {
-	            policy << "场景：软件工程协作\n";
-	            policy << "任务类型：下一步工具调用指令生成（工具由外部系统执行）\n";
-	            policy << "目标：根据【用户请求】选择并输出下一步要调用的 1 个工具。\n";
-	            policy << "注意：不要解释你是否有权限/访问能力，也不要要求用户粘贴文件内容；根据你的需要使用列出的工具(比如需要文件就直接调用 read_file/list_files)。\n";
-	        } else {
-	            policy << "场景：软件工程协作\n";
-	            policy << "任务类型：下一步工具调用指令生成（工具由外部系统执行）\n";
-	            policy << "目标：根据【用户请求】选择并输出下一步要调用的1个或多个工具。\n";
-	            policy << "注意：不要解释你是否有权限/访问能力，也不要要求用户粘贴文件内容；根据你的需要使用列出的工具(比如需要文件就直接调用 read_file/list_files)。\n";
-	        }
+    //
+    // IMPORTANT: The wrapper tag <tool_instructions> is intentionally different from
+    // XmlTagToolCallCodec's recognized tags (function_calls, function_call, tool, args_json)
+    // to prevent the prompt itself from being misinterpreted as a tool call.
+    {
+        std::ostringstream policy;
+        
+        // Use English for better model stability with format constraints
+        policy << "<tool_instructions>\n";
+        
+        if (strictToolClient) {
+            policy << "Context: Software engineering collaboration\n";
+            policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
+            policy << "Goal: Based on the user request, select and output exactly 1 tool to call.\n";
+            policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+        } else {
+            policy << "Context: Software engineering collaboration\n";
+            policy << "Task: Generate tool call instructions (tools are executed by an external system)\n";
+            policy << "Goal: Based on the user request, select and output one or more tools to call.\n";
+            policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+        }
 
         if (!forcedToolName.empty()) {
-            policy << "本次任务指定调用的 API： " << forcedToolName << "。\n";
+            policy << "Required tool for this task: " << forcedToolName << "\n";
         } else if (toolChoice == "required") {
-            policy << "本次任务必须输出 1 个工具调用（请选择最合适的一个 API）。\n";
-	        } else if (strictToolClient) {
-	            policy << "本次任务每次回复必须输出 1 个工具调用。\n";
-	            policy << "若不需要调用其它工具，请使用 attempt_completion 输出最终结果。\n";
-	        } else {
-	            policy << "当且仅当需要调用 API 才能完成任务时，才输出所需工具的 XML 格式；否则正常回答。\n";
-	        }
+            policy << "This task MUST output exactly 1 tool call (choose the most appropriate API).\n";
+        } else if (strictToolClient) {
+            policy << "Each response MUST output exactly 1 tool call.\n";
+            policy << "If no other tool is needed, use attempt_completion to output the final result.\n";
+        } else {
+            policy << "Output tool calls in XML format ONLY when an API call is needed to complete the task; otherwise respond normally.\n";
+        }
 
-        policy << "要求：\n";
-        policy << "- 当输出工具调用时，除 XML 外不要输出任何其它文本（不要解释、不要前后缀、不要 markdown 代码块）。\n";
-        policy << "- 必须严格按下面的 XML 格式输出（第1行是触发标记，第2行开始紧跟 <function_calls>）：\n";
+        policy << "\nRequirements:\n";
+        policy << "- When outputting a tool call, output ONLY the XML (no explanations, no prefixes/suffixes, no markdown code blocks).\n";
+        policy << "- You MUST follow this exact XML format (line 1 is the trigger marker, line 2 starts <function_calls>):\n";
         policy << triggerSignal << "\n";
         policy << "<function_calls>\n";
         policy << "  <function_call>\n";
@@ -1810,30 +1917,22 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         policy << "    <args_json><![CDATA[{\"PARAM_NAME\":\"VALUE\"}]]></args_json>\n";
         policy << "  </function_call>\n";
         policy << "</function_calls>\n";
-        policy << "- <tool> 必须是 API 定义里存在的名称。\n";
-        policy << "- <args_json> 必须是严格 JSON 对象，参数 key 必须与 API 定义完全一致（区分大小写）。\n";
+        policy << "- <tool> MUST be a name that exists in the API definitions below.\n";
+        policy << "- <args_json> MUST be a valid JSON object containing all required arguments for that tool.\n";
+        policy << "- Parameter keys MUST exactly match the API definition (case-sensitive).\n";
+        policy << "- Parameters marked with * are required and MUST be provided.\n";
+        policy << "- Parameters marked with ? are optional.\n";
 
-        // if (strictToolClient) {
-        //     policy << "（" << clientType << "）每次回复必须且只能输出 1 个 <function_call>。\n";
-        //     policy << "（" << clientType << "）当需要给出最终答复时，请输出工具调用：\n";
-        //     policy << triggerSignal << "\n";
-        //     policy << "<function_calls>\n";
-        //     policy << "  <function_call>\n";
-        //     policy << "    <tool>attempt_completion</tool>\n";
-        //     policy << "    <args_json><![CDATA[{\"result\":\"...\"}]]></args_json>\n";
-        //     policy << "  </function_call>\n";
-        //     policy << "</function_calls>\n";
-        // }
-
-        policy << "\n";
+        policy << "\nAPI Definitions (* = required, ? = optional):\n";
         toolDefinitions = policy.str() + toolDefinitions;
+        toolDefinitions += "</tool_instructions>\n\n";
     }
 
     LOG_INFO << "[GenerationService] 注入工具定义到 requestmessage, 长度: " << toolDefinitions.length();
 
     std::string originalInput = session.requestmessage;
-    LOG_DEBUG << "工具定义:" << toolDefinitions;
-    session.requestmessage = toolDefinitions + "\n\n" + originalInput;
+    LOG_INFO << "工具定义:" << toolDefinitions;
+    session.requestmessage = originalInput+ "\n\n" + toolDefinitions ;
 
     // 清除 tools，避免后续流程再次处理
     session.tools = Json::Value(Json::nullValue);

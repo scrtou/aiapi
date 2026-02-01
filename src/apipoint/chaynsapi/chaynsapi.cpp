@@ -457,7 +457,7 @@ void chaynsapi::postChatMessage(session_st& session)
                         }
                         response_statusCode = 200;
                         LOG_INFO << "[chaynsAPI] 轮询结束, 总计轮询 " << pollCount << " 次, 成功获取响应";
-                        LOG_DEBUG << "[chaynsAPI] 回复内容 " << response_message;
+                        LOG_INFO << "[chaynsAPI] 回复内容 " << response_message;
 
                         goto found;
                     }
@@ -490,7 +490,7 @@ bool chaynsapi::checkAlivableToken(string token)
     request->setPath("/v2/userSettings");
     request->addHeader("Authorization", "Bearer " + token);
     auto [result, response] = client->sendRequest(request);
-    LOG_DEBUG << "[chaynsAPI] 验证Token响应: " << response->getStatusCode();
+    LOG_INFO << "[chaynsAPI] 验证Token响应: " << response->getStatusCode();
     if(response->getStatusCode()!=200)
     {
         return false;

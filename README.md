@@ -1,280 +1,521 @@
-# aiapi - AI API Gateway Service
+# aiapi
 
-AI API 网关服务，基于 **Drogon (C++ Web 框架)** 构建，提供 OpenAI 兼容的 API 接口。支持多种 AI 提供商的统一接入、会话管理、工具调用桥接等高级功能。
+基于 Drogon 框架的 AI API 网关服务，提供 OpenAI 兼容的 Chat Completions 和 Responses API 接口。
 
-## ✨ 特性
+## 功能特性
 
-- **OpenAI 兼容接口**：支持 Chat Completions API 和 Responses API
-- **多会话追踪模式**：Hash 模式（内容哈希）和 ZeroWidth 模式（零宽字符嵌入）
-- **工具调用桥接**：为不支持原生 tool calls 的通道提供 XML 格式转换
-- **统一请求适配**：`RequestAdapters` 将不同 API 格式统一为 `GenerationRequest`
-- **并发门控**：`ExecutionGuard` 实现会话级并发控制
-- **多渠道管理**：支持多上游 Provider 的负载均衡
-- **账户管理**：内置账户认证与管理功能
-- **Prometheus 监控**：内置 `/metrics` 端点
+- ✅ OpenAI Chat Completions API 兼容
+- ✅ OpenAI Responses API 兼容
+- ✅ 流式与非流式输出支持
+- ✅ 多 Provider 支持（可扩展）
+- ✅ 工具调用（Tool Calls）支持
+- ✅ 工具调用桥接（Text Bridge）- 支持不原生支持工具调用的模型
+- ✅ 工具调用验证（ToolCallValidator）- 支持 None/Relaxed/Strict 三种校验模式
+- ✅ 会话追踪（Hash / ZeroWidth 两种模式）
+- ✅ 并发门控（SessionExecutionGate）
+- ✅ 输出清洗（ClientOutputSanitizer）
+- ✅ 统一错误模型（Errors）
 
-## 🏗️ 架构概览
+## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        HTTP 接入层                              │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │   AiApi         │  │  ChatJsonSink   │  │  ChatSseSink    │ │
-│  │   Controller    │  │  ResponsesSink  │  │                 │ │
-│  └────────┬────────┘  └─────────────────┘  └─────────────────┘ │
-└───────────┼─────────────────────────────────────────────────────┘
-            │
-┌───────────▼─────────────────────────────────────────────────────┐
+│                         HTTP 层                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    AiApi Controller                      │    │
+│  │  POST /chaynsapi/v1/chat/completions                    │    │
+│  │  POST /chaynsapi/v1/responses                           │    │
+│  │  GET  /chaynsapi/v1/models                              │    │
+│  │  GET  /chaynsapi/v1/responses/{id}                      │    │
+│  │  DELETE /chaynsapi/v1/responses/{id}                    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                        适配层                                    │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  RequestAdapters: HTTP JSON → GenerationRequest             ││
-│  └─────────────────────────────────────────────────────────────┘│
-└───────────┬─────────────────────────────────────────────────────┘
-            │
-┌───────────▼─────────────────────────────────────────────────────┐
-│                     生成编排层                                   │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │ GenerationService│ │ ExecutionGuard  │  │  ToolCallBridge │ │
-│  │   runGuarded()  │  │ (并发门控)       │  │ (工具调用桥接)   │ │
-│  └────────┬────────┘  └─────────────────┘  └─────────────────┘ │
-└───────────┼─────────────────────────────────────────────────────┘
-            │
-┌───────────▼─────────────────────────────────────────────────────┐
-│                       会话层                                     │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  chatSession: Hash/ZeroWidth 两种会话追踪模式                ││
-│  │  ZeroWidthEncoder: 零宽字符编解码                            ││
-│  └─────────────────────────────────────────────────────────────┘│
-└───────────┬─────────────────────────────────────────────────────┘
-            │
-┌───────────▼─────────────────────────────────────────────────────┐
-│                     Provider 层                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │   ApiManager    │  │   ApiFactory    │  │  APIinterface   │ │
-│  │  (路由/负载均衡) │  │  (Provider注册) │  │  (Provider抽象) │ │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│  ┌─────────────────┐     ┌──────────────────────────────────┐  │
+│  │ RequestAdapters │ ──▶ │      GenerationRequest           │  │
+│  │ (Chat/Responses)│     │ (统一请求结构)                    │  │
+│  └─────────────────┘     └──────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      生成编排层                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │               GenerationService                          │    │
+│  │  - runGuarded()       (主入口，含并发门控)                │    │
+│  │  - materializeSession()                                  │    │
+│  │  - computeExecutionKey()                                 │    │
+│  │  - executeProvider()                                     │    │
+│  │  - emitResultEvents()                                    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│           │              │              │              │         │
+│           ▼              ▼              ▼              ▼         │
+│  ┌──────────────┐ ┌────────────┐ ┌──────────────┐ ┌──────────┐  │
+│  │ToolCallBridge│ │  Session   │ │ToolCallValid.│ │OutputSan.│  │
+│  └──────────────┘ └────────────┘ └──────────────┘ └──────────┘  │
+│           │                                                      │
+│           ▼                                                      │
+│  ┌──────────────────┐                                            │
+│  │SessionExecutionGate│ (并发门控)                               │
+│  └──────────────────┘                                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Provider 层                                 │
+│  ┌─────────────┐     ┌─────────────────────────────────────┐   │
+│  │  ApiManager │ ──▶ │         APIinterface                │   │
+│  │  (路由选择)  │     │  - generate()                       │   │
+│  └─────────────┘     │  - ProviderResult                   │   │
+│                       └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       输出层                                     │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────────┐   │
+│  │ IResponseSink │  │GenerationEvent│  │   HTTP Response   │   │
+│  │  (接口)       │◀─│  (事件模型)    │──▶│  (JSON/SSE)       │   │
+│  └───────────────┘  └───────────────┘  └───────────────────┘   │
+│        │                                                         │
+│        ├── ChatJsonSink (非流式 JSON)                            │
+│        ├── ChatSseSink (流式 SSE)                                │
+│        └── ResponsesSseSink (Responses API SSE)                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 快速启动
+## 项目结构
 
-### 使用 Docker Compose
-
-```bash
-# 克隆项目后
-cd aiapi
-docker compose up --build -d
+```
+aiapi/src/
+├── main.cc                     # 程序入口
+├── config.json                 # Drogon 配置
+│
+├── controllers/                # HTTP 控制器
+│   ├── AiApi.h / AiApi.cc     # 主路由控制器
+│   └── sinks/                  # 输出 Sink 实现
+│       ├── ChatJsonSink.cpp    # Chat 非流式输出
+│       ├── ChatSseSink.cpp     # Chat 流式 SSE
+│       └── ResponsesSseSink.cpp
+│
+├── sessionManager/             # 核心业务逻辑
+│   ├── GenerationRequest.h     # 统一请求结构
+│   ├── GenerationEvent.h       # 统一事件模型
+│   ├── IResponseSink.h         # 输出通道接口
+│   ├── RequestAdapters.h/cpp   # 请求适配器
+│   ├── GenerationService.h/cpp # 生成编排服务
+│   ├── Session.h/cpp           # 会话管理
+│   ├── SessionExecutionGate.h/cpp # 并发门控
+│   ├── ToolCallBridge.h/cpp    # 工具调用桥接
+│   ├── XmlTagToolCallCodec.h/cpp # XML 编解码
+│   ├── ToolCallValidator.h/cpp # 工具调用验证
+│   ├── ClientOutputSanitizer.h/cpp # 输出清洗
+│   └── Errors.h                # 统一错误模型
+│
+├── apipoint/                   # Provider 抽象
+│   ├── APIinterface.h          # Provider 接口
+│   ├── ProviderResult.h        # 结果结构
+│   └── chaynsapi/              # chayns Provider 实现
+│
+├── apiManager/                 # Provider 管理
+│   ├── ApiFactory.h/cpp        # Provider 工厂
+│   └── ApiManager.h/cpp        # Provider 路由
+│
+├── accountManager/             # 账号管理
+├── channelManager/             # 渠道管理
+├── dbManager/                  # 数据库管理
+│
+└── tools/                      # 工具类
+    └── ZeroWidthEncoder.h/cpp  # 零宽字符编码
 ```
 
-### 本地编译
+## 核心模块说明
 
-```bash
-# 依赖: CMake 3.5+, Drogon, OpenSSL, jsoncpp
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-./aiapi
+### GenerationEvent（统一事件模型）
+
+所有生成过程产生的事件都通过 `GenerationEvent` 统一表示：
+
+| 事件类型 | 说明 | 数据 |
+|----------|------|------|
+| `Started` | 生成开始 | responseId, model |
+| `OutputTextDelta` | 文本增量（流式） | delta, index, outputItemIndex(可选) |
+| `OutputTextDone` | 文本完成 | text, index |
+| `ToolCallDone` | 工具调用完成 | id, name, arguments, index |
+| `Usage` | Token 使用量 | inputTokens, outputTokens |
+| `Completed` | 生成完成 | finishReason, usage(可选) |
+| `Error` | 错误 | code, message, detail |
+
+### IResponseSink（输出通道接口）
+
+将 `GenerationEvent` 转换为具体协议格式：
+
+```cpp
+class IResponseSink {
+    virtual void onEvent(const generation::GenerationEvent& event) = 0;
+    virtual void onClose() = 0;
+    virtual std::string getSinkType() const = 0;
+};
 ```
 
-## ⚙️ 配置
+内置实现：
+- `ChatJsonSink` - Chat Completions 非流式 JSON
+- `ChatSseSink` - Chat Completions 流式 SSE  
+- `ResponsesSseSink` - Responses API 流式 SSE
+- `NullSink` - 丢弃输出（测试用）
+- `CollectorSink` - 收集事件（测试用）
 
-### 配置文件
+### GenerationService（生成编排服务）
 
-复制 `config.example.json` 为 `config.json` 并修改：
+核心编排服务，负责整个生成流程：
 
-```bash
-cp config.example.json src/config.json
+```cpp
+class GenerationService {
+public:
+    // 主入口：带并发门控的生成
+    void runGuarded(
+        const GenerationRequest& request,
+        std::shared_ptr<IResponseSink> sink,
+        session::ConcurrencyPolicy policy
+    );
+    
+private:
+    session_st materializeSession(const GenerationRequest& request);
+    std::string computeExecutionKey(const session_st& session);
+    ProviderResult executeProvider(session_st& session, const GenerationRequest& request);
+    void emitResultEvents(const ProviderResult& result, std::shared_ptr<IResponseSink> sink);
+    std::string sanitizeOutput(const std::string& output, const GenerationRequest& request);
+    void processOutputWithBridge(const std::string& output, ...);
+    std::vector<generation::ToolCallDone> parseXmlToolCalls(const std::string& text);
+    generation::ToolCallDone generateForcedToolCall(const Json::Value& tools);
+    void normalizeToolCallArguments(generation::ToolCallDone& call, const Json::Value& toolDef);
+    bool selfHealReadFile(generation::ToolCallDone& call);
+    void applyStrictClientRules(generation::ToolCallDone& call, const Json::Value& clientInfo);
+};
 ```
 
-### 主要配置项
+### SessionExecutionGate（并发门控）
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `listeners[].port` | 服务监听端口 | 5555 |
-| `db_clients[]` | PostgreSQL 数据库配置 | - |
-| `custom_config.session_tracking.mode` | 会话追踪模式 (`hash`/`zerowidth`) | `hash` |
-| `custom_config.login_service_urls` | 登录服务地址配置 | - |
-| `custom_config.regist_service_urls` | 注册服务地址配置 | - |
+防止同一会话并发执行：
 
-### 环境变量
+```cpp
+namespace session {
 
-```bash
-# 登录服务地址
-export LOGIN_SERVICE_URL=http://localhost:5557
+enum class ConcurrencyPolicy {
+    RejectConcurrent,   // 拒绝并发请求（返回 409 Conflict）
+    CancelPrevious      // 取消之前的请求，执行新请求
+};
+
+enum class GateResult {
+    Acquired,           // 成功获取执行权
+    Rejected,           // 被拒绝
+    Cancelled           // 之前的请求被取消
+};
+
+class SessionExecutionGate {
+public:
+    static SessionExecutionGate& getInstance();
+    GateResult tryAcquire(const std::string& sessionKey, ConcurrencyPolicy policy, CancellationTokenPtr& outToken);
+    void release(const std::string& sessionKey);
+    bool isExecuting(const std::string& sessionKey) const;
+    void cleanup(size_t maxIdleSlots = 1000);
+};
+
+// RAII 风格的执行守卫
+class ExecutionGuard {
+public:
+    ExecutionGuard(const std::string& sessionKey, ConcurrencyPolicy policy = ConcurrencyPolicy::RejectConcurrent);
+    ~ExecutionGuard();  // 自动释放
+    bool isAcquired() const;
+    GateResult getResult() const;
+    CancellationTokenPtr getToken() const;
+    bool isCancelled() const;
+};
+
+} // namespace session
 ```
 
-### 会话追踪模式
+### ToolCallBridge（工具调用桥接）
 
-在 `config.json` 的 `custom_config.session_tracking.mode` 中配置：
+为不原生支持工具调用的模型提供桥接：
 
-- **`hash`** (默认): 基于消息内容 SHA256 哈希生成会话ID
-- **`zerowidth`**: 在响应末尾使用零宽字符嵌入会话ID，对用户不可见
+- **Native 模式**：直接透传原生 tool calls
+- **TextBridge 模式**：
+  - 请求侧：将工具定义转换为 XML 注入 system prompt
+  - 响应侧：解析模型输出中的 XML 工具调用
 
-## 📡 API 端点
+### ToolCallValidator（工具调用验证）
+
+验证模型生成的工具调用是否符合工具定义，支持三种校验模式：
+
+```cpp
+namespace toolcall {
+
+// 校验模式
+enum class ValidationMode {
+    None,      // 不校验 - 信任 AI 输出，只解析 JSON
+    Relaxed,   // 宽松校验 - 只校验关键字段（path, content 等必须非空）
+    Strict     // 严格校验 - 完整 schema 校验（所有 required + 类型检查）
+};
+
+// 校验结果
+struct ValidationResult {
+    bool valid = false;
+    std::string errorMessage;
+    
+    static ValidationResult success();
+    static ValidationResult failure(const std::string& msg);
+};
+
+class ToolCallValidator {
+public:
+    // 构造时传入工具定义和客户端类型
+    explicit ToolCallValidator(const Json::Value& toolDefs, const std::string& clientType = "");
+    
+    // 校验单个工具调用
+    ValidationResult validate(
+        const generation::ToolCallDone& toolCall,
+        ValidationMode mode = ValidationMode::None
+    ) const;
+    
+    // 过滤无效的工具调用
+    size_t filterInvalidToolCalls(
+        std::vector<generation::ToolCallDone>& toolCalls,
+        std::string& discardedText,
+        ValidationMode mode = ValidationMode::None
+    ) const;
+    
+    // 检查工具名是否存在
+    bool hasToolDefinition(const std::string& toolName) const;
+    
+    // 获取有效工具名集合
+    const std::unordered_set<std::string>& getValidToolNames() const;
+    
+    // 获取客户端类型
+    const std::string& getClientType() const;
+};
+
+// 降级策略
+enum class FallbackStrategy {
+    DiscardOnly,           // 仅丢弃无效工具调用
+    WrapAttemptCompletion, // 包装为 attempt_completion
+    GenerateReadFile       // 生成 read_file 降级调用
+};
+
+// 辅助函数
+bool isStrictToolClient(const std::string& clientType);
+ValidationMode getRecommendedValidationMode(const std::string& clientType);
+
+} // namespace toolcall
+```
+
+### ClientOutputSanitizer（输出清洗）
+
+修正模型常见的输出错误：
+
+- 修正标签拼写错误
+- 去除非法控制字符
+- 根据客户端类型应用不同的清洗规则
+
+### Session（会话追踪）
+
+支持两种追踪模式：
+
+| 模式 | 实现 | 说明 |
+|------|------|------|
+| Hash | 消息内容 SHA256 | 默认模式，简单可靠 |
+| ZeroWidth | 零宽字符嵌入 | 对用户不可见的 sessionId |
+
+```cpp
+// 会话追踪模式
+enum class TrackingMode {
+    Hash,       // SHA256 哈希追踪（默认）
+    ZeroWidth   // 零宽字符嵌入追踪
+};
+
+// 会话结构
+struct session_st {
+    std::string sessionId;           // 会话 ID
+    std::string systemPrompt;        // 系统提示词
+    std::string systemPromptHash;    // 系统提示词哈希
+    std::string contextHash;         // 上下文哈希
+    TrackingMode trackingMode;       // 追踪模式
+    bool useTextBridge;              // 是否使用文本桥接
+    std::chrono::steady_clock::time_point lastActivityTime;  // 最后活动时间
+    std::vector<Message> conversationHistory;  // 会话历史
+};
+```
+
+### Errors（统一错误模型）
+
+统一的错误类型与 HTTP 状态码映射：
+
+```cpp
+namespace error {
+
+enum class ErrorCode {
+    None, BadRequest, Unauthorized, Forbidden, NotFound,
+    Conflict, RateLimited, Timeout, ProviderError, Internal, Cancelled
+};
+
+struct AppError {
+    ErrorCode code;
+    std::string message;
+    std::string detail;
+    std::string providerCode;
+    
+    bool hasError() const;
+    int httpStatus() const;
+    std::string type() const;
+    
+    // 工厂方法
+    static AppError badRequest(const std::string& msg, const std::string& detail = "");
+    static AppError unauthorized(const std::string& msg = "Unauthorized");
+    static AppError forbidden(const std::string& msg = "Forbidden");
+    static AppError notFound(const std::string& msg = "Not found");
+    static AppError conflict(const std::string& msg, const std::string& detail = "");
+    static AppError rateLimited(const std::string& msg = "Rate limited");
+    static AppError timeout(const std::string& msg = "Request timeout");
+    static AppError providerError(const std::string& msg, const std::string& providerCode = "");
+    static AppError internal(const std::string& msg, const std::string& detail = "");
+    static AppError cancelled(const std::string& msg = "Request cancelled");
+};
+
+} // namespace error
+```
+
+## API 接口
 
 ### Chat Completions API
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/chaynsapi/v1/chat/completions` | POST | 聊天补全（支持 stream） |
-| `/chaynsapi/v1/models` | GET | 获取可用模型列表 |
-
-### Responses API (OpenAI 兼容)
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/chaynsapi/v1/responses` | POST | 创建响应（支持 stream） |
-| `/chaynsapi/v1/responses/{id}` | GET | 获取响应详情 |
-| `/chaynsapi/v1/responses/{id}` | DELETE | 删除响应 |
-
-### 账户管理 API
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/aichat/account/add` | POST | 添加账户 |
-| `/aichat/account/info` | GET | 查询账户（内存态） |
-| `/aichat/account/dbinfo` | GET | 查询账户（数据库） |
-| `/aichat/account/update` | POST | 更新账户 |
-| `/aichat/account/delete` | POST | 删除账户 |
-
-### 渠道管理 API
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/aichat/channel/add` | POST | 添加渠道 |
-| `/aichat/channel/info` | GET | 获取渠道列表 |
-| `/aichat/channel/update` | POST | 更新渠道 |
-| `/aichat/channel/updatestatus` | POST | 更新渠道状态 |
-| `/aichat/channel/delete` | POST | 删除渠道 |
-
-### 监控
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/metrics` | GET | Prometheus 指标 |
-
-## 📂 项目结构
-
-```
-aiapi/
-├── CMakeLists.txt              # 主构建配置
-├── config.example.json         # 配置文件模板
-├── Dockerfile                  # Docker 构建文件
-├── docker-compose.*.yml        # Docker Compose 配置
-├── README.md                   # 本文档
-├── doc/
-│   └── aiapi_callflow_and_api_examples.md  # 详细调用流程文档
-└── src/
-    ├── main.cc                 # 程序入口
-    ├── controllers/            # HTTP 控制器
-    │   ├── AiApi.cc/h         # 主 API 控制器
-    │   └── sinks/             # 输出格式化器
-    │       ├── ChatJsonSink    # Chat API JSON 输出
-    │       ├── ChatSseSink     # Chat API SSE 输出
-    │       └── ResponsesSseSink # Responses API SSE 输出
-    ├── sessionManager/         # 会话管理核心
-    │   ├── Session.cc/h        # 会话存储与追踪
-    │   ├── GenerationService   # 生成编排服务
-    │   ├── GenerationRequest.h # 统一请求结构
-    │   ├── RequestAdapters     # 请求适配器
-    │   ├── ToolCallBridge      # 工具调用桥接
-    │   └── XmlTagToolCallCodec # XML 工具调用编解码
-    ├── apiManager/             # Provider 管理
-    │   ├── ApiManager          # API 路由与负载均衡
-    │   └── ApiFactory          # Provider 工厂
-    ├── apipoint/               # Provider 实现
-    │   └── chaynsapi/          # chayns API Provider
-    ├── accountManager/         # 账户管理
-    ├── channelManager/         # 渠道管理
-    ├── dbManager/              # 数据库管理
-    └── tools/                  # 工具类
-        └── ZeroWidthEncoder    # 零宽字符编解码器
-```
-
-## 🔧 核心模块说明
-
-### GenerationService
-
-统一的业务编排层，负责：
-- 接收 `GenerationRequest` + `IResponseSink`
-- 通过 `SessionStore` 获取/更新会话上下文
-- 调用 Provider 执行生成
-- 将结果转换为 `GenerationEvent` 发送给 Sink
-- 统一错误捕获、映射与清理
-
-### RequestAdapters
-
-HTTP → GenerationRequest 转换的唯一实现点：
-- `buildGenerationRequestFromChat()`: 解析 Chat Completions API
-- `buildGenerationRequestFromResponses()`: 解析 Responses API
-
-### ToolCallBridge
-
-当通道不支持原生 tool calls 时：
-- 请求侧：将工具定义注入到 prompt，使用 XML 格式
-- 响应侧：解析上游返回的 XML 工具调用块
-- 支持 Kilo-Code/RooCode 等严格客户端的兼容
-
-### Session (chatSession)
-
-会话存储与追踪：
-- **Hash 模式**: 消息内容 SHA256 生成 key
-- **ZeroWidth 模式**: 在输出末尾嵌入零宽字符编码的 sessionId
-- **Response API**: 使用 response_id 作为 key
-
-## 🧪 测试
-
 ```bash
-# 测试模型列表
-curl http://localhost:5555/chaynsapi/v1/models
-
-# 测试聊天（非流式）
-curl -X POST http://localhost:5555/chaynsapi/v1/chat/completions \
+# 非流式
+curl -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 
-# 测试聊天（流式）
-curl -N http://localhost:5555/chaynsapi/v1/chat/completions \
+# 流式
+curl -N -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
     "stream": true,
     "messages": [{"role": "user", "content": "Hello"}]
   }'
+```
 
-# 测试 Responses API
-curl -X POST http://localhost:5555/chaynsapi/v1/responses \
+### Responses API
+
+```bash
+# 创建 Response
+curl -X POST "http://localhost:5555/chaynsapi/v1/responses" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
-    "input": "Hello, how are you?"
+    "input": "Hello"
   }'
+
+# 获取 Response
+curl "http://localhost:5555/chaynsapi/v1/responses/{response_id}"
+
+# 删除 Response  
+curl -X DELETE "http://localhost:5555/chaynsapi/v1/responses/{response_id}"
 ```
 
-## 📦 依赖
+### Models API
 
-### 编译依赖
+```bash
+curl "http://localhost:5555/chaynsapi/v1/models"
+```
 
-- CMake >= 3.5
-- C++17 或更高
-- [Drogon](https://github.com/drogonframework/drogon) - C++ Web 框架
+## 构建与运行
+
+### 依赖
+
+- C++17 或更高版本
+- Drogon 框架
+- JsonCpp
 - OpenSSL
-- jsoncpp
+- PostgreSQL（可选，用于持久化）
 
-### 运行依赖
+### 构建
 
-- **aiapi-tool**: 账户登录验证服务（独立部署）
-- **PostgreSQL**: 数据库（配置在 config.json）
+```bash
+cd aiapi/src
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+```
 
-## 📚 详细文档
+### 运行
 
-更详细的调用流程、时序图、接口样例请参考：
+```bash
+cd aiapi/src/build
+./aiapi
+```
 
-- [aiapi 调用关系图 / 时序图 / 接口样例](doc/aiapi_callflow_and_api_examples.md)
+服务默认监听 `0.0.0.0:5555`
 
-## 📄 License
+## 配置
 
-MIT License
+配置文件位于 `aiapi/src/config.json`：
+
+```json
+{
+  "listeners": [
+    { "address": "0.0.0.0", "port": 5555 }
+  ],
+  "custom_config": {
+    "session_tracking": {
+      "mode": "hash"
+    },
+    "tool_call_validation": {
+      "default_mode": "none"
+    }
+  }
+}
+```
+
+## 详细文档
+
+- [调用关系图与接口样例](doc/aiapi_callflow_and_api_examples.md) - 详细的模块拆解、时序图和 curl 示例
+
+## 错误码
+
+| 错误码 | HTTP Status | 说明 |
+|--------|-------------|------|
+| BadRequest | 400 | 请求格式错误 |
+| Unauthorized | 401 | 未授权 |
+| Forbidden | 403 | 禁止访问 |
+| NotFound | 404 | 资源不存在 |
+| Conflict | 409 | 并发冲突 |
+| RateLimited | 429 | 限流 |
+| Timeout | 504 | 超时 |
+| ProviderError | 502 | Provider 错误 |
+| Internal | 500 | 内部错误 |
+| Cancelled | 499 | 请求被取消 |
+
+## 开发路线
+
+- [x] Chat Completions API 基础功能
+- [x] Responses API 基础功能
+- [x] 流式输出支持
+- [x] 工具调用支持
+- [x] 工具调用桥接
+- [x] 工具调用验证（ToolCallValidator - 支持 None/Relaxed/Strict 模式）
+- [x] 会话追踪（Hash/ZeroWidth）
+- [x] 并发门控（SessionExecutionGate + CancellationToken）
+- [x] 输出清洗（ClientOutputSanitizer）
+- [x] 统一错误模型（Errors）
+- [ ] 真正的流式 Provider 回调
+- [ ] 更多 Provider 实现
+- [ ] 完善单元测试
+
+## License
+
+MIT

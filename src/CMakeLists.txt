@@ -38,6 +38,7 @@ add_executable(${PROJECT_NAME}
     sessionManager/GenerationService.cpp
     sessionManager/RequestAdapters.cpp
     sessionManager/ToolCallBridge.cpp
+    sessionManager/ToolCallValidator.cpp
     sessionManager/XmlTagToolCallCodec.cpp
     tools/ZeroWidthEncoder.cpp
 )

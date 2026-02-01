@@ -291,23 +291,6 @@ private:
     );
     
     /**
-     * @brief 为严格客户端自动修复（生成 read_file 调用）
-     *
-     * 当上游拒绝工具访问时，自动提取文件路径并生成 read_file 调用
-     *
-     * @param session 会话状态
-     * @param clientType 客户端类型
-     * @param textContent 文本内容（会被清空如果生成了 tool call）
-     * @param outToolCalls 输出的 tool calls 列表
-     */
-    static void selfHealReadFile(
-        const session_st& session,
-        const std::string& clientType,
-        std::string& textContent,
-        std::vector<generation::ToolCallDone>& outToolCalls
-    );
-    
-    /**
      * @brief 应用严格客户端规则
      *
      * 包括：包装为 attempt_completion、限制单个 tool call

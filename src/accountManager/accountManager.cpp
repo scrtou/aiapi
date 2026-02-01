@@ -302,7 +302,7 @@ bool AccountManager::checkChaynsToken(string token)
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
     auto [result, response] = client->sendRequest(request);
-    LOG_DEBUG << "checkAlivableToken response: " << response->getStatusCode();
+    LOG_INFO << "checkAlivableToken response: " << response->getStatusCode();
     LOG_INFO << "checkChaynsTonen end";
     if(response->getStatusCode()!=200)
     {
@@ -864,8 +864,8 @@ void AccountManager::checkAccountTypeThread()
             LOG_INFO << "Starting scheduled account type check...";
             updateAllAccountTypes();
             
-            // 每 0.5 小时检查一次
-            std::this_thread::sleep_for(std::chrono::hours(1));
+            // 每 1 小时检查一次
+            std::this_thread::sleep_for(std::chrono::hours(3));
         }
     });
     t.detach();
