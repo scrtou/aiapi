@@ -72,15 +72,13 @@ private:
      * @param[out] systemPrompt 提取的系统提示词
      * @param[out] currentInput 当前用户输入
      * @param[out] images 提取的图片信息
-     * @param[out] extractedSessionId 从零宽字符中提取的会话ID（如果有）
      */
     static void parseChatMessages(
         const Json::Value& messages,
         std::vector<Message>& result,
         std::string& systemPrompt,
         std::string& currentInput,
-        std::vector<ImageInfo>& images,
-        std::string& extractedSessionId
+        std::vector<ImageInfo>& images
     );
     
     /**
@@ -94,14 +92,23 @@ private:
      * @param[out] messages 解析后的历史消息
      * @param[out] currentInput 当前用户输入
      * @param[out] images 提取的图片信息
-     * @param[out] extractedSessionId 从零宽字符中提取的会话ID（如果有）
      */
     static void parseResponseInput(
         const Json::Value& input,
         std::vector<Message>& messages,
         std::string& currentInput,
-        std::vector<ImageInfo>& images,
-        std::string& extractedSessionId
+        std::vector<ImageInfo>& images
+    );
+
+    /**
+     * @brief 解析 Responses API 的 input_items 字段（部分客户端使用）
+     *
+     * 目前仅将其中的文本汇总到 currentInput，并解析图片。
+     */
+    static void parseResponseInputItems(
+        const Json::Value& inputItems,
+        std::string& currentInput,
+        std::vector<ImageInfo>& images
     );
     
     /**
@@ -115,7 +122,8 @@ private:
     static std::string extractContentText(
         const Json::Value& content,
         std::vector<ImageInfo>& images,
-        bool stripZeroWidth = false
+        bool stripZeroWidth = false,
+        std::vector<std::string>* outRawTexts = nullptr
     );
     
     /**

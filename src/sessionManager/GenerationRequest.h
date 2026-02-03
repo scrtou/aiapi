@@ -3,16 +3,17 @@
 
 #include <string>
 #include <vector>
+#include <optional>
 #include <json/json.h>
 
 /**
- * @brief 输出协议类型
- * 
- * 定义支持的输出协议，用于决定如何编码输出事件
+ * @brief 请求入口类型（API endpoint）
+ *
+ * 用于区分 Chat Completions 与 Responses 两类入口。
  */
-enum class OutputProtocol {
-    ChatCompletions,   // OpenAI Chat Completions API 格式
-    Responses          // OpenAI Responses API 格式
+enum class EndpointType {
+    ChatCompletions,   // OpenAI Chat Completions API (/v1/chat/completions)
+    Responses          // OpenAI Responses API (/v1/responses)
 };
 
 /**
@@ -123,11 +124,11 @@ struct ImageInfo {
  * 参考设计文档: plans/aiapi-refactor-design.md 第 4.1 节
  */
 struct GenerationRequest {
-    // ========== 身份/上下文 ==========
-    std::string sessionKey;         // 内部会话 key，不等同 response_id
-    std::string previousKey;        // 可选，用于续聊/Responses 的 previous_response_id 映射
-    std::string responseId;         // [Responses] 服务器端生成的 response_id（可选，用于确保 Controller/Service 一致）
-    Json::Value clientInfo;         // 后续可换成强类型
+    // ========== 入口/会话连续性 ==========
+    EndpointType endpointType = EndpointType::ChatCompletions;
+    std::optional<std::string> previousResponseId;   // /v1/responses: previous_response_id（可选）
+    std::vector<std::string> continuityTexts;        // 原始文本集合（用于 ZeroWidth / 其它续聊解析，保留零宽字符）
+    Json::Value clientInfo;                          // 后续可换成强类型
     
     // ========== 生成目标 ==========
     std::string provider;           // 如 "chaynsapi"
@@ -145,7 +146,6 @@ struct GenerationRequest {
     
     // ========== 输出要求 ==========
     bool stream = false;            // 是否流式输出
-    OutputProtocol protocol = OutputProtocol::ChatCompletions;  // 输出协议
     
     // ========== 追踪 ==========
     std::string requestId;          // 请求 ID（可选）
@@ -157,7 +157,7 @@ struct GenerationRequest {
      * @brief 检查是否为 Response API 请求
      */
     bool isResponseApi() const {
-        return protocol == OutputProtocol::Responses;
+        return endpointType == EndpointType::Responses;
     }
     
     /**

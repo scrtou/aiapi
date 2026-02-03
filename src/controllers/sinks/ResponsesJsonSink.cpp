@@ -3,14 +3,10 @@
 
 ResponsesJsonSink::ResponsesJsonSink(
     ResponseCallback responseCallback,
-    const std::string& responseId,
     const std::string& model,
-    const std::string& internalSessionId,
     int inputTokensEstimated
 ) : responseCallback_(std::move(responseCallback)),
-    responseId_(responseId),
     model_(model),
-    internalSessionId_(internalSessionId),
     inputTokensEstimated_(inputTokensEstimated)
 {
     createdAt_ = static_cast<int64_t>(
@@ -27,7 +23,12 @@ void ResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
         using T = std::decay_t<decltype(arg)>;
 
         if constexpr (std::is_same_v<T, generation::Started>) {
-            // JSON sink 不需要在 Started 时做任何事
+            if (responseId_.empty()) {
+                responseId_ = arg.responseId;
+            }
+            if (model_.empty() && !arg.model.empty()) {
+                model_ = arg.model;
+            }
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDelta>) {
             collectedText_ += arg.delta;
@@ -81,6 +82,10 @@ Json::Value ResponsesJsonSink::buildResponse() {
     }
 
     Json::Value response;
+    if (responseId_.empty()) {
+        // 按设计：/v1/responses 必须有 id；这里兜底避免返回空字段
+        responseId_ = "resp_missing";
+    }
     response["id"] = responseId_;
     response["object"] = "response";
     response["created_at"] = static_cast<Json::Int64>(createdAt_);
@@ -88,7 +93,7 @@ Json::Value ResponsesJsonSink::buildResponse() {
     response["status"] = "completed";
 
     // 内部字段：供 Session 层存储/续聊映射
-    response["_internal_session_id"] = internalSessionId_;
+    //response["_internal_session_id"] = internalSessionId_;
 
     // output
     Json::Value outputArray(Json::arrayValue);

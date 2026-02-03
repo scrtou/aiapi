@@ -39,6 +39,9 @@ add_executable(${PROJECT_NAME}
     sessionManager/Session.cpp
     sessionManager/ClientOutputSanitizer.cpp
     sessionManager/GenerationService.cpp
+    sessionManager/ResponseIndex.cpp
+    sessionManager/TextExtractor.cpp
+    sessionManager/ContinuityResolver.cpp
     sessionManager/RequestAdapters.cpp
     sessionManager/ToolCallBridge.cpp
     sessionManager/ToolCallValidator.cpp

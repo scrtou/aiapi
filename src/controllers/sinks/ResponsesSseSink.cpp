@@ -8,11 +8,9 @@ using namespace drogon;
 ResponsesSseSink::ResponsesSseSink(
     StreamCallback streamCallback,
     CloseCallback closeCallback,
-    const std::string& responseId,
     const std::string& model
 ) : streamCallback_(std::move(streamCallback)),
     closeCallback_(std::move(closeCallback)),
-    responseId_(responseId),
     model_(model)
 {
     createdAt_ = static_cast<int64_t>(
@@ -20,7 +18,7 @@ ResponsesSseSink::ResponsesSseSink(
             std::chrono::system_clock::now().time_since_epoch()
         ).count()
     );
-    LOG_DEBUG << "[响应SSE] 已创建, 响应ID: " << responseId_ << ", 模型: " << model_;
+    LOG_DEBUG << "[响应SSE] 已创建, 模型: " << model_;
 }
 
 void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
@@ -93,6 +91,13 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Va
 
 void ResponsesSseSink::handleStarted(const generation::Started& event) {
     LOG_DEBUG << "[响应SSE] 开始事件, 响应ID: " << event.responseId;
+
+    if (responseId_.empty()) {
+        responseId_ = event.responseId;
+    }
+    if (model_.empty() && !event.model.empty()) {
+        model_ = event.model;
+    }
     
     // 1) response.created
     Json::Value createdEvent(Json::objectValue);

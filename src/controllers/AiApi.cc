@@ -18,6 +18,7 @@
 #include <sessionManager/SessionExecutionGate.h>
 #include <sessionManager/Errors.h>
 #include <sessionManager/RequestAdapters.h>
+#include <sessionManager/ResponseIndex.h>
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ChatJsonSink.h>
 #include <controllers/sinks/ResponsesSseSink.h>
@@ -135,7 +136,8 @@ void AiApi::chaynsapichat(const HttpRequestPtr &req, std::function<void(const Ht
     
     // ========== 流式请求：使用 GenerationService::runGuarded() ==========
     LOG_INFO << "[API接口] 流式响应 - 使用 GenerationService::runGuarded()";
-    LOG_INFO << "[API接口] 会话Key: " << genReq.sessionKey;
+    LOG_INFO << "[API接口] previousResponseId: "
+             << (genReq.previousResponseId.has_value() ? *genReq.previousResponseId : "");
     
     // 使用 CollectorSink 收集完整响应
     CollectorSink collector;
@@ -829,12 +831,12 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
     }
     
     auto& reqBody = *jsonPtr;
-    bool stream = reqBody.get("stream", false).asBool();
-    
-    // ========== PR3: 使用 RequestAdapters 构建 GenerationRequest ==========
+    const bool stream = reqBody.get("stream", false).asBool();
+
+    // 使用 RequestAdapters 构建 GenerationRequest
     LOG_INFO << "[API接口] 使用 RequestAdapters 构建 GenerationRequest";
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
-    
+
     // 验证输入不为空
     if (genReq.currentInput.empty() && genReq.messages.empty()) {
         Json::Value error;
@@ -846,14 +848,6 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         callback(resp);
         return;
     }
-    
-    // ========== Responses API：与 Chat 完全对齐 ==========
-    // - stream=false: ResponsesJsonSink（一次性 JSON）
-    // - stream=true : ResponsesSseSink（SSE）
-
-    // 预先生成 responseId，确保 Controller / GenerationService / Session 存储一致
-    std::string responseId = chatSession::generateResponseId();
-    genReq.responseId = responseId;
 
     // ========== 非流式：ResponsesJsonSink ==========
     if (!stream) {
@@ -863,21 +857,17 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         int httpStatus = 200;
 
         ResponsesJsonSink jsonSink(
-            [&jsonResp, &httpStatus, &responseId](const Json::Value& builtResponse, int status) {
-                // 存储完整 response（保留 _internal_session_id）到已存在的 response_id 会话中
-                if (status == 200 && !builtResponse.isMember("error")) {
-                    chatSession::getInstance()->updateResponseApiData(responseId, builtResponse);
+            [&jsonResp, &httpStatus](const Json::Value& builtResponse, int status) {
+                // 成功时存储 response JSON（用于 GET /responses/{id}）
+                if (status == 200 && !builtResponse.isMember("error") &&
+                    builtResponse.isMember("id") && builtResponse["id"].isString()) {
+                    ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
                 }
 
-                Json::Value publicResponse = builtResponse;
-                publicResponse.removeMember("_internal_session_id");
-
-                jsonResp = HttpResponse::newHttpJsonResponse(publicResponse);
+                jsonResp = HttpResponse::newHttpJsonResponse(builtResponse);
                 httpStatus = status;
             },
-            responseId,
             genReq.model,
-            genReq.sessionKey,
             static_cast<int>(genReq.currentInput.length() / 4)
         );
 
@@ -911,7 +901,6 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
             callback(errorResp);
         }
 
-        LOG_INFO << "[API接口] 创建响应完成, 响应ID: " << responseId;
         return;
     }
 
@@ -947,66 +936,30 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
         return;
     }
 
-    // 组装一份 JSON 响应用于 Session 存储（对外不直接返回它；对外返回 SSE）
-    std::string responseMessage = collector.getFinalText();
-    std::string modelUsed = genReq.model;
-    std::string sessionId = genReq.sessionKey;
-
-    Json::Value response;
-    response["id"] = responseId;
-    response["object"] = "response";
-    response["created_at"] = static_cast<Json::Int64>(time(nullptr));
-    response["model"] = modelUsed;
-    response["status"] = "completed";
-
-    Json::Value outputArray(Json::arrayValue);
-    Json::Value messageOutput;
-    messageOutput["type"] = "message";
-    messageOutput["id"] = "msg_" + responseId;
-    messageOutput["status"] = "completed";
-    messageOutput["role"] = "assistant";
-
-    Json::Value contentArray(Json::arrayValue);
-    if (!responseMessage.empty()) {
-        Json::Value textContent;
-        textContent["type"] = "output_text";
-        textContent["text"] = responseMessage;
-        contentArray.append(textContent);
-    }
-    messageOutput["content"] = contentArray;
-
-    outputArray.append(messageOutput);
-    response["output"] = outputArray;
-
-    // usage：优先从 Completed 事件获取，否则估算
-    std::optional<generation::Usage> usageOpt;
-    for (const auto& ev : collector.getEvents()) {
-        if (std::holds_alternative<generation::Completed>(ev)) {
-            const auto& c = std::get<generation::Completed>(ev);
-            if (c.usage.has_value()) {
-                usageOpt = *c.usage;
-            }
+    // 将 Collector 事件复放到 ResponsesJsonSink 构建一份 JSON（用于 GET /responses/{id} 存储）
+    Json::Value builtResponse;
+    int builtStatus = 200;
+    {
+        ResponsesJsonSink jsonBuilder(
+            [&builtResponse, &builtStatus](const Json::Value& resp, int status) {
+                builtResponse = resp;
+                builtStatus = status;
+            },
+            genReq.model,
+            static_cast<int>(genReq.currentInput.length() / 4)
+        );
+        for (const auto& ev : collector.getEvents()) {
+            jsonBuilder.onEvent(ev);
         }
+        jsonBuilder.onClose();
     }
 
-    Json::Value usage;
-    if (usageOpt.has_value()) {
-        usage["input_tokens"] = usageOpt->inputTokens;
-        usage["output_tokens"] = usageOpt->outputTokens;
-        usage["total_tokens"] = usageOpt->totalTokens;
-    } else {
-        usage["input_tokens"] = static_cast<int>(genReq.currentInput.length() / 4);
-        usage["output_tokens"] = static_cast<int>(responseMessage.length() / 4);
-        usage["total_tokens"] = usage["input_tokens"].asInt() + usage["output_tokens"].asInt();
+    if (builtStatus == 200 && !builtResponse.isMember("error") &&
+        builtResponse.isMember("id") && builtResponse["id"].isString()) {
+        ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
     }
-    response["usage"] = usage;
 
-    response["_internal_session_id"] = sessionId;
-
-    // 存储完整 response（保留 _internal_session_id）到已存在的 response_id 会话中
-    chatSession::getInstance()->updateResponseApiData(responseId, response);
-
-    // SSE 输出
+    // SSE 输出（复放事件给 ResponsesSseSink）
     std::string ssePayload;
 
     ResponsesSseSink sseSink(
@@ -1015,8 +968,7 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
             return true;
         },
         []() {},
-        responseId,
-        modelUsed
+        genReq.model
     );
 
     for (const auto& ev : collector.getEvents()) {
@@ -1063,17 +1015,14 @@ void AiApi::responsesCreate(const HttpRequestPtr &req, std::function<void(const 
     resp->addHeader("X-Accel-Buffering", "no");
     resp->addHeader("Keep-Alive", "timeout=60");
     callback(resp);
-    
-    
-    LOG_INFO << "[API接口] 创建响应完成, 响应ID: " << responseId;
 }
 
 void AiApi::responsesGet(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id)
 {
     LOG_INFO << "[API接口] 获取响应 - 响应ID: " << response_id;
-    
-    session_st responseSession;
-    if (!chatSession::getInstance()->getResponseSession(response_id, responseSession)) {
+
+    Json::Value stored;
+    if (!ResponseIndex::instance().tryGetResponse(response_id, stored)) {
         Json::Value error;
         error["error"]["message"] = "Response not found";
         error["error"]["type"] = "invalid_request_error";
@@ -1083,12 +1032,8 @@ void AiApi::responsesGet(const HttpRequestPtr &req, std::function<void(const Htt
         callback(resp);
         return;
     }
-    
-    // 移除内部字段后返回
-    Json::Value publicResponse = responseSession.api_response_data;
-    publicResponse.removeMember("_internal_session_id");
-    
-    auto resp = HttpResponse::newHttpJsonResponse(publicResponse);
+
+    auto resp = HttpResponse::newHttpJsonResponse(stored);
     resp->setStatusCode(k200OK);
     callback(resp);
 }
@@ -1096,8 +1041,8 @@ void AiApi::responsesGet(const HttpRequestPtr &req, std::function<void(const Htt
 void AiApi::responsesDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string response_id)
 {
     LOG_INFO << "[API接口] 删除响应 - 响应ID: " << response_id;
-    
-    if (!chatSession::getInstance()->deleteResponseSession(response_id)) {
+
+    if (!ResponseIndex::instance().erase(response_id)) {
         Json::Value error;
         error["error"]["message"] = "Response not found";
         error["error"]["type"] = "invalid_request_error";

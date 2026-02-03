@@ -29,16 +29,12 @@ public:
      * @brief 构造函数
      *
      * @param responseCallback 响应完成时的回调
-     * @param responseId Responses API 的 response id（由 Controller 生成）
      * @param model 模型名称
-     * @param internalSessionId 内部会话ID（用于 previous_response_id 续聊；会写入 _internal_session_id 供 Session 层存储）
      * @param inputTokensEstimated 输入 token 估算（可选，用于 usage 兜底）
      */
     ResponsesJsonSink(
         ResponseCallback responseCallback,
-        const std::string& responseId,
         const std::string& model,
-        const std::string& internalSessionId,
         int inputTokensEstimated = 0
     );
 
@@ -57,7 +53,6 @@ private:
     ResponseCallback responseCallback_;
     std::string responseId_;
     std::string model_;
-    std::string internalSessionId_;
 
     int64_t createdAt_ = 0;
 

@@ -23,7 +23,7 @@ namespace drogon {
 
 /**
  * @brief 会话追踪模式
- * 
+ *
  * 定义如何在连续对话中追踪会话上下文：
  * - Hash: 使用消息内容的 SHA256 哈希作为会话ID（原有方式）
  * - ZeroWidth: 使用零宽字符在响应末尾隐式嵌入会话ID（新方式）
@@ -31,6 +31,16 @@ namespace drogon {
 enum class SessionTrackingMode {
     Hash,       // 基于消息内容哈希的会话追踪（默认，向后兼容）
     ZeroWidth   // 基于零宽字符嵌入的会话追踪
+};
+
+/**
+ * @brief API 类型枚举
+ *
+ * 区分不同的 API 接口类型，替代原来的 bool is_response_api
+ */
+enum class ApiType {
+    ChatCompletions,  // Chat Completions API (/v1/chat/completions)
+    Responses         // Responses API (/v1/responses)
 };
 
 static const int SESSION_EXPIRE_TIME = 86400; //24小时，单位秒数,会话过期时间
@@ -59,19 +69,40 @@ struct session_st
   time_t created_time=0;                // 会话创建时间
   time_t last_active_time=0;            // 最后活跃时间
   
-  // ========== Chat API 专用字段 ==========
-  std::string preConversationId="";     // 上一轮对话 ID (用于会话迁移)
-  std::string curConversationId="";     // 当前对话 ID (session_map 的键)
-  std::string contextConversationId=""; // 上下文映射 ID (context_map 使用)
-  std::string apiChatinfoConversationId=""; // API 聊天信息 ID
+  // ========== hash模式 专用字段 ==========
+  std::string contextConversationId=""; // 上下文映射 ID (context_map 使用，仅 Hash 模式)
   int contextlength=0;                  // 上下文消息数量
   bool contextIsFull=false;             // 上下文是否已满
   
-  // ========== Response API 专用字段 ==========
-  std::string response_id="";           // Response API 唯一标识 (resp_xxx 格式)
-  bool is_response_api=false;           // 标记此会话是否由 Response API 创建
+  // ========== 会话状态标记（Chat 和 Response 接口公用）==========
+  ApiType apiType = ApiType::ChatCompletions;  // API 类型（替代原 is_response_api）
   bool has_previous_response_id=false;  // 标记客户端是否携带了 previous_response_id
+  bool is_continuation=false;           // 标记是否是继续会话（用于决定是否转移 provider 线程上下文）
+  std::string prev_provider_key="";     // 上一次会话提取到的 ID（用于线程上下文转移和 m_threadMap 查找）
+  std::string curConversationId="";     // sessionId：会话主键（session_map 的 key）
+                                        // - Hash 模式：SHA256(hashKey)（保持旧规则）
+                                        // - ZeroWidth 模式：sess_<timestamp>_<rand>
+  //===============response api 专用字段=============
+  std::string response_id="";           // Response API 本次请求的 response id (resp_xxx 格式)
+  std::string lastResponseId="";        // 最近一次完成的 response id（用于观测/调试，可选）
   
+  //===============ZeroWidth 模式专用字段=============
+  std::string nextSessionId="";         // ZeroWidth/Hash 模式：下一轮的 sessionId
+                                        // 由 prepareNextSessionId() 预生成
+                                        // 嵌入响应后由 commitSessionTransfer() 执行转移
+  // ========== 辅助方法 ==========
+  /**
+   * @brief 检查是否为 Response API 会话
+   * @return true 如果是 Response API
+   */
+  bool isResponseApi() const { return apiType == ApiType::Responses; }
+  
+  /**
+   * @brief 检查是否为 Chat Completions API 会话
+   * @return true 如果是 Chat API
+   */
+  bool isChatApi() const { return apiType == ApiType::ChatCompletions; }
+
   // ========== 错误统计追踪字段 ==========
   std::string request_id="";            // 请求唯一 ID（用于错误追踪，格式：req_xxx）
   
@@ -139,6 +170,17 @@ public:
     bool sessionIsExist(const std::string &ConversationId);
     bool sessionIsExist(session_st &sessio);
 
+    /**
+     * @brief Hash 模式：消费一次 context_map 映射
+     *
+     * 当 Hash key 未命中 session_map，但命中 context_map 时，说明处于“上下文裁剪”边界。
+     * 该方法会：
+     * - 返回映射后的真实 sessionId
+     * - 删除 context_map 中对应项（一次性映射）
+     * - 将目标会话标记为 contextIsFull=true（保持旧行为）
+     */
+    bool consumeContextMapping(const std::string& contextConversationId, std::string& outSessionId);
+
     void coverSessionresponse(session_st& session);
     static std::string generateConversationKey(const Json::Value& keyData);
     static std::string generateSHA256(const std::string& input);
@@ -168,6 +210,20 @@ public:
      * @return 处理后的会话引用
      */
     session_st& createOrUpdateResponseSession(session_st& session);
+
+    /**
+     * @brief 按 sessionId 获取或创建会话（新主路径）
+     *
+     * GenerationService 在完成会话连续性决策后，使用该方法：
+     * - 若 sessionId 已存在：合并本次请求字段到存量会话（保留 message_context）
+     * - 若 sessionId 不存在：创建新会话
+     *
+     * 该方法会设置：
+     * - session.curConversationId = sessionId
+     * - session.prev_provider_key = sessionId（用于 provider thread map 查找）
+     * - session.is_continuation
+     */
+    session_st& getOrCreateSession(const std::string& sessionId, session_st& session);
     
     // ========== 会话创建/更新方法（底层实现，独立功能）==========
     /**
@@ -219,6 +275,23 @@ public:
     // ========== 新增方法（Response API 使用）==========
     // 生成唯一的 response_id (resp_xxx 格式)
     static std::string generateResponseId();
+    
+    /**
+     * @brief 根据 API 类型和追踪模式生成 curConversationId
+     *
+     * 生成规则：
+     * - Response API + has_previous_response_id → "resp_xxx" 格式
+     * - Response API + ZeroWidth → "zw_xxx" 格式
+     * - Response API + Hash → "" (延迟生成)
+     * - Chat API + ZeroWidth → "zw_xxx" 格式
+     * - Chat API + Hash → "" (延迟生成)
+     *
+     * @param apiType API 类型
+     * @param mode 会话追踪模式
+     * @param has_previous_response_id 是否携带 previous_response_id
+     * @return 生成的会话ID，空字符串表示需要延迟生成（Hash模式）
+     */
+    static std::string generateCurConversationId(ApiType apiType, SessionTrackingMode mode, bool has_previous_response_id);
     
     // 为 Response API 创建会话（使用 response_id 作为键）
     std::string createResponseSession(session_st& session);
@@ -285,12 +358,36 @@ public:
     
     /**
      * @brief 将会话ID嵌入到文本末尾
-     * 
+     *
      * @param text 原始文本
      * @param sessionId 要嵌入的会话ID
      * @return 带有嵌入会话ID的文本
      */
     static std::string embedSessionIdInText(const std::string& text, const std::string& sessionId);
+    
+    // ========== 会话转移两阶段方法（ZeroWidth/Hash 模式共用）==========
+    /**
+     * @brief 阶段1：预生成下一轮的 sessionId
+     *
+     * 在响应嵌入之前调用，生成新的 sessionId 并存储到 session.nextSessionId。
+     * 调用方应将 nextSessionId 嵌入到响应中发送给客户端。
+     *
+     * @param session 会话对象（会设置 nextSessionId 字段）
+     * @return 生成的新 sessionId
+     */
+    std::string prepareNextSessionId(session_st& session);
+    
+    /**
+     * @brief 阶段2：执行会话转移
+     *
+     * 在响应发送给客户端之后调用，执行实际的会话转移：
+     * - 更新 message_context（添加本轮对话）
+     * - 转移 provider 线程上下文
+     * - 更新 session_map（添加新会话，删除旧会话）
+     *
+     * @param session 会话对象（需要预先设置 nextSessionId）
+     */
+    void commitSessionTransfer(session_st& session);
     
 private:
     // ========== 图片解析辅助方法（Chat API 和 Response API 共用）==========

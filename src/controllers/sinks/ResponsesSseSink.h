@@ -32,13 +32,11 @@ public:
      * 
      * @param streamCallback 用于发送 SSE 数据的回调
      * @param closeCallback 关闭连接的回调
-     * @param responseId Response ID
      * @param model 模型名称
      */
     ResponsesSseSink(
         StreamCallback streamCallback,
         CloseCallback closeCallback,
-        const std::string& responseId,
         const std::string& model
     );
     

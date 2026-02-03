@@ -84,31 +84,24 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     }
 
     // Keep protocol flags in sync (mainly for Response API reuse of this helper)
-    // IMPORTANT: for Response API follow-ups, `session.response_id` is per-request (new response id),
-    // while `stored.response_id` should remain stable and match the session_map key (the previous response id).
-    // So we MUST NOT overwrite stored.response_id here.
-    const std::string incomingResponseId = session.response_id;
-    stored.is_response_api = session.is_response_api;
+    // 更新 API 类型和相关标记
+    stored.apiType = session.apiType;
     stored.has_previous_response_id = session.has_previous_response_id;
-    if (stored.response_id.empty() && !incomingResponseId.empty()) {
-        // only initialize if missing; do not mutate existing key semantics
-        stored.response_id = incomingResponseId;
-    }
+    
+    // IMPORTANT: for Response API follow-ups, `session.curConversationId` is per-request (new id),
+    // while `stored.curConversationId` should remain stable and match the session_map key.
+    // So we MUST NOT overwrite stored.curConversationId here.
 
     stored.last_active_time = time(nullptr);
 
     // Return the merged session state to caller
     session = stored;
-    if (!incomingResponseId.empty()) {
-        session.response_id = incomingResponseId;
-    }
 }
 
 void chatSession::initializeNewSession(const std::string& sessionId, session_st& session)
 {
-    session.preConversationId = sessionId;
+    session.prev_provider_key = sessionId;
     session.curConversationId = sessionId;
-    session.apiChatinfoConversationId = sessionId;
     if (session.created_time == 0) {
         session.created_time = time(nullptr);
     }
@@ -138,6 +131,9 @@ session_st& chatSession::createOrUpdateResponseSession(session_st& session)
 {
     LOG_INFO << "[Response API] 创建或更新会话";
     
+    // 设置 API 类型（在所有分支之前设置）
+    session.apiType = ApiType::Responses;
+    
     // 优先级1：如果客户端携带了 previous_response_id，从历史会话获取上下文
     if (session.has_previous_response_id && !session.curConversationId.empty()) {
         LOG_INFO << "[Response API] 检测到 previous_response_id: " << session.curConversationId;
@@ -147,25 +143,82 @@ session_st& chatSession::createOrUpdateResponseSession(session_st& session)
         if (getResponseSession(session.curConversationId, prevSession)) {
             // 继承历史消息上下文
             session.message_context = prevSession.message_context;
-            session.preConversationId = session.curConversationId;
+            session.prev_provider_key = session.curConversationId;
+            session.is_continuation = true;
             LOG_INFO << "[Response API] 从 previous_response_id 继承上下文, 消息数: "
                      << session.message_context.size();
         } else {
             LOG_WARN << "[Response API] previous_response_id 对应的会话不存在: "
                      << session.curConversationId;
+            session.is_continuation = false;
         }
         
-        return createOrUpdateSessionByPreviousResponseId(session);
+        // Response API 使用 previous_response_id 模式时，curConversationId 应该由 Controller 预先生成
+        // 这里不再调用 createOrUpdateSessionByPreviousResponseId，因为会话创建由 Controller 控制
+        return session;
     }
     
-    // 优先级2：没有 previous_response_id，根据配置选择追踪模式（与Chat API相同逻辑）
-    if (isZeroWidthMode()) {
-        LOG_INFO << "[Response API] 使用零宽字符追踪模式";
-        return createOrUpdateSessionZeroWidth(session);
-    } else {
-        LOG_INFO << "[Response API] 使用Hash追踪模式";
-        return createOrUpdateSessionHash(session);
+    // 优先级2：没有 previous_response_id，检查是否从零宽字符提取了会话ID
+    // Response API 也支持零宽字符追踪模式（用于不支持 previous_response_id 的客户端）
+    if (isZeroWidthMode() && !session.has_previous_response_id && !session.curConversationId.empty()) {
+        LOG_INFO << "[Response API] 使用零宽字符追踪模式, 提取的会话ID: " << session.curConversationId;
+        
+        // 尝试从零宽字符提取的会话ID获取上下文
+        session_st prevSession;
+        if (getResponseSession(session.curConversationId, prevSession)) {
+            // 继承历史消息上下文
+            session.message_context = prevSession.message_context;
+            session.prev_provider_key = session.curConversationId;
+            session.is_continuation = true;
+            LOG_INFO << "[Response API] 从零宽字符会话继承上下文, 消息数: "
+                     << session.message_context.size();
+        } else {
+            LOG_INFO << "[Response API] 零宽字符会话不存在，创建新会话";
+            session.is_continuation = false;
+        }
+        
+        return session;
     }
+    
+    // 优先级3：Hash模式或新会话
+    LOG_INFO << "[Response API] 新会话（无 previous_response_id，无零宽字符）";
+    //Hash模型的会话连续性暂时未实现
+    session.is_continuation = false;
+    return session;
+}
+
+session_st& chatSession::getOrCreateSession(const std::string& sessionId, session_st& session)
+{
+    std::string sid = sessionId;
+    if (sid.empty()) {
+        // 兜底：理论上不应该发生（ContinuityResolver 一定会给出 sessionId）
+        sid = generateZeroWidthSessionId();
+        LOG_WARN << "[SessionStore] sessionId 为空，已兜底生成: " << sid;
+    }
+
+    // Hash 模式存在 context_map 映射：当 hashKey 未命中 session_map 但命中 context_map 时，
+    // 需要将“裁剪后的 hashKey”映射回真实 sessionId（保持旧行为）。
+    std::string mapped;
+    if (!sessionIsExist(sid) && consumeContextMapping(sid, mapped)) {
+        sid = mapped;
+    }
+
+    session.curConversationId = sid;  // sessionId：会话主键（session_map 的 key）
+    session.prev_provider_key = sid;  // provider thread map 查找 key
+
+    if (sessionIsExist(sid)) {
+        updateExistingSessionFromRequest(sid, session);
+        // updateExistingSessionFromRequest() 会用存量会话覆盖 session（包含旧的 prev_provider_key/is_continuation 等）。
+        // 这里需要把“本次请求”的续聊语义字段重新写回，避免被覆盖。
+        session.is_continuation = true;
+        session.curConversationId = sid;
+        session.prev_provider_key = sid;
+    } else {
+        session.is_continuation = false;
+        initializeNewSession(sid, session);
+    }
+
+    return session;
 }
 
 // ========== 底层实现方法（独立功能）==========
@@ -179,10 +232,14 @@ session_st& chatSession::createOrUpdateSessionByPreviousResponseId(session_st& s
     if (!prevId.empty() && sessionIsExist(session)) {
         // 会话存在，更新并延续上下文
         LOG_INFO << "[Previous Response ID] 延续已存在会话: " << prevId;
+        // 标记为继续会话，保存旧的 ID 用于线程上下文转移
+        session.is_continuation = true;
+        session.prev_provider_key = prevId;
         updateExistingSessionFromRequest(prevId, session);
     } else {
         // 会话不存在，创建新会话（使用previous_response_id作为会话ID）
         LOG_INFO << "[Previous Response ID] 会话不存在，创建新会话: " << prevId;
+        session.is_continuation = false;
         if (!prevId.empty()) {
             initializeNewSession(prevId, session);
         } else {
@@ -206,6 +263,9 @@ session_st& chatSession::createOrUpdateSessionHash(session_st& session)
     if (sessionIsExist(tempConversationId))
     {
         LOG_DEBUG << "[Hash模式] 会话已存在, 正在更新";
+        // 标记为继续会话，保存旧的 ID 用于线程上下文转移
+        session.is_continuation = true;
+        session.prev_provider_key = tempConversationId;
         updateExistingSessionFromRequest(tempConversationId, session);
     }
     else
@@ -215,12 +275,16 @@ session_st& chatSession::createOrUpdateSessionHash(session_st& session)
             LOG_DEBUG << "[Hash模式] 在上下文映射中找到会话";
             std::string mappedSessionId = context_map[tempConversationId];
             session_map[mappedSessionId].contextIsFull = true;
+            // 标记为继续会话，保存旧的 ID 用于线程上下文转移
+            session.is_continuation = true;
+            session.prev_provider_key = mappedSessionId;
             updateExistingSessionFromRequest(mappedSessionId, session);
             context_map.erase(tempConversationId);
         }
         else
         {
             LOG_INFO << "[Hash模式] 未找到会话, 正在创建新会话";
+            session.is_continuation = false;
             initializeNewSession(tempConversationId, session);
         }
     }
@@ -256,8 +320,126 @@ std::string chatSession::generateConversationKey(
     return generateSHA256(output);
 }
 
+// ========== 会话转移两阶段方法实现 ==========
+
+std::string chatSession::prepareNextSessionId(session_st& session)
+{
+    // 根据追踪模式生成下一轮的 sessionId
+    if (isZeroWidthMode()) {
+        session.nextSessionId = generateZeroWidthSessionId();
+        LOG_INFO << "[ZeroWidth] 预生成下一轮 sessionId: " << session.nextSessionId
+                 << " (当前: " << session.curConversationId << ")";
+    } else {
+        // Hash 模式：基于当前上下文生成新的 sessionId
+        // 注意：此时 message_context 还未包含本轮对话，需要先临时添加
+        Json::Value tempContext = session.message_context;
+        
+        // 临时添加本轮对话用于计算 hash
+        Json::Value userMsg;
+        userMsg["role"] = "user";
+        userMsg["content"] = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
+        tempContext.append(userMsg);
+        
+        Json::Value assistantMsg;
+        assistantMsg["role"] = "assistant";
+        assistantMsg["content"] = session.responsemessage["message"].asString();
+        tempContext.append(assistantMsg);
+        
+        // 构建用于 hash 的 JSON
+        Json::Value keyData(Json::objectValue);
+        keyData["messages"] = tempContext;
+        keyData["client_info"] = session.client_info;
+        keyData["model"] = session.selectmodel;
+        
+        session.nextSessionId = generateConversationKey(keyData);
+        LOG_INFO << "[Hash] 预生成下一轮 sessionId: " << session.nextSessionId
+                 << " (当前: " << session.curConversationId << ")";
+    }
+    
+    return session.nextSessionId;
+}
+
+void chatSession::commitSessionTransfer(session_st& session)
+{
+    // 1. 更新 message_context（添加本轮对话）
+    Json::Value userMsg;
+    userMsg["role"] = "user";
+    userMsg["content"] = session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
+    session.addMessageToContext(userMsg);
+    
+    Json::Value assistantMsg;
+    assistantMsg["role"] = "assistant";
+    assistantMsg["content"] = session.responsemessage["message"].asString();
+    session.addMessageToContext(assistantMsg);
+    
+    session.last_active_time = time(nullptr);
+    
+    // 2. 清理临时字段
+    session.requestmessage.clear();
+    session.requestmessage_raw.clear();
+    session.responsemessage.clear();
+    session.tool_bridge_trigger.clear();
+    
+    // 3. 执行会话转移
+    std::string oldSessionId = session.curConversationId;
+    std::string newSessionId = session.nextSessionId;
+    
+    if (newSessionId.empty()) {
+        // 兜底：如果 nextSessionId 为空，说明没有调用 prepareNextSessionId()
+        LOG_WARN << "[SessionTransfer] nextSessionId 为空，使用旧的 coverSessionresponse 逻辑";
+        // 回退到旧逻辑
+        if (isZeroWidthMode()) {
+            newSessionId = generateZeroWidthSessionId();
+        } else {
+            Json::Value keyData = generateJsonbySession(session, session.contextIsFull);
+            newSessionId = generateConversationKey(keyData);
+        }
+    }
+    
+    LOG_INFO << "[SessionTransfer] 执行会话转移: " << oldSessionId << " -> " << newSessionId;
+    
+    // 4. 更新 session 字段
+    session.prev_provider_key = oldSessionId;
+    session.curConversationId = newSessionId;
+    session.nextSessionId.clear();  // 清理已使用的 nextSessionId
+    
+    // 5. 转移 provider 线程上下文（如 chaynsapi 的 threadId 映射）
+    if (!session.selectapi.empty()) {
+        auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
+        if (api) {
+            api->transferThreadContext(oldSessionId, newSessionId);
+        }
+    }
+    
+    // 6. 更新 session_map（添加新会话，删除旧会话）
+    addSession(newSessionId, session);
+    delSession(oldSessionId);
+    
+    // 7. Hash 模式特有：更新 context_map
+    if (!isZeroWidthMode() && !session.contextIsFull) {
+        LOG_INFO << "[Hash] 上下文未满，更新 contextConversationId";
+        session.contextlength = session.message_context.size() - 2;
+        std::string tempConversationId = generateConversationKey(generateJsonbySession(session, true));
+        context_map.erase(session.contextConversationId);
+        session.contextConversationId = tempConversationId;
+        context_map[tempConversationId] = session.curConversationId;
+        updateSession(session.curConversationId, session);
+    }
+    
+    LOG_INFO << "[SessionTransfer] 会话转移完成, 新 sessionId: " << newSessionId;
+}
+
 void chatSession::coverSessionresponse(session_st& session)
 {
+    // 新的两阶段方法：如果 nextSessionId 已经预生成，使用 commitSessionTransfer()
+    if (!session.nextSessionId.empty()) {
+        commitSessionTransfer(session);
+        return;
+    }
+    
+    // 兼容旧调用方式：如果没有预生成 nextSessionId，使用原有逻辑
+    LOG_INFO << "[coverSessionresponse] 使用旧逻辑（未预生成 nextSessionId）";
+    
     Json::Value assistantresponse;
     assistantresponse["role"]="user";
     assistantresponse["content"]=session.requestmessage_raw.empty() ? session.requestmessage : session.requestmessage_raw;
@@ -274,28 +456,45 @@ void chatSession::coverSessionresponse(session_st& session)
     session.responsemessage.clear();
     session.tool_bridge_trigger.clear();
     
-    // 零宽字符模式：会话ID保持不变，只更新session内容
+    // 零宽字符模式：每轮生成新的 sessionId，响应后转移会话
     if (isZeroWidthMode()) {
-        LOG_INFO << "[ZeroWidth] 更新会话内容，会话ID保持不变: " << session.curConversationId;
-        updateSession(session.curConversationId, session);
+        std::string newSessionId = generateZeroWidthSessionId();
+        std::string oldSessionId = session.curConversationId;
+        
+        LOG_INFO << "[ZeroWidth] 会话转移: " << oldSessionId << " -> " << newSessionId;
+        
+        session.prev_provider_key = oldSessionId;
+        session.curConversationId = newSessionId;
+        
+        if (!session.selectapi.empty()) {
+            auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
+            if (api) {
+                api->transferThreadContext(oldSessionId, newSessionId);
+            }
+        }
+        
+        addSession(newSessionId, session);
+        delSession(oldSessionId);
+        
+        LOG_INFO << "[ZeroWidth] 会话转移完成, 新sessionId: " << newSessionId;
         return;
     }
     
-    // Hash模式：原有逻辑，根据内容生成新的会话ID
+    // Hash模式：原有逻辑，根据内容生成新的会话ID（每轮变化）
     std::string newConversationId;
     newConversationId=chatSession::getInstance()->generateConversationKey(
     chatSession::getInstance()->generateJsonbySession(session,session.contextIsFull)
     );
-    session.preConversationId=session.curConversationId;
+    session.prev_provider_key=session.curConversationId;
     session.curConversationId = newConversationId;
     if (!session.selectapi.empty()) {
         auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
         if (api) {
-            api->transferThreadContext(session.preConversationId, session.curConversationId);
+            api->transferThreadContext(session.prev_provider_key, session.curConversationId);
         }
     }
     addSession(newConversationId,session);
-    delSession(session.preConversationId);
+    delSession(session.prev_provider_key);
     if(!session.contextIsFull)
     {
         LOG_INFO << "上下文未满，更新上下文长度,生成新的contextConversationId";
@@ -456,14 +655,14 @@ Json::Value chatSession::getClientInfo(const HttpRequestPtr &req)
 
 void chatSession::clearExpiredSession()
 {
-    // 存储过期会话信息: (sessionId, selectapi, is_response_api)
+    // 存储过期会话信息: (sessionId, selectapi, isResponseApi)
     std::vector<std::tuple<std::string, std::string, bool>> expired;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
         int chatCount = 0, responseCount = 0;
         for (const auto& pair : session_map) {
-            if (pair.second.is_response_api) responseCount++;
+            if (pair.second.isResponseApi()) responseCount++;
             else chatCount++;
         }
         LOG_INFO << "开始清除过期会话，当前会话数量:" << session_map.size()
@@ -476,14 +675,14 @@ void chatSession::clearExpiredSession()
             {
                 const std::string sessionId = it->first;
                 const std::string apiName = it->second.selectapi;
-                const bool isResponseApi = it->second.is_response_api;
-                expired.emplace_back(sessionId, apiName, isResponseApi);
+                const bool isRespApi = it->second.isResponseApi();
+                expired.emplace_back(sessionId, apiName, isRespApi);
 
                 it = session_map.erase(it);
 
                 // Chat API 会话：清理 context_map
                 // Response API 会话：不使用 context_map，无需清理
-                if (!isResponseApi) {
+                if (!isRespApi) {
                     for (auto ctxIt = context_map.begin(); ctxIt != context_map.end();)
                     {
                         if (ctxIt->second == sessionId)
@@ -501,7 +700,7 @@ void chatSession::clearExpiredSession()
 
         chatCount = 0; responseCount = 0;
         for (const auto& pair : session_map) {
-            if (pair.second.is_response_api) responseCount++;
+            if (pair.second.isResponseApi()) responseCount++;
             else chatCount++;
         }
         LOG_INFO << "清除过期会话完成，剩余会话数量:" << session_map.size()
@@ -513,7 +712,7 @@ void chatSession::clearExpiredSession()
     {
         const std::string& sessionId = std::get<0>(item);
         const std::string& apiName = std::get<1>(item);
-        const bool isResponseApi = std::get<2>(item);
+        const bool isRespApi = std::get<2>(item);
         
         if (apiName.empty())
             continue;
@@ -524,7 +723,7 @@ void chatSession::clearExpiredSession()
             api->eraseChatinfoMap(sessionId);
         }
         
-        if (isResponseApi) {
+        if (isRespApi) {
             LOG_DEBUG << "[Response API] 清理过期会话: " << sessionId;
         }
     }
@@ -562,6 +761,25 @@ bool chatSession::sessionIsExist(session_st &session)
     }
     return false;
 
+}
+
+bool chatSession::consumeContextMapping(const std::string& contextConversationId, std::string& outSessionId)
+{
+    if (contextConversationId.empty()) return false;
+
+    auto it = context_map.find(contextConversationId);
+    if (it == context_map.end()) return false;
+
+    outSessionId = it->second;
+    context_map.erase(it);
+
+    // 保持旧行为：标记目标会话 contextIsFull=true
+    auto sit = session_map.find(outSessionId);
+    if (sit != session_map.end()) {
+        sit->second.contextIsFull = true;
+    }
+
+    return !outSessionId.empty();
 }
 
 // ========== 图片解析辅助方法实现 (Chat API 和 Response API 共用) ==========
@@ -616,7 +834,7 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
         std::string text = content.asString();
         // 如果使用零宽字符模式，从文本中移除可能存在的零宽字符编码
         if (getInstance()->isZeroWidthMode()) {
-            ZeroWidthEncoder::stripZeroWidth(text);
+            text = ZeroWidthEncoder::stripZeroWidth(text);
         }
         return text;
     }
@@ -630,7 +848,7 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
                     std::string textPart = item["text"].asString();
                     // 如果使用零宽字符模式，从文本中移除可能存在的零宽字符编码
                     if (getInstance()->isZeroWidthMode()) {
-                        ZeroWidthEncoder::stripZeroWidth(textPart);
+                        textPart = ZeroWidthEncoder::stripZeroWidth(textPart);
                     }
                     result += textPart;
             
@@ -684,7 +902,7 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
                 std::string textPart = item["text"].asString();
                 // 如果使用零宽字符模式，从文本中移除可能存在的零宽字符编码
                 if (getInstance()->isZeroWidthMode()) {
-                    ZeroWidthEncoder::stripZeroWidth(textPart);
+                    textPart = ZeroWidthEncoder::stripZeroWidth(textPart);
                 }
                 result += textPart;
                 if (!textPart.empty() && textPart.back() != '\n') {
@@ -736,7 +954,7 @@ session_st chatSession::gennerateSessionstByReq(const HttpRequestPtr &req)
         if (!extractedZeroWidthSessionId.empty()) {
             LOG_INFO << "[ZeroWidth] 从历史assistant消息中提取到会话ID: " << extractedZeroWidthSessionId;
             session.curConversationId = extractedZeroWidthSessionId;
-            session.preConversationId = extractedZeroWidthSessionId;
+            session.prev_provider_key = extractedZeroWidthSessionId;
         }
     }
     
@@ -820,15 +1038,53 @@ std::string chatSession::generateResponseId()
     return "resp_" + std::to_string(timestamp) + "_" + std::to_string(dis(gen));
 }
 
+std::string chatSession::generateCurConversationId(ApiType apiType, SessionTrackingMode mode, bool has_previous_response_id)
+{
+    // Response API
+    if (apiType == ApiType::Responses) {
+        if (has_previous_response_id) {
+            // 客户端携带了 previous_response_id，生成 resp_xxx 格式
+            return generateResponseId();
+        } else if (mode == SessionTrackingMode::ZeroWidth) {
+            // 零宽字符模式，生成 zw_xxx 格式
+            return generateZeroWidthSessionId();
+        } else {
+            // Hash模式：需要回复后才能确定，返回空字符串表示延迟生成
+            return "";
+        }
+    }
+    
+    // Chat API
+    if (mode == SessionTrackingMode::ZeroWidth) {
+        // 零宽字符模式，生成 zw_xxx 格式
+        return generateZeroWidthSessionId();
+    }
+    
+    // Hash模式：需要回复后才能确定，返回空字符串表示延迟生成
+    return "";
+}
+
 std::string chatSession::createResponseSession(session_st& session)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // 如果调用者已经设置了 response_id，则使用它；否则生成新的
-    std::string respId = session.response_id.empty() ? generateResponseId() : session.response_id;
-    session.response_id = respId;
-    session.curConversationId = respId;  // 直接使用 response_id
-    session.is_response_api = true;
+    // 设置 API 类型
+    session.apiType = ApiType::Responses;
+    
+    // curConversationId 应该已经在调用此方法前通过 generateCurConversationId 生成
+    // 如果为空，则生成一个（兜底逻辑）
+    if (session.curConversationId.empty()) {
+        session.curConversationId = generateCurConversationId(
+            session.apiType,
+            trackingMode_,
+            session.has_previous_response_id
+        );
+        // 如果仍然为空（Hash模式），使用 resp_xxx 格式作为兜底
+        if (session.curConversationId.empty()) {
+            session.curConversationId = generateResponseId();
+        }
+    }
+    
     if (session.created_time == 0) {
         session.created_time = time(nullptr);
     }
@@ -836,49 +1092,54 @@ std::string chatSession::createResponseSession(session_st& session)
         session.last_active_time = time(nullptr);
     }
     
-    // 直接用 response_id 作为 session_map 的键
-    session_map[respId] = session;
+    // 使用 curConversationId 作为 session_map 的键
+    session_map[session.curConversationId] = session;
     
-    LOG_INFO << "[Response API] 创建会话, response_id: " << respId;
-    return respId;
+    LOG_INFO << "[Response API] 创建会话, curConversationId: " << session.curConversationId;
+    return session.curConversationId;
 }
 
-bool chatSession::getResponseSession(const std::string& response_id, session_st& session)
+bool chatSession::getResponseSession(const std::string& sessionId, session_st& session)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // 直接查找，不需要映射
-    auto it = session_map.find(response_id);
-    if (it == session_map.end()) {
-        LOG_WARN << "[Response API] getResponseSession: response_id not found: " << response_id;
-        return false;
+    // 现在 curConversationId 就是 session_map 的键，直接查找
+    auto it = session_map.find(sessionId);
+    if (it != session_map.end()) {
+        session = it->second;
+        return true;
     }
     
-    session = it->second;
-    return true;
+    
+    LOG_WARN << "[Response API] getResponseSession: sessionId not found: " << sessionId;
+    return false;
 }
 
-bool chatSession::deleteResponseSession(const std::string& response_id)
+bool chatSession::deleteResponseSession(const std::string& sessionId)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    auto it = session_map.find(response_id);
+    // 现在 curConversationId 就是 session_map 的键，直接查找
+    auto it = session_map.find(sessionId);
+    
+    
     if (it == session_map.end()) {
-        LOG_WARN << "[Response API] deleteResponseSession: response_id not found: " << response_id;
+        LOG_WARN << "[Response API] deleteResponseSession: sessionId not found: " << sessionId;
         return false;
     }
     
     // 如果有关联的 API，清理其资源
     const std::string& apiName = it->second.selectapi;
+    const std::string keyToDelete = it->first;
     if (!apiName.empty()) {
         auto api = ApiManager::getInstance().getApiByApiName(apiName);
         if (api) {
-            api->eraseChatinfoMap(response_id);
+            api->eraseChatinfoMap(keyToDelete);
         }
     }
     
     session_map.erase(it);
-    LOG_INFO << "[Response API] 删除会话, response_id: " << response_id;
+    LOG_INFO << "[Response API] 删除会话, sessionId: " << sessionId << ", key: " << keyToDelete;
     return true;
 }
 
@@ -886,19 +1147,19 @@ void chatSession::updateResponseSession(session_st& session)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    if (session.response_id.empty()) {
-        LOG_WARN << "[Response API] updateResponseSession: response_id is empty";
+    // 使用 curConversationId 作为键
+    if (session.curConversationId.empty()) {
+        LOG_WARN << "[Response API] updateResponseSession: curConversationId is empty";
         return;
     }
     
-    auto it = session_map.find(session.response_id);
+    auto it = session_map.find(session.curConversationId);
     if (it == session_map.end()) {
-        LOG_WARN << "[Response API] updateResponseSession: response_id not found: " << session.response_id;
+        LOG_WARN << "[Response API] updateResponseSession: curConversationId not found: " << session.curConversationId;
         return;
     }
     
     // Response API 不删除旧 session，直接更新
-    // response_id 保持不变
     session.last_active_time = time(nullptr);
     
     // 更新上下文
@@ -918,40 +1179,51 @@ void chatSession::updateResponseSession(session_st& session)
     session.responsemessage.clear();
     session.tool_bridge_trigger.clear();
 
-    // 直接更新，不改变键
-    session_map[session.response_id] = session;
+    // Provider 线程上下文转移（在发送响应给客户端后进行）
+    // 只有当 is_continuation 为 true 且 prev_provider_key 与 curConversationId 不同时才需要转移
+    if (session.is_continuation && !session.selectapi.empty() &&
+        !session.prev_provider_key.empty() && session.prev_provider_key != session.curConversationId) {
+        auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
+        if (api) {
+            LOG_INFO << "[Response API] 转移线程上下文: " << session.prev_provider_key << " -> " << session.curConversationId;
+            api->transferThreadContext(session.prev_provider_key, session.curConversationId);
+        }
+    }
+
+    // 使用 curConversationId 作为键更新
+    session_map[session.curConversationId] = session;
     
-    LOG_INFO << "[Response API] 更新会话, response_id: " << session.response_id;
+    LOG_INFO << "[Response API] 更新会话, curConversationId: " << session.curConversationId;
 }
 
-bool chatSession::updateResponseApiData(const std::string& response_id, const Json::Value& apiData)
+bool chatSession::updateResponseApiData(const std::string& sessionId, const Json::Value& apiData)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (response_id.empty()) {
-        LOG_WARN << "[Response API] updateResponseApiData: response_id is empty";
+    if (sessionId.empty()) {
+        LOG_WARN << "[Response API] updateResponseApiData: sessionId is empty";
         return false;
     }
 
-    auto it = session_map.find(response_id);
-    if (it == session_map.end()) {
-        LOG_WARN << "[Response API] updateResponseApiData: response_id not found: " << response_id
-                 << ", creating minimal session";
-
-        session_st s;
-        s.response_id = response_id;
-        s.curConversationId = response_id;
-        s.is_response_api = true;
-        s.created_time = time(nullptr);
-        s.last_active_time = time(nullptr);
-        s.api_response_data = apiData;
-        session_map[response_id] = std::move(s);
-        return false;
+    // 现在 curConversationId 就是 session_map 的键，直接查找
+    auto it = session_map.find(sessionId);
+    if (it != session_map.end()) {
+        it->second.api_response_data = apiData;
+        it->second.last_active_time = time(nullptr);
+        return true;
     }
+    
+    LOG_WARN << "[Response API] updateResponseApiData: sessionId not found: " << sessionId
+             << ", creating minimal session";
 
-    it->second.api_response_data = apiData;
-    it->second.last_active_time = time(nullptr);
-    return true;
+    session_st s;
+    s.curConversationId = sessionId;
+    s.apiType = ApiType::Responses;
+    s.created_time = time(nullptr);
+    s.last_active_time = time(nullptr);
+    s.api_response_data = apiData;
+    session_map[sessionId] = std::move(s);
+    return false;
 }
 
 session_st chatSession::gennerateSessionstByResponseReq(const HttpRequestPtr &req)
@@ -972,7 +1244,7 @@ session_st chatSession::gennerateSessionstByResponseReq(const HttpRequestPtr &re
     session.selectapi = "chaynsapi";
     session.systemprompt = reqBody.get("instructions", "").asString();
     session.client_info = getClientInfo(req);
-    session.is_response_api = true;
+    session.apiType = ApiType::Responses;
     session.last_active_time = time(nullptr);
     session.created_time = time(nullptr);
     
@@ -998,7 +1270,7 @@ session_st chatSession::gennerateSessionstByResponseReq(const HttpRequestPtr &re
                 if (!extractedSessionId.empty()) {
                     LOG_INFO << "[Response API][ZeroWidth] 从历史assistant消息中提取到会话ID: " << extractedSessionId;
                     session.curConversationId = extractedSessionId;
-                    session.preConversationId = extractedSessionId;
+                    session.prev_provider_key = extractedSessionId;
                 }
             }
             
@@ -1044,15 +1316,33 @@ session_st& chatSession::createOrUpdateSessionZeroWidth(session_st& session)
     if (!extractedSessionId.empty() && sessionIsExist(session))
     {
         // 找到了有效的会话ID，更新现有会话
-        LOG_INFO << "[ZeroWidth] 使用已提取的会话ID: " << extractedSessionId;
+        LOG_INFO << "[ZeroWidth] 找到旧会话: " << extractedSessionId;
         updateExistingSessionFromRequest(extractedSessionId, session);
+        
+        // 生成新的会话 ID（像 Response 接口一样，每次都变化）
+        std::string newSessionId = generateZeroWidthSessionId();
+        LOG_INFO << "[ZeroWidth] 生成新的会话ID: " << newSessionId << " (旧: " << extractedSessionId << ")";
+        
+        // 迁移会话：从旧 ID 迁移到新 ID
+        session_map[newSessionId] = session;
+        session_map[newSessionId].curConversationId = newSessionId;
+        session_map[newSessionId].prev_provider_key = extractedSessionId;
+        delSession(extractedSessionId);
+        
+        // 更新 session 引用
+        session = session_map[newSessionId];
+        
+        // 标记为继续会话，需要转移线程上下文
+        session.is_continuation = true;
+        session.prev_provider_key = extractedSessionId;
     }
     else
     {
         // 没有找到有效的会话ID，创建新会话
-        LOG_INFO << "[ZeroWidth] 未找到有效会话ID，创建新会话";
+        LOG_INFO << "[ZeroWidth] 创建新会话";
         std::string newSessionId = generateZeroWidthSessionId();
         initializeNewSession(newSessionId, session);
+        session.is_continuation = false;
     }
     
     return session;
@@ -1114,7 +1404,7 @@ std::string chatSession::extractTextFromResponseContent(const Json::Value& conte
     }
     
     if (stripZeroWidth && !result.empty()) {
-        ZeroWidthEncoder::stripZeroWidth(result);
+        result = ZeroWidthEncoder::stripZeroWidth(result);
     }
     
     return result;
@@ -1162,7 +1452,7 @@ void chatSession::parseResponseInputItem(const Json::Value& item, int index, int
                 if (content.isString()) {
                     msgContent = content.asString();
                     if (isZeroWidthMode) {
-                        ZeroWidthEncoder::stripZeroWidth(msgContent);
+                        msgContent = ZeroWidthEncoder::stripZeroWidth(msgContent);
                     }
                 } else if (content.isArray()) {
                     msgContent = getContentAsString(content, historyImages);
@@ -1182,7 +1472,7 @@ void chatSession::parseResponseInputItem(const Json::Value& item, int index, int
                     if (content.isString()) {
                         msgContent = content.asString();
                         if (isZeroWidthMode) {
-                            ZeroWidthEncoder::stripZeroWidth(msgContent);
+                            msgContent = ZeroWidthEncoder::stripZeroWidth(msgContent);
                         }
                     } else if (content.isArray()) {
                         msgContent = getContentAsString(content, session.requestImages);
@@ -1198,7 +1488,7 @@ void chatSession::parseResponseInputItem(const Json::Value& item, int index, int
     if (type == "input_text" || type == "text") {
         std::string textContent = item.get("text", "").asString();
         if (isZeroWidthMode) {
-            ZeroWidthEncoder::stripZeroWidth(textContent);
+            textContent = ZeroWidthEncoder::stripZeroWidth(textContent);
         }
         session.requestmessage += textContent;
         return;
@@ -1265,7 +1555,7 @@ void chatSession::handlePreviousResponseId(const std::string& prevId, session_st
         if (prevSession.api_response_data.isMember("_internal_session_id")) {
             std::string internalSessionId = prevSession.api_response_data["_internal_session_id"].asString();
             session.curConversationId = internalSessionId;
-            session.preConversationId = internalSessionId;
+            session.prev_provider_key = internalSessionId;
             LOG_INFO << "[Response API] 使用 previous_response_id 延续会话: " << internalSessionId;
         }
         // 继承之前的消息上下文（覆盖 input 中可能存在的历史消息）

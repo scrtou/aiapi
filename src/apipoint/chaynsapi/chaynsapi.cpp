@@ -119,13 +119,17 @@ void chaynsapi::postChatMessage(session_st& session)
     shared_ptr<Accountinfo_st> accountinfo = nullptr;
     
     // 检查是否存在上下文 (ThreadId)，如果有则使用相同账户
+    // 优化：只有当 is_continuation 为 true 时才查找 m_threadMap
+    // 新会话直接创建新 ThreadContext，避免无效查找
     std::string savedAccountUserName;
-    {
+    if (session.is_continuation && !session.prev_provider_key.empty()) {
         std::lock_guard<std::mutex> lock(m_threadMapMutex);
-        auto it = m_threadMap.find(session.curConversationId);
+        // 使用 prev_provider_key 查找，因为它指向上一轮的会话ID
+        auto it = m_threadMap.find(session.prev_provider_key);
         if (it != m_threadMap.end() && !it->second.accountUserName.empty()) {
             savedAccountUserName = it->second.accountUserName;
-            LOG_INFO << "[chaynsAPI] 找到已保存的账户用户名: " << savedAccountUserName << " 当前会话ID: " << session.curConversationId;
+            LOG_INFO << "[chaynsAPI] 找到已保存的账户用户名: " << savedAccountUserName
+                     << " (prev_provider_key: " << session.prev_provider_key << ")";
         }
     }
     
@@ -201,17 +205,20 @@ void chaynsapi::postChatMessage(session_st& session)
     string lastMessageTime;
 
     // 3. 检查是否存在上下文 (ThreadId)
+    // 优化：只有当 is_continuation 为 true 时才查找 m_threadMap
+    // 新会话直接创建新 ThreadContext，避免无效查找
     bool isFollowUp = false;
-    {
+    if (session.is_continuation && !session.prev_provider_key.empty()) {
         std::lock_guard<std::mutex> lock(m_threadMapMutex);
-        // 使用 preConversationId 查找，因为 session 的 preConversationId 指向上一轮的 curConversationId
-        // 使用 curConversationId 查找，因为 transferThreadContext 会把上下文转移到这个新的 ID 上
-        auto it = m_threadMap.find(session.curConversationId);
+        // 使用 prev_provider_key 查找，因为它指向上一轮的会话ID
+        // 转移逻辑在发送响应给客户端后进行（在 updateResponseSession/coverSessionresponse 中）
+        auto it = m_threadMap.find(session.prev_provider_key);
         if (it != m_threadMap.end()) {
             threadId = it->second.threadId;
             userAuthorId = it->second.userAuthorId;
             isFollowUp = true;
-            LOG_INFO << "[chaynsAPI] 找到现有threadId: " << threadId << ", curConvId: " << session.curConversationId;
+            LOG_INFO << "[chaynsAPI] 找到现有threadId: " << threadId
+                     << " (prev_provider_key: " << session.prev_provider_key << ")";
         }
     }
 

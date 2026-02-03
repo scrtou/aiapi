@@ -10,7 +10,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     LOG_INFO << "[RequestAdapters] 从 Chat API 请求构建 GenerationRequest";
     
     GenerationRequest genReq;
-    genReq.protocol = OutputProtocol::ChatCompletions;
+    genReq.endpointType = EndpointType::ChatCompletions;
     
     auto jsonPtr = req->getJsonObject();
     if (!jsonPtr) {
@@ -53,22 +53,37 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     
     // 3. 解析 messages 数组
     std::vector<ImageInfo> images;
-    std::string extractedSessionId;
     if (reqBody.isMember("messages") && reqBody["messages"].isArray()) {
+        // continuityTexts: 保留原始文本（包含零宽字符），用于后续会话连续性解析
+        // 注意：parseChatMessages 内部会按需 stripZeroWidth，避免把零宽数据传给上游模型
+        genReq.continuityTexts.clear();
+        for (const auto& m : reqBody["messages"]) {
+            if (!m.isObject()) continue;
+            if (!m.isMember("content")) continue;
+            const auto& c = m["content"];
+            if (c.isString()) {
+                genReq.continuityTexts.push_back(c.asString());
+            } else if (c.isArray()) {
+                for (const auto& item : c) {
+                    if (!item.isObject()) continue;
+                    const std::string type = item.get("type", "").asString();
+                    if ((type == "text" || type == "input_text" || type == "output_text") &&
+                        item.isMember("text") && item["text"].isString()) {
+                        genReq.continuityTexts.push_back(item["text"].asString());
+                    } else if (item.isMember("text") && item["text"].isString()) {
+                        genReq.continuityTexts.push_back(item["text"].asString());
+                    }
+                }
+            }
+        }
+
         parseChatMessages(
             reqBody["messages"],
             genReq.messages,
             genReq.systemPrompt,
             genReq.currentInput,
-            images,
-            extractedSessionId
+            images
         );
-        
-        // 如果从零宽字符中提取到了会话ID，设置 sessionKey
-        if (!extractedSessionId.empty()) {
-            genReq.sessionKey = extractedSessionId;
-            LOG_INFO << "[RequestAdapters] Chat API 从零宽字符提取到会话ID: " << extractedSessionId;
-        }
     }
     
     // 将提取的图片传递给 GenerationRequest
@@ -88,7 +103,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     LOG_INFO << "[RequestAdapters] 从 Responses API 请求构建 GenerationRequest";
     
     GenerationRequest genReq;
-    genReq.protocol = OutputProtocol::Responses;
+    genReq.endpointType = EndpointType::Responses;
     
     auto jsonPtr = req->getJsonObject();
     if (!jsonPtr) {
@@ -125,35 +140,78 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     genReq.clientInfo = extractClientInfo(req);
     
     // 3. 处理 previous_response_id（用于续聊）
-    if (reqBody.isMember("previous_response_id") && 
+    if (reqBody.isMember("previous_response_id") &&
+        reqBody["previous_response_id"].isString() &&
         !reqBody["previous_response_id"].asString().empty()) {
-        genReq.previousKey = reqBody["previous_response_id"].asString();
-        LOG_INFO << "[RequestAdapters] 检测到 previous_response_id: " << genReq.previousKey;
+        genReq.previousResponseId = reqBody["previous_response_id"].asString();
+        LOG_INFO << "[RequestAdapters] 检测到 previous_response_id: " << *genReq.previousResponseId;
     }
     
-    // 4. 解析 input 字段
+    // 4. continuityTexts：覆盖 input/messages/input_items 三个来源（保留原始文本，包含零宽字符）
+    genReq.continuityTexts.clear();
+    auto collectTextFromValue = [&genReq](const Json::Value& v, auto&& self) -> void {
+        if (v.isString()) {
+            genReq.continuityTexts.push_back(v.asString());
+            return;
+        }
+        if (v.isArray()) {
+            for (const auto& it : v) self(it, self);
+            return;
+        }
+        if (!v.isObject()) return;
+
+        if (v.isMember("text") && v["text"].isString()) {
+            genReq.continuityTexts.push_back(v["text"].asString());
+        }
+
+        if (v.isMember("content")) {
+            const auto& c = v["content"];
+            if (c.isString()) {
+                genReq.continuityTexts.push_back(c.asString());
+            } else if (c.isArray()) {
+                for (const auto& item : c) {
+                    if (!item.isObject()) continue;
+                    const std::string type = item.get("type", "").asString();
+                    if ((type == "text" || type == "input_text" || type == "output_text") &&
+                        item.isMember("text") && item["text"].isString()) {
+                        genReq.continuityTexts.push_back(item["text"].asString());
+                    } else if (item.isMember("text") && item["text"].isString()) {
+                        genReq.continuityTexts.push_back(item["text"].asString());
+                    }
+                }
+            }
+        }
+    };
+
+    if (reqBody.isMember("input")) {
+        collectTextFromValue(reqBody["input"], collectTextFromValue);
+    }
+    if (reqBody.isMember("messages")) {
+        collectTextFromValue(reqBody["messages"], collectTextFromValue);
+    }
+    if (reqBody.isMember("input_items")) {
+        collectTextFromValue(reqBody["input_items"], collectTextFromValue);
+    }
+
+    // 5. 解析输入（按优先级：input > messages > input_items）
     std::vector<ImageInfo> images;
-    std::string extractedSessionId;
     if (reqBody.isMember("input")) {
         parseResponseInput(
             reqBody["input"],
             genReq.messages,
             genReq.currentInput,
-            images,
-            extractedSessionId
+            images
         );
-        
-        // 如果从零宽字符中提取到了会话ID，设置 sessionKey
-        bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
-
-        if (isZeroWidthMode)
-        {
-            if (!extractedSessionId.empty()) {
-                genReq.sessionKey = extractedSessionId;
-                LOG_INFO << "[RequestAdapters] 从零宽字符提取到会话ID: " << extractedSessionId;
-            }
-        }
-
+    } else if (reqBody.isMember("messages") && reqBody["messages"].isArray()) {
+        parseChatMessages(
+            reqBody["messages"],
+            genReq.messages,
+            genReq.systemPrompt,
+            genReq.currentInput,
+            images
+        );
+    } else if (reqBody.isMember("input_items") && reqBody["input_items"].isArray()) {
+        parseResponseInputItems(reqBody["input_items"], genReq.currentInput, images);
     }
     
     // 将提取的图片传递给 GenerationRequest
@@ -172,15 +230,12 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     
     // 提取 User-Agent 并识别客户端类型
     std::string userAgent = req->getHeader("user-agent");
-    std::string clientType = "";
+    std::string clientType = userAgent;
     
     if (userAgent.find("Kilo-Code") != std::string::npos) {
         clientType = "Kilo-Code";
     } else if (userAgent.find("RooCode") != std::string::npos) {
         clientType = "RooCode";
-    }else
-    {
-        clientType =userAgent;
     }
     
     clientInfo["client_type"] = clientType;
@@ -204,7 +259,7 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     stripBearer(auth);
     clientInfo["client_authorization"] = auth;
     
-    LOG_INFO << "[RequestAdapters] 识别到客户端类型: " << clientType;
+    LOG_INFO << "[RequestAdapters] 识别到客户端类型: " << (clientType.empty() ? "Unknown" : clientType);
     LOG_INFO << "[RequestAdapters] 识别到客户 authorization: " << (auth.empty() ? "empty" : auth);
     
     return clientInfo;
@@ -215,8 +270,7 @@ void RequestAdapters::parseChatMessages(
     std::vector<Message>& result,
     std::string& systemPrompt,
     std::string& currentInput,
-    std::vector<ImageInfo>& images,
-    std::string& extractedSessionId
+    std::vector<ImageInfo>& images
 ) {
     if (!messages.isArray() || messages.empty()) {
         return;
@@ -233,27 +287,6 @@ void RequestAdapters::parseChatMessages(
     
     // 检查是否使用零宽字符模式
     bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
-    
-    // 如果使用零宽字符模式，尝试从最后一个 assistant 消息中提取会话ID
-    if (isZeroWidthMode && splitIndex > 0) {
-        const Json::Value& lastAssistantContent = messages[splitIndex]["content"];
-        std::string lastAssistantText;
-        if (lastAssistantContent.isString()) {
-            lastAssistantText = lastAssistantContent.asString();
-        } else if (lastAssistantContent.isArray()) {
-            for (const auto& item : lastAssistantContent) {
-                if (item.isObject() && item.isMember("type") &&
-                    item["type"].asString() == "text") {
-                    lastAssistantText += item.get("text", "").asString();
-                }
-            }
-        }
-        // 提取会话ID并通过输出参数返回
-        extractedSessionId = chatSession::extractSessionIdFromText(lastAssistantText);
-        if (!extractedSessionId.empty()) {
-            LOG_INFO << "[RequestAdapters] 从历史 assistant 消息中提取到会话ID: " << extractedSessionId;
-        }
-    }
     
     // 用于临时存储历史消息中的图片（不加入当前请求图片）
     std::vector<ImageInfo> tempImages;
@@ -299,10 +332,11 @@ void RequestAdapters::parseChatMessages(
                 }
             }
             
-            // 合并连续的相同角色消息（但不合并带 tool_calls 的消息）
-            if (!result.empty() && result.back().role == message.role &&
-                message.toolCalls.empty() && result.back().toolCalls.empty() &&
-                message.role != MessageRole::Tool) {
+            // 合并连续的 user 消息（保持旧逻辑：仅合并 user，不合并 assistant/tool）
+            if (!result.empty() &&
+                message.role == MessageRole::User &&
+                result.back().role == MessageRole::User &&
+                message.toolCalls.empty() && result.back().toolCalls.empty()) {
                 result.back().content[0].text += text;
             } else {
                 result.push_back(message);
@@ -323,8 +357,7 @@ void RequestAdapters::parseResponseInput(
     const Json::Value& input,
     std::vector<Message>& messages,
     std::string& currentInput,
-    std::vector<ImageInfo>& images,
-    std::string& extractedSessionId
+    std::vector<ImageInfo>& images
 ) {
     // 检查是否使用零宽字符模式
     bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
@@ -333,7 +366,7 @@ void RequestAdapters::parseResponseInput(
         // 简单字符串输入
         currentInput = input.asString();
         if (isZeroWidthMode) {
-            ZeroWidthEncoder::stripZeroWidth(currentInput);
+            currentInput = ZeroWidthEncoder::stripZeroWidth(currentInput);
         }
         return;
     }
@@ -352,28 +385,6 @@ void RequestAdapters::parseResponseInput(
         }
     }
     
-    // 如果使用零宽字符模式，尝试从最后一个 assistant 消息中提取会话ID
-    if (isZeroWidthMode && splitIndex >= 0) {
-        const auto& lastAssistantItem = input[splitIndex];
-        if (lastAssistantItem.isMember("content")) {
-            std::string lastAssistantText;
-            const auto& content = lastAssistantItem["content"];
-            if (content.isString()) {
-                lastAssistantText = content.asString();
-            } else if (content.isArray()) {
-                for (const auto& c : content) {
-                    if (c.isObject()) {
-                        std::string ctype = c.get("type", "").asString();
-                        if (ctype == "output_text" || ctype == "text" || ctype == "input_text") {
-                            lastAssistantText += c.get("text", "").asString();
-                        }
-                    }
-                }
-            }
-            extractedSessionId = chatSession::extractSessionIdFromText(lastAssistantText);
-        }
-    }
-    
     // 用于临时存储历史消息中的图片
     std::vector<ImageInfo> historyImages;
     
@@ -385,7 +396,7 @@ void RequestAdapters::parseResponseInput(
             // 简单字符串，作为当前请求的一部分
             std::string text = item.asString();
             if (isZeroWidthMode) {
-                ZeroWidthEncoder::stripZeroWidth(text);
+                text = ZeroWidthEncoder::stripZeroWidth(text);
             }
             currentInput += text + "\n";
             continue;
@@ -436,7 +447,7 @@ void RequestAdapters::parseResponseInput(
         if (type == "input_text" || type == "text") {
             std::string textContent = item.get("text", "").asString();
             if (isZeroWidthMode) {
-                ZeroWidthEncoder::stripZeroWidth(textContent);
+                textContent = ZeroWidthEncoder::stripZeroWidth(textContent);
             }
             currentInput += textContent;
             continue;
@@ -482,15 +493,115 @@ void RequestAdapters::parseResponseInput(
     }
 }
 
+void RequestAdapters::parseResponseInputItems(
+    const Json::Value& inputItems,
+    std::string& currentInput,
+    std::vector<ImageInfo>& images
+) {
+    if (!inputItems.isArray()) return;
+
+    const bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
+
+    for (const auto& item : inputItems) {
+        if (item.isString()) {
+            std::string text = item.asString();
+            if (isZeroWidthMode) {
+                text = ZeroWidthEncoder::stripZeroWidth(text);
+            }
+            currentInput += text;
+            if (!text.empty() && text.back() != '\n') {
+                currentInput += "\n";
+            }
+            continue;
+        }
+
+        if (!item.isObject()) continue;
+
+        const std::string type = item.get("type", "").asString();
+
+        if ((type == "input_text" || type == "text") &&
+            item.isMember("text") && item["text"].isString()) {
+            std::string text = item["text"].asString();
+            if (isZeroWidthMode) {
+                text = ZeroWidthEncoder::stripZeroWidth(text);
+            }
+            currentInput += text;
+            if (!text.empty() && text.back() != '\n') {
+                currentInput += "\n";
+            }
+            continue;
+        }
+
+        // message item (some clients)
+        if (type == "message" && item.isMember("content")) {
+            currentInput += extractContentText(item["content"], images, isZeroWidthMode);
+            continue;
+        }
+
+        // 图片输入
+        if (type == "input_image") {
+            std::string url;
+            if (item.isMember("image_url")) {
+                url = item["image_url"].asString();
+            } else if (item.isMember("url")) {
+                url = item["url"].asString();
+            } else if (item.isMember("file") && item["file"].isObject()) {
+                const auto& fileObj = item["file"];
+                if (fileObj.isMember("url")) {
+                    url = fileObj["url"].asString();
+                }
+            }
+
+            if (!url.empty()) {
+                ImageInfo imgInfo = parseImageUrl(url);
+                if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
+                    images.push_back(imgInfo);
+                }
+            }
+            continue;
+        }
+
+        // 兼容 Chat API 的 image_url
+        if (type == "image_url") {
+            if (item.isMember("image_url") && item["image_url"].isObject()) {
+                const auto& imageUrl = item["image_url"];
+                if (imageUrl.isMember("url")) {
+                    ImageInfo imgInfo = parseImageUrl(imageUrl["url"].asString());
+                    if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
+                        images.push_back(imgInfo);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // fallback: raw text field
+        if (item.isMember("text") && item["text"].isString()) {
+            std::string text = item["text"].asString();
+            if (isZeroWidthMode) {
+                text = ZeroWidthEncoder::stripZeroWidth(text);
+            }
+            currentInput += text;
+            if (!text.empty() && text.back() != '\n') {
+                currentInput += "\n";
+            }
+        }
+    }
+}
+
 std::string RequestAdapters::extractContentText(
     const Json::Value& content,
     std::vector<ImageInfo>& images,
-    bool stripZeroWidth
+    bool stripZeroWidth,
+    std::vector<std::string>* outRawTexts
 ) {
     if (content.isString()) {
         std::string text = content.asString();
+        if (outRawTexts) {
+            outRawTexts->push_back(text);
+        }
         if (stripZeroWidth) {
-            ZeroWidthEncoder::stripZeroWidth(text);
+            text = ZeroWidthEncoder::stripZeroWidth(text);
         }
         return text;
     }
@@ -508,11 +619,14 @@ std::string RequestAdapters::extractContentText(
         std::string itemType = item.get("type", "").asString();
         
         // 处理文本类型：支持 "text" (Chat API) 和 "input_text" (Response API)
-        if ((itemType == "text" || itemType == "input_text") && 
+        if ((itemType == "text" || itemType == "input_text" || itemType == "output_text") && 
             item.isMember("text") && item["text"].isString()) {
             std::string textPart = item["text"].asString();
+            if (outRawTexts) {
+                outRawTexts->push_back(textPart);
+            }
             if (stripZeroWidth) {
-                ZeroWidthEncoder::stripZeroWidth(textPart);
+                textPart = ZeroWidthEncoder::stripZeroWidth(textPart);
             }
             result += textPart;
             if (!textPart.empty() && textPart.back() != '\n') {
@@ -555,8 +669,11 @@ std::string RequestAdapters::extractContentText(
         // 兼容旧格式：直接包含 text 字段的对象
         else if (item.isMember("text") && item["text"].isString()) {
             std::string textPart = item["text"].asString();
+            if (outRawTexts) {
+                outRawTexts->push_back(textPart);
+            }
             if (stripZeroWidth) {
-                ZeroWidthEncoder::stripZeroWidth(textPart);
+                textPart = ZeroWidthEncoder::stripZeroWidth(textPart);
             }
             result += textPart;
             if (!textPart.empty() && textPart.back() != '\n') {

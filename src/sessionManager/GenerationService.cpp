@@ -1,5 +1,7 @@
 #include "GenerationService.h"
 #include "ClientOutputSanitizer.h"
+#include "ContinuityResolver.h"
+#include "ResponseIndex.h"
 #include "ToolCallBridge.h"
 #include "ToolCallValidator.h"
 #include "XmlTagToolCallCodec.h"
@@ -264,7 +266,7 @@ std::string getClientTypeFromSession(const session_st& session) {
  * @brief 获取 API 类型字符串
  */
 std::string getApiKindFromSession(const session_st& session) {
-    return session.is_response_api ? "responses" : "chat_completions";
+    return session.isResponseApi() ? "responses" : "chat_completions";
 }
 
 /**
@@ -345,11 +347,7 @@ void recordRequestCompletedStat(const session_st& session, int httpStatus) {
 } // namespace
 
 std::string GenerationService::computeExecutionKey(const session_st& session) {
-    // Response API: 优先使用 response_id
-    // Chat API: 使用 curConversationId
-    if (!session.response_id.empty()) {
-        return session.response_id;
-    }
+    // 门控 key 统一使用 sessionId（session.curConversationId）
     return session.curConversationId;
 }
 
@@ -372,24 +370,12 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
     session.last_active_time = time(nullptr);
     session.created_time = time(nullptr);
     
-    // 协议相关
-    session.is_response_api = req.isResponseApi();
-
-    // Responses API: allow controller to pre-assign a response_id so all layers use the same id.
-    if (session.is_response_api && !req.responseId.empty()) {
-        session.response_id = req.responseId;
-    }
+    // 协议相关 - 使用新的 ApiType 枚举
+    session.apiType = req.isResponseApi() ? ApiType::Responses : ApiType::ChatCompletions;
+    session.has_previous_response_id = req.previousResponseId.has_value() &&
+                                      !req.previousResponseId->empty();
+    // prev_provider_key / curConversationId 由会话连续性决策器与 SessionStore 在后续阶段赋值
     
-    // 会话 key（如果已在 RequestAdapters 中从零宽字符提取）
-    if (!req.sessionKey.empty()) {
-        session.curConversationId = req.sessionKey;
-        session.preConversationId = req.sessionKey;
-    }
-    
-    // previous key（用于 Responses API 续聊）
-    if (!req.previousKey.empty()) {
-        session.has_previous_response_id = true;
-    }
     
     // 转换消息上下文（从强类型 Message 转换为 Json::Value）
     for (const auto& msg : req.messages) {
@@ -413,7 +399,7 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
     }
     
     LOG_INFO << "[生成服务] 物化完成, model: " << session.selectmodel
-             << ", is_response_api: " << session.is_response_api
+             << ", apiType: " << (session.isResponseApi() ? "Responses" : "ChatCompletions")
              << ", message_context size: " << session.message_context.size();
     
     return session;
@@ -427,13 +413,6 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 ) {
     // 计算执行 key
     std::string sessionKey = computeExecutionKey(session);
-    
-    if (sessionKey.empty()) {
-        LOG_WARN << "[生成服务] 无会话密钥, 不使用门控运行";
-        runWithSession(session, sink, stream);
-        return std::nullopt;
-    }
-    
     LOG_INFO << "[生成服务] 执行门控, 会话密钥: " << sessionKey
              << ", 策略: " << (policy == ConcurrencyPolicy::RejectConcurrent ? "拒绝并发" : "取消前一个");
     
@@ -486,9 +465,17 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	            transformRequestForToolBridge(session);
 	        }
         
-        // 1. 发送 Started 事件
+        // 1. Responses API: 生成 responseId 并尽早绑定到 ResponseIndex（用于 previous_response_id 续接）
+        if (session.isResponseApi() && session.response_id.empty()) {
+            session.response_id = chatSession::generateResponseId();
+        }
+        if (session.isResponseApi() && !session.response_id.empty()) {
+            ResponseIndex::instance().bind(session.response_id, session.curConversationId);
+        }
+
+        // 2. 发送 Started 事件（Responses: response.id；Chat: sessionId（仅日志用途））
         generation::Started startEvent;
-        startEvent.responseId = session.curConversationId;
+        startEvent.responseId = session.isResponseApi() ? session.response_id : session.curConversationId;
         startEvent.model = session.selectmodel;
         sink.onEvent(startEvent);
         
@@ -545,23 +532,33 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             return AppError::cancelled("Request was cancelled");
         }
         
-        // 5. 发送结果事件
+        // 5. 预生成下一轮 sessionId（用于嵌入响应）
+        // 必须在 emitResultEvents 之前调用，这样嵌入的是新 ID
+        // ZeroWidth 和 Hash 模式都需要每轮生成新的 sessionId
+        sessionManager.prepareNextSessionId(session);
+        
+        // 6. 发送结果事件（会使用 session.nextSessionId 嵌入）
         emitResultEvents(session, sink);
         
-        // 6. 更新会话上下文（根据 API 类型选择不同方法）
-        if (session.is_response_api) {
-            sessionManager.updateResponseSession(session);
-        } else {
-            sessionManager.coverSessionresponse(session);
+        // 7. 更新会话上下文 + 执行会话转移（Late commit）
+        // coverSessionresponse() 内部会检测 nextSessionId，如果存在则调用 commitSessionTransfer()
+        // 完成：更新 message_context → 转移会话到新 sessionId → 更新 session_map
+        if (session.isResponseApi() && !session.response_id.empty()) {
+            session.lastResponseId = session.response_id;
+        }
+        sessionManager.coverSessionresponse(session);
+        if (session.isResponseApi() && !session.response_id.empty()) {
+            // 会话转移后 curConversationId 已更新为 nextSessionId，重新绑定 responseId
+            ResponseIndex::instance().bind(session.response_id, session.curConversationId);
         }
         
-        // 7. 调用 Provider 后处理
+        // 8. 调用 Provider 后处理
         auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
         if (api) {
             api->afterResponseProcess(session);
         }
         
-        // 8. 记录请求完成（成功）
+        // 9. 记录请求完成（成功）
         recordRequestCompletedStat(session, 200);
         
     } catch (const std::exception& e) {
@@ -606,217 +603,26 @@ std::optional<AppError> GenerationService::runGuarded(
     // 1. materialize: GenerationRequest → session_st
     session_st session = materializeSession(req);
     
-    // 2. create/update session（必须发生在门控前）
+    // 2. resolve sessionId + getOrCreate（必须发生在门控前）
     auto& sessionManager = *chatSession::getInstance();
-    
-    if (req.isResponseApi()) {
-        // Response API 流程
-        // 设置 previous_response_id 标记（如果有）
-        if (!req.previousKey.empty()) {
-            session.curConversationId = req.previousKey;
-            session.has_previous_response_id = true;
-        }
-        
-        // 使用统一包装方法创建/更新 Response 会话
-        // previous_response_id 的上下文继承逻辑已集成在 createOrUpdateResponseSession 中
-        session = sessionManager.createOrUpdateResponseSession(session);
-        
-        // 创建 Response 会话（获取稳定的 response_id 用于门控）
-        // NOTE: Provider 线程上下文通常按 "会话ID" 维度存储。
-        // Responses API 每一轮会生成新的 response_id；若不把 provider 的上下文从上一轮 key
-        // 转移到新的 response_id，则 provider 会不断创建新线程，表现为“找不到上一轮会话”。
-        const std::string prevProviderKey = session.curConversationId;
-        std::string responseId = sessionManager.createResponseSession(session);
-        LOG_INFO << "[生成服务] 创建 Response 会话, response_id: " << responseId;
 
-        // Transfer provider thread context (best-effort)
-        if (!session.selectapi.empty() && !prevProviderKey.empty() && prevProviderKey != responseId) {
-            auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
-            if (api) {
-                api->transferThreadContext(prevProviderKey, responseId);
-            }
-        }
-    } else {
-        // Chat API 流程 - 使用统一包装方法
-        session = sessionManager.createOrUpdateChatSession(session);
-        LOG_INFO << "[生成服务] Chat 会话已创建/更新, curConversationId: " << session.curConversationId;
-    }
+    ContinuityResolver resolver;
+    const ContinuityDecision decision = resolver.resolve(req);
+
+    LOG_INFO << "[生成服务] ContinuityDecision"
+             << " source=" << static_cast<int>(decision.source)
+             << " mode=" << (decision.mode == SessionTrackingMode::ZeroWidth ? "ZeroWidth" : "Hash")
+             << " sessionId=" << decision.sessionId
+             << (decision.debug.empty() ? "" : (" debug=" + decision.debug));
+
+    sessionManager.getOrCreateSession(decision.sessionId, session);
+
+    LOG_INFO << "[生成服务] 会话 " << (session.is_continuation ? "续接" : "新建")
+             << ", sessionId: " << session.curConversationId
+             << ", apiType: " << (session.isResponseApi() ? "Responses" : "ChatCompletions");
     
     // 3. 调用共享 helper executeGuardedWithSession()
     return executeGuardedWithSession(session, sink, req.stream, policy);
-}
-
-// ========== 旧入口实现（变薄，调用共享 helper）==========
-
-void GenerationService::run(const GenerationRequest& req, IResponseSink& sink) {
-    LOG_INFO << "[生成服务] 开始生成, 协议: " 
-             << (req.isResponseApi() ? "Responses" : "ChatCompletions")
-             << ", 流式: " << req.stream;
-    
-    try {
-        // 构建或获取 session
-        session_st session;
-        session.selectmodel = req.model;
-        session.selectapi = req.provider.empty() ? "chaynsapi" : req.provider;
-        session.systemprompt = req.systemPrompt;
-        session.client_info = req.clientInfo;
-        session.requestmessage = req.currentInput;
-        session.last_active_time = time(nullptr);
-        
-        // 根据协议选择不同的处理流程
-        if (req.isResponseApi()) {
-            runResponseFlow(req, sink, session);
-        } else {
-            runChatFlow(req, sink, session);
-        }
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR << "[生成服务] 异常: " << e.what();
-        emitError(generation::ErrorCode::Internal, e.what(), sink);
-    } catch (...) {
-        LOG_ERROR << "[生成服务] 未知异常";
-        emitError(generation::ErrorCode::Internal, "Unknown error occurred", sink);
-    }
-    
-    sink.onClose();
-}
-
-void GenerationService::runWithSession(session_st& session, IResponseSink& sink, bool stream) {
-    LOG_INFO << "[生成服务] 运行会话, 流式: " << stream;
-    
-    try {
-        auto& sessionManager = *chatSession::getInstance();
-        
-        // 1. 发送 Started 事件
-        generation::Started startEvent;
-        startEvent.responseId = session.curConversationId;
-        startEvent.model = session.selectmodel;
-        sink.onEvent(startEvent);
-        
-        // 2. 调用 Provider
-        if (!executeProvider(session)) {
-            emitError(
-                generation::ErrorCode::ProviderError,
-                safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
-                sink
-            );
-            sink.onClose();
-            return;
-        }
-        
-        // 3. 发送结果事件
-        emitResultEvents(session, sink);
-        
-        // 4. 更新会话上下文
-        sessionManager.coverSessionresponse(session);
-        
-        // 5. 调用 Provider 后处理
-        auto api = ApiManager::getInstance().getApiByApiName(session.selectapi);
-        if (api) {
-            api->afterResponseProcess(session);
-        }
-        
-    } catch (const std::exception& e) {
-        LOG_ERROR << "[生成服务] 运行会话异常: " << e.what();
-        emitError(generation::ErrorCode::Internal, e.what(), sink);
-    } catch (...) {
-        LOG_ERROR << "[生成服务] 运行会话未知异常";
-        emitError(generation::ErrorCode::Internal, "Unknown error occurred", sink);
-    }
-    
-    sink.onClose();
-}
-
-std::optional<AppError> GenerationService::runWithSessionGuarded(
-    session_st& session,
-    IResponseSink& sink,
-    bool stream,
-    ConcurrencyPolicy policy
-) {
-    LOG_INFO << "[生成服务] runWithSessionGuarded (旧入口-变薄), 流式: " << stream
-             << ", 策略: " << (policy == ConcurrencyPolicy::RejectConcurrent ? "拒绝并发" : "取消前一个");
-    
-    // 直接调用共享 helper，复用同一套门控/执行包装逻辑
-    return executeGuardedWithSession(session, sink, stream, policy);
-}
-
-void GenerationService::runChatFlow(
-    const GenerationRequest& req,
-    IResponseSink& sink,
-    session_st& session
-) {
-    LOG_INFO << "[生成服务] 运行聊天流程";
-    
-    // 1. 创建或更新会话 - 使用统一包装方法
-    auto& sessionManager = *chatSession::getInstance();
-    session = sessionManager.createOrUpdateChatSession(session);
-    
-    // 2. 发送 Started 事件
-    generation::Started startEvent;
-    startEvent.responseId = session.curConversationId;
-    startEvent.model = session.selectmodel;
-    sink.onEvent(startEvent);
-    
-    // 3. 调用 Provider
-    if (!executeProvider(session)) {
-        emitError(
-            generation::ErrorCode::ProviderError,
-            safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
-            sink
-        );
-        return;
-    }
-    
-    // 4. 发送结果事件
-    emitResultEvents(session, sink);
-    
-    // 5. 更新会话上下文
-    sessionManager.coverSessionresponse(session);
-}
-
-void GenerationService::runResponseFlow(
-    const GenerationRequest& req, 
-    IResponseSink& sink, 
-    session_st& session
-) {
-    LOG_INFO << "[生成服务] 运行响应流程";
-    
-    auto& sessionManager = *chatSession::getInstance();
-    
-    // 1. 处理 previous_response_id (如果有)
-    if (!req.previousKey.empty()) {
-        session_st prevSession;
-        if (sessionManager.getResponseSession(req.previousKey, prevSession)) {
-            session.message_context = prevSession.message_context;
-            session.preConversationId = req.previousKey;
-        }
-    }
-    
-    // 2. 创建 Response 会话
-    session.is_response_api = true;
-    std::string responseId = sessionManager.createResponseSession(session);
-    
-    // 3. 发送 Started 事件
-    generation::Started startEvent;
-    startEvent.responseId = responseId;
-    startEvent.model = session.selectmodel;
-    sink.onEvent(startEvent);
-    
-    // 4. 调用 Provider
-    if (!executeProvider(session)) {
-        emitError(
-            generation::ErrorCode::ProviderError,
-            safeJsonAsString(session.responsemessage.get("error", "Provider error"), "Provider error"),
-            sink
-        );
-        return;
-    }
-    
-    // 5. 发送结果事件
-    emitResultEvents(session, sink);
-    
-    // 6. 更新 Response 会话
-    sessionManager.updateResponseSession(session);
 }
 
 bool GenerationService::executeProvider(session_st& session) {
@@ -1102,27 +908,38 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // 【功能说明】
     // 使用零宽字符将会话ID嵌入到响应文本中，客户端下次请求时可以提取该ID实现续聊。
     //
+    // 【两阶段设计】
+    // 1. prepareNextSessionId() 在 emitResultEvents 之前预生成 nextSessionId
+    // 2. 这里嵌入 nextSessionId（而非 curConversationId）
+    // 3. commitSessionTransfer() 在发送后执行实际的会话转移
+    //
     // 【特殊处理】
     // 对于 tool_calls 场景，部分客户端在收到 finish_reason="tool_calls" 后
     // 会停止处理后续内容，因此需要在 tool_calls 之前发送会话ID。
     auto& sessionManager = *chatSession::getInstance();
 
-    if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
+    // 优先使用预生成的 nextSessionId，如果没有则回退到 curConversationId
+    const std::string& sessionIdToEmbed =
+        !session.nextSessionId.empty() ? session.nextSessionId : session.curConversationId;
+
+    if (sessionManager.isZeroWidthMode() && !sessionIdToEmbed.empty()) {
         const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
         if (!toolCalls.empty() && clientType == "claudecode") {
             // Claude Code 客户端 + 有工具调用：单独发送零宽会话ID
-            std::string zwOnly = chatSession::embedSessionIdInText("", session.curConversationId);
+            std::string zwOnly = chatSession::embedSessionIdInText("", sessionIdToEmbed);
             if (!zwOnly.empty()) {
                 generation::OutputTextDone zwDone;
                 zwDone.text = zwOnly;
                 zwDone.index = 0;
                 sink.onEvent(zwDone);
-                LOG_INFO << "[生成服务] 已在 tool_calls 前发送零宽会话ID: " << session.curConversationId;
+                LOG_INFO << "[生成服务] 已在 tool_calls 前发送零宽会话ID: " << sessionIdToEmbed
+                         << " (当前会话: " << session.curConversationId << ")";
             }
         } else {
             // 其他情况：在文本末尾嵌入会话ID
-            textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
-            LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
+            textContent = chatSession::embedSessionIdInText(textContent, sessionIdToEmbed);
+            LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << sessionIdToEmbed
+                     << " (当前会话: " << session.curConversationId << ")";
         }
     }
 
@@ -1168,80 +985,6 @@ std::string GenerationService::sanitizeOutput(
     const std::string& text
 ) {
     return ClientOutputSanitizer::sanitize(clientInfo, text);
-}
-
-void GenerationService::processOutputWithBridge(
-    const std::string& text,
-    bool supportsToolCalls,
-    const session_st& session,
-    IResponseSink& sink
-) {
-    std::string textContent;
-    std::vector<generation::ToolCallDone> toolCalls;
-
-    if (supportsToolCalls) {
-        LOG_INFO << "[GenerationService] 通道支持 tool calls，跳过 Bridge 处理";
-        textContent = text;
-    } else {
-        // 使用 ToolCallBridge 处理文本中的工具调用
-        LOG_INFO << "[GenerationService] 通道不支持 tool calls，使用 ToolCallBridge 处理输出";
-        
-        auto bridge = toolcall::createToolCallBridge(supportsToolCalls);
-        auto codec = toolcall::createXmlTagToolCallCodec();
-        bridge->setTextCodec(codec);
-        
-        std::vector<toolcall::ToolCallEvent> events;
-        bridge->transformResponseChunk(text, events);
-        bridge->flushResponse(events);
-        
-        // 将事件转换回文本或 ToolCall 事件
-        for (const auto& event : events) {
-            switch (event.type) {
-                case toolcall::EventType::Text:
-                    textContent += event.text;
-                    break;
-                case toolcall::EventType::ToolCallEnd: {
-                    LOG_INFO << "[GenerationService] 工具调用结束: " << event.toolName;
-                    generation::ToolCallDone tc;
-                    tc.id = event.toolCallId;
-                    tc.name = event.toolName;
-                    tc.arguments = event.argumentsDelta; // 这里是完整参数
-                    tc.index = toolCalls.size();
-                    toolCalls.push_back(tc);
-                    // Also trigger separate ToolCallDone event
-                    sink.onEvent(tc);
-                    break;
-                }
-                case toolcall::EventType::ToolCallBegin:
-                case toolcall::EventType::ToolCallArgsDelta:
-                    // 这些是流式过程中的中间状态，对于非流式聚合结果，我们关注 End 事件
-                    break;
-                case toolcall::EventType::Error:
-                    LOG_WARN << "[GenerationService] 解析错误: " << event.errorMessage;
-                    break;
-            }
-        }
-    }
-    
-    // 3. 如果使用零宽字符模式，在响应末尾嵌入会话ID
-    auto& sessionManager = *chatSession::getInstance();
-    if (sessionManager.isZeroWidthMode() && !session.curConversationId.empty()) {
-        textContent = chatSession::embedSessionIdInText(textContent, session.curConversationId);
-        LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << session.curConversationId;
-    }
-    
-    // 发送 OutputTextDone 事件 (如果有文本)
-    if (!textContent.empty()) {
-        generation::OutputTextDone textDone;
-        textDone.text = textContent;
-        textDone.index = 0;
-        sink.onEvent(textDone);
-    }
-    
-    // 发送 Completed 事件
-    generation::Completed completed;
-    completed.finishReason = toolCalls.empty() ? "stop" : "tool_calls";
-    sink.onEvent(completed);
 }
 
 bool GenerationService::getChannelSupportsToolCalls(const std::string& channelName) {
@@ -1905,13 +1648,13 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     // instructions that are incompatible with our XML-tag bridge. Keep only the first
     // "intro" section so the upstream sees language/role guidance but not the full
     // client prompt blob.
-    if (strictToolClient && !session.systemprompt.empty()) {
-        const std::string marker = "\n\n====";
-        size_t pos = session.systemprompt.find(marker);
-        if (pos != std::string::npos) {
-            session.systemprompt = session.systemprompt.substr(0, pos);
-        }
-    }
+    // if (strictToolClient && !session.systemprompt.empty()) {
+    //     const std::string marker = "\n\n====";
+    //     size_t pos = session.systemprompt.find(marker);
+    //     if (pos != std::string::npos) {
+    //         session.systemprompt = session.systemprompt.substr(0, pos);
+    //     }
+    // }
 
     auto encodeCompactToolList = [](const Json::Value& tools) -> std::string {
         if (!tools.isArray() || tools.empty()) {
@@ -2166,41 +1909,4 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         "Injected tool definitions for bridge mode",
         injectDetail
     );
-}
-
-GenerationRequest GenerationService::buildRequest(
-    const session_st& session,
-    OutputProtocol protocol,
-    bool stream
-) {
-    GenerationRequest req;
-    
-    req.sessionKey = session.curConversationId;
-    req.previousKey = session.preConversationId;
-    req.clientInfo = session.client_info;
-    
-    req.provider = session.selectapi;
-    req.model = session.selectmodel;
-    req.systemPrompt = session.systemprompt;
-    
-    req.currentInput = session.requestmessage;
-    
-    // 转换消息上下文
-    for (const auto& msg : session.message_context) {
-        std::string role = safeJsonAsString(msg.get("role", "user"), "user");
-        std::string content = safeJsonAsString(msg.get("content", ""), "");
-        
-        if (role == "user") {
-            req.messages.push_back(Message::user(content));
-        } else if (role == "assistant") {
-            req.messages.push_back(Message::assistant(content));
-        } else if (role == "system") {
-            req.messages.push_back(Message::system(content));
-        }
-    }
-    
-    req.stream = stream;
-    req.protocol = protocol;
-    
-    return req;
 }

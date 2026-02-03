@@ -54,74 +54,14 @@ public:
         session::ConcurrencyPolicy policy = session::ConcurrencyPolicy::RejectConcurrent
     );
     
-    // ========== 旧入口（保留兼容，短期内变薄）==========
-    
-    /**
-     * @brief 执行生成请求
-     *
-     * 同步执行，将所有事件通过 sink 输出。
-     * 后续可升级 coroutine/async，但第一版可同步执行，减少变更面。
-     *
-     * @param req 生成请求
-     * @param sink 输出通道
-     */
-    void run(const GenerationRequest& req, IResponseSink& sink);
-    
-    /**
-     * @brief 从 session_st 构建 GenerationRequest
-     *
-     * 便捷方法，用于从现有的 session 结构转换
-     *
-     * @param session 会话状态
-     * @param protocol 输出协议
-     * @param stream 是否流式输出
-     * @return GenerationRequest
-     */
-    static GenerationRequest buildRequest(
-        const session_st& session,
-        OutputProtocol protocol,
-        bool stream
-    );
-    
-    /**
-     * @brief 使用已准备好的 session 执行生成
-     *
-     * 适用于 Controller 已经通过 gennerateSessionstByReq() 等方法
-     * 初始化 session 的情况。
-     *
-     * @param session 已初始化的会话状态（会被修改）
-     * @param sink 输出通道
-     * @param stream 是否流式输出
-     */
-    void runWithSession(session_st& session, IResponseSink& sink, bool stream);
-    
-    /**
-     * @brief 【旧入口-变薄】使用已准备好的 session 执行生成（带执行门控）
-     *
-     * 短期保留兼容，内部已改为调用共享 helper。
-     *
-     * @param session 已初始化的会话状态（会被修改）
-     * @param sink 输出通道
-     * @param stream 是否流式输出
-     * @param policy 并发策略
-     * @return 应用层错误（如果有）
-     */
-    std::optional<error::AppError> runWithSessionGuarded(
-        session_st& session,
-        IResponseSink& sink,
-        bool stream,
-        session::ConcurrencyPolicy policy = session::ConcurrencyPolicy::RejectConcurrent
-    );
-    
 private:
     // ========== 共享 helper（新旧入口复用）==========
     
     /**
      * @brief 计算执行门控的 key
      *
-     * 统一封装 guard key 计算逻辑：
-     * - Response API: 使用 response_id
-     * - Chat API: 使用 curConversationId
+     * 门控 key 统一使用 sessionId（即 session.curConversationId）。
+     * Responses API 的 response.id 为每次请求生成，不参与门控（避免同一会话并发打架）。
      *
      * @param session 会话状态
      * @return 门控 key，空字符串表示不使用门控
@@ -129,9 +69,9 @@ private:
     static std::string computeExecutionKey(const session_st& session);
     
     /**
-     * @brief 【共享 helper】带门控执行生成
+     * @brief 【核心 helper】带门控执行生成
      *
-     * 从旧 runWithSessionGuarded() 中抽取的核心逻辑，负责：
+     * 核心执行逻辑，负责：
      * - guard key 计算入口（调用 computeExecutionKey）
      * - ExecutionGuard 生命周期（构造/获取/失败分支处理）
      * - 取消检查：guard.isCancelled() 前后各一次
@@ -160,18 +100,6 @@ private:
      * @return 初始化的 session_st
      */
     static session_st materializeSession(const GenerationRequest& req);
-    
-    // ========== 流程方法 ==========
-    
-    /**
-     * @brief 执行 Chat API 流程
-     */
-    void runChatFlow(const GenerationRequest& req, IResponseSink& sink, session_st& session);
-    
-    /**
-     * @brief 执行 Response API 流程
-     */
-    void runResponseFlow(const GenerationRequest& req, IResponseSink& sink, session_st& session);
     
     /**
      * @brief 调用 Provider 执行生成
@@ -212,23 +140,6 @@ private:
      * @return 清洗后的文本
      */
     std::string sanitizeOutput(const Json::Value& clientInfo, const std::string& text);
-    
-    /**
-     * @brief 使用 ToolCallBridge 处理输出
-     *
-     * 当通道不支持 tool calls 时，使用 ToolCallBridge 解析文本中的工具调用
-     *
-     * @param text 原始文本
-     * @param supportsToolCalls 通道是否支持 tool calls
-     * @param session 会话状态
-     * @param sink 输出通道
-     */
-    void processOutputWithBridge(
-        const std::string& text,
-        bool supportsToolCalls,
-        const session_st& session,
-        IResponseSink& sink
-    );
     
     /**
      * @brief 获取通道的 tool call 支持能力
