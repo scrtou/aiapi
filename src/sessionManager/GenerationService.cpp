@@ -1896,6 +1896,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     session.tools = Json::Value(Json::nullValue);
     
     // 记录 TOOL_BRIDGE 警告：注入了工具定义
+    /*
     Json::Value injectDetail;
     injectDetail["tool_count"] = session.tools_raw.isArray() ? static_cast<Json::UInt64>(session.tools_raw.size()) : 0;
     injectDetail["trigger_signal"] = triggerSignal;
@@ -1909,4 +1910,5 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         "Injected tool definitions for bridge mode",
         injectDetail
     );
+    */
 }

@@ -1,4 +1,5 @@
 #include "Session.h"
+#include "ResponseIndex.h"
 #include <time.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
@@ -413,6 +414,16 @@ void chatSession::commitSessionTransfer(session_st& session)
     
     // 6. 更新 session_map（添加新会话，删除旧会话）
     addSession(newSessionId, session);
+
+    // [Fix] Responses 会话连续性：避免竞态窗口
+    // 在删除 oldSessionId 前，确保 response_id 已重新绑定到 newSessionId。
+    // 否则可能出现 ResponseIndex 仍指向 oldSessionId，但 oldSessionId 已被删除，导致 previous_response_id 续接断链。
+    if (session.apiType == ApiType::Responses && !session.response_id.empty()) {
+        ResponseIndex::instance().bind(session.response_id, newSessionId);
+        LOG_DEBUG << "[SessionTransfer][Responses] Rebind responseId->sessionId early: "
+                  << session.response_id << " -> " << newSessionId;
+    }
+
     delSession(oldSessionId);
     
     // 7. Hash 模式特有：更新 context_map

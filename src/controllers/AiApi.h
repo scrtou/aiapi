@@ -32,6 +32,10 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::getErrorsSeries, "/aichat/metrics/errors/series", Get); // 错误时序统计
     ADD_METHOD_TO(AiApi::getErrorsEvents, "/aichat/metrics/errors/events", Get); // 错误事件列表
     ADD_METHOD_TO(AiApi::getErrorsEventById, "/aichat/metrics/errors/events/{1}", Get); // 错误事件详情
+    // 服务状态监控 API
+    ADD_METHOD_TO(AiApi::getStatusSummary, "/aichat/status/summary", Get); // 服务状态概览
+    ADD_METHOD_TO(AiApi::getStatusChannels, "/aichat/status/channels", Get); // 渠道状态列表
+    ADD_METHOD_TO(AiApi::getStatusModels, "/aichat/status/models", Get); // 模型状态列表
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -57,6 +61,10 @@ class AiApi : public drogon::HttpController<AiApi>
     void getErrorsSeries(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void getErrorsEvents(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void getErrorsEventById(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, int64_t id);
+    // 服务状态监控 API
+    void getStatusSummary(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void getStatusChannels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void getStatusModels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
   //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);

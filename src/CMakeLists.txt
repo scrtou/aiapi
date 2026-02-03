@@ -34,6 +34,7 @@ add_executable(${PROJECT_NAME}
     dbManager/account/accountDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     dbManager/metrics/ErrorStatsDbManager.cpp
+    dbManager/metrics/StatusDbManager.cpp
     metrics/ErrorStatsConfig.cpp
     metrics/ErrorStatsService.cpp
     sessionManager/Session.cpp

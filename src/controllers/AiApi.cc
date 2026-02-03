@@ -9,6 +9,7 @@
 #include <accountManager/accountManager.h>
 #include <dbManager/account/accountDbManager.h>
 #include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/metrics/StatusDbManager.h>
 #include <channelManager/channelManager.h>
 #include <sessionManager/Session.h>
 #include <sessionManager/ClientOutputSanitizer.h>
@@ -1298,6 +1299,159 @@ void AiApi::getErrorsEventById(const HttpRequestPtr &req, std::function<void(con
     response["message"] = ev.message;
     response["detail_json"] = ev.detailJson;
     response["raw_snippet"] = ev.rawSnippet;
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+// ========== 服务状态监控 API ==========
+
+void AiApi::getStatusSummary(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取服务状态概览";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    
+    metrics::StatusQueryParams params;
+    params.from = from;
+    params.to = to;
+    
+    auto statusManager = metrics::StatusDbManager::getInstance();
+    auto summary = statusManager->getStatusSummary(params);
+    
+    Json::Value response(Json::objectValue);
+    response["total_requests"] = static_cast<Json::Int64>(summary.totalRequests);
+    response["total_errors"] = static_cast<Json::Int64>(summary.totalErrors);
+    response["error_rate"] = summary.errorRate;
+    response["channel_count"] = summary.channelCount;
+    response["model_count"] = summary.modelCount;
+    response["healthy_channels"] = summary.healthyChannels;
+    response["degraded_channels"] = summary.degradedChannels;
+    response["down_channels"] = summary.downChannels;
+    response["overall_status"] = metrics::StatusDbManager::statusToString(summary.overallStatus);
+    
+    // 时间序列数据
+    Json::Value buckets(Json::arrayValue);
+    for (const auto& bucket : summary.buckets) {
+        Json::Value item;
+        item["bucket_start"] = bucket.bucketStart;
+        item["request_count"] = static_cast<Json::Int64>(bucket.requestCount);
+        item["error_count"] = static_cast<Json::Int64>(bucket.errorCount);
+        item["error_rate"] = bucket.errorRate;
+        buckets.append(item);
+    }
+    response["buckets"] = buckets;
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+void AiApi::getStatusChannels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取渠道状态列表";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    std::string provider = req->getParameter("provider");
+    
+    metrics::StatusQueryParams params;
+    params.from = from;
+    params.to = to;
+    params.provider = provider;
+    
+    auto statusManager = metrics::StatusDbManager::getInstance();
+    auto channels = statusManager->getChannelStatusList(params);
+    
+    Json::Value response(Json::objectValue);
+    Json::Value data(Json::arrayValue);
+    
+    for (const auto& ch : channels) {
+        Json::Value item;
+        item["channel_id"] = ch.channelId;
+        item["channel_name"] = ch.channelName;
+        item["total_requests"] = static_cast<Json::Int64>(ch.totalRequests);
+        item["total_errors"] = static_cast<Json::Int64>(ch.totalErrors);
+        item["error_rate"] = ch.errorRate;
+        item["status"] = metrics::StatusDbManager::statusToString(ch.status);
+        item["last_request_time"] = ch.lastRequestTime;
+        
+        // 时间序列数据
+        Json::Value buckets(Json::arrayValue);
+        for (const auto& bucket : ch.buckets) {
+            Json::Value b;
+            b["bucket_start"] = bucket.bucketStart;
+            b["request_count"] = static_cast<Json::Int64>(bucket.requestCount);
+            b["error_count"] = static_cast<Json::Int64>(bucket.errorCount);
+            b["error_rate"] = bucket.errorRate;
+            buckets.append(b);
+        }
+        item["buckets"] = buckets;
+        
+        data.append(item);
+    }
+    
+    response["data"] = data;
+    response["count"] = static_cast<Json::UInt64>(channels.size());
+    
+    auto resp = HttpResponse::newHttpJsonResponse(response);
+    resp->setStatusCode(k200OK);
+    callback(resp);
+}
+
+void AiApi::getStatusModels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[API接口] 获取模型状态列表";
+    
+    // 解析查询参数
+    std::string from = req->getParameter("from");
+    std::string to = req->getParameter("to");
+    std::string provider = req->getParameter("provider");
+    std::string model = req->getParameter("model");
+    
+    metrics::StatusQueryParams params;
+    params.from = from;
+    params.to = to;
+    params.provider = provider;
+    params.model = model;
+    
+    auto statusManager = metrics::StatusDbManager::getInstance();
+    auto models = statusManager->getModelStatusList(params);
+    
+    Json::Value response(Json::objectValue);
+    Json::Value data(Json::arrayValue);
+    
+    for (const auto& m : models) {
+        Json::Value item;
+        item["model"] = m.model;
+        item["provider"] = m.provider;
+        item["total_requests"] = static_cast<Json::Int64>(m.totalRequests);
+        item["total_errors"] = static_cast<Json::Int64>(m.totalErrors);
+        item["error_rate"] = m.errorRate;
+        item["status"] = metrics::StatusDbManager::statusToString(m.status);
+        item["last_request_time"] = m.lastRequestTime;
+        
+        // 时间序列数据
+        Json::Value buckets(Json::arrayValue);
+        for (const auto& bucket : m.buckets) {
+            Json::Value b;
+            b["bucket_start"] = bucket.bucketStart;
+            b["request_count"] = static_cast<Json::Int64>(bucket.requestCount);
+            b["error_count"] = static_cast<Json::Int64>(bucket.errorCount);
+            b["error_rate"] = bucket.errorRate;
+            buckets.append(b);
+        }
+        item["buckets"] = buckets;
+        
+        data.append(item);
+    }
+    
+    response["data"] = data;
+    response["count"] = static_cast<Json::UInt64>(models.size());
     
     auto resp = HttpResponse::newHttpJsonResponse(response);
     resp->setStatusCode(k200OK);
