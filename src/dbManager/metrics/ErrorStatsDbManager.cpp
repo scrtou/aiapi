@@ -198,16 +198,42 @@ std::string ErrorStatsDbManager::truncateBucket(const std::chrono::system_clock:
     return std::string(buf);
 }
 
+// ============================================================================
+// 辅助函数：转义 SQL 字符串值（防止 SQL 注入）
+// ============================================================================
+static std::string escapeSqlString(const std::string& str) {
+    std::string result;
+    result.reserve(str.size() * 2 + 2);
+    result += "'";
+    for (char c : str) {
+        if (c == '\'') {
+            result += "''";
+        } else if (c == '\0') {
+            // Skip null bytes
+        } else {
+            result += c;
+        }
+    }
+    result += "'";
+    return result;
+}
+
+// ============================================================================
+// 优化：批量插入事件（使用事务）
+// ============================================================================
 bool ErrorStatsDbManager::insertEvents(const std::vector<ErrorEvent>& events) {
     if (events.empty()) return true;
     try {
+        // 使用事务包裹批量插入，显著提高性能
+        auto trans = dbClient_->newTransaction();
+        
         for (const auto& ev : events) {
             auto tt = std::chrono::system_clock::to_time_t(ev.ts);
             char tsBuf[32];
             std::strftime(tsBuf, sizeof(tsBuf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
             Json::StreamWriterBuilder wb;
             std::string detailStr = Json::writeString(wb, ev.detailJson);
-            dbClient_->execSqlSync(
+            trans->execSqlSync(
                 "INSERT INTO error_event (ts, severity, domain, type, provider, model, client_type, "
                 "api_kind, stream, http_status, request_id, response_id, tool_name, message, detail_json, raw_snippet) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
@@ -223,16 +249,22 @@ bool ErrorStatsDbManager::insertEvents(const std::vector<ErrorEvent>& events) {
     }
 }
 
+// ============================================================================
+// 优化：批量更新错误聚合（使用事务）
+// ============================================================================
 bool ErrorStatsDbManager::upsertErrorAggHour(const std::vector<ErrorEvent>& events) {
     if (events.empty()) return true;
     try {
+        // 使用事务包裹批量操作
+        auto trans = dbClient_->newTransaction();
+        
         for (const auto& ev : events) {
             std::string bucket = truncateBucket(ev.ts);
             auto tt = std::chrono::system_clock::to_time_t(ev.ts);
             char tsBuf[32];
             std::strftime(tsBuf, sizeof(tsBuf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
             if (dbType_ == DbType::PostgreSQL) {
-                dbClient_->execSqlSync(
+                trans->execSqlSync(
                     "INSERT INTO error_agg_hour (bucket_start, severity, domain, type, provider, model, "
                     "client_type, api_kind, stream, http_status, count, last_event_ts) "
                     "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11) "
@@ -242,7 +274,7 @@ bool ErrorStatsDbManager::upsertErrorAggHour(const std::vector<ErrorEvent>& even
                     ev.provider, ev.model, ev.clientType, ev.apiKind, ev.stream, ev.httpStatus, std::string(tsBuf)
                 );
             } else {
-                dbClient_->execSqlSync(
+                trans->execSqlSync(
                     "INSERT OR REPLACE INTO error_agg_hour (bucket_start, severity, domain, type, provider, model, "
                     "client_type, api_kind, stream, http_status, count, last_event_ts) "
                     "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, "
@@ -290,23 +322,39 @@ bool ErrorStatsDbManager::upsertRequestAggHour(const RequestAggData& data) {
     }
 }
 
+// ============================================================================
+// 修复：queryErrorSeries 参数绑定 Bug
+// 原问题：动态添加过滤条件但只传递了前两个参数
+// 解决方案：使用字符串拼接构建完整 SQL（值已转义）
+// ============================================================================
 std::vector<AggBucket> ErrorStatsDbManager::queryErrorSeries(const QueryParams& params) {
     std::vector<AggBucket> result;
     try {
         std::ostringstream sql;
         sql << "SELECT bucket_start, SUM(count) as total FROM error_agg_hour WHERE bucket_start >= $1 AND bucket_start <= $2";
-        int paramIdx = 3;
-        std::vector<std::string> binds;
-        binds.push_back(params.from);
-        binds.push_back(params.to);
-        if (!params.severity.empty()) { sql << " AND severity = $" << paramIdx++; binds.push_back(params.severity); }
-        if (!params.domain.empty()) { sql << " AND domain = $" << paramIdx++; binds.push_back(params.domain); }
-        if (!params.type.empty()) { sql << " AND type = $" << paramIdx++; binds.push_back(params.type); }
-        if (!params.provider.empty()) { sql << " AND provider = $" << paramIdx++; binds.push_back(params.provider); }
-        if (!params.model.empty()) { sql << " AND model = $" << paramIdx++; binds.push_back(params.model); }
-        if (!params.clientType.empty()) { sql << " AND client_type = $" << paramIdx++; binds.push_back(params.clientType); }
+        
+        // 使用字符串拼接方式添加过滤条件（值已转义，安全）
+        if (!params.severity.empty()) {
+            sql << " AND severity = " << escapeSqlString(params.severity);
+        }
+        if (!params.domain.empty()) {
+            sql << " AND domain = " << escapeSqlString(params.domain);
+        }
+        if (!params.type.empty()) {
+            sql << " AND type = " << escapeSqlString(params.type);
+        }
+        if (!params.provider.empty()) {
+            sql << " AND provider = " << escapeSqlString(params.provider);
+        }
+        if (!params.model.empty()) {
+            sql << " AND model = " << escapeSqlString(params.model);
+        }
+        if (!params.clientType.empty()) {
+            sql << " AND client_type = " << escapeSqlString(params.clientType);
+        }
         sql << " GROUP BY bucket_start ORDER BY bucket_start";
-        auto res = dbClient_->execSqlSync(sql.str(), binds[0], binds[1]);
+        
+        auto res = dbClient_->execSqlSync(sql.str(), params.from, params.to);
         for (const auto& row : res) {
             AggBucket b;
             b.bucketStart = row["bucket_start"].as<std::string>();
@@ -324,9 +372,20 @@ std::vector<AggBucket> ErrorStatsDbManager::queryRequestSeries(const QueryParams
     try {
         std::ostringstream sql;
         sql << "SELECT bucket_start, SUM(count) as total FROM request_agg_hour WHERE bucket_start >= $1 AND bucket_start <= $2";
-        std::vector<std::string> binds = {params.from, params.to};
+        
+        // 添加可选过滤条件
+        if (!params.provider.empty()) {
+            sql << " AND provider = " << escapeSqlString(params.provider);
+        }
+        if (!params.model.empty()) {
+            sql << " AND model = " << escapeSqlString(params.model);
+        }
+        if (!params.clientType.empty()) {
+            sql << " AND client_type = " << escapeSqlString(params.clientType);
+        }
         sql << " GROUP BY bucket_start ORDER BY bucket_start";
-        auto res = dbClient_->execSqlSync(sql.str(), binds[0], binds[1]);
+        
+        auto res = dbClient_->execSqlSync(sql.str(), params.from, params.to);
         for (const auto& row : res) {
             AggBucket b;
             b.bucketStart = row["bucket_start"].as<std::string>();
@@ -339,15 +398,38 @@ std::vector<AggBucket> ErrorStatsDbManager::queryRequestSeries(const QueryParams
     return result;
 }
 
+// ============================================================================
+// 修复：queryEvents 参数绑定 Bug
+// ============================================================================
 std::vector<ErrorEventRecord> ErrorStatsDbManager::queryEvents(const QueryParams& params, int limit, int offset) {
     std::vector<ErrorEventRecord> result;
     try {
         std::ostringstream sql;
         sql << "SELECT id, ts, severity, domain, type, provider, model, client_type, api_kind, stream, http_status, "
             << "request_id, response_id, tool_name, message, detail_json, raw_snippet FROM error_event WHERE ts >= $1 AND ts <= $2";
-        std::vector<std::string> binds = {params.from, params.to};
+        
+        // 使用字符串拼接方式添加过滤条件（值已转义，安全）
+        if (!params.severity.empty()) {
+            sql << " AND severity = " << escapeSqlString(params.severity);
+        }
+        if (!params.domain.empty()) {
+            sql << " AND domain = " << escapeSqlString(params.domain);
+        }
+        if (!params.type.empty()) {
+            sql << " AND type = " << escapeSqlString(params.type);
+        }
+        if (!params.provider.empty()) {
+            sql << " AND provider = " << escapeSqlString(params.provider);
+        }
+        if (!params.model.empty()) {
+            sql << " AND model = " << escapeSqlString(params.model);
+        }
+        if (!params.clientType.empty()) {
+            sql << " AND client_type = " << escapeSqlString(params.clientType);
+        }
         sql << " ORDER BY ts DESC LIMIT " << limit << " OFFSET " << offset;
-        auto res = dbClient_->execSqlSync(sql.str(), binds[0], binds[1]);
+        
+        auto res = dbClient_->execSqlSync(sql.str(), params.from, params.to);
         for (const auto& row : res) {
             ErrorEventRecord rec;
             rec.id = row["id"].as<int64_t>();
@@ -355,15 +437,15 @@ std::vector<ErrorEventRecord> ErrorStatsDbManager::queryEvents(const QueryParams
             rec.severity = row["severity"].as<std::string>();
             rec.domain = row["domain"].as<std::string>();
             rec.type = row["type"].as<std::string>();
-            rec.provider = row["provider"].as<std::string>();
-            rec.model = row["model"].as<std::string>();
-            rec.clientType = row["client_type"].as<std::string>();
-            rec.apiKind = row["api_kind"].as<std::string>();
-            rec.stream = row["stream"].as<bool>();
-            rec.httpStatus = row["http_status"].as<int>();
-            rec.requestId = row["request_id"].as<std::string>();
-            rec.message = row["message"].as<std::string>();
-            rec.detailJson = row["detail_json"].as<std::string>();
+            rec.provider = row["provider"].isNull() ? "" : row["provider"].as<std::string>();
+            rec.model = row["model"].isNull() ? "" : row["model"].as<std::string>();
+            rec.clientType = row["client_type"].isNull() ? "" : row["client_type"].as<std::string>();
+            rec.apiKind = row["api_kind"].isNull() ? "" : row["api_kind"].as<std::string>();
+            rec.stream = row["stream"].isNull() ? false : row["stream"].as<bool>();
+            rec.httpStatus = row["http_status"].isNull() ? 0 : row["http_status"].as<int>();
+            rec.requestId = row["request_id"].isNull() ? "" : row["request_id"].as<std::string>();
+            rec.message = row["message"].isNull() ? "" : row["message"].as<std::string>();
+            rec.detailJson = row["detail_json"].isNull() ? "" : row["detail_json"].as<std::string>();
             result.push_back(rec);
         }
     } catch (const std::exception& e) {
@@ -385,16 +467,16 @@ std::optional<ErrorEventRecord> ErrorStatsDbManager::queryEventById(int64_t id) 
         rec.severity = row["severity"].as<std::string>();
         rec.domain = row["domain"].as<std::string>();
         rec.type = row["type"].as<std::string>();
-        rec.provider = row["provider"].as<std::string>();
-        rec.model = row["model"].as<std::string>();
-        rec.clientType = row["client_type"].as<std::string>();
-        rec.apiKind = row["api_kind"].as<std::string>();
-        rec.stream = row["stream"].as<bool>();
-        rec.httpStatus = row["http_status"].as<int>();
-        rec.requestId = row["request_id"].as<std::string>();
-        rec.message = row["message"].as<std::string>();
-        rec.detailJson = row["detail_json"].as<std::string>();
-        rec.rawSnippet = row["raw_snippet"].as<std::string>();
+        rec.provider = row["provider"].isNull() ? "" : row["provider"].as<std::string>();
+        rec.model = row["model"].isNull() ? "" : row["model"].as<std::string>();
+        rec.clientType = row["client_type"].isNull() ? "" : row["client_type"].as<std::string>();
+        rec.apiKind = row["api_kind"].isNull() ? "" : row["api_kind"].as<std::string>();
+        rec.stream = row["stream"].isNull() ? false : row["stream"].as<bool>();
+        rec.httpStatus = row["http_status"].isNull() ? 0 : row["http_status"].as<int>();
+        rec.requestId = row["request_id"].isNull() ? "" : row["request_id"].as<std::string>();
+        rec.message = row["message"].isNull() ? "" : row["message"].as<std::string>();
+        rec.detailJson = row["detail_json"].isNull() ? "" : row["detail_json"].as<std::string>();
+        rec.rawSnippet = row["raw_snippet"].isNull() ? "" : row["raw_snippet"].as<std::string>();
         return rec;
     } catch (const std::exception& e) {
         LOG_ERROR << "[ErrorStats] queryEventById failed: " << e.what();

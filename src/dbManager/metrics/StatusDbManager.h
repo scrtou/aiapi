@@ -86,6 +86,15 @@ struct StatusQueryParams {
 };
 
 /**
+ * @brief 渠道状态统计（轻量级，用于 Summary 计算）
+ */
+struct ChannelStatusCounts {
+    int healthy = 0;    // 健康渠道数
+    int degraded = 0;   // 降级渠道数
+    int down = 0;       // 不可用渠道数
+};
+
+/**
  * @brief 服务状态数据库管理器
  *
  * 负责从 request_agg_hour 和 error_agg_hour 表查询数据，
@@ -153,6 +162,31 @@ private:
      * @brief 获取默认时间范围（最近 24 小时）
      */
     std::pair<std::string, std::string> getDefaultTimeRange();
+    
+    /**
+     * @brief 一次性获取所有渠道的时间序列数据（优化：避免 N+1 查询）
+     * @param from 开始时间
+     * @param to 结束时间
+     * @return map<provider, buckets>
+     */
+    std::map<std::string, std::vector<StatusBucket>> fetchAllChannelBuckets(
+        const std::string& from, const std::string& to);
+    
+    /**
+     * @brief 一次性获取所有模型的时间序列数据（优化：避免 N+1 查询）
+     * @param from 开始时间
+     * @param to 结束时间
+     * @return map<model:provider, buckets>
+     */
+    std::map<std::string, std::vector<StatusBucket>> fetchAllModelBuckets(
+        const std::string& from, const std::string& to);
+    
+    /**
+     * @brief 轻量级获取渠道状态统计（不获取时间序列数据）
+     * @param from 开始时间
+     * @param to 结束时间
+     */
+    ChannelStatusCounts getChannelStatusCounts(const std::string& from, const std::string& to);
 };
 
 } // namespace metrics
