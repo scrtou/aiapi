@@ -9,8 +9,8 @@
 #include <sstream>
 #include <iomanip>
 
-const int MAX_RETRIES = 2000;  // 最大重试次数
-const int BASE_DELAY = 300;  // 最大重试间隔（豪秒）
+const int MAX_RETRIES = 6000;  // 最大重试次数
+const int BASE_DELAY = 100;  // 最大重试间隔（豪秒）
 
 std::string generateGuid();
 

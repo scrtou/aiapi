@@ -4,7 +4,7 @@
 #include <random>
 #include <algorithm>
 #include <drogon/utils/Utilities.h>
-
+#include<drogon/drogon.h>
 namespace toolcall {
 
 // XML标签常量
@@ -963,9 +963,34 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
         if (ok && parsed.isObject()) {
             evt.argumentsDelta = Json::writeString(writer, parsed);
         } else {
-            Json::Value wrapper(Json::objectValue);
-            wrapper["raw_arguments"] = jsonStr;
-            evt.argumentsDelta = Json::writeString(writer, wrapper);
+            // If args_json isn't a JSON object, we normally wrap it into {"raw_arguments": "..."}.
+            // However, Roo/Kilo tool clients often require certain fields (e.g. attempt_completion.result).
+            // When the model emits invalid JSON (or a non-object JSON), wrapping can cause validation
+            // failures like: missing required field "result".
+            //
+            // Best-effort compatibility: for attempt_completion, always emit a JSON object with "result".
+            if (currentContext_.toolName == "attempt_completion") {
+                Json::Value args(Json::objectValue);
+                if (ok && parsed.isString()) {
+                    args["result"] = parsed.asString();
+                } else {
+                    // Fallback: preserve raw payload (even if it's malformed JSON) as the result text.
+                    args["result"] = jsonStr;
+                }
+                evt.argumentsDelta = Json::writeString(writer, args);
+            } else {
+                Json::Value wrapper(Json::objectValue);
+                wrapper["raw_arguments"] = jsonStr;
+                evt.argumentsDelta = Json::writeString(writer, wrapper);
+            }
+
+            if (!ok) {
+                LOG_WARN << "[XmlTagToolCallCodec] args_json parse failed for tool="
+                         << currentContext_.toolName << ": " << errors;
+            } else if (!parsed.isObject()) {
+                LOG_WARN << "[XmlTagToolCallCodec] args_json parsed but is not an object for tool="
+                         << currentContext_.toolName;
+            }
         }
     } else {
         // Parameter-tag style: build full args JSON from collected parameters
