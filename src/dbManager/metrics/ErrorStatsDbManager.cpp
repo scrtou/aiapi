@@ -4,8 +4,8 @@
 
 namespace metrics {
 
-// PostgreSQL 建表语句
-static const char* CREATE_ERROR_EVENT_PG = R"(
+// PostgreSQL 建表语句 - 必须拆分执行（PG prepared statement 不允许多条命令）
+static const char* CREATE_ERROR_EVENT_PG_TABLE = R"(
 CREATE TABLE IF NOT EXISTS error_event (
     id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -25,10 +25,14 @@ CREATE TABLE IF NOT EXISTS error_event (
     detail_json JSONB,
     raw_snippet TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_error_event_ts ON error_event(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_error_event_filter ON error_event(domain, type, severity, provider, model, client_type, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_error_event_request ON error_event(request_id);
 )";
+
+static const char* CREATE_ERROR_EVENT_PG_IDX1 =
+    "CREATE INDEX IF NOT EXISTS idx_error_event_ts ON error_event(ts DESC)";
+static const char* CREATE_ERROR_EVENT_PG_IDX2 =
+    "CREATE INDEX IF NOT EXISTS idx_error_event_filter ON error_event(domain, type, severity, provider, model, client_type, ts DESC)";
+static const char* CREATE_ERROR_EVENT_PG_IDX3 =
+    "CREATE INDEX IF NOT EXISTS idx_error_event_request ON error_event(request_id)";
 
 static const char* CREATE_ERROR_AGG_HOUR_PG = R"(
 CREATE TABLE IF NOT EXISTS error_agg_hour (
@@ -170,7 +174,11 @@ void ErrorStatsDbManager::createTablesIfNotExist() {
             dbClient_->execSqlSync(CREATE_ERROR_AGG_HOUR_SQLITE);
             dbClient_->execSqlSync(CREATE_REQUEST_AGG_HOUR_SQLITE);
         } else {
-            dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG);
+            // PostgreSQL 同样需要分开执行，避免一次 exec 多条 SQL（prepared statement 限制）
+            dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_TABLE);
+            dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_IDX1);
+            dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_IDX2);
+            dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_IDX3);
             dbClient_->execSqlSync(CREATE_ERROR_AGG_HOUR_PG);
             dbClient_->execSqlSync(CREATE_REQUEST_AGG_HOUR_PG);
         }
