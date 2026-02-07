@@ -161,24 +161,61 @@ void AccountDbManager::checkAndUpgradeTable()
 bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 {
     std::string selectsql = "select * from account where apiname=$1 and username=$2";
-    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
+
+    // 注意：PostgreSQL 的 TIMESTAMP 不接受空字符串 ''。
+    // 当 createTime 为空时，让数据库使用列默认值（CURRENT_TIMESTAMP），以兼容 SQLite/PG/MySQL。
+    std::string insertsqlWithCreateTime = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
+    std::string insertsqlNoCreateTime   = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
+
     std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,status=$9 where apiname=$10 and username=$11";
-    
+
     // 如果status为空，默认设置为active
     if (accountinfo.status.empty()) {
         accountinfo.status = AccountStatus::ACTIVE;
     }
-    
-    auto result = dbClient->execSqlSync(selectsql,accountinfo.apiName,accountinfo.userName);
-    if(result.size()!=0)
+
+    auto result = dbClient->execSqlSync(selectsql, accountinfo.apiName, accountinfo.userName);
+    if (result.size() != 0)
     {
         LOG_INFO << "账号 " << accountinfo.userName << " 已存在,更新账号";
         return updateAccount(accountinfo);
     }
     else
     {
-         auto result1 =dbClient->execSqlSync(insertsql,accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
-        if(result1.affectedRows()!=0)
+        auto result1 = [&]() {
+            if (accountinfo.createTime.empty())
+            {
+                return dbClient->execSqlSync(
+                    insertsqlNoCreateTime,
+                    accountinfo.apiName,
+                    accountinfo.userName,
+                    accountinfo.passwd,
+                    accountinfo.authToken,
+                    accountinfo.useCount,
+                    accountinfo.tokenStatus,
+                    accountinfo.accountStatus,
+                    accountinfo.userTobitId,
+                    accountinfo.personId,
+                    accountinfo.accountType,
+                    accountinfo.status);
+            }
+            return dbClient->execSqlSync(
+                insertsqlWithCreateTime,
+                accountinfo.apiName,
+                accountinfo.userName,
+                accountinfo.passwd,
+                accountinfo.authToken,
+                accountinfo.useCount,
+                accountinfo.tokenStatus,
+                accountinfo.accountStatus,
+                accountinfo.userTobitId,
+                accountinfo.personId,
+                accountinfo.createTime,
+                accountinfo.accountType,
+                accountinfo.status);
+        }();
+
+        if (result1.affectedRows() != 0)
         {
             LOG_INFO << "账号 " << accountinfo.userName << " 添加成功";
             return true;
@@ -288,9 +325,10 @@ int AccountDbManager::createWaitingAccount(string apiName)
     
     // 生成一个临时的占位用户名
     std::string waitingUsername = "waiting_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-    
-    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
-    
+
+    // waiting 账号不提供 createtime，让数据库使用默认值（CURRENT_TIMESTAMP），兼容 SQLite/PG/MySQL。
+    std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
+
     try {
         auto result = dbClient->execSqlSync(insertsql,
             apiName,
@@ -302,7 +340,6 @@ int AccountDbManager::createWaitingAccount(string apiName)
             false, // accountstatus
             0,   // usertobitid
             "",  // personid
-            "",  // createtime
             "free", // accounttype
             AccountStatus::WAITING  // status = waiting (待注册)
         );
@@ -337,25 +374,51 @@ bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st acco
     LOG_INFO << "[账户数据库] 激活账号, ID: " << waitingId << ", 用户名: " << accountinfo.userName;
     
     // 支持从 waiting 或 registering 状态激活
-    std::string updatesql = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10,createtime=$11 where id=$12 and (status=$13 or status=$14)";
-    
+    // createtime 可能为空；PG 不接受 '' -> TIMESTAMP。
+    // 为空则不更新 createtime（保留默认/原值），否则写入指定值。
+    std::string updatesqlWithCreateTime = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10,createtime=$11 where id=$12 and (status=$13 or status=$14)";
+    std::string updatesqlNoCreateTime   = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10 where id=$11 and (status=$12 or status=$13)";
+
     try {
-        auto result = dbClient->execSqlSync(updatesql,
-            accountinfo.userName,
-            accountinfo.passwd,
-            accountinfo.authToken,
-            accountinfo.useCount,
-            accountinfo.tokenStatus,
-            accountinfo.accountStatus,
-            accountinfo.userTobitId,
-            accountinfo.personId,
-            accountinfo.accountType,
-            AccountStatus::ACTIVE,  // 激活为active状态
-            accountinfo.createTime,
-            waitingId,
-            AccountStatus::WAITING,     // 从待注册状态激活
-            AccountStatus::REGISTERING  // 从注册中状态激活
-        );
+        auto result = [&]() {
+            if (accountinfo.createTime.empty())
+            {
+                return dbClient->execSqlSync(
+                    updatesqlNoCreateTime,
+                    accountinfo.userName,
+                    accountinfo.passwd,
+                    accountinfo.authToken,
+                    accountinfo.useCount,
+                    accountinfo.tokenStatus,
+                    accountinfo.accountStatus,
+                    accountinfo.userTobitId,
+                    accountinfo.personId,
+                    accountinfo.accountType,
+                    AccountStatus::ACTIVE,  // 激活为active状态
+                    waitingId,
+                    AccountStatus::WAITING,     // 从待注册状态激活
+                    AccountStatus::REGISTERING  // 从注册中状态激活
+                );
+            }
+
+            return dbClient->execSqlSync(
+                updatesqlWithCreateTime,
+                accountinfo.userName,
+                accountinfo.passwd,
+                accountinfo.authToken,
+                accountinfo.useCount,
+                accountinfo.tokenStatus,
+                accountinfo.accountStatus,
+                accountinfo.userTobitId,
+                accountinfo.personId,
+                accountinfo.accountType,
+                AccountStatus::ACTIVE,  // 激活为active状态
+                accountinfo.createTime,
+                waitingId,
+                AccountStatus::WAITING,     // 从待注册状态激活
+                AccountStatus::REGISTERING  // 从注册中状态激活
+            );
+        }();
         
         if(result.affectedRows() != 0)
         {
