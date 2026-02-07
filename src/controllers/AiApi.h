@@ -16,6 +16,8 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::accountAdd, "/aichat/account/add", Post); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountDelete, "/aichat/account/delete", Post); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountUpdate, "/aichat/account/update", Post); // 更新账号
+    ADD_METHOD_TO(AiApi::accountRefresh, "/aichat/account/refresh", Post); // 刷新账号状态（token+类型）
+    ADD_METHOD_TO(AiApi::accountAutoRegister, "/aichat/account/autoregister", Post); // 自动注册账号
     ADD_METHOD_TO(AiApi::accountInfo, "/aichat/account/info", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::accountDbInfo, "/aichat/account/dbinfo", Get); // path is /AiApi/{arg1}/{arg2}/list
     ADD_METHOD_TO(AiApi::channelAdd, "/aichat/channel/add", Post); // 添加渠道
@@ -36,6 +38,10 @@ class AiApi : public drogon::HttpController<AiApi>
     ADD_METHOD_TO(AiApi::getStatusSummary, "/aichat/status/summary", Get); // 服务状态概览
     ADD_METHOD_TO(AiApi::getStatusChannels, "/aichat/status/channels", Get); // 渠道状态列表
     ADD_METHOD_TO(AiApi::getStatusModels, "/aichat/status/models", Get); // 模型状态列表
+    // 日志查看 API
+    ADD_METHOD_TO(AiApi::logsList, "/aichat/logs/list", Get);
+    ADD_METHOD_TO(AiApi::logsTail, "/aichat/logs/tail", Get);
+
     METHOD_LIST_END
     // your declaration of processing function maybe like this:
     // void get(const HttpRequestPtr& req, std::function<void (const HttpResponsePtr &)> &&callback, int p1, std::string p2);
@@ -45,6 +51,8 @@ class AiApi : public drogon::HttpController<AiApi>
     void accountAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void accountRefresh(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void accountAutoRegister(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void accountDbInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void channelAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
@@ -65,7 +73,11 @@ class AiApi : public drogon::HttpController<AiApi>
     void getStatusSummary(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void getStatusChannels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
     void getStatusModels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
-  //custom function
+   // 日志查看 API
+    void logsList(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+    void logsTail(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback);
+
+    //custom function
   std::string generateClientId(const HttpRequestPtr &req);
   bool isCreateNewSession(const HttpRequestPtr &req);
 };

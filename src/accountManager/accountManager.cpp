@@ -842,6 +842,134 @@ void AccountManager::autoRegisterAccount(string apiName)
     }
 }
 
+// 从上游服务删除账号
+// 流程: 1) 获取确认 token  2) 使用确认 token 删除账号
+bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
+{
+    LOG_INFO << "[上游删除] 开始删除上游账号: " << account.userName;
+
+    // 检查必要字段
+    if (account.userName.empty() || account.passwd.empty()) {
+        LOG_ERROR << "[上游删除] 缺少用户名或密码，无法删除上游账号";
+        return false;
+    }
+    if (account.authToken.empty()) {
+        LOG_ERROR << "[上游删除] 缺少 authToken，无法删除上游账号: " << account.userName;
+        return false;
+    }
+
+    // ====== 第一步: 获取确认 token ======
+    // Basic 认证: base64(username:password)
+    string credentials = account.userName + ":" + account.passwd;
+    string base64Credentials = drogon::utils::base64Encode(
+        reinterpret_cast<const unsigned char*>(credentials.data()),
+        credentials.size()
+    );
+
+    try {
+        auto authClient = HttpClient::newHttpClient("https://auth.tobit.com");
+        auto authRequest = HttpRequest::newHttpRequest();
+        authRequest->setMethod(HttpMethod::Post);
+        authRequest->setPath("/v2/token");
+        authRequest->addHeader("Authorization", "Basic " + base64Credentials);
+        authRequest->setContentTypeString("application/json; charset=utf-8");
+
+        Json::Value tokenBody;
+        tokenBody["tokenType"] = 12;
+        tokenBody["isConfirmation"] = false;
+        tokenBody["locationId"] = 234191;
+        tokenBody["deviceId"] = "1a0e1c3b-bc2e-4dd8-863a-e7061e35ccff";
+        tokenBody["createIfNotExists"] = false;
+        authRequest->setBody(tokenBody.toStyledString());
+
+        LOG_INFO << "[上游删除] 请求确认 token...";
+        auto [authResult, authResponse] = authClient->sendRequest(authRequest, 30.0);
+
+        if (authResult != ReqResult::Ok || !authResponse || authResponse->getStatusCode() != 200) {
+            LOG_ERROR << "[上游删除] 获取确认 token 失败. Result: " << (int)authResult
+                      << ", Status: " << (authResponse ? authResponse->getStatusCode() : 0)
+                      << ", Body: " << (authResponse ? std::string(authResponse->getBody()) : "");
+            return false;
+        }
+
+        // 解析确认 token
+        Json::CharReaderBuilder reader;
+        Json::Value authJson;
+        string errs;
+        string authBody = string(authResponse->getBody());
+        istringstream authStream(authBody);
+
+        if (!Json::parseFromStream(reader, authStream, &authJson, &errs)) {
+            LOG_ERROR << "[上游删除] 解析确认 token 响应失败: " << errs;
+            return false;
+        }
+
+        string confirmationToken = authJson["token"].asString();
+        if (confirmationToken.empty()) {
+            LOG_ERROR << "[上游删除] 确认 token 为空";
+            return false;
+        }
+        LOG_INFO << "[上游删除] 获取确认 token 成功";
+
+        // ====== 第二步: 删除账号 ======
+        auto deleteClient = HttpClient::newHttpClient("https://webapi.tobit.com");
+        auto deleteRequest = HttpRequest::newHttpRequest();
+        deleteRequest->setMethod(HttpMethod::Delete);
+        deleteRequest->setPath("/AccountService/v1.0/chayns/User");
+        deleteRequest->addHeader("Authorization", "Bearer " + account.authToken);
+        deleteRequest->addHeader("x-confirmation-token", "bearer " + confirmationToken);
+        deleteRequest->setContentTypeString("application/json");
+
+        Json::Value deleteBody;
+        deleteBody["PersonId"] = account.personId;
+        deleteBody["ForceDelete"] = true;
+        deleteRequest->setBody(deleteBody.toStyledString());
+
+        LOG_INFO << "[上游删除] 发送删除请求...";
+        auto [delResult, delResponse] = deleteClient->sendRequest(deleteRequest, 30.0);
+
+        if (delResult != ReqResult::Ok || !delResponse || delResponse->getStatusCode() != 200) {
+            LOG_ERROR << "[上游删除] 删除上游账号失败. Result: " << (int)delResult
+                      << ", Status: " << (delResponse ? delResponse->getStatusCode() : 0)
+                      << ", Body: " << (delResponse ? std::string(delResponse->getBody()) : "");
+            return false;
+        }
+
+        LOG_INFO << "[上游删除] 上游账号删除成功: " << account.userName;
+
+        // ====== 第三步: 撤销 token (logout / invalidate) ======
+        try {
+            auto invalidClient = HttpClient::newHttpClient("https://auth.tobit.com");
+            auto invalidRequest = HttpRequest::newHttpRequest();
+            invalidRequest->setMethod(HttpMethod::Post);
+            invalidRequest->setPath("/v2/invalidToken");
+            invalidRequest->setContentTypeString("application/json; charset=utf-8");
+
+            Json::Value invalidBody;
+            invalidBody["token"] = account.authToken;
+            invalidRequest->setBody(invalidBody.toStyledString());
+
+            LOG_INFO << "[上游删除] 撤销 token...";
+            auto [invResult, invResponse] = invalidClient->sendRequest(invalidRequest, 30.0);
+
+            if (invResult == ReqResult::Ok && invResponse && invResponse->getStatusCode() == 200) {
+                LOG_INFO << "[上游删除] token 撤销成功: " << account.userName;
+            } else {
+                LOG_WARN << "[上游删除] token 撤销失败（账号已删除，非致命）. Status: "
+                         << (invResponse ? invResponse->getStatusCode() : 0);
+            }
+        } catch (const std::exception& ex) {
+            LOG_WARN << "[上游删除] token 撤销异常（账号已删除，非致命）: " << ex.what();
+        }
+
+        return true;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR << "[上游删除] 异常: " << e.what() << ", 用户: " << account.userName;
+        return false;
+    }
+}
+
 // 获取用户 Pro 权限状态
 // 参考 Python autoregister.py 中的 get_user_pro_access 方法
 bool AccountManager::getUserProAccess(const string& token, const string& personId)

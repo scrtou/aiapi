@@ -1644,6 +1644,72 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     const std::string clientType = safeJsonAsString(session.client_info.get("client_type", ""), "");
     const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
 
+    // Tool definition verbosity switch (configurable)
+    // Default: compact = simplified types; full = detailed types
+    bool useFullToolDefinitions = false;
+    bool includeToolDescriptions = false; // compact: include function description; full: include function+param descriptions
+    int maxDescriptionChars = 160;        // truncate descriptions to avoid prompt bloat
+
+    {
+        const auto& customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isObject() && customConfig.isMember("tool_bridge") && customConfig["tool_bridge"].isObject()) {
+            const auto& tb = customConfig["tool_bridge"];
+
+            bool hasDefinitionMode = false;
+            std::string definitionMode;
+            bool hasLegacyUseFull = false;
+            bool legacyUseFull = false;
+
+            if (tb.isMember("definition_mode") && tb["definition_mode"].isString()) {
+                hasDefinitionMode = true;
+                definitionMode = toLowerStr(tb["definition_mode"].asString());
+            }
+
+            if (tb.isMember("use_full_definitions") && tb["use_full_definitions"].isBool()) {
+                hasLegacyUseFull = true;
+                legacyUseFull = tb["use_full_definitions"].asBool();
+            }
+
+            if (tb.isMember("include_descriptions") && tb["include_descriptions"].isBool()) {
+                includeToolDescriptions = tb["include_descriptions"].asBool();
+            }
+
+            if (tb.isMember("max_description_chars") && tb["max_description_chars"].isInt()) {
+                maxDescriptionChars = tb["max_description_chars"].asInt();
+            }
+
+            // Priority:
+            // 1) definition_mode (compact/full)
+            // 2) legacy use_full_definitions (bool)
+            // 3) default compact
+            if (hasDefinitionMode) {
+                if (definitionMode == "full") {
+                    useFullToolDefinitions = true;
+                } else if (definitionMode == "compact") {
+                    useFullToolDefinitions = false;
+                } else {
+                    LOG_WARN << "[GenerationService] tool_bridge.definition_mode invalid: " << definitionMode
+                             << ", fallback to default(compact)";
+                    useFullToolDefinitions = false;
+                }
+
+                if (hasLegacyUseFull) {
+                    const bool modeIsFull = (definitionMode == "full");
+                    const bool modeIsCompact = (definitionMode == "compact");
+                    if ((modeIsFull || modeIsCompact) && legacyUseFull != modeIsFull) {
+                        LOG_WARN << "[GenerationService] tool_bridge config conflict: definition_mode=" << definitionMode
+                                 << " overrides legacy use_full_definitions=" << (legacyUseFull ? "true" : "false");
+                    }
+                }
+            } else if (hasLegacyUseFull) {
+                useFullToolDefinitions = legacyUseFull;
+            }
+
+            if (maxDescriptionChars < 0) maxDescriptionChars = 0;
+            if (maxDescriptionChars > 2000) maxDescriptionChars = 2000;
+        }
+    }
+
     // Kilo-Code / RooCode clients send a very long system prompt blob containing tool
     // instructions that are incompatible with our XML-tag bridge. Keep only the first
     // "intro" section so the upstream sees language/role guidance but not the full
@@ -1656,7 +1722,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     //     }
     // }
 
-    auto encodeCompactToolList = [](const Json::Value& tools) -> std::string {
+    auto encodeToolList = [&](const Json::Value& tools) -> std::string {
         if (!tools.isArray() || tools.empty()) {
             return "";
         }
@@ -1668,6 +1734,13 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
                 oss << items[i];
             }
             return oss.str();
+        };
+
+        auto truncate = [&](std::string s) -> std::string {
+            s = trimWhitespace(std::move(s));
+            if (maxDescriptionChars <= 0) return "";
+            if (static_cast<int>(s.size()) <= maxDescriptionChars) return s;
+            return s.substr(0, static_cast<size_t>(maxDescriptionChars)) + "...";
         };
 
         // Collect required field names from schema
@@ -1705,33 +1778,76 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             return keys;
         };
 
-        auto describeSchema = [&](const Json::Value& schema) -> std::string {
+        // JSON Schema: "type" may be string or array (e.g. ["string","null"]).
+        // Never call asString() blindly to avoid Json::LogicError: "Type is not convertible to string".
+        auto schemaTypeToString = [&](const Json::Value& typeVal) -> std::string {
+            if (typeVal.isString()) return typeVal.asString();
+            if (typeVal.isArray()) {
+                std::vector<std::string> parts;
+                parts.reserve(static_cast<size_t>(typeVal.size()));
+                for (const auto& t : typeVal) {
+                    if (t.isString()) parts.push_back(t.asString());
+                }
+                if (!parts.empty()) return join(parts, "|");
+            }
+            return "";
+        };
+
+        auto schemaHasType = [&](const Json::Value& schema, const std::string& expected) -> bool {
+            if (!schema.isObject() || !schema.isMember("type")) return false;
+            const auto& t = schema["type"];
+            if (t.isString()) return t.asString() == expected;
+            if (t.isArray()) {
+                for (const auto& it : t) {
+                    if (it.isString() && it.asString() == expected) return true;
+                }
+            }
+            return false;
+        };
+
+        // compact: simplified types (string/number/boolean/object/array/string|null)
+        auto describeSchemaCompact = [&](const Json::Value& schema) -> std::string {
+            if (!schema.isObject()) return "any";
+            if (schemaHasType(schema, "array")) return "array";
+            if (schemaHasType(schema, "object")) return "object";
+            const std::string typeStr = schema.isMember("type") ? schemaTypeToString(schema["type"]) : "";
+            return typeStr.empty() ? "any" : typeStr;
+        };
+
+        // full: detailed types (array item/object keys when available)
+        auto describeSchemaFull = [&](const Json::Value& schema) -> std::string {
             if (!schema.isObject()) return "any";
 
-            const std::string type = schema.get("type", "").asString();
-            if (type == "array") {
+            const bool isArrayType = schemaHasType(schema, "array");
+            const bool isObjectType = schemaHasType(schema, "object");
+            const std::string typeStr = schema.isMember("type") ? schemaTypeToString(schema["type"]) : "";
+
+            if (isArrayType) {
                 const auto& items = schema["items"];
-                const std::string itemType = items.isObject() ? items.get("type", "").asString() : "";
-                if (itemType == "object") {
-                    const auto keys = collectSchemaKeys(items);
-                    return "[{" + join(keys, ",") + "}]";
-                }
-                if (!itemType.empty()) {
-                    return itemType + "[]";
+                if (items.isObject()) {
+                    const bool itemsIsObject = schemaHasType(items, "object");
+                    const std::string itemTypeStr = items.isMember("type") ? schemaTypeToString(items["type"]) : "";
+
+                    if (itemsIsObject) {
+                        const auto keys = collectSchemaKeys(items);
+                        return "[{" + join(keys, ",") + "}]";
+                    }
+                    if (!itemTypeStr.empty()) {
+                        return itemTypeStr + "[]";
+                    }
                 }
                 return "array";
             }
 
-            if (type == "object") {
+            if (isObjectType) {
                 const auto keys = collectSchemaKeys(schema);
                 return "{" + join(keys, ",") + "}";
             }
 
-            return type.empty() ? "any" : type;
+            return typeStr.empty() ? "any" : typeStr;
         };
 
         std::ostringstream oss;
-        // Note: The header "API Definitions (* = required, ? = optional):" is now in the policy section
         for (const auto& tool : tools) {
             if (!tool.isObject()) continue;
             if (tool.get("type", "").asString() != "function") continue;
@@ -1739,48 +1855,111 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             const auto& func = tool["function"];
             if (!func.isObject()) continue;
 
-            std::string name = func.get("name", "").asString();
+            const std::string name = func.get("name", "").asString();
             if (name.empty()) continue;
 
-            std::vector<std::string> params;
-            const auto& schema = func["parameters"];
-            if (schema.isObject()) {
-                const auto requiredSet = getRequiredSet(schema);
-                const auto& props = schema["properties"];
+            const std::string funcDesc = func.isMember("description") ? safeJsonAsString(func["description"], "") : "";
 
-                // Iterate over all properties, not just required ones
-                if (props.isObject()) {
-                    for (const auto& key : props.getMemberNames()) {
-                        const bool isRequired = requiredSet.find(key) != requiredSet.end();
-                        const std::string marker = isRequired ? "*" : "?";
-                        
-                        if (!props[key].isObject()) {
-                            params.push_back(key + marker);
-                            continue;
-                        }
-                        params.push_back(key + marker + ": " + describeSchema(props[key]));
+            const auto& schema = func["parameters"];
+            const auto requiredSet = schema.isObject() ? getRequiredSet(schema) : std::unordered_set<std::string>{};
+            const auto& props = schema.isObject() ? schema["properties"] : Json::Value(Json::nullValue);
+
+            if (!useFullToolDefinitions) {
+                // Compact = simplified types, clearer format (no '-' or '—' separators)
+                oss << "Tool: " << name << "\n";
+
+                if (includeToolDescriptions) {
+                    const std::string t = truncate(funcDesc);
+                    if (!t.empty()) {
+                        oss << "What: " << t << "\n";
                     }
                 }
+
+                oss << "Args:\n";
+                if (props.isObject() && !props.getMemberNames().empty()) {
+                    for (const auto& key : props.getMemberNames()) {
+                        const bool isRequired = requiredSet.find(key) != requiredSet.end();
+                        const std::string req = isRequired ? "required" : "optional";
+
+                        std::string typePart = "any";
+                        if (props[key].isObject()) {
+                            typePart = describeSchemaCompact(props[key]);
+                        }
+
+                        oss << "  " << key << " : " << typePart << " [" << req << "]\n";
+                    }
+                } else {
+                    oss << "  (none)\n";
+                }
+
+                oss << "\n";
+                continue;
             }
 
-            oss << "- " << name;
-            if (!params.empty()) {
-                oss << "(";
-                for (size_t i = 0; i < params.size(); ++i) {
-                    if (i) oss << ", ";
-                    oss << params[i];
+            // Full = detailed types, clearer format (no '-' or '—' separators)
+            oss << "Tool: " << name << "\n";
+
+            if (includeToolDescriptions) {
+                const std::string t = truncate(funcDesc);
+                if (!t.empty()) {
+                    oss << "What: " << t << "\n";
                 }
-                oss << ")";
             }
+
+            oss << "Args:\n";
+            if (props.isObject() && !props.getMemberNames().empty()) {
+                for (const auto& key : props.getMemberNames()) {
+                    const bool isRequired = requiredSet.find(key) != requiredSet.end();
+                    const std::string req = isRequired ? "required" : "optional";
+
+                    std::string typePart = "any";
+                    std::string pDesc;
+
+                    if (props[key].isObject()) {
+                        typePart = describeSchemaFull(props[key]);
+                        if (includeToolDescriptions && props[key].isMember("description")) {
+                            pDesc = truncate(safeJsonAsString(props[key]["description"], ""));
+                        }
+                    }
+
+                    oss << "  " << key << " : " << typePart << " [" << req << "]";
+                    if (includeToolDescriptions && !pDesc.empty()) {
+                        oss << " ; " << pDesc;
+                    }
+                    oss << "\n";
+                }
+            } else {
+                oss << "  (none)\n";
+            }
+
             oss << "\n";
         }
+
         return oss.str();
     };
 
     // Encode tool definitions for upstream.
-    // Use a compact list to avoid huge descriptions (which can trigger upstream refusals
+    // Default: compact list to avoid huge descriptions (which can trigger upstream refusals
     // and also push the user request out of the context window).
-    std::string toolDefinitions = encodeCompactToolList(session.tools);
+    std::string toolDefinitions;
+    try {
+        toolDefinitions = encodeToolList(session.tools);
+    } catch (const std::exception& e) {
+        // Never fail the request due to tool schema encoding. Fallback to names only.
+        LOG_WARN << "[GenerationService] 工具定义编码异常，回退为仅工具名列表: " << e.what();
+        std::ostringstream oss;
+        for (const auto& tool : session.tools) {
+            if (!tool.isObject()) continue;
+            if (tool.get("type", "").asString() != "function") continue;
+            const auto& func = tool["function"];
+            if (!func.isObject()) continue;
+            const std::string name = func.get("name", "").asString();
+            if (!name.empty()) {
+                oss << "Tool: " << name << "\n";
+            }
+        }
+        toolDefinitions = oss.str();
+    }
 
     if (toolDefinitions.empty()) {
         LOG_WARN << "[GenerationService] 工具定义编码结果为空";
@@ -1878,10 +2057,12 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         policy << "- <tool> MUST be a name that exists in the API definitions below.\n";
         policy << "- <args_json> MUST be a valid JSON object containing all required arguments for that tool.\n";
         policy << "- Parameter keys MUST exactly match the API definition (case-sensitive).\n";
-        policy << "- Parameters marked with * are required and MUST be provided.\n";
-        policy << "- Parameters marked with ? are optional.\n";
+        //policy << "- Parameters marked with * are required and MUST be provided.\n";
+        //policy << "- Parameters marked with ? are optional.\n";
 
-        policy << "\nAPI Definitions (* = required, ? = optional):\n";
+        //policy << "\nAPI Definitions (* = required, ? = optional):\n";
+        policy << "\nAPI Definitions:\n";
+
         toolDefinitions = policy.str() + toolDefinitions;
         toolDefinitions += "</tool_instructions>\n\n";
     }
@@ -1890,7 +2071,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
 
     std::string originalInput = session.requestmessage;
     LOG_INFO << "工具定义:" << toolDefinitions;
-    session.requestmessage = originalInput+ "\n\n" + toolDefinitions ;
+    session.requestmessage = originalInput+ "\n\n"+"回答时必须满足<tool_instructions></tool_instructions>中的要求：" + toolDefinitions ;
 
     // 清除 tools，避免后续流程再次处理
     session.tools = Json::Value(Json::nullValue);

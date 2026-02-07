@@ -130,9 +130,17 @@
         }
     ],
     "custom_config": {
+        "dbtype": "sqlite3",
+        "dbtype_comment": "可选值: postgresql, mysql, sqlite3, 默认为 postgresql",
         "session_tracking": {
             "mode": "zerowidth",
             "_comment": "可选值: 'hash' (基于消息内容哈希，默认) 或 'zerowidth' (基于零宽字符嵌入)"
+        },
+        "tool_bridge": {
+            "definition_mode": "compact",
+            "include_descriptions": false,
+            "max_description_chars": 5000,
+             "_comment": "ToolBridge 工具定义注入：definition_mode=compact|full；include_descriptions 控制是否附带描述；max_description_chars 控制截断，防止 prompt 过长"       
         },
         "login_service_urls": [
             {

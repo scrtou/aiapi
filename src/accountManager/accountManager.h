@@ -135,6 +135,9 @@ class AccountManager
     bool isAccountRegistering(int pendingId);  // 检查账号是否正在注册中
     bool isAccountRegisteringByUsername(const string& userName);  // 通过用户名检查
     
+    // 上游账号删除
+    bool deleteUpstreamAccount(const Accountinfo_st& account);  // 从上游服务删除账号
+    
     // 定时更新账号类型相关方法
     bool getUserProAccess(const string& token, const string& personId);  // 获取用户 Pro 权限状态
     void updateAccountType(shared_ptr<Accountinfo_st> account);  // 更新单个账号的 accountType
