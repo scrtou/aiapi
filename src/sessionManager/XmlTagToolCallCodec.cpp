@@ -1037,9 +1037,39 @@ static const char* stateName(XmlParserState s) {
   
   void XmlTagToolCallCodec::flush(std::vector<ToolCallEvent>& events) {
       if (!buffer_.empty()) {
-          emitTextEvent(buffer_, events);
-          buffer_.clear();
+          // 如果在 InArgsJson 状态，将 buffer 中剩余内容追加到参数值中再尝试恢复
+          if (state_ == XmlParserState::InArgsJson) {
+              currentContext_.currentParamValue += buffer_;
+              buffer_.clear();
+          } else if (state_ == XmlParserState::InFunctionCall &&
+                     !currentContext_.toolName.empty() &&
+                     !currentContext_.rawArgumentsJson.empty()) {
+              // 已经有完整的 toolName 和 rawArgumentsJson，只是缺少闭合标签
+              buffer_.clear();
+              LOG_INFO << "[XmlTagToolCallCodec] flush 恢复: InFunctionCall 状态，数据完整，直接 emit";
+              emitToolCallEnd(events);
+              state_ = XmlParserState::Text;
+              return;
+          } else {
+              emitTextEvent(buffer_, events);
+              buffer_.clear();
+          }
       }
+
+      if (state_ == XmlParserState::InArgsJson) {
+          // 尝试从不完整的 args_json 中恢复
+          LOG_INFO << "[XmlTagToolCallCodec] flush: InArgsJson 状态，尝试恢复不完整的 tool call"
+                   << " (tool=" << currentContext_.toolName
+                   << ", accumulated=" << currentContext_.currentParamValue.size() << " bytes)";
+          if (tryRecoverIncompleteArgsJson(events)) {
+              LOG_INFO << "[XmlTagToolCallCodec] flush: 成功恢复不完整的 tool call (tool=" << currentContext_.toolName << ")";
+              state_ = XmlParserState::Text;
+              return;
+          }
+          // 恢复失败，走原有的 Error 路径
+          LOG_WARN << "[XmlTagToolCallCodec] flush: 恢复不完整 tool call 失败 (tool=" << currentContext_.toolName << ")";
+      }
+
       if (state_ != XmlParserState::Text) {
           ToolCallEvent evt;
           evt.type = EventType::Error;
@@ -1047,6 +1077,88 @@ static const char* stateName(XmlParserState s) {
           events.push_back(std::move(evt));
           state_ = XmlParserState::Text;
       }
+  }
+
+  bool XmlTagToolCallCodec::tryParseAndEmitArgs(const std::string& jsonStr, std::vector<ToolCallEvent>& events) {
+      if (jsonStr.empty()) return false;
+
+      Json::Value parsed;
+      Json::CharReaderBuilder builder;
+      std::string errors;
+      std::istringstream iss(jsonStr);
+      bool ok = Json::parseFromStream(builder, iss, &parsed, &errors);
+
+      if (ok && parsed.isObject()) {
+          currentContext_.rawArgumentsJson = jsonStr;
+          emitToolCallEnd(events);
+          return true;
+      }
+      return false;
+  }
+
+  bool XmlTagToolCallCodec::tryRecoverIncompleteArgsJson(std::vector<ToolCallEvent>& events) {
+      auto trimWs = [](std::string s) -> std::string {
+          const auto start = s.find_first_not_of(" \t\n\r");
+          if (start == std::string::npos) return "";
+          const auto end = s.find_last_not_of(" \t\n\r");
+          return s.substr(start, end - start + 1);
+      };
+
+      std::string payload = trimWs(currentContext_.currentParamValue);
+
+      // Strip CDATA prefix if present
+      const std::string cdataStart = "<![CDATA[";
+      const std::string cdataEnd = "]]>";
+      if (payload.size() >= cdataStart.size() &&
+          payload.compare(0, cdataStart.size(), cdataStart) == 0) {
+          payload = payload.substr(cdataStart.size());
+          // Strip CDATA suffix if present
+          if (payload.size() >= cdataEnd.size() &&
+              payload.compare(payload.size() - cdataEnd.size(), cdataEnd.size(), cdataEnd) == 0) {
+              payload = payload.substr(0, payload.size() - cdataEnd.size());
+          }
+      }
+      payload = trimWs(payload);
+
+      if (payload.empty()) return false;
+
+      // 尝试直接解析（内容完整，只是缺少闭合标签的情况）
+      if (tryParseAndEmitArgs(payload, events)) {
+          LOG_INFO << "[XmlTagToolCallCodec] 恢复成功: 直接解析 JSON";
+          return true;
+      }
+
+      // 尝试补全常见的截断模式
+      // 按照从简单到复杂的顺序尝试
+      static const std::vector<std::string> suffixes = {
+          "}",           // 缺少最外层 }
+          "\"}",         // 缺少字符串闭合引号 + }
+          "\"}]",        // 缺少字符串闭合引号 + }]
+          "\"}",         // 同上
+          "}}",          // 嵌套对象缺少两层 }
+          "]",           // 缺少数组闭合
+          "]}",          // 缺少数组闭合 + 对象闭合
+          "\"]",         // 缺少字符串闭合 + 数组闭合
+          "\"]}"          // 缺少字符串闭合 + 数组闭合 + 对象闭合
+      };
+
+      for (const auto& suffix : suffixes) {
+          if (tryParseAndEmitArgs(payload + suffix, events)) {
+              LOG_INFO << "[XmlTagToolCallCodec] 恢复成功: 补全后缀 '" << suffix << "'";
+              return true;
+          }
+      }
+
+      // 最后的兜底：如果 toolName 非空，尝试将整个 payload 作为 raw_arguments 强制 emit
+      // 这样至少 tool call 的 name 能传递给下游，让 applyStrictClientRules 有机会处理
+      if (!currentContext_.toolName.empty()) {
+          LOG_WARN << "[XmlTagToolCallCodec] 恢复: JSON 补全失败，强制 emit raw payload (tool=" << currentContext_.toolName << ")";
+          currentContext_.rawArgumentsJson = payload;
+          emitToolCallEnd(events);
+          return true;
+      }
+
+      return false;
   }
   
 void XmlTagToolCallCodec::reset() {

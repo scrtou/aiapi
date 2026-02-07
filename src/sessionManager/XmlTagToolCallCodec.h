@@ -60,6 +60,8 @@ private:
     void emitTextEvent(const std::string& text, std::vector<ToolCallEvent>& events);
     void emitToolCallBegin(std::vector<ToolCallEvent>& events);
     void emitToolCallEnd(std::vector<ToolCallEvent>& events);
+    bool tryRecoverIncompleteArgsJson(std::vector<ToolCallEvent>& events);
+    bool tryParseAndEmitArgs(const std::string& jsonStr, std::vector<ToolCallEvent>& events);
     std::string generateToolCallId();
     std::string extractAttribute(const std::string& tag, const std::string& attrName);
     std::string escapeXml(const std::string& text);

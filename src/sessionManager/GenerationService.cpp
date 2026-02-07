@@ -1369,6 +1369,20 @@ void GenerationService::normalizeToolCallArguments(
         return;
     }
 
+    // 安全提取 JSON Schema 的 type 字段（可能是 string 或 array，如 ["string", "null"]）
+    auto safeGetType = [](const Json::Value& schema) -> std::string {
+        if (!schema.isObject() || !schema.isMember("type")) return "";
+        const auto& typeVal = schema["type"];
+        if (typeVal.isString()) return typeVal.asString();
+        if (typeVal.isArray()) {
+            for (const auto& t : typeVal) {
+                if (t.isString() && t.asString() != "null") return t.asString();
+            }
+            if (typeVal.size() > 0 && typeVal[0].isString()) return typeVal[0].asString();
+        }
+        return "";
+    };
+
     const Json::Value& toolDefs =
         (!session.tools_raw.isNull() && session.tools_raw.isArray() && session.tools_raw.size() > 0)
             ? session.tools_raw
@@ -1392,11 +1406,11 @@ void GenerationService::normalizeToolCallArguments(
         if (!args.isObject() || !args.isMember(paramName) || !args[paramName].isArray()) {
             return;
         }
-        if (!paramSchema.isObject() || paramSchema.get("type", "").asString() != "array") {
+        if (!paramSchema.isObject() || safeGetType(paramSchema) != "array") {
             return;
         }
         const auto& items = paramSchema["items"];
-        if (!items.isObject() || items.get("type", "").asString() != "object") {
+        if (!items.isObject() || safeGetType(items) != "object") {
             return;
         }
 
@@ -1423,7 +1437,7 @@ void GenerationService::normalizeToolCallArguments(
         auto getPropType = [&](const std::string& key) -> std::string {
             if (!itemProps || !itemProps->isObject()) return "";
             if (!itemProps->isMember(key) || !(*itemProps)[key].isObject()) return "";
-            return (*itemProps)[key].get("type", "").asString();
+            return safeGetType((*itemProps)[key]);
         };
         auto hasKey = [&](const std::string& key) -> bool {
             for (const auto& k : requiredKeys) {
@@ -1544,10 +1558,10 @@ void GenerationService::normalizeToolCallArguments(
         const auto& props = paramsSchema["properties"];
         for (const auto& paramName : props.getMemberNames()) {
             const auto& paramSchema = props[paramName];
-            const std::string type = paramSchema.get("type", "").asString();
+            const std::string type = safeGetType(paramSchema);
             if (type == "array" && paramSchema.isMember("items") &&
                 paramSchema["items"].isObject() &&
-                paramSchema["items"].get("type", "").asString() == "object") {
+                safeGetType(paramSchema["items"]) == "object") {
                 normalizeArrayOfObjectParam(args, paramName, paramSchema);
             }
         }
@@ -2071,7 +2085,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
 
     std::string originalInput = session.requestmessage;
     LOG_INFO << "工具定义:" << toolDefinitions;
-    session.requestmessage = originalInput+ "\n\n"+"【注意：回复时必须要满足下面<tool_instructions></tool_instructions>定义中的要求！！！：" + toolDefinitions+"】" ;
+    session.requestmessage = originalInput+ "\n\n"+"【注意：回复时必须要满足下面<tool_instructions></tool_instructions>定义中的要求！！！】" + toolDefinitions+"；" ;
 
     // 清除 tools，避免后续流程再次处理
     session.tools = Json::Value(Json::nullValue);

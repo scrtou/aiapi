@@ -8,9 +8,14 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <vector>
 
-const int MAX_RETRIES = 6000;  // 最大重试次数
-const int BASE_DELAY = 100;  // 最大重试间隔（豪秒）
+const int MAX_RETRIES = 6000;  // 轮询最大重试次数
+const int BASE_DELAY = 100;  // 轮询重试间隔（毫秒）
+const int CONSECUTIVE_FAILS_BEFORE_SWITCH = 3;  // 连续失败n次后换账号
+const int MAX_UPSTREAM_RETRIES = 4;  // 上游最大总重试次数（外层循环，每次创建新线程或换账号）
+const int SAME_THREAD_RETRIES = 2;  // 同一线程上的最大重试次数（内层循环，在同一线程上重新发送消息）
+// 上游错误文本列表从 config.json 的 custom_config.upstream_error_texts 加载
 
 std::string generateGuid();
 
@@ -52,5 +57,8 @@ class chaynsapi:public APIinterface
     // 映射表: ConversationId -> ThreadContext
     std::map<std::string, ThreadContext> m_threadMap;
     std::mutex m_threadMapMutex;
+
+    // 上游错误文本列表，从 config.json 的 custom_config.upstream_error_texts 加载
+    std::vector<std::string> m_upstreamErrorTexts;
 };
 #endif

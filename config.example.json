@@ -153,6 +153,11 @@
                 "name": "chaynsapi",
                 "url": "http://127.0.0.1:5557/aichat/chayns/autoregister"
             }
-        ]
+        ],
+        "upstream_error_texts": [
+            "Es ist ein Fehler aufgetreten. Bitte versuche es später erneut.",
+            "An error has occurred. Please try again later."
+        ],
+        "upstream_error_texts_comment": "上游错误文本列表：当轮询到的响应文本完全匹配其中任一条时，视为上游错误并触发重试"
     }
 }
