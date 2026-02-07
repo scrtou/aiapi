@@ -495,10 +495,12 @@ void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
 void AccountManager::checkUpdateTokenthread()
 {
     thread t1([&]{
-        while(true) 
+        while(true)
         {
             checkToken();
-            this_thread::sleep_for(chrono::hours(1));
+            // 清理创建超过6天的过期账号
+            cleanExpiredAccounts();
+            this_thread::sleep_for(chrono::hours(5));
             //updateToken();
         }
     });
@@ -1115,5 +1117,104 @@ bool AccountManager::isAccountRegisteringByUsername(const string& userName)
     // 检查数据库中的状态
     string status = accountDbManager->getAccountStatusByUsername("chaynsapi", userName);
     return status == AccountStatus::REGISTERING;
+}
+
+void AccountManager::cleanExpiredAccounts()
+{
+    LOG_INFO << "[自动清理] 开始检查过期账号...";
+    
+    // 获取当前时间
+    auto now = trantor::Date::now();
+    // 6天 = 6 * 24 * 3600 秒
+    const double expireDurationSeconds = 6.0 * 24.0 * 3600.0;
+    
+    // 获取当前所有账号的快照
+    auto currentAccountMap = getAccountList();
+    
+    list<Accountinfo_st> expiredAccounts;
+    
+    for (auto &apiPair : currentAccountMap)
+    {
+        for (auto &accountPair : apiPair.second)
+        {
+            auto &account = accountPair.second;
+            if (!account) continue;
+            
+            // 只清理 free 类型的账号
+            if (account->accountType != "free") continue;
+            
+            // 跳过正在注册中的账号
+            if (account->status == AccountStatus::REGISTERING) continue;
+            
+            // 检查 createTime 是否为空
+            if (account->createTime.empty()) {
+                LOG_WARN << "[自动清理] 账号 " << account->userName << " 没有 createTime，跳过";
+                continue;
+            }
+            
+            // 解析 createTime (格式: "2026-02-07 12:46:38")
+            auto createDate = trantor::Date::fromDbStringLocal(account->createTime);
+            
+            // 计算时间差（秒）
+            double ageSec = now.secondsSinceEpoch() - createDate.secondsSinceEpoch();
+            
+            if (ageSec >= expireDurationSeconds)
+            {
+                LOG_INFO << "[自动清理] 账号 " << account->userName
+                         << " 创建于 " << account->createTime
+                         << "，已超过6天（" << (ageSec / 86400.0) << "天），标记为待删除";
+                
+                // 复制完整账号信息用于删除
+                Accountinfo_st expiredAccount;
+                expiredAccount.apiName = account->apiName;
+                expiredAccount.userName = account->userName;
+                expiredAccount.passwd = account->passwd;
+                expiredAccount.authToken = account->authToken;
+                expiredAccount.userTobitId = account->userTobitId;
+                expiredAccount.personId = account->personId;
+                expiredAccount.createTime = account->createTime;
+                expiredAccount.accountType = account->accountType;
+                expiredAccount.status = account->status;
+                
+                expiredAccounts.push_back(expiredAccount);
+            }
+        }
+    }
+    
+    if (expiredAccounts.empty()) {
+        LOG_INFO << "[自动清理] 没有发现过期账号";
+        return;
+    }
+    
+    LOG_INFO << "[自动清理] 发现 " << expiredAccounts.size() << " 个过期账号，开始删除...";
+    
+    for (auto &account : expiredAccounts)
+    {
+        // 1) 从内存中删除
+        if (!deleteAccountbyPost(account.apiName, account.userName)) {
+            LOG_WARN << "[自动清理] 从内存删除失败: " << account.userName;
+            continue;
+        }
+        
+        // 2) 从上游删除账号
+        bool upstreamDeleted = deleteUpstreamAccount(account);
+        if (upstreamDeleted) {
+            LOG_INFO << "[自动清理] 上游账号删除成功: " << account.userName;
+        } else {
+            LOG_WARN << "[自动清理] 上游账号删除失败（继续删除本地数据库）: " << account.userName;
+        }
+        
+        // 3) 从本地数据库删除
+        accountDbManager->deleteAccount(account.apiName, account.userName);
+        LOG_INFO << "[自动清理] 数据库记录已删除: " << account.userName;
+    }
+    
+    // 重新加载账号
+    loadAccount();
+    
+    // 检查渠道账号数量（可能需要补充账号）
+    checkChannelAccountCounts();
+    
+    LOG_INFO << "[自动清理] 过期账号清理完成，共删除 " << expiredAccounts.size() << " 个账号";
 }
 

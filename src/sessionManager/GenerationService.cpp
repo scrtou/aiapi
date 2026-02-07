@@ -2061,17 +2061,17 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         //policy << "- Parameters marked with ? are optional.\n";
 
         //policy << "\nAPI Definitions (* = required, ? = optional):\n";
-        policy << "\nAPI Definitions:\n";
+        policy << "\nAPI Definitions{\n";
 
         toolDefinitions = policy.str() + toolDefinitions;
-        toolDefinitions += "</tool_instructions>\n\n";
+        toolDefinitions += "}</tool_instructions>\n\n";
     }
 
     LOG_INFO << "[GenerationService] 注入工具定义到 requestmessage, 长度: " << toolDefinitions.length();
 
     std::string originalInput = session.requestmessage;
     LOG_INFO << "工具定义:" << toolDefinitions;
-    session.requestmessage = originalInput+ "\n\n"+"回答时必须满足<tool_instructions></tool_instructions>中的要求：" + toolDefinitions ;
+    session.requestmessage = originalInput+ "\n\n"+"【注意：回复时必须要满足下面<tool_instructions></tool_instructions>定义中的要求！！！：" + toolDefinitions+"】" ;
 
     // 清除 tools，避免后续流程再次处理
     session.tools = Json::Value(Json::nullValue);

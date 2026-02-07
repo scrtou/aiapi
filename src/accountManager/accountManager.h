@@ -143,5 +143,6 @@ class AccountManager
     void updateAccountType(shared_ptr<Accountinfo_st> account);  // 更新单个账号的 accountType
     void updateAllAccountTypes();  // 更新所有账号的 accountType
     void checkAccountTypeThread();  // 启动定时检查 accountType 的线程
+    void cleanExpiredAccounts();  // 自动清理创建超过6天的过期账号
 };
 #endif
