@@ -39,7 +39,7 @@ int main() {
     // 在事件循环开始后立即执行
     app().getLoop()->queueInLoop([](){
         std::thread t1([]{
-            LOG_INFO << "==================【version: 1.0 更新时间：2026/0204/2300】===================";
+            LOG_INFO << "==================【version: 1.1 更新时间：2026/0207/1816】===================";
              // 读取会话追踪模式配置
         auto customConfig = drogon::app().getCustomConfig();
     if (customConfig.isMember("session_tracking")) {
