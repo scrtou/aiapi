@@ -69,20 +69,28 @@ std::string normalizeBridgeXml(std::string s) {
     return s;
 }
 
-std::string extractXmlInputForToolCalls(const session_st& session, const std::string& rawText) {
+std::string extractXmlInputForToolCalls(
+    const session_st& session,
+    const std::string& rawText,
+    bool allowFunctionCallsFallback
+) {
     std::string xmlCandidate = stripMarkdownCodeFence(rawText);
     const std::string_view trimmed = ltrimView(xmlCandidate);
 
-    if (!session.provider.toolBridgeTrigger.empty()) {
-        size_t triggerPos = trimmed.find(session.provider.toolBridgeTrigger);
-        if (triggerPos != std::string::npos) {
-            return std::string(trimmed.substr(triggerPos));
-        }
+    if (session.provider.toolBridgeTrigger.empty()) {
+        return "";
     }
 
-    size_t tagPos = trimmed.find("<function_calls");
-    if (tagPos != std::string::npos) {
-        return std::string(trimmed.substr(tagPos));
+    size_t triggerPos = trimmed.find(session.provider.toolBridgeTrigger);
+    if (triggerPos != std::string::npos) {
+        return std::string(trimmed.substr(triggerPos));
+    }
+
+    if (allowFunctionCallsFallback) {
+        size_t tagPos = trimmed.find("<function_calls");
+        if (tagPos != std::string::npos) {
+            return std::string(trimmed.substr(tagPos));
+        }
     }
 
     return "";
@@ -102,15 +110,19 @@ std::string generateFallbackToolCallId() {
     return oss.str();
 }
 
-std::string generateRandomTriggerSignal() {
+std::string generateRandomTriggerSignal(size_t randomLength) {
     static const std::string kChars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, static_cast<int>(kChars.size() - 1));
+
+    if (randomLength < 4) randomLength = 4;
+    if (randomLength > 32) randomLength = 32;
+
     std::string randomStr;
-    randomStr.reserve(4);
-    for (int i = 0; i < 4; ++i) {
+    randomStr.reserve(randomLength);
+    for (size_t i = 0; i < randomLength; ++i) {
         randomStr.push_back(kChars[dis(gen)]);
     }
     return "<Function_" + randomStr + "_Start/>";

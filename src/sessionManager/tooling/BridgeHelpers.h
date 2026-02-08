@@ -24,12 +24,16 @@ bool startsWithStr(std::string_view s, std::string_view prefix);
 
 
 std::string normalizeBridgeXml(std::string s);
-std::string extractXmlInputForToolCalls(const session_st& session, const std::string& rawText);
+std::string extractXmlInputForToolCalls(
+    const session_st& session,
+    const std::string& rawText,
+    bool allowFunctionCallsFallback = false
+);
 
 
 
 std::string generateFallbackToolCallId();
-std::string generateRandomTriggerSignal();
+std::string generateRandomTriggerSignal(size_t randomLength = 8);
 
 // ========== 错误统计辅助函数 ==========
 

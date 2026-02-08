@@ -142,7 +142,30 @@
             "definition_mode": "compact",
             "include_descriptions": false,
             "max_description_chars": 5000,
-             "_comment": "ToolBridge 工具定义注入：definition_mode=compact|full；include_descriptions 控制是否附带描述；max_description_chars 控制截断，防止 prompt 过长"       
+            "trigger_random_length": 8,
+            "rewrite_user_input_conflicts": false,
+            "strict_sentinel": true,
+            "strict_sentinel_by_channel": {
+                "openai": true,
+                "chaynsapi": false
+            },
+            "strict_sentinel_by_model": {
+                "gpt-4o-mini": true,
+                "legacy-compat-model": false
+            },
+            "strict_sentinel_enabled_channels": [
+                "openai"
+            ],
+            "strict_sentinel_disabled_channels": [
+                "chaynsapi"
+            ],
+            "strict_sentinel_enabled_models": [
+                "gpt-4o-mini"
+            ],
+            "strict_sentinel_disabled_models": [
+                "legacy-compat-model"
+            ],
+             "_comment": "ToolBridge 示例策略：默认 strict_sentinel=true；按渠道/模型可放宽。trigger_random_length 建议 6-12。rewrite_user_input_conflicts 默认 false（避免改写用户原始输入）；若设为 true 会在 bridge 模式下改写当前用户输入中的 native 冲突指令。覆盖优先级：全局 strict_sentinel -> by_channel/by_model -> disabled/enabled 列表；但 strict 客户端或 tool_choice=required 会被强制为 true。"
         },
         "login_service_urls": [
             {

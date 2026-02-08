@@ -17,9 +17,11 @@
 #include <metrics/ErrorStatsService.h>
 #include <metrics/ErrorEvent.h>
 #include <drogon/drogon.h>
+#include <algorithm>
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <vector>
 #include <unordered_set>
 
 using namespace drogon;
@@ -40,6 +42,188 @@ Json::StreamWriterBuilder& compactJsonWriter() {
 
 std::string toCompactJson(const Json::Value& value) {
     return Json::writeString(compactJsonWriter(), value);
+}
+
+void replaceAll(std::string& s, const std::string& from, const std::string& to) {
+    if (from.empty() || s.empty()) return;
+    size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos) {
+        s.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
+
+void rewriteBridgeConflictsInText(std::string& text) {
+    if (text.empty()) return;
+
+    replaceAll(text,
+        "Use the provider-native tool-calling mechanism.",
+        "Use the XML bridge tool-calling format defined by <tool_instructions> for this turn.");
+
+    replaceAll(text,
+        "Do not include XML markup or examples.",
+        "When a tool call is needed, output ONLY XML using the <tool_instructions> output contract.");
+
+    replaceAll(text,
+        "provider-native tool-calling mechanism",
+        "XML bridge tool-calling format defined by <tool_instructions>");
+
+    replaceAll(text,
+        "<tool_format>native</tool_format>",
+        "<tool_format>xml_bridge</tool_format>");
+
+    replaceAll(text,
+        "tool_format\":\"native\"",
+        "tool_format\":\"xml_bridge\"");
+}
+
+void rewriteBridgeConflictsInMessageContext(Json::Value& messageContext, bool rewriteUserRoleMessages) {
+    if (!messageContext.isArray()) return;
+    for (auto& msg : messageContext) {
+        if (!msg.isObject()) continue;
+
+        const std::string role = msg.get("role", "").asString();
+        if (!rewriteUserRoleMessages && role == "user") {
+            continue;
+        }
+
+        if (msg.isMember("content") && msg["content"].isString()) {
+            std::string content = msg["content"].asString();
+            rewriteBridgeConflictsInText(content);
+            msg["content"] = content;
+            continue;
+        }
+
+        if (msg.isMember("content") && msg["content"].isArray()) {
+            for (auto& part : msg["content"]) {
+                if (!part.isObject()) continue;
+                if (part.get("type", "").asString() == "text" && part.isMember("text") && part["text"].isString()) {
+                    std::string text = part["text"].asString();
+                    rewriteBridgeConflictsInText(text);
+                    part["text"] = text;
+                }
+            }
+        }
+    }
+}
+
+void rewriteBridgeConflictingDirectives(session_st& session, bool rewriteUserInput) {
+    const size_t beforeSystem = session.request.systemPrompt.size();
+    const size_t beforeMessage = session.request.message.size();
+    rewriteBridgeConflictsInText(session.request.systemPrompt);
+
+    if (rewriteUserInput) {
+        rewriteBridgeConflictsInText(session.request.message);
+    }
+
+    rewriteBridgeConflictsInMessageContext(session.provider.messageContext, rewriteUserInput);
+    LOG_DEBUG << "[生成服务] bridge 冲突指令改写已执行: system_len "
+              << beforeSystem << "->" << session.request.systemPrompt.size()
+              << ", message_len(" << (rewriteUserInput ? "rewritten" : "unchanged_user_input")
+              << ") " << beforeMessage << "->" << session.request.message.size();
+}
+
+struct ToolChoiceSpec {
+    bool none = false;
+    bool required = false;
+    std::string forcedToolName;
+};
+
+bool containsStr(const Json::Value& arr, const std::string& value) {
+    if (!arr.isArray() || value.empty()) return false;
+    for (const auto& item : arr) {
+        if (item.isString() && item.asString() == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ToolChoiceSpec parseToolChoiceSpec(const std::string& toolChoiceRaw) {
+    ToolChoiceSpec spec;
+    if (toolChoiceRaw.empty()) {
+        return spec;
+    }
+
+    auto normalizeLower = [](std::string s) {
+        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    if (toolChoiceRaw.front() == '{') {
+        Json::Value tc;
+        Json::CharReaderBuilder builder;
+        std::string errors;
+        std::istringstream iss(toolChoiceRaw);
+        if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
+            if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
+                spec.forcedToolName = tc["function"].get("name", "").asString();
+                if (!spec.forcedToolName.empty()) {
+                    spec.required = true;
+                }
+            }
+        }
+        return spec;
+    }
+
+    const std::string mode = normalizeLower(toolChoiceRaw);
+    spec.none = (mode == "none");
+    spec.required = (mode == "required");
+    return spec;
+}
+
+bool isStrictSentinelEnabled(const session_st& session, bool strictToolClient, bool toolChoiceRequired) {
+    const auto& customConfig = drogon::app().getCustomConfig();
+    if (!customConfig.isObject() || !customConfig.isMember("tool_bridge") || !customConfig["tool_bridge"].isObject()) {
+        return strictToolClient || toolChoiceRequired;
+    }
+
+    const auto& tb = customConfig["tool_bridge"];
+    bool strictSentinel = true;
+
+    if (tb.isMember("strict_sentinel") && tb["strict_sentinel"].isBool()) {
+        strictSentinel = tb["strict_sentinel"].asBool();
+    }
+
+    if (tb.isMember("strict_sentinel_by_channel") && tb["strict_sentinel_by_channel"].isObject()) {
+        const auto& byChannel = tb["strict_sentinel_by_channel"];
+        if (byChannel.isMember(session.request.api) && byChannel[session.request.api].isBool()) {
+            strictSentinel = byChannel[session.request.api].asBool();
+        }
+    }
+
+    if (tb.isMember("strict_sentinel_by_model") && tb["strict_sentinel_by_model"].isObject()) {
+        const auto& byModel = tb["strict_sentinel_by_model"];
+        if (!session.request.model.empty() && byModel.isMember(session.request.model) && byModel[session.request.model].isBool()) {
+            strictSentinel = byModel[session.request.model].asBool();
+        }
+    }
+
+    if (tb.isMember("strict_sentinel_disabled_channels") &&
+        containsStr(tb["strict_sentinel_disabled_channels"], session.request.api)) {
+        strictSentinel = false;
+    }
+
+    if (tb.isMember("strict_sentinel_enabled_channels") &&
+        containsStr(tb["strict_sentinel_enabled_channels"], session.request.api)) {
+        strictSentinel = true;
+    }
+
+    if (tb.isMember("strict_sentinel_disabled_models") &&
+        containsStr(tb["strict_sentinel_disabled_models"], session.request.model)) {
+        strictSentinel = false;
+    }
+
+    if (tb.isMember("strict_sentinel_enabled_models") &&
+        containsStr(tb["strict_sentinel_enabled_models"], session.request.model)) {
+        strictSentinel = true;
+    }
+
+    if (strictToolClient || toolChoiceRequired) {
+        strictSentinel = true;
+    }
+
+    return strictSentinel;
 }
 
 } // 匿名命名空间
@@ -73,8 +257,13 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // 如果支持，上游会直接返回结构化的 tool_calls，无需再从文本中二次解析
     const bool supportsToolCalls = getChannelSupportsToolCalls(session.request.api);
     
-    // 检查 tool_choice 是否为 ""（禁用工具调用）
-    const bool toolChoiceNone = (toLowerStr(session.request.toolChoice) == "none");
+    const ToolChoiceSpec toolChoiceSpec = parseToolChoiceSpec(session.request.toolChoice);
+    const bool toolChoiceNone = toolChoiceSpec.none;
+    const bool toolChoiceRequired = toolChoiceSpec.required;
+    const bool strictSentinelEnabled = isStrictSentinelEnabled(session, strictToolClient, toolChoiceRequired);
+    const bool allowFunctionCallsFallback = !strictSentinelEnabled;
+    const bool requireBridgeSentinel = strictSentinelEnabled;
+    const std::string forcedToolName = toolChoiceSpec.forcedToolName;
 
     // 用于存储解析结果
     std::string textContent;                              // 普通文本内容
@@ -117,8 +306,9 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
 
         // - 优先查找本次请求的随机触发标记 (会话.toolBridgeTrigger)
         // - 如果找到触发标记，返回从触发标记开始的子串
-        // - 如果没找到，尝试查找 <function_calls> 标签作为兜底
-        std::string xmlInput = extractXmlInputForToolCalls(session, text);
+        // - strict_sentinel=true: 仅匹配触发标记
+        // - strict_sentinel=false: 允许退化匹配 <function_calls>
+        std::string xmlInput = extractXmlInputForToolCalls(session, text, allowFunctionCallsFallback);
 
         if (xmlInput.empty()) {
             // 没有找到工具调用 XML，全部当作普通文本
@@ -139,16 +329,10 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
             // 步骤 2.2： 规范化 XML（处理特殊空格、换行符等）
             xmlInput = normalizeBridgeXml(std::move(xmlInput));
             
-            // 步骤 2.3： 确定是否启用 严格匹配
-            // 【 触发标记机制说明】
-            // 每次请求会生成一个随机的触发标记（如 <Function_Ab1c_Start/>），
+            // 步骤 2.3： 强制使用本次请求触发标记进行解析
+            // 每次请求会生成随机触发标记（如 <Function_Ab1c_Start/>），
             // 只有包含该标记的 XML 块才会被解析，避免误解析历史消息或示例中的 XML。
-            std::string expectedSentinel = "";
-            if (!session.provider.toolBridgeTrigger.empty() &&
-                xmlInput.find(session.provider.toolBridgeTrigger) != std::string::npos) {
-                // XML 中包含本次请求的触发标记，启用严格匹配
-                expectedSentinel = session.provider.toolBridgeTrigger;
-            }
+            std::string expectedSentinel = session.provider.toolBridgeTrigger;
             
             // 步骤 2.4： 解析 XML 工具调用
             // 解析XmlToolCalls() 的处理内容：
@@ -157,6 +341,11 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
             // - 将解析结果填充到 toolCalls 向量
             // - 非工具调用的文本会填充到 textContent
             parseXmlToolCalls(xmlInput, textContent, toolCalls, expectedSentinel);
+
+            if (requireBridgeSentinel && xmlInput.find(session.provider.toolBridgeTrigger) == std::string::npos) {
+                toolCalls.clear();
+                textContent = std::move(text);
+            }
         }
 
         // 步骤 2.5: 强制工具调用兜底
@@ -167,7 +356,48 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         }
     }
 
-    // ==================== 步骤 3: 参数形状规范化 ====================
+    // ==================== 步骤 3: tool_choice 强制工具名约束 ====================
+    if (!forcedToolName.empty() && !toolCalls.empty()) {
+        std::vector<generation::ToolCallDone> filteredCalls;
+        filteredCalls.reserve(toolCalls.size());
+        std::vector<std::string> rejectedNames;
+
+        for (const auto& tc : toolCalls) {
+            if (tc.name == forcedToolName) {
+                filteredCalls.push_back(tc);
+            } else {
+                rejectedNames.push_back(tc.name);
+            }
+        }
+
+        if (!rejectedNames.empty()) {
+            std::ostringstream rejected;
+            for (size_t i = 0; i < rejectedNames.size(); ++i) {
+                if (i) rejected << ",";
+                rejected << rejectedNames[i];
+            }
+
+            Json::Value detail;
+            detail["forced_tool_name"] = forcedToolName;
+            detail["rejected_count"] = static_cast<Json::UInt64>(rejectedNames.size());
+            detail["rejected_tools"] = rejected.str();
+            recordWarnStat(
+                session,
+                metrics::Domain::TOOL_BRIDGE,
+                metrics::EventType::TOOLBRIDGE_VALIDATION_FILTERED,
+                "tool_choice 指定函数约束生效，已过滤非指定工具调用",
+                detail
+            );
+        }
+
+        toolCalls = std::move(filteredCalls);
+    }
+
+    if (toolCalls.empty() && toolChoiceRequired) {
+        generateForcedToolCall(session, toolCalls, textContent);
+    }
+
+    // ==================== 步骤 4: 参数形状规范化 ====================
     // 规范化ToolCallArguments() 的作用：
     // - 修复常见的参数格式问题（如 ：[""] → ：[{：""}]）
     // - 处理参数别名（如 → ）
@@ -1302,6 +1532,20 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         session.request.toolsRaw = session.request.tools;
     }
 
+    bool rewriteUserInputForBridge = false;
+    {
+        const auto& customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isObject() && customConfig.isMember("tool_bridge") && customConfig["tool_bridge"].isObject()) {
+            const auto& tb = customConfig["tool_bridge"];
+            if (tb.isMember("rewrite_user_input_conflicts") && tb["rewrite_user_input_conflicts"].isBool()) {
+                rewriteUserInputForBridge = tb["rewrite_user_input_conflicts"].asBool();
+            }
+        }
+    }
+
+    // 对 bridge 模式下的冲突指令做改写：避免上游继续遵循 native tool-calling 提示。
+    rewriteBridgeConflictingDirectives(session, rewriteUserInputForBridge);
+
     // 解析 tool_choice（同时支持字符串与 JSON 对象两种编码）。
     auto normalizeLower = [](std::string s) {
         for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1330,9 +1574,20 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         }
     }
 
+    int triggerRandomLength = 8;
+    {
+        const auto& customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isObject() && customConfig.isMember("tool_bridge") && customConfig["tool_bridge"].isObject()) {
+            const auto& tb = customConfig["tool_bridge"];
+            if (tb.isMember("trigger_random_length") && tb["trigger_random_length"].isInt()) {
+                triggerRandomLength = tb["trigger_random_length"].asInt();
+            }
+        }
+    }
+
     // 为每次请求生成随机触发标记，仅解析属于本次请求的工具调用，避免误命中
     // 并避免将普通文本中的示例 XML 误解析为真实调用。
-    session.provider.toolBridgeTrigger = generateRandomTriggerSignal();
+    session.provider.toolBridgeTrigger = generateRandomTriggerSignal(static_cast<size_t>(triggerRandomLength));
     const std::string& triggerSignal = session.provider.toolBridgeTrigger;
 
     // 使用低阻抗“任务型”提示词（英文文本对模型约束更稳定）：
@@ -1348,7 +1603,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         
         // 为提升格式约束稳定性，这里继续使用英文指令
         policy << "<tool_instructions>\n";
-        
+
         if (strictToolClient) {
             policy << "Context: Software engineering collaboration\n";
             policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
