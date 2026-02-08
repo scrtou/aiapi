@@ -34,6 +34,7 @@ struct Accountinfo_st
     string createTime;
     string accountType;  // 账号类型: "pro" 或 "free"
     string status;       // 账号状态: "pending", "active", "disabled"
+
     Accountinfo_st(){}
     Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active")
     {
@@ -50,6 +51,44 @@ struct Accountinfo_st
         this->accountType = accountType;
         this->status = status;
     }
+
+    // 将请求/数据库中的 JSON 字段解析为统一账号结构（仅保留 camelCase 新命名）。
+    static Accountinfo_st fromJson(const Json::Value& value)
+    {
+        Accountinfo_st result;
+        result.apiName = value.get("apiName", "").asString();
+        result.userName = value.get("userName", "").asString();
+        result.passwd = value.get("password", "").asString();
+        result.authToken = value.get("authToken", "").asString();
+        result.useCount = value.get("useCount", 0).asInt();
+        result.tokenStatus = value.get("tokenStatus", false).asBool();
+        result.accountStatus = value.get("accountStatus", false).asBool();
+        result.userTobitId = value.get("userTobitId", 0).asInt();
+        result.personId = value.get("personId", "").asString();
+        result.createTime = value.get("createTime", "").asString();
+        result.accountType = value.get("accountType", "free").asString();
+        result.status = value.get("status", "active").asString();
+        return result;
+    }
+
+    // 将账号结构导出为统一 JSON（仅保留 camelCase 新命名）。
+    Json::Value toJson() const
+    {
+        Json::Value value;
+        value["apiName"] = apiName;
+        value["userName"] = userName;
+        value["password"] = passwd;
+        value["authToken"] = authToken;
+        value["useCount"] = useCount;
+        value["tokenStatus"] = tokenStatus;
+        value["accountStatus"] = accountStatus;
+        value["userTobitId"] = userTobitId;
+        value["personId"] = personId;
+        value["createTime"] = createTime;
+        value["accountType"] = accountType;
+        value["status"] = status;
+        return value;
+    }
 };
 
 struct AccountCompare
@@ -65,9 +104,9 @@ struct AccountCompare
 class AccountManager
 {
     private:
-   // static AccountManager* instance;
+   // 旧单例写法保留：当前已改为函数内静态对象
     map<string,shared_ptr<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>> accountPoolMap;
-    map<string,map<string,shared_ptr<Accountinfo_st>>> accountList;//apiName->userName->accountinfo
+    map<string,map<string,shared_ptr<Accountinfo_st>>> accountList;// 二级索引结构：apiName -> userName -> accountInfo
     mutable std::mutex accountListMutex;  // 保护 accountList 的互斥锁
     std::set<int> registeringAccountIds_;     // 正在注册中的账号ID集合
     mutable std::mutex registeringMutex_;     // 保护 registeringAccountIds_ 的互斥锁
@@ -82,7 +121,7 @@ class AccountManager
     map<string, bool (AccountManager::*)(string)> checkTokenMap = {
         {"chaynsapi", &AccountManager::checkChaynsToken}
     };
-    //list<string> apiNameList;
+    // 旧字段保留：历史版本用于缓存 API 名称列表
     shared_ptr<AccountDbManager> accountDbManager;
      AccountManager();
     ~AccountManager();

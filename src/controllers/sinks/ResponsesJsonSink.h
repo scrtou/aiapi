@@ -1,7 +1,7 @@
 #ifndef RESPONSES_JSON_SINK_H
 #define RESPONSES_JSON_SINK_H
 
-#include <sessionManager/IResponseSink.h>
+#include <sessionManager/contracts/IResponseSink.h>
 #include <json/json.h>
 #include <functional>
 #include <string>
@@ -70,4 +70,4 @@ private:
     bool closed_ = false;
 };
 
-#endif // RESPONSES_JSON_SINK_H
+#endif // 头文件保护结束

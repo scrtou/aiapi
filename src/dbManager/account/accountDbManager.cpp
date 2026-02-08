@@ -1,7 +1,7 @@
 #include "accountDbManager.h"
-#include <algorithm>  // for std::transform
-#include <chrono>     // for std::chrono in createPendingAccount
-//pg create table
+#include <algorithm>  // 引入算法库，用于字符串统一小写等处理
+#include <chrono>     // 用于创建待处理账号时的时间计算
+
 std::string tableName = "account";
 std::string createTablePgSql = R"(
     CREATE TABLE IF NOT EXISTS account (
@@ -74,13 +74,13 @@ void AccountDbManager::detectDbType()
     
     if (dbTypeStr == "sqlite3" || dbTypeStr == "sqlite") {
         dbType = DbType::SQLite3;
-        LOG_INFO << "[账户数据库] 配置的数据库类型: SQLite3";
+        LOG_INFO << "[账户数据库] 配置的数据库类型： SQLite3";
     } else if (dbTypeStr == "mysql" || dbTypeStr == "mariadb") {
         dbType = DbType::MySQL;
-        LOG_INFO << "[账户数据库] 配置的数据库类型: MySQL";
+        LOG_INFO << "[账户数据库] 配置的数据库类型： MySQL";
     } else {
         dbType = DbType::PostgreSQL;
-        LOG_INFO << "[账户数据库] 配置的数据库类型: PostgreSQL";
+        LOG_INFO << "[账户数据库] 配置的数据库类型： PostgreSQL";
     }
 }
 
@@ -99,7 +99,7 @@ void AccountDbManager::checkAndUpgradeTable()
     
     if (dbType == DbType::SQLite3)
     {
-        // SQLite3: 使用 PRAGMA table_info
+
         std::string checkSql = "PRAGMA table_info(account)";
         auto result = dbClient->execSqlSync(checkSql);
         for (const auto& row : result)
@@ -117,7 +117,7 @@ void AccountDbManager::checkAndUpgradeTable()
     }
     else
     {
-        // PostgreSQL/MySQL: 使用 information_schema
+
         std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
         auto result = dbClient->execSqlSync(checkSql);
         hasAccountType = (result.size() > 0);
@@ -129,31 +129,31 @@ void AccountDbManager::checkAndUpgradeTable()
     
     if (!hasAccountType)
     {
-        LOG_INFO << "[账户数据库] 表'account'中缺少列'accounttype', 正在添加...";
+        LOG_INFO << "[账户数据库] 表'账号'中缺少列'账号type'，正在添加...";
         try {
             if (dbType == DbType::SQLite3) {
                 dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype TEXT DEFAULT 'free'");
             } else {
                 dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
             }
-            LOG_INFO << "[账户数据库] 列'accounttype'添加成功";
+            LOG_INFO << "[账户数据库] 列'账号type'添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[账户数据库] 添加列'accounttype'失败: " << e.what();
+            LOG_ERROR << "[账户数据库] 添加列'账号type'失败：" << e.what();
         }
     }
     
     if (!hasStatus)
     {
-        LOG_INFO << "[账户数据库] 表'account'中缺少列'status', 正在添加...";
+        LOG_INFO << "[账户数据库] 表'账号'中缺少列''，正在添加...";
         try {
             if (dbType == DbType::SQLite3) {
                 dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status TEXT DEFAULT 'active'");
             } else {
                 dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status VARCHAR(20) DEFAULT 'active'");
             }
-            LOG_INFO << "[账户数据库] 列'status'添加成功";
+            LOG_INFO << "[账户数据库] 列''添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[账户数据库] 添加列'status'失败: " << e.what();
+            LOG_ERROR << "[账户数据库] 添加列''失败：" << e.what();
         }
     }
 }
@@ -163,7 +163,7 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
     std::string selectsql = "select * from account where apiname=$1 and username=$2";
 
     // 注意：PostgreSQL 的 TIMESTAMP 不接受空字符串 ''。
-    // 当 createTime 为空时，让数据库使用列默认值（CURRENT_TIMESTAMP），以兼容 SQLite/PG/MySQL。
+    // 当 创建Time 为空时，让数据库使用列默认值（CURRENT_TIMESTAMP），以兼容 SQLite/PG/MySQL。
     std::string insertsqlWithCreateTime = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
     std::string insertsqlNoCreateTime   = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
 
@@ -286,13 +286,13 @@ bool AccountDbManager::isTableExist()
 {
     if (dbType == DbType::SQLite3)
     {
-        // SQLite3: 使用 sqlite_master
+
         auto result = dbClient->execSqlSync("SELECT name FROM sqlite_master WHERE type='table' AND name='" + tableName + "'");
         return result.size() != 0;
     }
     else
     {
-        // PostgreSQL/MySQL: 使用 information_schema
+
         auto result = dbClient->execSqlSync("SELECT table_name FROM information_schema.tables WHERE table_name='" + tableName + "'");
         return result.size() != 0;
     }
@@ -326,21 +326,21 @@ int AccountDbManager::createWaitingAccount(string apiName)
     // 生成一个临时的占位用户名
     std::string waitingUsername = "waiting_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
-    // waiting 账号不提供 createtime，让数据库使用默认值（CURRENT_TIMESTAMP），兼容 SQLite/PG/MySQL。
+    // 账号不提供 创建time，让数据库使用默认值（CURRENT_TIMESTAMP），兼容 SQLite/PG/MySQL。
     std::string insertsql = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
 
     try {
         auto result = dbClient->execSqlSync(insertsql,
             apiName,
             waitingUsername,
-            "",  // password
-            "",  // authtoken
-            0,   // usecount
-            false, // tokenstatus
-            false, // accountstatus
-            0,   // usertobitid
-            "",  // personid
-            "free", // accounttype
+            "",  // 字段 password：占位空密码
+            "",  // 字段 authtoken：占位空令牌
+            0,   // 字段 usecount：初始化为 0
+            false, // 字段 tokenstatus：初始化为 false
+            false, // 字段 accountstatus：初始化为 false
+            0,   // 字段 usertobitid：初始化为 0
+            "",  // 字段 personid：初始化为空
+            "free", // 字段 accounttype：默认 free
             AccountStatus::WAITING  // status = waiting (待注册)
         );
         
@@ -373,9 +373,9 @@ bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st acco
 {
     LOG_INFO << "[账户数据库] 激活账号, ID: " << waitingId << ", 用户名: " << accountinfo.userName;
     
-    // 支持从 waiting 或 registering 状态激活
-    // createtime 可能为空；PG 不接受 '' -> TIMESTAMP。
-    // 为空则不更新 createtime（保留默认/原值），否则写入指定值。
+    // 支持从 或 状态激活
+    // 创建time 可能为空；PG 不接受 '' -> TIMESTAMP。
+    // 为空则不更新 创建time（保留默认/原值），否则写入指定值。
     std::string updatesqlWithCreateTime = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10,createtime=$11 where id=$12 and (status=$13 or status=$14)";
     std::string updatesqlNoCreateTime   = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10 where id=$11 and (status=$12 or status=$13)";
 
@@ -440,7 +440,7 @@ bool AccountDbManager::deleteWaitingAccount(int waitingId)
 {
     LOG_INFO << "[账户数据库] 删除待注册账号, ID: " << waitingId;
     
-    // 只能删除 waiting 状态的账号，不能删除 registering 状态的
+    // 只能删除 状态的账号，不能删除 状态的
     std::string deletesql = "delete from account where id=$1 and status=$2";
     
     try {
@@ -468,7 +468,7 @@ int AccountDbManager::countAccountsByChannel(string apiName, bool includeWaiting
     if (includeWaiting) {
         countsql = "select count(*) as cnt from account where apiname=$1";
     } else {
-        // 排除 waiting, registering, pending 状态
+
         countsql = "select count(*) as cnt from account where apiname=$1 and status=$2";
     }
     
@@ -486,7 +486,8 @@ int AccountDbManager::countAccountsByChannel(string apiName, bool includeWaiting
             }
         }
         
-        LOG_DEBUG << "[账户数据库] 渠道 " << apiName << " 账号数量: " << count << " (includeWaiting=" << includeWaiting << ")";
+        LOG_DEBUG << "[账户数据库] 渠道 " << apiName << " 账号数量: " << count
+                  << "（includeWaiting=" << includeWaiting << "）";
         return count;
     } catch(const std::exception& e) {
         LOG_ERROR << "[账户数据库] 统计账号数量异常: " << e.what();

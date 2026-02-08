@@ -85,7 +85,7 @@ void AccountManager::init()
         accountDbManager->checkAndUpgradeTable();
     }
     loadAccount();
-    //checkUpdateAccountToken();
+    // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
     checkUpdateTokenthread();
     waitUpdateAccountTokenThread();
     //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
@@ -102,7 +102,7 @@ void AccountManager::loadAccount()
 {
     accountPoolMap.clear();
     LOG_INFO << "[账户管理] 加载账户开始";
-    //load account from config.json
+    // 旧设计备注：可从配置文件加载账号，当前优先从数据库加载
     if(accountDbManager->isTableExist())
     {
         loadAccountFromDatebase();
@@ -118,7 +118,7 @@ void AccountManager::loadAccount()
 
     }
     LOG_INFO << "[账户管理] 加载账户完成";
-    //printAccountPoolMap();
+    // 调试入口：如需排查账号池分配，可临时开启打印
 }
 void AccountManager::loadAccountFromConfig()
 {
@@ -126,7 +126,7 @@ void AccountManager::loadAccountFromConfig()
      auto customConfig = app().getCustomConfig();
     auto configAccountList = customConfig["account"];
 
-    //and add to accountPoolMap
+    // 将配置中的账号逐条写入内存账号池，供调度器按权重获取
     for(auto& account : configAccountList)
     {
         auto apiName =account["apiname"].empty()?"":account["apiname"].asString();
@@ -287,8 +287,8 @@ void AccountManager::getAccountByUserName(string apiName, string userName, share
 void AccountManager::checkAccount()
 {
     LOG_INFO << "[账户管理] 检查账户开始";
-    //check account from accountList
-    //and add to accountPoolMap
+    // 预留检查点：可在此加入 accountList 与账号池一致性校验
+    // 将配置中的账号逐条写入内存账号池，供调度器按权重获取
     LOG_INFO << "[账户管理] 检查账户完成";
 }   
 void AccountManager::refreshAccountQueue(string apiName)
@@ -322,15 +322,15 @@ void AccountManager::printAccountPoolMap()
 }
 bool AccountManager::checkChaynsToken(string token)
 {
-    LOG_INFO << "checkChaynsTonen start";
+    LOG_INFO << "[账户管理] 开始校验 Chayns 令牌";
     auto client = HttpClient::newHttpClient("https://webapi.tobit.com/AccountService/v1.0/Chayns/User");
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
     auto [result, response] = client->sendRequest(request);
-    LOG_INFO << "checkAlivableToken response: " << response->getStatusCode();
-    LOG_INFO << "checkChaynsTonen end";
+    LOG_INFO << "[账户管理] 令牌校验接口响应状态码: " << response->getStatusCode();
+    LOG_INFO << "[账户管理] Chayns 令牌校验结束";
     if(response->getStatusCode()!=200)
     {
         return false;
@@ -339,19 +339,19 @@ bool AccountManager::checkChaynsToken(string token)
 }
 Json::Value AccountManager::getChaynsToken(string username,string passwd)
 {
-    LOG_INFO << "getChaynsToken start";
+    LOG_INFO << "[账户管理] 开始获取 Chayns 令牌";
     const string fullUrl = getLoginServiceUrl("chaynsapi");
     if (fullUrl.empty()) {
-        LOG_ERROR << "login_service_url for 'chaynsapi' not found in config.";
+        LOG_ERROR << "[账户管理] 配置中未找到 chaynsapi 的登录服务地址";
         return Json::Value();
     }
-    LOG_INFO << "fullurl： "<<fullUrl;
+    LOG_INFO << "[账户管理] 完整登录地址: "<<fullUrl;
 
     // 解析 URL
     string baseUrl, path;
     size_t protocolPos = fullUrl.find("://");
     if (protocolPos == string::npos) {
-        LOG_ERROR << "Invalid login service URL format: " << fullUrl;
+        LOG_ERROR << "[账户管理] 登录服务地址格式无效: " << fullUrl;
         return Json::Value();
     }
     size_t pathPos = fullUrl.find('/', protocolPos + 3);
@@ -362,11 +362,11 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
         baseUrl = fullUrl.substr(0, pathPos);
         path = fullUrl.substr(pathPos);
     }
-    LOG_INFO << "baseUrl： "<<baseUrl;
+    LOG_INFO << "[账户管理] 解析出的主机地址: "<<baseUrl;
 
      // 等待服务器可用
     if (!isServerReachable(baseUrl)) {
-        LOG_ERROR << "Server is not reachable after maximum retries: " << baseUrl;
+        LOG_ERROR << "[账户管理] 达到最大重试次数后仍无法连通目标主机: " << baseUrl;
         return Json::Value(); // 返回空的Json对象
     }
     auto client = HttpClient::newHttpClient(baseUrl);
@@ -385,19 +385,19 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     if(response->getStatusCode()==200)
     {
         body=std::string(response->getBody());
-        LOG_INFO << "Login service response body: " << body;
+        LOG_INFO << "[账户管理] 登录服务原始响应内容: " << body;
     }
     string errs;
     istringstream s(body);
     if (!Json::parseFromStream(reader, s, &responsejson, &errs)) {
-        LOG_ERROR << "Failed to parse login response JSON: " << errs;
+        LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: " << errs;
     }
     return responsejson;
 }
 void AccountManager::checkToken()
 {
-    LOG_INFO << "checkToken start";
-    LOG_INFO << "checkToken function map size: " << checkTokenMap.size();
+    LOG_INFO << "[账户管理] 开始批量校验账号令牌";
+    LOG_INFO << "[账户管理] 令牌校验函数映射数量: " << checkTokenMap.size();
     
     // 先复制需要检查的账号列表，避免长时间持有锁
     std::vector<shared_ptr<Accountinfo_st>> accountsToCheck;
@@ -415,24 +415,24 @@ void AccountManager::checkToken()
     // 在锁外进行检查操作
     for(auto& account : accountsToCheck)
     {
-        LOG_INFO << "checkToken accountinfo: " << account->apiName << " " << account->userName;
+        LOG_INFO << "[账户管理] 正在校验账号: " << account->apiName << " " << account->userName;
         if(checkTokenMap[account->apiName])
         {
             bool result = (this->*checkTokenMap[account->apiName])(account->authToken);
-            LOG_INFO << "checkToken result: " << result;
+            LOG_INFO << "[账户管理] 令牌校验结果: " << result;
             setStatusTokenStatus(account->apiName, account->userName, result);
         }
         else
         {
-            LOG_ERROR << "apiName: " << account->apiName << " is not supported";
+            LOG_ERROR << "[账户管理] 不支持的上游渠道 apiName: " << account->apiName << " is not supported";
         }
     }
-    LOG_INFO << "checkToken end";
+    LOG_INFO << "[账户管理] 批量令牌校验结束";
 }
 
 void AccountManager::updateToken()
 {
-    LOG_INFO << "updateToken start";
+    LOG_INFO << "[账户管理] 开始批量更新令牌";
     
     // 先复制需要更新的账号列表，避免长时间持有锁
     std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
@@ -464,17 +464,17 @@ void AccountManager::updateToken()
         }
         else
         {
-            LOG_ERROR << "apiName: " << account->apiName << " is not supported";
+            LOG_ERROR << "[账户管理] 不支持的上游渠道 apiName: " << account->apiName << " is not supported";
         }
     }
-    LOG_INFO << "updateToken end";
+    LOG_INFO << "[账户管理] 批量令牌更新结束";
 }
 
 void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
 {
-    LOG_INFO << "updateChaynsToken start " << accountinfo->userName;
+    LOG_INFO << "[账户管理] 开始更新 Chayns 令牌，用户: " << accountinfo->userName;
     auto token = getChaynsToken(accountinfo->userName,accountinfo->passwd);
-    LOG_INFO << "updateChaynsToken token result: " << (token.empty()?"empty":"not empty");
+    LOG_INFO << "[账户管理] Chayns 令牌更新结果: " << (token.empty()?"empty":"not empty");
     if(!token.empty())
     {
                 accountinfo->tokenStatus = true;
@@ -490,7 +490,7 @@ void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
                 string accountType = hasProAccess ? "pro" : "free";
                 accountinfo->accountType=accountType;
     }
-    LOG_INFO << "updateChaynsToken end";
+    LOG_INFO << "[账户管理] Chayns 令牌更新流程结束";
 }
 void AccountManager::checkUpdateTokenthread()
 {
@@ -501,7 +501,6 @@ void AccountManager::checkUpdateTokenthread()
             // 清理创建超过6天的过期账号
             cleanExpiredAccounts();
             this_thread::sleep_for(chrono::hours(5));
-            //updateToken();
         }
     });
     t1.detach();
@@ -509,7 +508,6 @@ void AccountManager::checkUpdateTokenthread()
 void AccountManager::checkUpdateAccountToken()  
 {
     checkToken();
-   // updateToken();
 }  
 
 // 添加检测服务可用性的函数
@@ -524,11 +522,11 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
         try {
             auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest);
             if (checkResponse && checkResponse->getStatusCode() == 200) {
-                LOG_INFO << "Server is reachable after " << retryCount << " attempts";
+                LOG_INFO << "[账户管理] 目标主机已连通，累计重试次数: " << retryCount << " 次";
                 return true;
             }
         } catch (...) {
-            LOG_INFO << "Server not reachable, retry attempt: " << retryCount + 1;
+            LOG_INFO << "[账户管理] 目标主机暂不可达，准备第 N 次重试: " << retryCount + 1;
         }
         
         retryCount++;
@@ -539,18 +537,18 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
 }
 void AccountManager::loadAccountFromDatebase()
 {
-    LOG_INFO << "loadAccountFromDatebase start";
+    LOG_INFO << "[账户管理] 开始从数据库加载账号";
     auto accountDBList = accountDbManager->getAccountDBList();
     for(auto& accountinfo:accountDBList)
     {
-        LOG_INFO << "Loading account from DB: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime << ", status: " << accountinfo.status;
+        LOG_INFO << "[账户管理] 从数据库加载账号记录: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime << ", status: " << accountinfo.status;
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
     }
-    LOG_INFO << "loadDatebase end size "<<accountDBList.size();
+    LOG_INFO << "[账户管理] 数据库加载完成，账号总数: "<<accountDBList.size();
 }
 void AccountManager::saveAccountToDatebase()
 {
-    LOG_INFO << "saveAccountToDatebase start";
+    LOG_INFO << "[账户管理] 开始将账号写回数据库";
     for(auto& apiName:accountList)
     {
         for(auto& userName:apiName.second)
@@ -558,7 +556,7 @@ void AccountManager::saveAccountToDatebase()
             accountDbManager->addAccount(*(userName.second.get()));
         }
     }
-    LOG_INFO << "saveAccountToDatebase end";
+    LOG_INFO << "[账户管理] 账号写回数据库完成";
 }
 
 map<string,map<string,shared_ptr<Accountinfo_st>>> AccountManager::getAccountList()
@@ -590,7 +588,7 @@ void AccountManager::setStatusTokenStatus(string apiName,string userName,bool st
 }
 void AccountManager::waitUpdateAccountToken()
 {
-    LOG_INFO << "waitUpdateAccountTokenThread start";
+    LOG_INFO << "[账户管理] 账号令牌更新线程已启动";
     while (true) {  // 持续运行的工作循环
         shared_ptr<Accountinfo_st> account;
         
@@ -603,19 +601,19 @@ void AccountManager::waitUpdateAccountToken()
             
             account = accountListNeedUpdate.front();
             accountListNeedUpdate.pop_front();
-            LOG_INFO << "Processing account update for user: " << account->userName;
+            LOG_INFO << "[账户管理] 正在处理账号更新，用户: " << account->userName;
         }
 
         // 验证账号
         if (!account) {
-            LOG_ERROR << "Invalid account pointer";
+            LOG_ERROR << "[账户管理] 账号指针无效，跳过本次更新";
             continue;
         }
 
         // 查找更新函数
         auto updateFunc = updateTokenMap.find(account->apiName);
         if (updateFunc == updateTokenMap.end()) {
-            LOG_ERROR << "Unsupported API name: " << account->apiName;
+            LOG_ERROR << "[账户管理] 不支持的 API 名称: " << account->apiName;
             continue;
         }
 
@@ -626,18 +624,18 @@ void AccountManager::waitUpdateAccountToken()
             // 仅在更新成功时更新数据库和刷新队列
             if (account->tokenStatus) {
                 if (!accountDbManager->updateAccount(*account)) {
-                    LOG_ERROR << "Failed to update account in database";
+                    LOG_ERROR << "[账户管理] 更新数据库账号记录失败";
                     continue;
                 }
                 refreshAccountQueue(account->apiName);
                 
                 // Token 更新成功后，检查并更新 accountType
-                LOG_INFO << "Token updated, checking accountType for " << account->userName;
-                //updateAccountType(account);
+                LOG_INFO << "[账户管理] 令牌更新完成，开始校验账号类型，用户: " << account->userName;
+                // 若需要强制刷新账号类型，可在此处启用单账号更新
             }
         }
         catch (const std::exception& e) {
-            LOG_ERROR << "Exception during account update: " << e.what() 
+            LOG_ERROR << "[账户管理] 执行账号更新时发生异常: " << e.what() 
                      << " for user: " << account->userName;
         }
     };
@@ -653,9 +651,9 @@ void AccountManager::checkAccountCountThread()
     std::thread t([this](){
         while(true)
         {
-            LOG_INFO << "Checking channel account counts...";
+            LOG_INFO << "[账户管理] 开始检查各渠道账号数量";
             checkChannelAccountCounts();
-            // Check every 10 minutes
+            // 定时巡检周期：每 10 分钟执行一次账号数量检查
             std::this_thread::sleep_for(std::chrono::minutes(10));
         }
     });
@@ -674,17 +672,17 @@ void AccountManager::checkChannelAccountCounts()
             // 使用数据库统计，包含pending状态的账号
             int currentCount = accountDbManager->countAccountsByChannel(channel.channelName, true);
 
-            LOG_INFO << "Channel: " << channel.channelName << ", Target: " << channel.accountCount << ", Current (including pending): " << currentCount;
+            LOG_INFO << "[账户管理] 渠道状态 -> 名称: " << channel.channelName << "，目标数量: " << channel.accountCount << "，当前数量（含待注册）: " << currentCount;
 
             if(currentCount < channel.accountCount)
             {
                 int needed = channel.accountCount - currentCount;
-                LOG_INFO << "Need to register " << needed << " accounts for " << channel.channelName;
-                // Register one by one to avoid overwhelming the service
+                LOG_INFO << "[账户管理] 该渠道需补充注册账号数量: " << needed << "，渠道: " << channel.channelName;
+                // 串行注册：逐个补充账号，避免瞬时请求压垮上游服务
                 for(int i=0; i<needed; ++i)
                 {
                     autoRegisterAccount(channel.channelName);
-                    // Small delay between registrations
+                    // 注册节流：每次注册之间增加短暂间隔，降低触发限流风险
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                 }
             }
@@ -976,9 +974,9 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
 // 参考 Python autoregister.py 中的 get_user_pro_access 方法
 bool AccountManager::getUserProAccess(const string& token, const string& personId)
 {
-    LOG_INFO << "getUserProAccess start for personId: " << personId;
+    LOG_INFO << "[账户管理] 开始查询 Pro 权限，personId: " << personId;
     
-    // API URL: https://cube.tobit.cloud/ai-proxy/v1/userSettings/personId/{personId}
+    // 接口地址示例（保留 URL 便于定位）：https://cube.tobit.cloud/ai-proxy/v1/userSettings/personId/{personId}
     string baseUrl = "https://cube.tobit.cloud";
     string path = "/ai-proxy/v1/userSettings/personId/" + personId;
     
@@ -993,11 +991,11 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
         auto [result, response] = client->sendRequest(request, 30.0);
         
         if (result != ReqResult::Ok || !response) {
-            LOG_ERROR << "getUserProAccess request failed";
+            LOG_ERROR << "[账户管理] 查询 Pro 权限请求失败";
             return false;
         }
         
-        LOG_INFO << "getUserProAccess response status: " << response->getStatusCode();
+        LOG_INFO << "[账户管理] 查询 Pro 权限响应状态码: " << response->getStatusCode();
         
         if (response->getStatusCode() == 200) {
             Json::CharReaderBuilder reader;
@@ -1009,18 +1007,18 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
             if (Json::parseFromStream(reader, s, &jsonResponse, &errs)) {
                 if (jsonResponse.isMember("hasProAccess")) {
                     bool hasProAccess = jsonResponse["hasProAccess"].asBool();
-                    LOG_INFO << "getUserProAccess result: hasProAccess=" << hasProAccess;
+                    LOG_INFO << "[账户管理] 查询 Pro 权限结果，hasProAccess=" << hasProAccess;
                     return hasProAccess;
                 }
             } else {
-                LOG_ERROR << "getUserProAccess JSON parse error: " << errs;
+                LOG_ERROR << "[账户管理] 解析 Pro 权限响应 JSON 失败: " << errs;
             }
         } else {
-            LOG_ERROR << "getUserProAccess API error: " << response->getStatusCode()
+            LOG_ERROR << "[账户管理] 查询 Pro 权限接口返回错误: " << response->getStatusCode()
                       << " - " << response->getBody();
         }
     } catch (const std::exception& e) {
-        LOG_ERROR << "getUserProAccess exception: " << e.what();
+        LOG_ERROR << "[账户管理] 查询 Pro 权限时捕获异常: " << e.what();
     }
     
     return false;
@@ -1030,35 +1028,35 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
 void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
 {
     if (!account || account->authToken.empty() || account->personId.empty()) {
-        LOG_ERROR << "updateAccountType: invalid account data";
+        LOG_ERROR << "[账户管理] 更新账号类型失败：账号数据无效";
         return;
     }
     
-    LOG_INFO << "updateAccountType for user: " << account->userName;
+    LOG_INFO << "[账户管理] 开始更新账号类型，用户: " << account->userName;
     
     bool hasProAccess = getUserProAccess(account->authToken, account->personId);
     string newAccountType = hasProAccess ? "pro" : "free";
     
     if (account->accountType != newAccountType) {
-        LOG_INFO << "Account type changed for " << account->userName
+        LOG_INFO << "[账户管理] 账号类型发生变化，用户: " << account->userName
                  << ": " << account->accountType << " -> " << newAccountType;
         account->accountType = newAccountType;
         
         // 更新数据库
         if (accountDbManager->updateAccount(*account)) {
-            LOG_INFO << "Account type updated in database for " << account->userName;
+            LOG_INFO << "[账户管理] 账号类型已写入数据库，用户: " << account->userName;
         } else {
-            LOG_ERROR << "Failed to update account type in database for " << account->userName;
+            LOG_ERROR << "[账户管理] 账号类型写入数据库失败，用户: " << account->userName;
         }
     } else {
-        LOG_INFO << "Account type unchanged for " << account->userName << ": " << account->accountType;
+        LOG_INFO << "[账户管理] 账号类型未变化，用户: " << account->userName << ": " << account->accountType;
     }
 }
 
 // 更新所有账号的 accountType
 void AccountManager::updateAllAccountTypes()
 {
-    LOG_INFO << "updateAllAccountTypes start";
+    LOG_INFO << "[账户管理] 开始全量刷新账号类型";
     
     // 先复制需要更新的账号列表，避免长时间持有锁
     std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
@@ -1082,7 +1080,7 @@ void AccountManager::updateAllAccountTypes()
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     
-    LOG_INFO << "updateAllAccountTypes end";
+    LOG_INFO << "[账户管理] 全量刷新账号类型结束";
 }
 
 // 启动定时检查 accountType 的线程
@@ -1093,15 +1091,15 @@ void AccountManager::checkAccountTypeThread()
         std::this_thread::sleep_for(std::chrono::minutes(1));
         
         while (true) {
-            LOG_INFO << "Starting scheduled account type check...";
+            LOG_INFO << "[账户管理] 启动定时账号类型巡检任务";
             updateAllAccountTypes();
             
-            // 每 1 小时检查一次
+            // 每 3 小时检查一次
             std::this_thread::sleep_for(std::chrono::hours(3));
         }
     });
     t.detach();
-    LOG_INFO << "checkAccountTypeThread started";
+    LOG_INFO << "[账户管理] 账号类型巡检线程已启动";
 }
 
 // 检查账号是否正在注册中（通过ID）

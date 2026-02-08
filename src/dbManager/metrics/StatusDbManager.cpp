@@ -18,12 +18,10 @@ void StatusDbManager::init() {
 void StatusDbManager::ensureDbClient() {
     if (!dbClient_) {
         detectDbType();
-        // NOTE: Calling getDbClient() without a name tries to fetch the "default" client.
-        // Our config defines a named client ("aichatpg") only, so the no-arg overload can
-        // trigger an assertion in DbClientManager if no default client exists.
+        // 从 Drogon 默认连接池获取数据库客户端 aichatpg。
         dbClient_ = drogon::app().getDbClient("aichatpg");
         if (!dbClient_) {
-            LOG_ERROR << "[StatusDbManager] Failed to get database client: aichatpg";
+            LOG_ERROR << "[状态数据库管理器] 获取数据库客户端失败";
         }
     }
 }
@@ -36,7 +34,7 @@ void StatusDbManager::detectDbType() {
     }
     std::transform(dbTypeStr.begin(), dbTypeStr.end(), dbTypeStr.begin(), ::tolower);
     isPostgres_ = !(dbTypeStr == "sqlite3" || dbTypeStr == "sqlite");
-    LOG_INFO << "[StatusDbManager] DB type: " << (isPostgres_ ? "PostgreSQL" : "SQLite3");
+    LOG_INFO << "[状态数据库管理器] 数据库类型：" << (isPostgres_ ? "PostgreSQL/MySQL" : "SQLite3");
 }
 
 std::string StatusDbManager::formatTimeUtc(std::chrono::system_clock::time_point tp) {
@@ -69,8 +67,8 @@ ServiceHealthStatus StatusDbManager::calculateStatus(double errorRate, int64_t r
     
     // 状态判定阈值（可配置）
     // OK: 错误率 < 1%
-    // DEGRADED: 错误率 1% - 10%
-    // DOWN: 错误率 >= 10% 或 最近无请求
+
+    // DOWN： 错误率 >= 10% 或 最近无请求
     if (errorRate < 0.01) {
         return ServiceHealthStatus::OK;
     } else if (errorRate < 0.10) {
@@ -89,7 +87,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
     std::map<std::string, std::vector<StatusBucket>> result;
     
     try {
-        // 一次性查询所有 provider 的请求时间序列
+        // 一次性查询所有上游的请求时间序列
         std::string reqBucketSql = R"(
             SELECT 
                 provider,
@@ -104,7 +102,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
         
         auto reqResult = dbClient_->execSqlSync(reqBucketSql, from, to);
         
-        // 一次性查询所有 provider 的错误时间序列
+        // 一次性查询所有上游的错误时间序列
         std::string errBucketSql = R"(
             SELECT 
                 provider,
@@ -119,7 +117,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
         
         auto errResult = dbClient_->execSqlSync(errBucketSql, from, to);
         
-        // 在内存中组织数据：provider -> bucket_start -> StatusBucket
+        // 在内存中组织数据：上游 -> bucket_start -> StatusBucket
         std::map<std::string, std::map<std::string, StatusBucket>> providerBucketMap;
         
         for (const auto& row : reqResult) {
@@ -154,7 +152,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
         }
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] fetchAllChannelBuckets error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 查询全部渠道时间序列失败：" << e.what();
     }
     
     return result;
@@ -169,7 +167,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
     std::map<std::string, std::vector<StatusBucket>> result;
     
     try {
-        // 构建 model:provider 组合键的 SQL（兼容 PG 和 SQLite）
+        // 构建 模型：上游 组合键的 SQL（兼容 PG 和 SQLite）
         std::string reqBucketSql;
         std::string errBucketSql;
         
@@ -200,7 +198,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
                 ORDER BY model, provider, bucket_start
             )";
         } else {
-            // SQLite 版本
+
             reqBucketSql = R"(
                 SELECT 
                     model,
@@ -231,7 +229,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
         auto reqResult = dbClient_->execSqlSync(reqBucketSql, from, to);
         auto errResult = dbClient_->execSqlSync(errBucketSql, from, to);
         
-        // 在内存中组织数据：(model:provider) -> bucket_start -> StatusBucket
+        // 在内存中组织数据：(模型：上游) -> bucket_start -> StatusBucket
         std::map<std::string, std::map<std::string, StatusBucket>> modelBucketMap;
         
         for (const auto& row : reqResult) {
@@ -270,7 +268,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
         }
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] fetchAllModelBuckets error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 查询全部模型时间序列失败：" << e.what();
     }
     
     return result;
@@ -327,7 +325,7 @@ ChannelStatusCounts StatusDbManager::getChannelStatusCounts(const std::string& f
         }
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] getChannelStatusCounts error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 获取渠道状态计数失败：" << e.what();
     }
     
     return counts;
@@ -338,7 +336,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
     
     ensureDbClient();
     if (!dbClient_) {
-        LOG_ERROR << "[StatusDbManager] Database client not available";
+        LOG_ERROR << "[状态数据库管理器] 数据库客户端不可用";
         return summary;
     }
     
@@ -380,7 +378,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             summary.errorRate = static_cast<double>(summary.totalErrors) / summary.totalRequests;
         }
         
-        // 查询渠道数量（按 provider 分组）
+        // 查询渠道数量（按 上游 分组）
         std::string channelSql = R"(
             SELECT COUNT(DISTINCT provider) as channel_count
             FROM request_agg_hour
@@ -393,7 +391,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             summary.channelCount = channelResult[0]["channel_count"].as<int>();
         }
         
-        // 查询模型数量（按 model×provider 分组）
+        // 查询模型数量（按 模型×上游 分组）
         std::string modelSql = R"(
             SELECT COUNT(DISTINCT CONCAT(model, ':', provider)) as model_count
             FROM request_agg_hour
@@ -464,7 +462,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             bucketMap[bucketStart].errorCount = row["error_count"].as<int64_t>();
         }
         
-        // 计算错误率并转换为 vector
+        // 计算错误率并转换为
         for (auto& [key, bucket] : bucketMap) {
             if (bucket.requestCount > 0) {
                 bucket.errorRate = static_cast<double>(bucket.errorCount) / bucket.requestCount;
@@ -479,7 +477,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             });
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] getStatusSummary error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 获取状态总览失败：" << e.what();
     }
     
     return summary;
@@ -490,7 +488,7 @@ std::vector<ChannelStatusData> StatusDbManager::getChannelStatusList(const Statu
     
     ensureDbClient();
     if (!dbClient_) {
-        LOG_ERROR << "[StatusDbManager] Database client not available";
+        LOG_ERROR << "[状态数据库管理器] 数据库客户端不可用";
         return channels;
     }
     
@@ -574,7 +572,7 @@ std::vector<ChannelStatusData> StatusDbManager::getChannelStatusList(const Statu
         }
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] getChannelStatusList error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 获取渠道状态列表失败：" << e.what();
     }
     
     return channels;
@@ -585,7 +583,7 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
     
     ensureDbClient();
     if (!dbClient_) {
-        LOG_ERROR << "[StatusDbManager] Database client not available";
+        LOG_ERROR << "[状态数据库管理器] 数据库客户端不可用";
         return models;
     }
     
@@ -598,7 +596,7 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
     }
     
     try {
-        // 查询每个 model×provider 的请求统计
+        // 查询每个 模型×上游 的请求统计
         std::string sql = R"(
             SELECT 
                 model,
@@ -614,7 +612,7 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
         
         auto result = dbClient_->execSqlSync(sql, from, to);
         
-        // 查询每个 model×provider 的错误统计
+        // 查询每个 模型×上游 的错误统计
         std::string errSql = R"(
             SELECT 
                 model,
@@ -628,7 +626,7 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
         
         auto errResult = dbClient_->execSqlSync(errSql, from, to);
         
-        // 构建错误数映射 (key: model:provider)
+        // 构建错误数映射（键：模型:上游）
         std::map<std::string, int64_t> errorMap;
         for (const auto& row : errResult) {
             std::string model = row["model"].as<std::string>();
@@ -674,10 +672,10 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
         }
         
     } catch (const std::exception& e) {
-        LOG_ERROR << "[StatusDbManager] getModelStatusList error: " << e.what();
+        LOG_ERROR << "[状态数据库管理器] 获取模型状态列表失败：" << e.what();
     }
     
     return models;
 }
 
-} // namespace metrics
+} // 命名空间结束

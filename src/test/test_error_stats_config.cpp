@@ -30,7 +30,7 @@ DROGON_TEST(ErrorStatsConfig_DefaultValues)
     CHECK(config.retentionDaysAgg == 30);
     CHECK(config.retentionDaysRequestAgg == 30);
     
-    // raw_snippet 配置默认值
+
     CHECK(config.rawSnippetEnabled == true);
     CHECK(config.rawSnippetMaxLen == 32768);
     
@@ -57,7 +57,7 @@ DROGON_TEST(ErrorStatsConfig_StringToDropPolicy)
     CHECK(ErrorStatsConfig::stringToDropPolicy("") == DropPolicy::DROP_OLDEST);
 }
 
-// ========== JSON 加载测试 ==========
+
 
 DROGON_TEST(ErrorStatsConfig_LoadFromJson_Empty)
 {

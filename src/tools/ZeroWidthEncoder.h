@@ -79,7 +79,7 @@ private:
     static constexpr const char* ZW_SPACE = "\xE2\x80\x8B";      // U+200B 零宽空格 = 00
     static constexpr const char* ZW_NON_JOINER = "\xE2\x80\x8C"; // U+200C 零宽非连接符 = 01
     static constexpr const char* ZW_JOINER = "\xE2\x80\x8D";     // U+200D 零宽连接符 = 10
-    static constexpr const char* ZW_NO_BREAK = "\xEF\xBB\xBF";   // U+FEFF 零宽非断空格 = 11
+    static constexpr const char* ZW_NO_BREAK = "\xEF\xBB\xBF";   // +FEFF 零宽非断空格 = 11
     static constexpr const char* MARKER = "\xE2\x81\xA0";        // U+2060 词连接符（用作标记）
     
     // 起始和结束标记
@@ -120,4 +120,4 @@ private:
     static const char* getZwChar(int value);
 };
 
-#endif // ZERO_WIDTH_ENCODER_H
+#endif // 头文件保护结束

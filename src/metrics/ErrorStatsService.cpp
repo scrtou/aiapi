@@ -13,22 +13,22 @@ ErrorStatsService::~ErrorStatsService() {
 }
 
 void ErrorStatsService::init(const ErrorStatsConfig& config) {
-    LOG_INFO << "[错误统计服务] Service start initialized";
+    LOG_INFO << "[错误统计服务] 开始";
 
     if (initialized_) {
-        LOG_WARN << "[ErrorStats] Service already initialized";
+        LOG_WARN << "[错误统计服务] 已初始化，跳过重复初始化";
         return;
     }
     
     config_ = config;
     
     if (!config_.enabled) {
-        LOG_INFO << "[ErrorStats] Service disabled by config";
+        LOG_INFO << "[错误统计服务] 配置已禁用，跳过初始化";
         initialized_ = true;
         return;
     }
     
-    // 初始化 DB Manager
+
     dbManager_ = ErrorStatsDbManager::getInstance();
     dbManager_->init();
     
@@ -40,30 +40,30 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
     drogon::app().getLoop()->runEvery(std::chrono::hours(1), [this]() {
         if (!running_ || !dbManager_) return;
         
-        LOG_INFO << "[ErrorStats] Running scheduled cleanup task";
+        LOG_INFO << "[错误统计] 开始执行定时清理任务";
         int totalCleaned = 0;
         
         // 清理过期的明细事件
         if (config_.retentionDaysDetail > 0) {
             int cleaned = dbManager_->cleanupOldEvents(config_.retentionDaysDetail);
             totalCleaned += cleaned;
-            LOG_INFO << "[ErrorStats] Cleaned " << cleaned << " old events (retention: "
-                     << config_.retentionDaysDetail << " days)";
+            LOG_INFO << "[错误统计] 已清理明细事件 " << cleaned << " 条（保留 "
+                     << config_.retentionDaysDetail << " 天）";
         }
         
         // 清理过期的聚合数据
         if (config_.retentionDaysAgg > 0) {
             int cleaned = dbManager_->cleanupOldAgg(config_.retentionDaysAgg);
             totalCleaned += cleaned;
-            LOG_INFO << "[ErrorStats] Cleaned " << cleaned << " old aggregation records (retention: "
-                     << config_.retentionDaysAgg << " days)";
+            LOG_INFO << "[错误统计] 已清理聚合数据 " << cleaned << " 条（保留 "
+                     << config_.retentionDaysAgg << " 天）";
         }
         
-        LOG_INFO << "[ErrorStats] Scheduled cleanup completed, total cleaned: " << totalCleaned;
+        LOG_INFO << "[错误统计] 清理任务完成，总计清理 " << totalCleaned << " 条记录";
     });
     
     initialized_ = true;
-    LOG_INFO << "[错误统计服务] Service initialized, batch_size=" << config_.asyncBatchSize
+    LOG_INFO << "[错误统计服务] 初始化完成，batch_size=" << config_.asyncBatchSize
              << ", flush_ms=" << config_.asyncFlushMs
              << ", retention_detail=" << config_.retentionDaysDetail << "d"
              << ", retention_agg=" << config_.retentionDaysAgg << "d";
@@ -72,7 +72,7 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
 void ErrorStatsService::shutdown() {
     if (!running_) return;
     
-    LOG_INFO << "[ErrorStats] Shutting down...";
+    LOG_INFO << "[错误统计服务] 开始关闭服务";
     running_ = false;
     cv_.notify_all();
     
@@ -80,17 +80,17 @@ void ErrorStatsService::shutdown() {
         workerThread_.join();
     }
     
-    // 最后一次 flush
+
     flushEvents();
     flushRequestAgg();
     
-    LOG_INFO << "[ErrorStats] Shutdown complete, dropped=" << droppedCount_.load();
+    LOG_INFO << "[错误统计服务] 关闭完成，累计丢弃事件数=" << droppedCount_.load();
 }
 
 void ErrorStatsService::recordEvent(const ErrorEvent& event) {
     if (!config_.enabled) return;
     
-    // 更新 Prometheus 计数器
+
     updatePrometheusCounters(event);
     
     // 推入队列
@@ -103,13 +103,13 @@ void ErrorStatsService::recordEvent(const ErrorEvent& event) {
             }
             droppedCount_++;
             
-            // 更新 dropped 计数器
-            // TODO: Prometheus counter for dropped events
+
+
         }
         eventQueue_.push(event);
     }
     
-    // 通知 worker
+    // 通知 工作线程
     cv_.notify_one();
 }
 
@@ -148,7 +148,7 @@ void ErrorStatsService::recordError(
     recordEvent(event);
     
     // 同时记录日志
-    LOG_ERROR << "[ErrorStats] " << ErrorEvent::domainToString(domain) << "." << type
+    LOG_ERROR << "[错误统计]" << ErrorEvent::domainToString(domain) << "." << type
               << " | req=" << requestId << " | " << message;
 }
 
@@ -186,14 +186,14 @@ void ErrorStatsService::recordWarn(
     
     recordEvent(event);
     
-    LOG_WARN << "[ErrorStats] " << ErrorEvent::domainToString(domain) << "." << type
+    LOG_WARN << "[错误统计]" << ErrorEvent::domainToString(domain) << "." << type
              << " | req=" << requestId << " | " << message;
 }
 
 void ErrorStatsService::recordRequestCompleted(const RequestCompletedData& data) {
     if (!config_.enabled || !config_.persistRequestAgg) return;
     
-    // 更新 Prometheus
+
     updatePrometheusRequestCounter(data);
     
     // 推入队列
@@ -210,7 +210,7 @@ void ErrorStatsService::recordRequestCompleted(const RequestCompletedData& data)
 }
 
 void ErrorStatsService::workerLoop() {
-    LOG_INFO << "[ErrorStats] Worker thread started";
+    LOG_INFO << "[错误统计服务] 后台工作线程已启动";
     
     while (running_) {
         std::unique_lock<std::mutex> lock(eventMutex_);
@@ -222,12 +222,12 @@ void ErrorStatsService::workerLoop() {
         
         lock.unlock();
         
-        // 执行 flush
+
         flushEvents();
         flushRequestAgg();
     }
     
-    LOG_INFO << "[ErrorStats] Worker thread exiting";
+    LOG_INFO << "[错误统计服务] 后台工作线程已退出";
 }
 
 void ErrorStatsService::flushEvents() {
@@ -246,7 +246,7 @@ void ErrorStatsService::flushEvents() {
     // 写入明细表
     if (config_.persistDetail && dbManager_) {
         if (!dbManager_->insertEvents(batch)) {
-            LOG_ERROR << "[ErrorStats] Failed to insert " << batch.size() << " events";
+            LOG_ERROR << "[错误统计] 写入明细事件失败，批大小=" << batch.size();
             droppedCount_ += batch.size();
         }
     }
@@ -254,7 +254,7 @@ void ErrorStatsService::flushEvents() {
     // 更新聚合表
     if (config_.persistAgg && dbManager_) {
         if (!dbManager_->upsertErrorAggHour(batch)) {
-            LOG_ERROR << "[ErrorStats] Failed to upsert error aggregation";
+            LOG_ERROR << "[错误统计] 写入错误聚合数据失败";
         }
     }
 }
@@ -284,7 +284,7 @@ void ErrorStatsService::flushRequestAgg() {
             aggData.ts = data.ts;
             
             if (!dbManager_->upsertRequestAggHour(aggData)) {
-                LOG_ERROR << "[ErrorStats] Failed to upsert request aggregation";
+                LOG_ERROR << "[错误统计] 写入请求聚合数据失败";
             }
         }
     }
@@ -302,37 +302,37 @@ int ErrorStatsService::runCleanup() {
     total += dbManager_->cleanupOldEvents(config_.retentionDaysDetail);
     total += dbManager_->cleanupOldAgg(config_.retentionDaysAgg);
     
-    LOG_INFO << "[ErrorStats] Cleanup completed, removed " << total << " records";
+    LOG_INFO << "[错误统计] 手动清理完成，总计 " << total << " 条记录";
     return total;
 }
 
 void ErrorStatsService::updatePrometheusCounters(const ErrorEvent& event) {
-    // TODO: 集成 Prometheus 客户端库
-    // 示例：使用 drogon 的 PromExporter 或 prometheus-cpp
+    // 待办：接入 Prometheus 客户端库
+    // 示例：可接入 Drogon PromExporter 或自定义指标上报
     // 
-    // auto& counter = prometheus::BuildCounter()
-    //     .Name("aiapi_error_events_total")
-    //     .Help("Total error/warning events")
-    //     .Register(*registry);
-    // counter.Add({
-    //     {"severity", severityToString(event.severity)},
-    //     {"domain", domainToString(event.domain)},
-    //     {"type", event.type},
-    //     {"provider", event.provider},
-    //     {"model", event.model},
-    //     {"client_type", event.clientType},
-    //     {"api_kind", event.apiKind},
-    //     {"stream", event.stream ? "true" : "false"}
-    // }).Increment();
+
+
+
+
+
+
+
+
+
+
+    // 可在此补充客户端类型维度（clientType）的指标标签
+
+
+
     
     // 暂时只记录日志
-    (void)event; // suppress unused warning
+    (void)event; // 显式忽略未使用告警，避免编译器噪声
 }
 
 void ErrorStatsService::updatePrometheusRequestCounter(const RequestCompletedData& data) {
-    // TODO: 集成 Prometheus 客户端库
-    // aiapi_requests_total counter
-    (void)data; // suppress unused warning
+    // 待办：接入 Prometheus 客户端库
+
+    (void)data; // 显式忽略未使用告警，避免编译器噪声
 }
 
 std::string ErrorStatsService::truncateRawSnippet(const std::string& snippet) {
@@ -347,4 +347,4 @@ std::string ErrorStatsService::truncateRawSnippet(const std::string& snippet) {
     return snippet.substr(0, config_.rawSnippetMaxLen);
 }
 
-} // namespace metrics
+} // 命名空间结束

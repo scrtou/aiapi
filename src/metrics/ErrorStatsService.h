@@ -146,13 +146,13 @@ private:
     // 统计
     std::atomic<uint64_t> droppedCount_{0};
     
-    // DB Manager
+
     std::shared_ptr<ErrorStatsDbManager> dbManager_;
     
     // 队列大小上限
     static constexpr size_t MAX_QUEUE_SIZE = 10000;
 };
 
-} // namespace metrics
+} // 命名空间结束
 
-#endif // METRICS_ERROR_STATS_SERVICE_H
+#endif // 头文件保护结束

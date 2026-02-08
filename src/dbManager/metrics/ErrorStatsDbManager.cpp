@@ -4,7 +4,7 @@
 
 namespace metrics {
 
-// PostgreSQL 建表语句 - 必须拆分执行（PG prepared statement 不允许多条命令）
+// PostgreSQL 建表语句 - 必须拆分执行（PG 不允许多条命令）
 static const char* CREATE_ERROR_EVENT_PG_TABLE = R"(
 CREATE TABLE IF NOT EXISTS error_event (
     id BIGSERIAL PRIMARY KEY,
@@ -148,19 +148,19 @@ void ErrorStatsDbManager::detectDbType() {
     std::transform(dbTypeStr.begin(), dbTypeStr.end(), dbTypeStr.begin(), ::tolower);
     if (dbTypeStr == "sqlite3" || dbTypeStr == "sqlite") {
         dbType_ = DbType::SQLite3;
-        LOG_INFO << "[ErrorStats] DB type: SQLite3";
+        LOG_INFO << "[错误统计数据库] 数据库类型：SQLite3";
     } else {
         dbType_ = DbType::PostgreSQL;
-        LOG_INFO << "[ErrorStats] DB type: PostgreSQL";
+        LOG_INFO << "[错误统计数据库] 数据库类型：PostgreSQL";
     }
 }
 
 void ErrorStatsDbManager::init() {
-    LOG_INFO << "[ErrorStats] Initializing DB Manager";
+    LOG_INFO << "[错误统计数据库] 初始化开始";
     dbClient_ = drogon::app().getDbClient("aichatpg");
     detectDbType();
     createTablesIfNotExist();
-    LOG_INFO << "[ErrorStats] DB Manager initialized";
+    LOG_INFO << "[错误统计数据库] 初始化完成";
 }
 
 void ErrorStatsDbManager::createTablesIfNotExist() {
@@ -174,7 +174,7 @@ void ErrorStatsDbManager::createTablesIfNotExist() {
             dbClient_->execSqlSync(CREATE_ERROR_AGG_HOUR_SQLITE);
             dbClient_->execSqlSync(CREATE_REQUEST_AGG_HOUR_SQLITE);
         } else {
-            // PostgreSQL 同样需要分开执行，避免一次 exec 多条 SQL（prepared statement 限制）
+            // PostgreSQL 同样需要逐条执行，避免多语句执行限制
             dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_TABLE);
             dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_IDX1);
             dbClient_->execSqlSync(CREATE_ERROR_EVENT_PG_IDX2);
@@ -182,9 +182,9 @@ void ErrorStatsDbManager::createTablesIfNotExist() {
             dbClient_->execSqlSync(CREATE_ERROR_AGG_HOUR_PG);
             dbClient_->execSqlSync(CREATE_REQUEST_AGG_HOUR_PG);
         }
-        LOG_INFO << "[ErrorStats] Tables created/verified";
+        LOG_INFO << "[错误统计数据库] 表结构检查完成";
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] Failed to create tables: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 创建表失败：" << e.what();
     }
 }
 
@@ -209,7 +209,7 @@ static std::string escapeSqlString(const std::string& str) {
         if (c == '\'') {
             result += "''";
         } else if (c == '\0') {
-            // Skip null bytes
+
         } else {
             result += c;
         }
@@ -244,7 +244,7 @@ bool ErrorStatsDbManager::insertEvents(const std::vector<ErrorEvent>& events) {
         }
         return true;
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] insertEvents failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 写入明细事件失败：" << e.what();
         return false;
     }
 }
@@ -287,7 +287,7 @@ bool ErrorStatsDbManager::upsertErrorAggHour(const std::vector<ErrorEvent>& even
         }
         return true;
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] upsertErrorAggHour failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 写入错误聚合数据失败：" << e.what();
         return false;
     }
 }
@@ -317,13 +317,13 @@ bool ErrorStatsDbManager::upsertRequestAggHour(const RequestAggData& data) {
         }
         return true;
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] upsertRequestAggHour failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 写入请求聚合数据失败：" << e.what();
         return false;
     }
 }
 
 // ============================================================================
-// 修复：queryErrorSeries 参数绑定 Bug
+// 修复：查询错误时间序列 参数绑定
 // 原问题：动态添加过滤条件但只传递了前两个参数
 // 解决方案：使用字符串拼接构建完整 SQL（值已转义）
 // ============================================================================
@@ -362,7 +362,7 @@ std::vector<AggBucket> ErrorStatsDbManager::queryErrorSeries(const QueryParams& 
             result.push_back(b);
         }
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] queryErrorSeries failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 查询错误时间序列失败：" << e.what();
     }
     return result;
 }
@@ -393,13 +393,13 @@ std::vector<AggBucket> ErrorStatsDbManager::queryRequestSeries(const QueryParams
             result.push_back(b);
         }
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] queryRequestSeries failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 查询请求时间序列失败：" << e.what();
     }
     return result;
 }
 
 // ============================================================================
-// 修复：queryEvents 参数绑定 Bug
+// 修复：查询错误事件 参数绑定
 // ============================================================================
 std::vector<ErrorEventRecord> ErrorStatsDbManager::queryEvents(const QueryParams& params, int limit, int offset) {
     std::vector<ErrorEventRecord> result;
@@ -449,7 +449,7 @@ std::vector<ErrorEventRecord> ErrorStatsDbManager::queryEvents(const QueryParams
             result.push_back(rec);
         }
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] queryEvents failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 查询错误事件失败：" << e.what();
     }
     return result;
 }
@@ -479,7 +479,7 @@ std::optional<ErrorEventRecord> ErrorStatsDbManager::queryEventById(int64_t id) 
         rec.rawSnippet = row["raw_snippet"].isNull() ? "" : row["raw_snippet"].as<std::string>();
         return rec;
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] queryEventById failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 按ID查询错误事件失败：" << e.what();
         return std::nullopt;
     }
 }
@@ -495,7 +495,7 @@ int ErrorStatsDbManager::cleanupOldEvents(int retentionDays) {
         auto res = dbClient_->execSqlSync(sql);
         return static_cast<int>(res.affectedRows());
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] cleanupOldEvents failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 清理过期明细事件失败：" << e.what();
         return 0;
     }
 }
@@ -514,9 +514,9 @@ int ErrorStatsDbManager::cleanupOldAgg(int retentionDays) {
         auto res2 = dbClient_->execSqlSync(sql2);
         return static_cast<int>(res1.affectedRows() + res2.affectedRows());
     } catch (const std::exception& e) {
-        LOG_ERROR << "[ErrorStats] cleanupOldAgg failed: " << e.what();
+        LOG_ERROR << "[错误统计数据库] 清理过期聚合数据失败：" << e.what();
         return 0;
     }
 }
 
-} // namespace metrics
+} // 命名空间结束

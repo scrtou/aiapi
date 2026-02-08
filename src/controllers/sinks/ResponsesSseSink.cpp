@@ -18,7 +18,7 @@ ResponsesSseSink::ResponsesSseSink(
             std::chrono::system_clock::now().time_since_epoch()
         ).count()
     );
-    LOG_DEBUG << "[响应SSE] 已创建, 模型: " << model_;
+    LOG_DEBUG << "[响应SSE] 已创建，模型：" << model_;
 }
 
 void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
@@ -43,9 +43,9 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
             handleToolCallDone(arg);
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[响应SSE] 令牌用量: 输入=" << arg.inputTokens
+            LOG_DEBUG << "[响应SSE] 令牌用量： 输入=" << arg.inputTokens
                      << ", 输出=" << arg.outputTokens;
-            // Usage 信息会在 Completed 事件中包含
+            // 信息会在 已完成 事件中包含
         }
         else if constexpr (std::is_same_v<T, generation::Completed>) {
             handleCompleted(arg);
@@ -78,6 +78,9 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const std::str
         if (!streamCallback_(sseData)) {
             LOG_WARN << "[响应SSE] 流回调返回false";
             closed_ = true;
+            if (closeCallback_) {
+                closeCallback_();
+            }
         }
     }
 }
@@ -90,7 +93,7 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Va
 }
 
 void ResponsesSseSink::handleStarted(const generation::Started& event) {
-    LOG_DEBUG << "[响应SSE] 开始事件, 响应ID: " << event.responseId;
+    LOG_DEBUG << "[响应SSE] 开始事件，响应ID：" << event.responseId;
 
     if (responseId_.empty()) {
         responseId_ = event.responseId;
@@ -99,14 +102,14 @@ void ResponsesSseSink::handleStarted(const generation::Started& event) {
         model_ = event.model;
     }
     
-    // 1) response.created
+    // 1) 响应.已创建
     Json::Value createdEvent(Json::objectValue);
     createdEvent["type"] = "response.created";
     createdEvent["sequence_number"] = sequenceNumber_++;
     createdEvent["response"] = buildResponseObject("in_progress");
     sendSseEvent("response.created", createdEvent);
 
-    // 2) response.output_item.added
+
     Json::Value outputItem;
     outputItem["type"] = "message";
     outputItem["id"] = "msg_" + responseId_;
@@ -127,7 +130,7 @@ void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& 
     // 累积文本
     outputText_ += event.delta;
     
-    // response.output_text.delta
+
     Json::Value deltaEvent(Json::objectValue);
     deltaEvent["type"] = "response.output_text.delta";
     deltaEvent["sequence_number"] = sequenceNumber_++;
@@ -140,19 +143,19 @@ void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& 
 }
 
 void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& event) {
-    // 如果之前没有通过 delta 发送，使用完整文本
+    // 如果之前没有通过 发送，使用完整文本
     if (outputText_.empty()) {
         outputText_ = event.text;
     }
 
-    // 当前项目没有上游真实 token stream；为了兼容 SSE 客户端，若未见 delta，则把 Done 拆分为多个 delta 发送。
+    // 当前项目没有上游真实 ；为了兼容 SSE 客户端，若未见 ，则把 拆分为多个 发送。
     if (!sawDelta_ && !outputText_.empty()) {
         auto utf8ChunkSize = [](const std::string& s, size_t pos, size_t maxBytes) -> size_t {
             if (pos >= s.size()) return 0;
             size_t remaining = s.size() - pos;
             size_t target = std::min(remaining, maxBytes);
             size_t end = pos + target;
-            // Move end backward until it points to a UTF-8 boundary (start of next codepoint).
+
             while (end < s.size() && end > pos &&
                    (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) {
                 end--;
@@ -194,7 +197,7 @@ void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event)
 }
 
 void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
-    // 构建 output item (message)
+
     Json::Value outputItem;
     outputItem["type"] = "message";
     outputItem["id"] = "msg_" + responseId_;
@@ -212,7 +215,7 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
     }
     outputItem["content"] = content;
 
-    // 添加 tool_calls
+
     if (!toolCalls_.empty()) {
         Json::Value toolCallsJson(Json::arrayValue);
         for (const auto& tc : toolCalls_) {
@@ -230,7 +233,7 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
         outputItem["tool_calls"] = toolCallsJson;
     }
     
-    // 发送 response.output_item.done（OpenAI Responses streaming 事件）
+    // 发送 response.output_item.done（OpenAI Responses 事件）
     Json::Value outputItemDoneEvent(Json::objectValue);
     outputItemDoneEvent["type"] = "response.output_item.done";
     outputItemDoneEvent["sequence_number"] = sequenceNumber_++;
@@ -238,7 +241,7 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
     outputItemDoneEvent["item"] = outputItem;
     sendSseEvent("response.output_item.done", outputItemDoneEvent);
     
-    // response.completed
+    // 响应已完成
     Json::Value responseObj = buildResponseObject("completed");
     
     // 添加 usage 信息（如果有）
@@ -263,7 +266,7 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
 }
 
 void ResponsesSseSink::handleError(const generation::Error& event) {
-    LOG_ERROR << "[响应SSE] 错误: " << event.message;
+    LOG_ERROR << "[响应SSE] 错误：" << event.message;
     
     Json::Value error;
     error["type"] = generation::errorCodeToString(event.code);

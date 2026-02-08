@@ -13,7 +13,7 @@
 
 using namespace metrics;
 
-// ========== Severity 枚举转换测试 ==========
+// ========== 枚举转换测试 ==========
 
 DROGON_TEST(ErrorEvent_SeverityToString)
 {
@@ -25,11 +25,11 @@ DROGON_TEST(ErrorEvent_StringToSeverity)
 {
     CHECK(ErrorEvent::stringToSeverity("WARN") == Severity::WARN);
     CHECK(ErrorEvent::stringToSeverity("ERROR") == Severity::ERROR);
-    CHECK(ErrorEvent::stringToSeverity("unknown") == Severity::WARN);  // 默认 WARN
+    CHECK(ErrorEvent::stringToSeverity("unknown") == Severity::WARN);  // 默认 警告
     CHECK(ErrorEvent::stringToSeverity("") == Severity::WARN);
 }
 
-// ========== Domain 枚举转换测试 ==========
+// ========== 枚举转换测试 ==========
 
 DROGON_TEST(ErrorEvent_DomainToString)
 {
@@ -52,7 +52,7 @@ DROGON_TEST(ErrorEvent_StringToDomain)
     CHECK(ErrorEvent::stringToDomain("unknown") == Domain::INTERNAL);  // 默认 INTERNAL
 }
 
-// ========== ErrorEvent 序列化测试 ==========
+// ========== 错误Event 序列化测试 ==========
 
 DROGON_TEST(ErrorEvent_ToJson)
 {
@@ -92,7 +92,7 @@ DROGON_TEST(ErrorEvent_ToJson)
     CHECK(json["message"].asString() == "Request timeout");
 }
 
-// ========== EventType 常量测试 ==========
+
 
 DROGON_TEST(EventType_Constants)
 {

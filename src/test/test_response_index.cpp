@@ -4,9 +4,7 @@
  */
 
 #include <drogon/drogon_test.h>
-
-#include "../sessionManager/ResponseIndex.h"
-
+#include "sessionManager/continuity/ResponseIndex.h"
 #include <thread>
 
 DROGON_TEST(ResponseIndex_BindAndGet)
@@ -82,7 +80,7 @@ DROGON_TEST(ResponseIndex_Cleanup_MaxAge)
 
     ResponseIndex::instance().bind(respId, "sess_age");
 
-    // maxAge 是 seconds 级别；这里等待 > 1s 以触发清理
+    // maxAge 是 级别；这里等待 > 1s 以触发清理
     std::this_thread::sleep_for(std::chrono::seconds(2));
     ResponseIndex::instance().cleanup(ResponseIndex::kDefaultMaxEntries, std::chrono::seconds(1));
 

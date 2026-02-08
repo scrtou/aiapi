@@ -42,7 +42,7 @@ void ResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
             toolCalls_.push_back(arg);
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            // usage 会在 Completed 里出现（GenerationService 会把 usage 放进 Completed）
+            // 会在 已完成 里出现（GenerationService 会把 放进 已完成）
         }
         else if constexpr (std::is_same_v<T, generation::Completed>) {
             if (arg.usage.has_value()) {
@@ -83,7 +83,7 @@ Json::Value ResponsesJsonSink::buildResponse() {
 
     Json::Value response;
     if (responseId_.empty()) {
-        // 按设计：/v1/responses 必须有 id；这里兜底避免返回空字段
+        // 按协议约束：Responses 必须包含 id；这里兜底避免返回空字段
         responseId_ = "resp_missing";
     }
     response["id"] = responseId_;
@@ -92,10 +92,10 @@ Json::Value ResponsesJsonSink::buildResponse() {
     response["model"] = model_;
     response["status"] = "completed";
 
-    // 内部字段：供 Session 层存储/续聊映射
-    //response["_internal_session_id"] = internalSessionId_;
+    // 内部字段：供 会话 层存储/续聊映射
+    // 响应["_internal_会话_id"] = internal会话Id_;
 
-    // output
+
     Json::Value outputArray(Json::arrayValue);
 
     Json::Value messageOutput;
@@ -104,7 +104,7 @@ Json::Value ResponsesJsonSink::buildResponse() {
     messageOutput["status"] = "completed";
     messageOutput["role"] = "assistant";
 
-    // content
+
     Json::Value contentArray(Json::arrayValue);
     if (!collectedText_.empty()) {
         Json::Value textContent;
@@ -114,7 +114,7 @@ Json::Value ResponsesJsonSink::buildResponse() {
     }
     messageOutput["content"] = contentArray;
 
-    // tool_calls（如果有）
+
     if (!toolCalls_.empty()) {
         Json::Value toolCallsJson(Json::arrayValue);
         for (const auto& tc : toolCalls_) {
@@ -135,7 +135,7 @@ Json::Value ResponsesJsonSink::buildResponse() {
     outputArray.append(messageOutput);
     response["output"] = outputArray;
 
-    // usage
+
     Json::Value usage;
     if (usage_.has_value()) {
         usage["input_tokens"] = usage_->inputTokens;

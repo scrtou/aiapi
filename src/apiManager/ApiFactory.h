@@ -4,12 +4,16 @@
 #include "Apicomn.h"
 #include <unordered_map>
 #include <memory>
-using namespace std;
+
+using std::string;
+using std::unordered_map;
+using std::make_shared;
+
 typedef void* (*CreateApi)(void);
 class ApiFactory
 {
 private:
-    /* data */
+    /* 成员数据 */
     unordered_map<string,CreateApi> m_ApiFactoryMap;
 public:
    static ApiFactory& getInstance();

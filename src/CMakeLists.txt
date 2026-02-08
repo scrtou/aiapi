@@ -25,8 +25,14 @@ add_executable(${PROJECT_NAME}
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
+    apipoint/openai/OpenAiProvider.cpp
     channelManager/channelManager.cpp
-    controllers/AiApi.cc
+    controllers/AiApiController.cc
+    controllers/AccountController.cc
+    controllers/ChannelController.cc
+    controllers/MetricsController.cc
+    controllers/LogController.cc
+    controllers/HealthController.cc
     controllers/sinks/ChatSseSink.cpp
     controllers/sinks/ChatJsonSink.cpp
     controllers/sinks/ResponsesSseSink.cpp
@@ -37,17 +43,24 @@ add_executable(${PROJECT_NAME}
     dbManager/metrics/StatusDbManager.cpp
     metrics/ErrorStatsConfig.cpp
     metrics/ErrorStatsService.cpp
-    sessionManager/Session.cpp
-    sessionManager/ClientOutputSanitizer.cpp
-    sessionManager/GenerationService.cpp
-    sessionManager/ResponseIndex.cpp
-    sessionManager/TextExtractor.cpp
-    sessionManager/ContinuityResolver.cpp
-    sessionManager/RequestAdapters.cpp
-    sessionManager/ToolCallBridge.cpp
-    sessionManager/ToolCallValidator.cpp
-    sessionManager/XmlTagToolCallCodec.cpp
+    sessionManager/core/Session.cpp
+    sessionManager/core/ClientOutputSanitizer.cpp
+    sessionManager/core/GenerationService.cpp
+    sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
+    sessionManager/tooling/BridgeHelpers.cpp
+    sessionManager/tooling/StrictClientRules.cpp
+    sessionManager/tooling/ToolDefinitionEncoder.cpp
+    sessionManager/tooling/ForcedToolCallGenerator.cpp
+    sessionManager/tooling/ToolCallNormalizer.cpp
+    sessionManager/continuity/ResponseIndex.cpp
+    sessionManager/continuity/TextExtractor.cpp
+    sessionManager/continuity/ContinuityResolver.cpp
+    sessionManager/core/RequestAdapters.cpp
+    sessionManager/tooling/ToolCallBridge.cpp
+    sessionManager/tooling/ToolCallValidator.cpp
+    sessionManager/tooling/XmlTagToolCallCodec.cpp
     tools/ZeroWidthEncoder.cpp
+    utils/ConfigValidator.cpp
 )
 
 # ##############################################################################
@@ -79,6 +92,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/apiManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
+                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/openai
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers
@@ -90,7 +104,8 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/models
                            ${CMAKE_CURRENT_SOURCE_DIR}/sessionManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/tools
+                           ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

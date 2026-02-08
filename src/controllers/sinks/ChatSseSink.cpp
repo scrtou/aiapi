@@ -14,7 +14,7 @@ ChatSseSink::ChatSseSink(
     model_(model),
     completionId_(generateCompletionId())
 {
-    LOG_DEBUG << "[聊天SSE] 已创建, 模型: " << model_ << ", ID: " << completionId_;
+    LOG_DEBUG << "[聊天SSE] 已创建，模型：" << model_ << ", ID: " << completionId_;
 }
 
 void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
@@ -27,8 +27,8 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
         using T = std::decay_t<decltype(arg)>;
         
         if constexpr (std::is_same_v<T, generation::Started>) {
-            LOG_DEBUG << "[聊天SSE] 开始事件, 响应ID: " << arg.responseId;
-            // Chat SSE 不需要在 Started 时发送任何内容
+            LOG_DEBUG << "[聊天SSE] 开始事件，响应ID：" << arg.responseId;
+            // SSE 不需要在 已开始 时发送任何内容
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDelta>) {
             // 发送增量文本
@@ -47,16 +47,16 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             }
         }
         else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
-            // 发送 tool_calls delta
-            // IMPORTANT: For ChatCompletions streaming, some clients only execute tools when
-            // tool_calls and finish_reason="tool_calls" appear together in the same chunk.
-            // Emit finish_reason here (and avoid emitting a separate trailing finish chunk).
+
+
+
+
             std::string json = buildToolCallChunkJson(arg, "tool_calls", firstChunk_);
             sendSseEvent(json);
             firstChunk_ = false;
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[聊天SSE] 令牌用量: 输入=" << arg.inputTokens
+            LOG_DEBUG << "[聊天SSE] 令牌用量： 输入=" << arg.inputTokens
                       << ", 输出=" << arg.outputTokens;
             usage_ = arg;
             if (usage_->totalTokens == 0) {
@@ -64,7 +64,7 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             }
         }
         else if constexpr (std::is_same_v<T, generation::Completed>) {
-            // Completed 可能携带 usage（优先使用 Completed 的 usage）
+            // 已完成 可能携带 （优先使用 已完成 的 ）
             if (arg.usage.has_value()) {
                 usage_ = arg.usage;
                 if (usage_->totalTokens == 0) {
@@ -72,16 +72,16 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
                 }
             }
 
-            // When tool calls are present, we already emitted a chunk that contains BOTH
-            // tool_calls and finish_reason="tool_calls". Do not emit an extra trailing
-            // empty finish chunk that would separate them again.
+
+
+
             const std::string finish = arg.finishReason.empty() ? "stop" : arg.finishReason;
             if (finish != "tool_calls") {
                 std::string json = buildChunkJson("", finish, false);
                 sendSseEvent(json);
             }
 
-            // 发送 usage chunk（非标准 OpenAI chunk，但满足“流式返回 usage”的需求）
+            // 发送 （非标准 OpenAI ，但满足“流式返回 ”的需求）
             if (usage_.has_value()) {
                 sendSseEvent(buildUsageChunkJson(*usage_));
             }
@@ -89,7 +89,7 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             sendDone();
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
-            LOG_ERROR << "[聊天SSE] 错误: " << arg.message;
+            LOG_ERROR << "[聊天SSE] 错误：" << arg.message;
             // 构建错误响应
             Json::Value errorJson;
             errorJson["error"]["message"] = arg.message;
@@ -126,6 +126,9 @@ void ChatSseSink::sendSseEvent(const std::string& data) {
         if (!streamCallback_(sseData)) {
             LOG_WARN << "[聊天SSE] 流回调返回false";
             closed_ = true;
+            if (closeCallback_) {
+                closeCallback_();
+            }
         }
     }
 }
@@ -245,7 +248,7 @@ std::string ChatSseSink::buildUsageChunkJson(const generation::Usage& usage) {
     );
     chunk["model"] = model_;
 
-    // 非标准：为了兼容“流式返回 usage”，这里 choices 发送空数组
+    // 非标准：为了兼容“流式返回 ”，这里 发送空数组
     chunk["choices"] = Json::Value(Json::arrayValue);
 
     int total = usage.totalTokens;

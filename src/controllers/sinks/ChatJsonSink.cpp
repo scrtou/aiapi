@@ -20,7 +20,7 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
         using T = std::decay_t<decltype(arg)>;
         
         if constexpr (std::is_same_v<T, generation::Started>) {
-            // JSON sink 不需要在 Started 时做任何事
+            // JSON 不需要在 已开始 时做任何事
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDelta>) {
             // 收集增量文本
@@ -36,7 +36,7 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
             toolCalls_.push_back(arg);
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            // 存储 usage 信息（供 Chat Completions 的 usage 字段使用）
+            // 存储 信息（供 的 字段使用）
             usage_ = arg;
             if (usage_->totalTokens == 0) {
                 usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
@@ -94,7 +94,7 @@ Json::Value ChatJsonSink::buildResponse() {
     );
     response["model"] = model_;
 
-    // Chat Completions usage（简单实现：优先使用 Session/Provider 上报的 usage；没有则返回 0）
+    // （简单实现：优先使用 会话/上游 上报的 ；没有则返回 0）
     {
         int promptTokens = 0;
         int completionTokens = 0;
@@ -120,8 +120,8 @@ Json::Value ChatJsonSink::buildResponse() {
     Json::Value message;
     message["role"] = "assistant";
     if (!toolCalls_.empty()) {
-        // OpenAI ChatCompletions: when tool_calls are present, content is usually null.
-        // Keep text only if we actually have remaining non-tool text.
+
+
         if (collectedText_.empty()) {
             message["content"] = Json::nullValue;
         } else {

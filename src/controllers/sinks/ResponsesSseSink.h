@@ -1,13 +1,11 @@
 #ifndef RESPONSES_SSE_SINK_H
 #define RESPONSES_SSE_SINK_H
 
-#include <sessionManager/IResponseSink.h>
+#include <sessionManager/contracts/IResponseSink.h>
 #include <drogon/drogon.h>
 #include <functional>
 #include <string>
 #include <vector>
-
-using namespace drogon;
 
 /**
  * @brief Responses API SSE 输出 Sink
@@ -107,4 +105,5 @@ private:
     bool closed_ = false;
 };
 
-#endif // RESPONSES_SSE_SINK_H
+
+#endif // 头文件保护结束

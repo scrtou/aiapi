@@ -1,7 +1,7 @@
 #include "channelDbManager.h"
-#include <algorithm>  // for std::transform
+#include <algorithm>  // 引入算法库，用于字符串统一小写等处理
 
-// PostgreSQL create table SQL
+
 std::string channelTableName = "channel";
 std::string createChannelTablePgSql = R"(
     CREATE TABLE IF NOT EXISTS channel (
@@ -75,13 +75,13 @@ void ChannelDbManager::detectDbType()
     
     if (dbTypeStr == "sqlite3" || dbTypeStr == "sqlite") {
         dbType = DbType::SQLite3;
-        LOG_INFO << "[渠道数据库] 配置的数据库类型: SQLite3";
+        LOG_INFO << "[渠道数据库] 配置的数据库类型： SQLite3";
     } else if (dbTypeStr == "mysql" || dbTypeStr == "mariadb") {
         dbType = DbType::MySQL;
-        LOG_INFO << "[渠道数据库] 配置的数据库类型: MySQL";
+        LOG_INFO << "[渠道数据库] 配置的数据库类型： MySQL";
     } else {
         dbType = DbType::PostgreSQL;
-        LOG_INFO << "[渠道数据库] 配置的数据库类型: PostgreSQL";
+        LOG_INFO << "[渠道数据库] 配置的数据库类型： PostgreSQL";
     }
 }
 
@@ -170,10 +170,10 @@ bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& cha
 {
     std::string selectsql;
     if (dbType == DbType::SQLite3) {
-        // SQLite3: use datetime() instead of to_char()
+
         selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel where channelname=$1";
     } else {
-        // PostgreSQL: use to_char() for date formatting
+
         selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel where channelname=$1";
     }
     auto result = dbClient->execSqlSync(selectsql, channelName);
@@ -207,10 +207,10 @@ list<Channelinfo_st> ChannelDbManager::getChannelList()
 {
     std::string selectsql;
     if (dbType == DbType::SQLite3) {
-        // SQLite3: use datetime() instead of to_char()
+
         selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel order by id";
     } else {
-        // PostgreSQL: use to_char() for date formatting
+
         selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel order by id";
     }
     auto result = dbClient->execSqlSync(selectsql);
@@ -258,13 +258,13 @@ bool ChannelDbManager::isTableExist()
 {
     if (dbType == DbType::SQLite3)
     {
-        // SQLite3: 使用 sqlite_master
+
         auto result = dbClient->execSqlSync("SELECT name FROM sqlite_master WHERE type='table' AND name='" + channelTableName + "'");
         return result.size() != 0;
     }
     else
     {
-        // PostgreSQL/MySQL: 使用 information_schema
+
         auto result = dbClient->execSqlSync("SELECT table_name FROM information_schema.tables WHERE table_name='" + channelTableName + "'");
         return result.size() != 0;
     }
@@ -296,7 +296,7 @@ void ChannelDbManager::checkAndUpgradeTable()
     
     if (dbType == DbType::SQLite3)
     {
-        // SQLite3: 使用 PRAGMA table_info
+
         std::string checkSql = "PRAGMA table_info(channel)";
         auto result = dbClient->execSqlSync(checkSql);
         
@@ -315,7 +315,7 @@ void ChannelDbManager::checkAndUpgradeTable()
     }
     else
     {
-        // PostgreSQL/MySQL: 使用 information_schema
+
         auto result1 = dbClient->execSqlSync("SELECT column_name FROM information_schema.columns WHERE table_name='channel' AND column_name='accountcount'");
         hasAccountCount = (result1.size() > 0);
         
@@ -325,22 +325,22 @@ void ChannelDbManager::checkAndUpgradeTable()
     
     if (!hasAccountCount)
     {
-        LOG_INFO << "[渠道数据库] 表'channel'中缺少列'accountcount', 正在添加...";
+        LOG_INFO << "[渠道数据库] 表'渠道'中缺少列'账号count'，正在添加...";
         try {
             if (dbType == DbType::SQLite3) {
                 dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountcount INTEGER DEFAULT 0");
             } else {
                 dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountcount INT DEFAULT 0");
             }
-            LOG_INFO << "[渠道数据库] 列'accountcount'添加成功";
+            LOG_INFO << "[渠道数据库] 列'账号count'添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[渠道数据库] 添加列'accountcount'失败: " << e.what();
+            LOG_ERROR << "[渠道数据库] 添加列'账号count'失败：" << e.what();
         }
     }
     
     if (!hasSupportsToolCalls)
     {
-        LOG_INFO << "[渠道数据库] 表'channel'中缺少列'supports_tool_calls', 正在添加...";
+        LOG_INFO << "[渠道数据库] 表'渠道'中缺少列'supports_tool_calls'，正在添加...";
         try {
             if (dbType == DbType::SQLite3) {
                 dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN supports_tool_calls INTEGER DEFAULT 1");
@@ -349,7 +349,7 @@ void ChannelDbManager::checkAndUpgradeTable()
             }
             LOG_INFO << "[渠道数据库] 列'supports_tool_calls'添加成功";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[渠道数据库] 添加列'supports_tool_calls'失败: " << e.what();
+            LOG_ERROR << "[渠道数据库] 添加列'supports_tool_calls'失败：" << e.what();
         }
     }
 }

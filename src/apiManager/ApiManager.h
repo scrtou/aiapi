@@ -1,9 +1,18 @@
 #include "ApiFactory.h"
 #include "./apipoint/APIinterface.h"
+#include <memory>
 #include <unordered_map>
 #include <queue>
+#include <string>
+#include <vector>
 
-using namespace std;
+using std::priority_queue;
+using std::shared_ptr;
+using std::string;
+using std::unordered_map;
+using std::vector;
+using std::make_shared;
+
 struct ApiInfo
 {
     string apiName;
@@ -23,7 +32,7 @@ public:
 class ApiManager
 {
 private:
-    /* data */
+    /* 成员数据 */
     unordered_map<string, std::priority_queue<std::shared_ptr<ApiInfo>,vector<std::shared_ptr<ApiInfo>>,Compare>> m_ModelnameApiQueueMap;
     unordered_map<string,std::shared_ptr<ApiInfo>> m_ApiNameApiMap;
 public:

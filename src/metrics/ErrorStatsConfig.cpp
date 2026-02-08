@@ -12,7 +12,7 @@ ErrorStatsConfig ErrorStatsConfig::loadFromJson(const Json::Value& config) {
     ErrorStatsConfig cfg;
     
     if (config.isNull() || !config.isObject()) {
-        LOG_WARN << "[ErrorStatsConfig] error_stats config not found or invalid, using defaults";
+        LOG_WARN << "[错误统计配置] error_stats 配置缺失或无效，使用默认配置";
         return cfg;
     }
     
@@ -47,7 +47,7 @@ ErrorStatsConfig ErrorStatsConfig::loadFromJson(const Json::Value& config) {
         if (cfg.retentionDaysRequestAgg > 365) cfg.retentionDaysRequestAgg = 365;
     }
     
-    // raw_snippet 配置
+
     if (config.isMember("raw_snippet_enabled") && config["raw_snippet_enabled"].isBool()) {
         cfg.rawSnippetEnabled = config["raw_snippet_enabled"].asBool();
     }
@@ -78,7 +78,7 @@ ErrorStatsConfig ErrorStatsConfig::loadFromJson(const Json::Value& config) {
         if (cfg.queueCapacity > 1000000) cfg.queueCapacity = 1000000;
     }
     
-    LOG_INFO << "[ErrorStatsConfig] Loaded config: enabled=" << cfg.enabled
+    LOG_INFO << "[错误统计配置] 已加载配置： =" << cfg.enabled
              << ", persistDetail=" << cfg.persistDetail
              << ", persistAgg=" << cfg.persistAgg
              << ", persistRequestAgg=" << cfg.persistRequestAgg
@@ -102,9 +102,9 @@ void ErrorStatsConfig::initFromApp() {
         if (customConfig.isMember("error_stats")) {
             g_config = loadFromJson(customConfig["error_stats"]);
         } else {
-            LOG_WARN << "[ErrorStatsConfig] custom_config.error_stats not found, using defaults";
+            LOG_WARN << "[错误统计配置] custom_config.error_stats 未找到，使用默认配置";
         }
     });
 }
 
-} // namespace metrics
+} // 命名空间结束

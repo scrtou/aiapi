@@ -3,11 +3,12 @@
 
 #include <string>
 #include <optional>
+#include <vector>
 
 /**
  * @brief Provider 层返回的结构化结果
  * 
- * 替代原有的隐式写入 session.responsemessage 的方式，
+ * 替代原有的隐式写入 session.response.message 的方式，
  * 使 Provider 返回显式的结构化数据。
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 6.2 节
@@ -35,7 +36,7 @@ enum class ProviderErrorCode {
 struct ProviderError {
     ProviderErrorCode code = ProviderErrorCode::None;
     std::string message;        // 错误消息
-    std::string providerCode;   // Provider 原始错误码
+    std::string providerCode;   // 上游 原始错误码
     int httpStatusCode = 0;     // HTTP 状态码（如果适用）
     
     bool hasError() const {
@@ -80,6 +81,12 @@ struct Usage {
     }
 };
 
+struct ToolCall {
+    std::string id;
+    std::string name;
+    std::string arguments;
+};
+
 /**
  * @brief Provider 层返回结果
  * 
@@ -92,12 +99,13 @@ struct Usage {
 struct ProviderResult {
     std::string text;                   // 生成的文本
     std::optional<Usage> usage;         // Token 使用量
+    std::vector<ToolCall> toolCalls;    // 原生工具调用（可选）
     ProviderError error;                // 错误信息
-    
-    // 兼容旧接口的字段（渐进式迁移用）
+
+    // Provider 返回字段
     int statusCode = 200;               // HTTP 状态码
     std::string rawResponse;            // 原始响应（调试用）
-    
+
     /**
      * @brief 判断是否成功
      */
@@ -135,26 +143,8 @@ struct ProviderResult {
         return result;
     }
     
-    /**
-     * @brief 从旧格式的 session.responsemessage 转换（兼容层）
-     * 
-     * 用于渐进式迁移，Provider 可以先返回 ProviderResult，
-     * 同时保持向后兼容。
-     */
-    static ProviderResult fromLegacyResponse(const std::string& message, int statusCode) {
-        ProviderResult result;
-        result.text = message;
-        result.statusCode = statusCode;
-        if (statusCode == 200) {
-            result.error = ProviderError::none();
-        } else {
-            result.error = ProviderError{ProviderErrorCode::InternalError, 
-                "Provider returned error", "", statusCode};
-        }
-        return result;
-    }
 };
 
-} // namespace provider
+} // 命名空间结束
 
-#endif // PROVIDER_RESULT_H
+#endif // 头文件保护结束

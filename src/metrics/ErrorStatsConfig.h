@@ -23,16 +23,16 @@ enum class DropPolicy {
 struct ErrorStatsConfig {
     // ========== 功能开关 ==========
     bool enabled = true;              // 是否启用错误统计
-    bool persistDetail = true;        // 是否持久化明细到 error_event 表
-    bool persistAgg = true;           // 是否持久化聚合到 error_agg_hour 表
-    bool persistRequestAgg = true;    // 是否持久化请求聚合到 request_agg_hour 表
+    bool persistDetail = true;        // 是否持久化明细到 错误_event 表
+    bool persistAgg = true;           // 是否持久化聚合到 错误_agg_hour 表
+    bool persistRequestAgg = true;    // 是否持久化请求聚合到 请求_agg_hour 表
     
     // ========== 保留策略 ==========
     int retentionDaysDetail = 30;     // 明细保留天数
     int retentionDaysAgg = 30;        // 错误聚合保留天数
     int retentionDaysRequestAgg = 30; // 请求聚合保留天数
     
-    // ========== raw_snippet 配置 ==========
+
     bool rawSnippetEnabled = true;    // 是否存储 raw_snippet
     size_t rawSnippetMaxLen = 32768;  // raw_snippet 最大长度（32KB）
     
@@ -84,6 +84,6 @@ struct ErrorStatsConfig {
     }
 };
 
-} // namespace metrics
+} // 命名空间结束
 
-#endif // ERROR_STATS_CONFIG_H
+#endif // 头文件保护结束

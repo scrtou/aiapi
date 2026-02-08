@@ -25,8 +25,8 @@ enum class Severity {
  * 用于前端快速过滤与 Prometheus 维度分类
  */
 enum class Domain {
-    UPSTREAM,        // 向 Provider 发起请求/处理响应的错误
-    TOOL_BRIDGE,     // 文本转工具链路（注入、sentinel、XML 解析、参数归一、校验、降级、自愈等）
+    UPSTREAM,        // 向 上游 发起请求/处理响应的错误
+    TOOL_BRIDGE,     // 文本转工具链路（注入、、XML 解析、参数归一、校验、降级、自愈等）
     TOOL_VALIDATION, // ToolCallValidator 校验相关
     SESSION_GATE,    // 并发门控（409 RejectConcurrent、CancelPrevious 取消等）
     INTERNAL,        // 内部异常
@@ -40,7 +40,7 @@ enum class Domain {
  * 类型要"少而稳定"，细节放到 detail_json
  */
 namespace EventType {
-    // ========== UPSTREAM ==========
+
     constexpr const char* UPSTREAM_NETWORK_ERROR = "upstream.network_error";
     constexpr const char* UPSTREAM_TIMEOUT = "upstream.timeout";
     constexpr const char* UPSTREAM_RATE_LIMITED = "upstream.rate_limited";
@@ -48,7 +48,7 @@ namespace EventType {
     constexpr const char* UPSTREAM_HTTP_ERROR = "upstream.http_error";
     constexpr const char* UPSTREAM_SERVICE_UNAVAILABLE = "upstream.service_unavailable";
     
-    // ========== TOOL_BRIDGE ==========
+
     constexpr const char* TOOLBRIDGE_TRANSFORM_INJECTED = "toolbridge.transform_injected";
     constexpr const char* TOOLBRIDGE_TRIGGER_MISSING = "toolbridge.trigger_missing";
     constexpr const char* TOOLBRIDGE_TRIGGER_MISMATCH_FALLBACK = "toolbridge.trigger_mismatch_fallback";
@@ -63,18 +63,18 @@ namespace EventType {
     constexpr const char* TOOLBRIDGE_SELFHEAL_READ_FILE_APPLIED = "toolbridge.selfheal_read_file_applied";
     constexpr const char* TOOLBRIDGE_STRICT_CLIENT_RULE_APPLIED = "toolbridge.strict_client_rule_applied";
     
-    // ========== TOOL_VALIDATION ==========
+
     constexpr const char* TOOLVALIDATION_TOOL_NOT_FOUND = "toolvalidation.tool_not_found";
     constexpr const char* TOOLVALIDATION_ARGUMENTS_NOT_OBJECT = "toolvalidation.arguments_not_object";
     constexpr const char* TOOLVALIDATION_REQUIRED_FIELD_MISSING = "toolvalidation.required_field_missing";
     constexpr const char* TOOLVALIDATION_FIELD_TYPE_MISMATCH = "toolvalidation.field_type_mismatch";
     constexpr const char* TOOLVALIDATION_CRITICAL_FIELD_EMPTY = "toolvalidation.critical_field_empty";
     
-    // ========== SESSION_GATE ==========
+
     constexpr const char* SESSIONGATE_REJECTED_CONFLICT = "sessiongate.rejected_conflict";
     constexpr const char* SESSIONGATE_CANCELLED = "sessiongate.cancelled";
     
-    // ========== INTERNAL ==========
+
     constexpr const char* INTERNAL_EXCEPTION = "internal.exception";
     constexpr const char* INTERNAL_UNKNOWN = "internal.unknown";
 }
@@ -95,7 +95,7 @@ struct ErrorEvent {
     std::string provider;                              // API 提供者名称
     std::string model;                                 // 模型名称
     std::string clientType;                            // 客户端类型
-    std::string apiKind;                               // "chat_completions" | "responses"
+    std::string apiKind;                               // API 类型标识（chat_completions 或 responses）
     bool stream = false;                               // 是否流式
     int httpStatus = 0;                                // HTTP 状态码
     
@@ -127,7 +127,7 @@ struct ErrorEvent {
      */
     static Severity stringToSeverity(const std::string& s) {
         if (s == "ERROR") return Severity::ERROR;
-        return Severity::WARN;  // 默认 WARN
+        return Severity::WARN;  // 默认 警告
     }
     
     /**
@@ -195,11 +195,11 @@ struct RequestCompletedEvent {
     std::string provider;                              // API 提供者名称
     std::string model;                                 // 模型名称
     std::string clientType;                            // 客户端类型
-    std::string apiKind;                               // "chat_completions" | "responses"
+    std::string apiKind;                               // API 类型标识（chat_completions 或 responses）
     bool stream = false;                               // 是否流式
     int httpStatus = 0;                                // HTTP 状态码
 };
 
-} // namespace metrics
+} // 命名空间结束
 
-#endif // ERROR_EVENT_H
+#endif // 头文件保护结束

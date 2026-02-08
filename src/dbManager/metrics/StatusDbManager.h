@@ -34,7 +34,7 @@ struct StatusBucket {
  * @brief 渠道状态数据结构
  */
 struct ChannelStatusData {
-    std::string channelId;      // 渠道 ID（目前用 provider）
+    std::string channelId;      // 渠道 ID（目前用 上游）
     std::string channelName;    // 渠道名称
     int64_t totalRequests = 0;  // 总请求数
     int64_t totalErrors = 0;    // 总错误数
@@ -189,6 +189,6 @@ private:
     ChannelStatusCounts getChannelStatusCounts(const std::string& from, const std::string& to);
 };
 
-} // namespace metrics
+} // 命名空间结束
 
-#endif // STATUS_DB_MANAGER_H
+#endif // 头文件保护结束

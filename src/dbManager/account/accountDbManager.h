@@ -6,7 +6,12 @@
 #include <list>
 #include <memory>
 #include <accountManager/accountManager.h>
-using namespace drogon;
+
+using std::list;
+using std::make_shared;
+using std::shared_ptr;
+using std::string;
+using drogon::app;
 
 // 数据库类型枚举
 enum class DbType {
@@ -55,7 +60,7 @@ class AccountDbManager
     private:
     void detectDbType();
     shared_ptr<drogon::orm::DbClient> dbClient;
-    DbType dbType = DbType::PostgreSQL;  // 默认为 PostgreSQL
+    DbType dbType = DbType::PostgreSQL;
     
 };
 

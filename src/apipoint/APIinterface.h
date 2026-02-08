@@ -2,14 +2,15 @@
 #define APIINTERFACE_H
 #include <string>
 #include <map>
-#include "../sessionManager/Session.h"
+#include "sessionManager/core/Session.h"
 #include "ProviderResult.h"
 
-using namespace std;
+using std::map;
+using std::string;
 
 struct modelInfo
 {
-    string modelName;
+    std::string modelName;
     bool status=true;
 };
 
@@ -17,30 +18,14 @@ class APIinterface
 {
     public:
     virtual ~APIinterface() = default;
-    
+
     /**
-     * @brief 发送聊天消息（旧接口，写入 session.responsemessage）
-     * @deprecated 建议使用 generate() 替代
-     */
-    virtual void postChatMessage(session_st& session) = 0;
-    
-    /**
-     * @brief 发送聊天消息并返回结构化结果（新接口）
-     *
-     * 默认实现调用旧的 postChatMessage 并转换结果，
-     * Provider 可以重写此方法以直接返回 ProviderResult。
+     * @brief 发送聊天消息并返回结构化结果（主接口）
      *
      * @param session 会话状态
      * @return ProviderResult 结构化结果
      */
-    virtual provider::ProviderResult generate(session_st& session) {
-        // 默认实现：调用旧接口并转换结果
-        postChatMessage(session);
-        return provider::ProviderResult::fromLegacyResponse(
-            session.responsemessage.get("message", "").asString(),
-            session.responsemessage.get("statusCode", 500).asInt()
-        );
-    }
+    virtual provider::ProviderResult generate(session_st& session) = 0;
     
     virtual void checkAlivableTokens() = 0;
     virtual void checkModels() = 0;
@@ -53,4 +38,4 @@ class APIinterface
     map<string,modelInfo> ModelInfoMap;
 };
 
-#endif // APIINTERFACE_H
+#endif

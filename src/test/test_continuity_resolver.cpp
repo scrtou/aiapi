@@ -4,11 +4,9 @@
  */
 
 #include <drogon/drogon_test.h>
-
-#include "../sessionManager/ContinuityResolver.h"
-#include "../sessionManager/ResponseIndex.h"
-#include "../sessionManager/Session.h"
-
+#include "sessionManager/continuity/ContinuityResolver.h"
+#include "sessionManager/continuity/ResponseIndex.h"
+#include "sessionManager/core/Session.h"
 #include <tools/ZeroWidthEncoder.h>
 
 namespace {
@@ -21,7 +19,7 @@ bool isHex64(const std::string& s) {
     return true;
 }
 
-} // namespace
+} // 命名空间结束
 
 DROGON_TEST(ContinuityResolver_Responses_PreviousResponseId_Hit)
 {
@@ -128,12 +126,12 @@ DROGON_TEST(SessionStore_ContextMap_IsConsumed_By_GetOrCreateSession)
     auto* mgr = chatSession::getInstance();
     mgr->setTrackingMode(SessionTrackingMode::Hash);
 
-    // 构造一个基础会话，并通过 coverSessionresponse 触发 context_map 生成（保持旧逻辑）。
+    // 构造一个基础会话，并走两阶段会话转移（prepare + cover）触发 context_map 生成。
     session_st base;
-    base.curConversationId = "sess_ctx_base_001";
-    base.selectmodel = "GPT-4o";
-    base.selectapi = "";  // 避免触发 provider transferThreadContext
-    base.client_info["client_type"] = "";
+    base.state.conversationId = "sess_ctx_base_001";
+    base.request.model = "GPT-4o";
+    base.request.api = "";  // 避免触发 上游 transfer线程Context
+    base.provider.clientInfo["client_type"] = "";
 
     {
         Json::Value m1;
@@ -147,36 +145,34 @@ DROGON_TEST(SessionStore_ContextMap_IsConsumed_By_GetOrCreateSession)
         base.addMessageToContext(m2);
     }
 
-    base.requestmessage = "u2";
-    base.requestmessage_raw = "u2";
-    base.responsemessage["message"] = "a2";
+    base.request.message = "u2";
+    base.request.rawMessage = "u2";
+    base.response.message["message"] = "a2";
 
-    mgr->addSession(base.curConversationId, base);
+    mgr->addSession(base.state.conversationId, base);
 
-    // 该调用会：
-    // - 追加 u2/a2 到 message_context
-    // - 重算 newConversationId 并 re-key session_map
-    // - 生成 context_map（用于“裁剪 hashKey”映射回真实 sessionId）
+    // 两阶段会话转移：先预生成 nextSessionId，再提交会话转移。
+    mgr->prepareNextSessionId(base);
     mgr->coverSessionresponse(base);
 
-    const std::string realSessionId = base.curConversationId;
-    const std::string trimmedHashKey = base.contextConversationId;
+    const std::string realSessionId = base.state.conversationId;
+    const std::string trimmedHashKey = base.state.contextConversationId;
 
     CHECK(isHex64(realSessionId));
     CHECK(isHex64(trimmedHashKey));
     CHECK(!mgr->sessionIsExist(trimmedHashKey));
     CHECK(mgr->sessionIsExist(realSessionId));
 
-    // 新请求命中 trimmedHashKey 时，应映射回 realSessionId，并消费 context_map。
+    // 新请求命中 trimmedHashKey 时，应映射回 real会话Id，并消费 context_map。
     session_st incoming;
-    incoming.selectmodel = "GPT-4o";
-    incoming.selectapi = "";
-    incoming.client_info["client_type"] = "";
+    incoming.request.model = "GPT-4o";
+    incoming.request.api = "";
+    incoming.provider.clientInfo["client_type"] = "";
 
     mgr->getOrCreateSession(trimmedHashKey, incoming);
 
-    CHECK(incoming.curConversationId == realSessionId);
-    CHECK(incoming.is_continuation);
+    CHECK(incoming.state.conversationId == realSessionId);
+    CHECK(incoming.state.isContinuation);
 
     // 映射应当已被消费（一次性）
     std::string out;

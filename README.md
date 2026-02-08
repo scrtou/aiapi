@@ -502,6 +502,20 @@ Docker 入口脚本支持：
 | `custom_config.tool_bridge.definition_mode` | 工具定义编码模式 | `compact` / `full` |
 | `custom_config.tool_bridge.include_descriptions` | 是否包含工具描述 | `true` / `false` |
 | `custom_config.tool_bridge.max_description_chars` | 描述截断长度 | 0-2000 |
+| `custom_config.admin_api_key` | 管理接口 Bearer Key（为空则兼容放行并告警） | 任意非空字符串 |
+| `custom_config.rate_limit.enabled` | AI 接口限流开关 | `true`/`false` |
+| `custom_config.rate_limit.requests_per_second` | 每秒令牌补充速率 | 正整数 |
+| `custom_config.rate_limit.burst` | 瞬时突发上限 | 正整数 |
+| `custom_config.response_index.max_entries` | Responses 索引最大内存条目数 | 正整数 |
+| `custom_config.response_index.max_age_hours` | Responses 索引过期时间（小时） | 正整数 |
+| `custom_config.response_index.cleanup_interval_minutes` | 索引清理周期（分钟） | 正整数 |
+| `custom_config.providers.openai` | OpenAI 兼容 Provider 配置 | `api_key`/`base_url`/`default_model` |
+| `custom_config.cors.allowed_origins` | CORS 白名单 | 字符串数组 |
+
+### 健康检查端点
+
+- `GET /health`：返回服务状态、版本、运行时长
+- `GET /ready`：检查数据库、Provider、账号池可用性（依赖不足时返回 503）
 
 ## 错误码
 
@@ -542,9 +556,9 @@ Docker 入口脚本支持：
 - [x] 服务状态监控（Summary + Channels + Models）
 - [x] 日志查看 API（文件列表 + 尾部读取 + 过滤）
 - [x] Prometheus 指标导出
-- [ ] 真正的流式 Provider 回调（当前为 CollectorSink 伪流式）
-- [ ] 更多 Provider 实现（当前仅 chaynsapi）
-- [ ] 完善单元测试
+- [x] 增量流式响应（AsyncStreamResponse + SSE 实时推送）
+- [x] 多 Provider 基础（新增 OpenAI 兼容 Provider）
+- [x] 核心单元测试扩展（RequestAdapters/XML Codec/Validator/Sinks）
 
 ## License
 

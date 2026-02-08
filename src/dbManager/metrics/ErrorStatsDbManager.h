@@ -192,6 +192,6 @@ private:
     std::string truncateBucket(const std::chrono::system_clock::time_point& tp);
 };
 
-} // namespace metrics
+} // 命名空间结束
 
-#endif // ERROR_STATS_DB_MANAGER_H
+#endif // 头文件保护结束
