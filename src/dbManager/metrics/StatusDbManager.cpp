@@ -286,7 +286,7 @@ ChannelStatusCounts StatusDbManager::getChannelStatusCounts(const std::string& f
             SELECT 
                 r.provider,
                 COALESCE(SUM(r.count), 0) as total_requests,
-                COALESCE(e.total_errors, 0) as total_errors
+                COALESCE(MAX(e.total_errors), 0) as total_errors
             FROM request_agg_hour r
             LEFT JOIN (
                 SELECT provider, SUM(count) as total_errors
