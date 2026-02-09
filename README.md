@@ -485,10 +485,10 @@ Docker 入口脚本支持：
       "max_description_chars": 160
     },
     "login_service_urls": [
-      { "name": "chaynsapi", "url": "http://127.0.0.1:5557/aichat/chayns/login" }
+      { "name": "chaynsapi", "url": "http://aiapi-tool:5557/aichat/chayns/login" }
     ],
     "regist_service_urls": [
-      { "name": "chaynsapi", "url": "http://127.0.0.1:5557/aichat/chayns/autoregister" }
+      { "name": "chaynsapi", "url": "http://aiapi-tool:5557/aichat/chayns/autoregister" }
     ]
   }
 }

@@ -170,13 +170,13 @@
         "login_service_urls": [
             {
                 "name": "chaynsapi",
-                "url": "http://127.0.0.1:5557/aichat/chayns/login"
+                "url": "http://aiapi-tool:5557/aichat/chayns/login"
             }
         ],
         "regist_service_urls": [
             {
                 "name": "chaynsapi",
-                "url": "http://127.0.0.1:5557/aichat/chayns/autoregister"
+                "url": "http://aiapi-tool:5557/aichat/chayns/autoregister"
             }
         ],
         "providers": {

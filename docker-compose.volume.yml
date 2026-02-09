@@ -7,5 +7,12 @@ services:
       - ./logs:/usr/aiapi/src/build/logs
       - ./config.json:/usr/aiapi/src/config.json
     ports:
-      - "0.0.0.0:5555:5555"
+      - "127.0.0.1:5555:5555"
+    networks:
+      - aiapi_shared
     # 使用 bridge 网络并显式映射端口，避免 host 网络带来的安全风险
+
+networks:
+  aiapi_shared:
+    external: true
+    name: aiapi_shared
