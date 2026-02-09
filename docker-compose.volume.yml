@@ -6,5 +6,6 @@ services:
     volumes:
       - ./logs:/usr/aiapi/src/build/logs
       - ./config.json:/usr/aiapi/src/config.json
-    network_mode: "host"
-    # 使用 host 网络模式，服务直接监听宿主机端口 5555
+    ports:
+      - "0.0.0.0:5555:5555"
+    # 使用 bridge 网络并显式映射端口，避免 host 网络带来的安全风险
