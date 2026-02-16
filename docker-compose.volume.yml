@@ -1,10 +1,16 @@
 services:
   app:
     build: .
+    restart: unless-stopped
     environment:
       - DUMMY_VAR=true
+    ulimits:
+      core:
+        soft: -1
+        hard: -1
     volumes:
       - ./logs:/usr/aiapi/src/build/logs
+      - ./cores:/usr/aiapi/src/build/cores
       - ./config.json:/usr/aiapi/src/config.json
     ports:
       - "127.0.0.1:5555:5555"

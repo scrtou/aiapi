@@ -327,13 +327,19 @@ void chaynsapi::postChatMessage(session_st& session)
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程：" << threadId;
             
             auto sendResult = client->sendRequest(reqSend);
-            if (sendResult.first != ReqResult::Ok) {
+            if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 发送后续消息失败(网络错误)";
                 sendFailed = true;
             } else {
                 auto responseSend = sendResult.second;
                 if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
-                    sendResponseJson = *responseSend->getJsonObject();
+                    auto sendJson = responseSend->getJsonObject();
+                    if (!sendJson) {
+                        LOG_ERROR << "[chaynsAPI] 后续消息发送成功但响应JSON为空";
+                        sendFailed = true;
+                    } else {
+                        sendResponseJson = *sendJson;
+                    }
                     if (sendResponseJson.isMember("creationTime")) {
                         lastMessageTime = sendResponseJson["creationTime"].asString();
                     }
@@ -408,13 +414,19 @@ void chaynsapi::postChatMessage(session_st& session)
             LOG_INFO << "[chaynsAPI] 正在创建新线程";
             
             auto sendResult = client->sendRequest(reqSend);
-            if (sendResult.first != ReqResult::Ok) {
+            if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 创建线程失败(网络错误)";
                 sendFailed = true;
             } else {
                 auto responseSend = sendResult.second;
                 if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
-                    sendResponseJson = *responseSend->getJsonObject();
+                    auto sendJson = responseSend->getJsonObject();
+                    if (!sendJson) {
+                        LOG_ERROR << "[chaynsAPI] 创建线程成功但响应JSON为空";
+                        sendFailed = true;
+                    } else {
+                        sendResponseJson = *sendJson;
+                    }
                     if (sendResponseJson.isMember("id")) {
                         threadId = sendResponseJson["id"].asString();
                         
@@ -539,7 +551,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
                 
                 auto getResult = client->sendRequest(reqGet);
-                if (getResult.first != ReqResult::Ok) {
+                if (getResult.first != ReqResult::Ok || !getResult.second) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY));
                     continue;
                 }

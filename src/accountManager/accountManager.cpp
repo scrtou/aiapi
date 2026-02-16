@@ -329,6 +329,11 @@ bool AccountManager::checkChaynsToken(string token)
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
     auto [result, response] = client->sendRequest(request);
+    if (result != ReqResult::Ok || !response) {
+        LOG_ERROR << "[账户管理] 令牌校验请求失败, result=" << static_cast<int>(result);
+        LOG_INFO << "[账户管理] Chayns 令牌校验结束";
+        return false;
+    }
     LOG_INFO << "[账户管理] 令牌校验接口响应状态码: " << response->getStatusCode();
     LOG_INFO << "[账户管理] Chayns 令牌校验结束";
     if(response->getStatusCode()!=200)
@@ -379,6 +384,10 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     request->setContentTypeString("application/json");
     request->setBody(json.toStyledString());
     auto [result, response] = client->sendRequest(request);
+    if (result != ReqResult::Ok || !response) {
+        LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
+        return Json::Value();
+    }
     Json::CharReaderBuilder reader;
     Json::Value responsejson;
     string body="";
@@ -1215,4 +1224,3 @@ void AccountManager::cleanExpiredAccounts()
     
     LOG_INFO << "[自动清理] 过期账号清理完成，共删除 " << expiredAccounts.size() << " 个账号";
 }
-
