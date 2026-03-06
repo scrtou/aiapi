@@ -99,6 +99,13 @@ struct AccountCompare
         return a->useCount > b->useCount;
     }
 };
+
+struct AccountAutomationSettings
+{
+    bool autoDeleteEnabled = true;
+    int deleteAfterDays = 6;
+    bool autoRegisterEnabled = true;
+};
 //定义函数指针
 
 class AccountManager
@@ -113,6 +120,8 @@ class AccountManager
     list<shared_ptr<Accountinfo_st>> accountListNeedUpdate;//需要更新的账号,
     std::mutex accountListNeedUpdateMutex;
     std::condition_variable accountListNeedUpdateCondition;
+    AccountAutomationSettings accountAutomationSettings_;
+    mutable std::mutex accountAutomationSettingsMutex_;
      // 
     map<string, void (AccountManager::*)(shared_ptr<Accountinfo_st>)> updateTokenMap = {
         {"chaynsapi", &AccountManager::updateChaynsToken}
@@ -162,6 +171,11 @@ class AccountManager
     void setStatusAccountStatus(string apiName,string userName,bool status);
     void setStatusTokenStatus(string apiName,string userName,bool status);
     std::map<string,map<string,shared_ptr<Accountinfo_st>>> getAccountList();
+    void loadAccountAutomationSettings();
+    AccountAutomationSettings getAccountAutomationSettings() const;
+    bool updateAccountAutomationSettings(const AccountAutomationSettings& settings,
+                                         bool persistToConfig = true,
+                                         std::string* errorMessage = nullptr);
 
     void waitUpdateAccountToken();
     void waitUpdateAccountTokenThread();
@@ -182,6 +196,6 @@ class AccountManager
     void updateAccountType(shared_ptr<Accountinfo_st> account);  // 更新单个账号的 accountType
     void updateAllAccountTypes();  // 更新所有账号的 accountType
     void checkAccountTypeThread();  // 启动定时检查 accountType 的线程
-    void cleanExpiredAccounts();  // 自动清理创建超过6天的过期账号
+    void cleanExpiredAccounts();  // 自动清理创建超过配置天数的过期账号
 };
 #endif

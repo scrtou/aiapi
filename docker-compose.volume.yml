@@ -1,5 +1,7 @@
 services:
-  app:
+  aiapi:
+    image: aiapi
+    container_name: aiapi
     build: .
     restart: unless-stopped
     environment:
@@ -11,12 +13,14 @@ services:
     volumes:
       - ./logs:/usr/aiapi/src/build/logs
       - ./cores:/usr/aiapi/src/build/cores
-      - ./config.json:/usr/aiapi/src/config.json
+      - ./data/config.json:/usr/aiapi/src/config.json
+      - ./data:/usr/aiapi/src/build/data
+      # 若使用 SQLite，请在 config.json 中将 db_clients[].filename 设为 ./data/aiapi.db
     ports:
-      - "127.0.0.1:5555:5555"
+      - "55555:55555"
     networks:
       - aiapi_shared
-    # 使用 bridge 网络并显式映射端口，避免 host 网络带来的安全风险
+    # 使用 bridge 网络并对外暴露端口，可供公网访问
 
 networks:
   aiapi_shared:

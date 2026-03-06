@@ -34,6 +34,7 @@ add_executable(${PROJECT_NAME}
     src/controllers/sinks/ResponsesJsonSink.cpp
     src/dbManager/account/accountDbManager.cpp
     src/dbManager/channel/channelDbManager.cpp
+    src/dbManager/config/ConfigDbManager.cpp
     src/sessionManager/Session.cpp
     src/sessionManager/ClientOutputSanitizer.cpp
     src/sessionManager/GenerationService.cpp

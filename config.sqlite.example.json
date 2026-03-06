@@ -6,26 +6,21 @@
             "https": false
         }
     ],
-    "db_clients":[
+    "db_clients": [
         {
             "name": "aichatpg",
-            "rdbms": "postgresql",
-            "host": "YOUR_DB_HOST",
-            "port": 14539,
-            "dbname": "aichat",
-            "user": "YOUR_DB_USER",
-            "passwd": "YOUR_DB_PASSWORD",
+            "rdbms": "sqlite3",
+            "filename": "./data/aiapi.db",
             "is_fast": false,
             "number_of_connections": 1,
-            "timeout": -1.0,
-            "auto_batch": false
+            "timeout": -1.0
         }
     ],
     "app": {
         "number_of_threads": 4,
         "enable_session": false,
         "session_timeout": 0,
-        "session_same_site" : "Null",
+        "session_same_site": "Null",
         "session_cookie_key": "JSESSIONID",
         "session_max_age": -1,
         "document_root": "./",
@@ -105,10 +100,23 @@
         "enable_request_stream": false,
         "cors": {
             "enabled": true,
-            "allow_origins": ["*"],
-            "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-            "allow_headers": ["*"],
-            "expose_headers": ["*"],
+            "allow_origins": [
+                "*"
+            ],
+            "allow_methods": [
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE",
+                "OPTIONS",
+                "PATCH"
+            ],
+            "allow_headers": [
+                "*"
+            ],
+            "expose_headers": [
+                "*"
+            ],
             "max_age": 3600,
             "allow_credentials": false
         }
@@ -170,7 +178,7 @@
             "strict_sentinel_disabled_models": [
                 "legacy-compat-model"
             ],
-             "_comment": "ToolBridge 示例策略：默认 strict_sentinel=true；按渠道/模型可放宽。trigger_random_length 建议 6-12。rewrite_user_input_conflicts 默认 false（避免改写用户原始输入）；若设为 true 会在 bridge 模式下改写当前用户输入中的 native 冲突指令。覆盖优先级：全局 strict_sentinel -> by_channel/by_model -> disabled/enabled 列表；但 strict 客户端或 tool_choice=required 会被强制为 true。"
+            "_comment": "ToolBridge 示例策略：默认 strict_sentinel=true；按渠道/模型可放宽。trigger_random_length 建议 6-12。rewrite_user_input_conflicts 默认 false（避免改写用户原始输入）；若设为 true 会在 bridge 模式下改写当前用户输入中的 native 冲突指令。覆盖优先级：全局 strict_sentinel -> by_channel/by_model -> disabled/enabled 列表；但 strict 客户端或 tool_choice=required 会被强制为 true。"
         },
         "login_service_urls": [
             {
@@ -207,10 +215,23 @@
             "burst": 20
         },
         "cors": {
-            "allowed_origins": ["*"],
-            "allowed_headers": ["*"],
-            "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-            "expose_headers": ["*"],
+            "allowed_origins": [
+                "*"
+            ],
+            "allowed_headers": [
+                "*"
+            ],
+            "allowed_methods": [
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE",
+                "OPTIONS",
+                "PATCH"
+            ],
+            "expose_headers": [
+                "*"
+            ],
             "max_age": 3600,
             "allow_credentials": false
         }

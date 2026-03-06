@@ -4,9 +4,69 @@
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
 #include <cstdlib>
+#include <optional>
+#include <dbManager/config/ConfigDbManager.h>
 #include "../dbManager/channel/channelDbManager.h"
 using namespace drogon;
 using namespace drogon::orm;
+
+namespace {
+
+constexpr const char* kAutoDeleteEnabledKey = "account_automation.auto_delete_enabled";
+constexpr const char* kDeleteAfterDaysKey = "account_automation.delete_after_days";
+constexpr const char* kAutoRegisterEnabledKey = "account_automation.auto_register_enabled";
+constexpr int kDefaultDeleteAfterDays = 6;
+
+AccountAutomationSettings loadAccountAutomationSettingsFromCustomConfig(const Json::Value& customConfig) {
+    AccountAutomationSettings settings;
+    if (customConfig.isMember("account_automation") && customConfig["account_automation"].isObject()) {
+        const auto& automation = customConfig["account_automation"];
+        settings.autoDeleteEnabled = automation.get("auto_delete_enabled", settings.autoDeleteEnabled).asBool();
+        settings.deleteAfterDays = automation.get("delete_after_days", settings.deleteAfterDays).asInt();
+        settings.autoRegisterEnabled = automation.get("auto_register_enabled", settings.autoRegisterEnabled).asBool();
+    }
+    if (settings.deleteAfterDays <= 0) {
+        settings.deleteAfterDays = kDefaultDeleteAfterDays;
+    }
+    return settings;
+}
+
+std::string boolToConfigValue(bool value) {
+    return value ? "true" : "false";
+}
+
+bool parseBoolConfigValue(const std::string& value, bool& parsed) {
+    if (value == "true" || value == "1") {
+        parsed = true;
+        return true;
+    }
+    if (value == "false" || value == "0") {
+        parsed = false;
+        return true;
+    }
+    return false;
+}
+
+bool parsePositiveIntConfigValue(const std::string& value, int& parsed) {
+    try {
+        parsed = std::stoi(value);
+        return parsed > 0;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& configDbManager,
+                                       const AccountAutomationSettings& settings,
+                                       std::string* errorMessage) {
+    return configDbManager->setValues({
+        {kAutoDeleteEnabledKey, boolToConfigValue(settings.autoDeleteEnabled)},
+        {kDeleteAfterDaysKey, std::to_string(settings.deleteAfterDays)},
+        {kAutoRegisterEnabledKey, boolToConfigValue(settings.autoRegisterEnabled)},
+    }, errorMessage);
+}
+
+}
 
 // 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
 string getLoginServiceUrl(const string& name) {
@@ -72,6 +132,123 @@ AccountManager::AccountManager()
 AccountManager::~AccountManager()
 {
 }
+
+void AccountManager::loadAccountAutomationSettings()
+{
+    const auto defaultSettings = loadAccountAutomationSettingsFromCustomConfig(drogon::app().getCustomConfig());
+    AccountAutomationSettings settings = defaultSettings;
+
+    auto configDbManager = ConfigDbManager::getInstance();
+    std::string errorMessage;
+    bool loadedFromDb = false;
+
+    if (!configDbManager->ensureTable(&errorMessage)) {
+        LOG_WARN << "[账户管理] " << errorMessage << "，账号自动化策略回退为配置文件默认值";
+    } else {
+        bool hasAnyStoredValue = false;
+        bool shouldSeedDefaults = false;
+
+        if (auto storedAutoDelete = configDbManager->getValue(kAutoDeleteEnabledKey, &errorMessage)) {
+            bool parsedValue = defaultSettings.autoDeleteEnabled;
+            if (parseBoolConfigValue(*storedAutoDelete, parsedValue)) {
+                settings.autoDeleteEnabled = parsedValue;
+                hasAnyStoredValue = true;
+            } else {
+                shouldSeedDefaults = true;
+                LOG_WARN << "[账户管理] 配置项 " << kAutoDeleteEnabledKey << " 非法，使用默认值覆盖";
+            }
+        }
+
+        if (auto storedDeleteDays = configDbManager->getValue(kDeleteAfterDaysKey, &errorMessage)) {
+            int parsedValue = defaultSettings.deleteAfterDays;
+            if (parsePositiveIntConfigValue(*storedDeleteDays, parsedValue)) {
+                settings.deleteAfterDays = parsedValue;
+                hasAnyStoredValue = true;
+            } else {
+                shouldSeedDefaults = true;
+                LOG_WARN << "[账户管理] 配置项 " << kDeleteAfterDaysKey << " 非法，使用默认值覆盖";
+            }
+        }
+
+        if (auto storedAutoRegister = configDbManager->getValue(kAutoRegisterEnabledKey, &errorMessage)) {
+            bool parsedValue = defaultSettings.autoRegisterEnabled;
+            if (parseBoolConfigValue(*storedAutoRegister, parsedValue)) {
+                settings.autoRegisterEnabled = parsedValue;
+                hasAnyStoredValue = true;
+            } else {
+                shouldSeedDefaults = true;
+                LOG_WARN << "[账户管理] 配置项 " << kAutoRegisterEnabledKey << " 非法，使用默认值覆盖";
+            }
+        }
+
+        if (!errorMessage.empty()) {
+            LOG_WARN << "[账户管理] " << errorMessage << "，账号自动化策略部分回退为配置文件默认值";
+            errorMessage.clear();
+        }
+
+        if (!hasAnyStoredValue) {
+            shouldSeedDefaults = true;
+            settings = defaultSettings;
+            LOG_INFO << "[账户管理] 配置表中未找到账号自动化策略，使用配置文件默认值初始化到数据库";
+        } else {
+            loadedFromDb = true;
+        }
+
+        if (shouldSeedDefaults) {
+            if (!saveAccountAutomationSettingsToDb(configDbManager, settings, &errorMessage)) {
+                LOG_WARN << "[账户管理] 初始化账号自动化配置到数据库失败: " << errorMessage;
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(accountAutomationSettingsMutex_);
+        accountAutomationSettings_ = settings;
+    }
+    LOG_INFO << "[账户管理] 自动化策略已加载(" << (loadedFromDb ? "db" : "config")
+             << "): autoDeleteEnabled=" << settings.autoDeleteEnabled
+             << ", deleteAfterDays=" << settings.deleteAfterDays
+             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled;
+}
+
+AccountAutomationSettings AccountManager::getAccountAutomationSettings() const
+{
+    std::lock_guard<std::mutex> lock(accountAutomationSettingsMutex_);
+    return accountAutomationSettings_;
+}
+
+bool AccountManager::updateAccountAutomationSettings(const AccountAutomationSettings& settings,
+                                                    bool persistToConfig,
+                                                    std::string* errorMessage)
+{
+    if (settings.deleteAfterDays <= 0) {
+        if (errorMessage) {
+            *errorMessage = "deleteAfterDays 必须为正整数";
+        }
+        return false;
+    }
+
+    if (persistToConfig) {
+        auto configDbManager = ConfigDbManager::getInstance();
+        if (!configDbManager->ensureTable(errorMessage)) {
+            return false;
+        }
+        if (!saveAccountAutomationSettingsToDb(configDbManager, settings, errorMessage)) {
+            return false;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(accountAutomationSettingsMutex_);
+        accountAutomationSettings_ = settings;
+    }
+
+    LOG_INFO << "[账户管理] 自动化策略已更新并保存到数据库: autoDeleteEnabled=" << settings.autoDeleteEnabled
+             << ", deleteAfterDays=" << settings.deleteAfterDays
+             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled;
+    return true;
+}
+
 void AccountManager::init()
 {
     LOG_INFO << "[账户管理] 初始化开始";
@@ -84,6 +261,7 @@ void AccountManager::init()
     {
         accountDbManager->checkAndUpgradeTable();
     }
+    loadAccountAutomationSettings();
     loadAccount();
     // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
     checkUpdateTokenthread();
@@ -507,7 +685,7 @@ void AccountManager::checkUpdateTokenthread()
         while(true)
         {
             checkToken();
-            // 清理创建超过6天的过期账号
+            // 清理创建超过配置天数的过期账号
             cleanExpiredAccounts();
             this_thread::sleep_for(chrono::hours(5));
         }
@@ -671,6 +849,12 @@ void AccountManager::checkAccountCountThread()
 
 void AccountManager::checkChannelAccountCounts()
 {
+    const auto automationSettings = getAccountAutomationSettings();
+    if (!automationSettings.autoRegisterEnabled) {
+        LOG_INFO << "[账户管理] 自动补注册已禁用，跳过渠道账号数量检查";
+        return;
+    }
+
     auto channelDbManager = ChannelDbManager::getInstance();
     auto channelList = channelDbManager->getChannelList();
 
@@ -1128,12 +1312,18 @@ bool AccountManager::isAccountRegisteringByUsername(const string& userName)
 
 void AccountManager::cleanExpiredAccounts()
 {
+    const auto automationSettings = getAccountAutomationSettings();
+    if (!automationSettings.autoDeleteEnabled) {
+        LOG_INFO << "[自动清理] 自动删除已禁用，跳过过期账号检查";
+        return;
+    }
+
     LOG_INFO << "[自动清理] 开始检查过期账号...";
     
     // 获取当前时间
     auto now = trantor::Date::now();
-    // 6天 = 6 * 24 * 3600 秒
-    const double expireDurationSeconds = 6.0 * 24.0 * 3600.0;
+    const double expireDurationSeconds =
+        static_cast<double>(automationSettings.deleteAfterDays) * 24.0 * 3600.0;
     
     // 获取当前所有账号的快照
     auto currentAccountMap = getAccountList();
@@ -1169,7 +1359,8 @@ void AccountManager::cleanExpiredAccounts()
             {
                 LOG_INFO << "[自动清理] 账号 " << account->userName
                          << " 创建于 " << account->createTime
-                         << "，已超过6天（" << (ageSec / 86400.0) << "天），标记为待删除";
+                         << "，已超过" << automationSettings.deleteAfterDays
+                         << "天（" << (ageSec / 86400.0) << "天），标记为待删除";
                 
                 // 复制完整账号信息用于删除
                 Accountinfo_st expiredAccount;

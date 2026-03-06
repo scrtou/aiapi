@@ -439,13 +439,21 @@ cd aiapi/src/build
 
 ```bash
 # 方式一：环境变量注入配置
-docker compose -f docker-compose.env.yml up --build
+docker compose -f docker-compose.env.yml up --build aiapi
 
 # 方式二：卷挂载配置文件
 cp config.example.json config.json
 # 编辑 config.json 填入实际配置
-docker compose -f docker-compose.volume.yml up --build
+docker compose -f docker-compose.volume.yml up --build aiapi
+
+# 方式三：SQLite + 卷挂载持久化
+cp config.sqlite.example.json config.json
+mkdir -p data logs cores
+# config.json 中默认使用 ./data/aiapi.db，对应宿主机 ./data/aiapi.db
+docker compose -f docker-compose.volume.yml up --build aiapi
 ```
+
+`docker-compose.env.yml` 与 `docker-compose.volume.yml` 中的服务名、镜像名、容器名均统一为 `aiapi`。
 
 Docker 入口脚本支持：
 - `CONFIG_JSON` 环境变量 → 直接覆盖配置文件
@@ -493,6 +501,14 @@ Docker 入口脚本支持：
   }
 }
 ```
+
+### 账号自动化策略
+
+账号自动化策略默认从 `custom_config.account_automation` 提供初始值；运行时优先从数据库配置表 `app_config` 读取，若表中缺失配置项则自动写入默认值。
+
+- `auto_delete_enabled`：是否自动删除过期的 free 账号
+- `delete_after_days`：账号创建超过多少天后删除，默认 `6`
+- `auto_register_enabled`：当渠道账号数量不足时，是否自动补注册账号
 
 ### 关键配置项
 

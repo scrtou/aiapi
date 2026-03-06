@@ -6,19 +6,13 @@
 #include <list>
 #include <memory>
 #include <accountManager/accountManager.h>
+#include <dbManager/DbType.h>
 
 using std::list;
 using std::make_shared;
 using std::shared_ptr;
 using std::string;
 using drogon::app;
-
-// 数据库类型枚举
-enum class DbType {
-    PostgreSQL,
-    SQLite3,
-    MySQL
-};
 
 class AccountDbManager
 {

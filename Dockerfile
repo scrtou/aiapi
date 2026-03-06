@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y \
     libjsoncpp-dev \
     libpq-dev \
     postgresql-server-dev-all \
+    libsqlite3-dev \
+    sqlite3 \
     libmysqlclient-dev \
     default-libmysqlclient-dev \
     xvfb \
@@ -54,7 +56,7 @@ COPY . .
 # 创建启动脚本
 RUN cat <<'EOF' > /usr/aiapi/docker-entrypoint.sh
 #!/bin/bash
-CONFIG_PATH="/usr/aiapi/src/build/config.json"
+CONFIG_PATH="/usr/aiapi/src/config.json"
 if [ ! -z "$CONFIG_JSON" ]; then
     echo "$CONFIG_JSON" > "$CONFIG_PATH"
 fi
@@ -77,7 +79,7 @@ RUN cmake ..
 RUN make -j $(nproc)
 
 # 复制默认配置文件
-RUN cp /usr/aiapi/config.example.json /usr/aiapi/src/build/config.json
+RUN cp /usr/aiapi/config.sqlite.example.json /usr/aiapi/src/config.json
 
 # 暴露端口
 EXPOSE 5555 5556

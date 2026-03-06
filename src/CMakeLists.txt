@@ -39,6 +39,7 @@ add_executable(${PROJECT_NAME}
     controllers/sinks/ResponsesJsonSink.cpp
     dbManager/account/accountDbManager.cpp
     dbManager/channel/channelDbManager.cpp
+    dbManager/config/ConfigDbManager.cpp
     dbManager/metrics/ErrorStatsDbManager.cpp
     dbManager/metrics/StatusDbManager.cpp
     metrics/ErrorStatsConfig.cpp
@@ -100,6 +101,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/channel
+                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/config
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/models

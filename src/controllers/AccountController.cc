@@ -33,6 +33,59 @@ Json::Value buildAccountPublicJson(const Accountinfo_st& account)
     return item;
 }
 
+Json::Value buildAccountAutomationSettingsJson(const AccountAutomationSettings& settings)
+{
+    Json::Value item;
+    item["autoDeleteEnabled"] = settings.autoDeleteEnabled;
+    item["deleteAfterDays"] = settings.deleteAfterDays;
+    item["autoRegisterEnabled"] = settings.autoRegisterEnabled;
+    return item;
+}
+
+bool mergeAccountAutomationSettingsFromJson(const Json::Value& body,
+                                            const AccountAutomationSettings& current,
+                                            AccountAutomationSettings& updated,
+                                            std::string& errorMessage)
+{
+    if (!body.isObject()) {
+        errorMessage = "Request body must be a JSON object.";
+        return false;
+    }
+
+    updated = current;
+
+    if (body.isMember("autoDeleteEnabled")) {
+        if (!body["autoDeleteEnabled"].isBool()) {
+            errorMessage = "autoDeleteEnabled must be a boolean.";
+            return false;
+        }
+        updated.autoDeleteEnabled = body["autoDeleteEnabled"].asBool();
+    }
+
+    if (body.isMember("deleteAfterDays")) {
+        if (!body["deleteAfterDays"].isInt()) {
+            errorMessage = "deleteAfterDays must be an integer.";
+            return false;
+        }
+        updated.deleteAfterDays = body["deleteAfterDays"].asInt();
+    }
+
+    if (body.isMember("autoRegisterEnabled")) {
+        if (!body["autoRegisterEnabled"].isBool()) {
+            errorMessage = "autoRegisterEnabled must be a boolean.";
+            return false;
+        }
+        updated.autoRegisterEnabled = body["autoRegisterEnabled"].asBool();
+    }
+
+    if (updated.deleteAfterDays <= 0) {
+        errorMessage = "deleteAfterDays must be greater than 0.";
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
@@ -317,5 +370,39 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
         LOG_INFO << "[账号Ctrl] 后台注册：注册完成";
     });
 
+    ctl::sendJson(callback, response);
+}
+
+void AccountController::accountSettingsGet(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    (void)req;
+    LOG_INFO << "[账号Ctrl] 获取账号自动化设置";
+    const auto settings = AccountManager::getInstance().getAccountAutomationSettings();
+    ctl::sendJson(callback, buildAccountAutomationSettingsJson(settings));
+}
+
+void AccountController::accountSettingsUpdate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[账号Ctrl] 更新账号自动化设置";
+    std::shared_ptr<Json::Value> jsonPtr;
+    if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
+
+    const auto currentSettings = AccountManager::getInstance().getAccountAutomationSettings();
+    AccountAutomationSettings updatedSettings;
+    std::string errorMessage;
+    if (!mergeAccountAutomationSettingsFromJson(*jsonPtr, currentSettings, updatedSettings, errorMessage)) {
+        ctl::sendError(callback, k400BadRequest, "invalid_request_error", errorMessage);
+        return;
+    }
+
+    if (!AccountManager::getInstance().updateAccountAutomationSettings(updatedSettings, true, &errorMessage)) {
+        ctl::sendError(callback, k500InternalServerError, "config_update_error", errorMessage.empty() ? "Failed to update account automation settings." : errorMessage);
+        return;
+    }
+
+    Json::Value response;
+    response["status"] = "success";
+    response["message"] = "Account automation settings updated";
+    response["settings"] = buildAccountAutomationSettingsJson(updatedSettings);
     ctl::sendJson(callback, response);
 }

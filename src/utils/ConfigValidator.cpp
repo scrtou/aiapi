@@ -93,6 +93,23 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
         }
     }
 
+    if (custom.isMember("account_automation") && custom["account_automation"].isObject()) {
+        const auto& automation = custom["account_automation"];
+        if (automation.isMember("auto_delete_enabled") && !automation["auto_delete_enabled"].isBool()) {
+            result.valid = false;
+            result.errors.emplace_back("account_automation.auto_delete_enabled 必须为布尔值");
+        }
+        if (automation.isMember("delete_after_days") &&
+            !isPositiveInt(automation["delete_after_days"])) {
+            result.valid = false;
+            result.errors.emplace_back("account_automation.delete_after_days 必须为正整数");
+        }
+        if (automation.isMember("auto_register_enabled") && !automation["auto_register_enabled"].isBool()) {
+            result.valid = false;
+            result.errors.emplace_back("account_automation.auto_register_enabled 必须为布尔值");
+        }
+    }
+
     if (custom.isMember("error_stats") && custom["error_stats"].isObject()) {
         const auto& stats = custom["error_stats"];
         if (stats.isMember("retention_days_detail") &&
