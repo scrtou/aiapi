@@ -493,10 +493,10 @@ Docker 入口脚本支持：
       "max_description_chars": 160
     },
     "login_service_urls": [
-      { "name": "chaynsapi", "url": "http://aiapi-tool:5557/aichat/chayns/login" }
+      { "name": "chaynsapi", "url": "http://login-service:8004/api/v1/logins" }
     ],
     "regist_service_urls": [
-      { "name": "chaynsapi", "url": "http://aiapi-tool:5557/aichat/chayns/autoregister" }
+      { "name": "chaynsapi", "url": "http://orchestrator-service:8000/api/v1/workflows/register-and-login" }
     ]
   }
 }

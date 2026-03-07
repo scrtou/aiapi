@@ -32,10 +32,8 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
         result.errors.emplace_back("listeners 必须存在且为非空数组");
     }
 
-    if (!config.isMember("db_clients") || !config["db_clients"].isArray() ||
-        config["db_clients"].empty()) {
-        result.valid = false;
-        result.errors.emplace_back("db_clients 必须存在且为非空数组");
+    if (!config.isMember("db_clients") || !config["db_clients"].isArray()) {
+        result.warnings.emplace_back("db_clients 缺失或不是数组，将以无内置 DBClient 模式运行");
     }
 
     if (!config.isMember("custom_config") || !config["custom_config"].isObject()) {

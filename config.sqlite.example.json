@@ -183,13 +183,13 @@
         "login_service_urls": [
             {
                 "name": "chaynsapi",
-                "url": "http://aiapi-tool:55557/aichat/chayns/login"
+                "url": "http://login-service:8004/api/v1/logins"
             }
         ],
         "regist_service_urls": [
             {
                 "name": "chaynsapi",
-                "url": "http://aiapi-tool:55557/aichat/chayns/autoregister"
+                "url": "http://orchestrator-service:8000/api/v1/workflows/register-and-login"
             }
         ],
         "providers": {

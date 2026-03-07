@@ -5,6 +5,8 @@
 #include <drogon/orm/DbClient.h>
 #include <cstdlib>
 #include <optional>
+#include <chrono>
+#include <thread>
 #include <dbManager/config/ConfigDbManager.h>
 #include "../dbManager/channel/channelDbManager.h"
 using namespace drogon;
@@ -66,6 +68,39 @@ bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& c
     }, errorMessage);
 }
 
+bool splitUrl(const string& fullUrl, string& baseUrl, string& path) {
+    size_t protocolPos = fullUrl.find("://");
+    if (protocolPos == string::npos) {
+        return false;
+    }
+    size_t pathPos = fullUrl.find('/', protocolPos + 3);
+    if (pathPos == string::npos) {
+        baseUrl = fullUrl;
+        path = "/";
+    } else {
+        baseUrl = fullUrl.substr(0, pathPos);
+        path = fullUrl.substr(pathPos);
+    }
+    return true;
+}
+
+bool parseJsonBody(const std::string& body, Json::Value& out, std::string& errs) {
+    Json::CharReaderBuilder reader;
+    std::istringstream s(body);
+    return Json::parseFromStream(reader, s, &out, &errs);
+}
+
+bool isSuccessEnvelope(const Json::Value& json) {
+    return json.isObject() && json.isMember("success") && json["success"].asBool() && json.isMember("data");
+}
+
+std::string extractErrorMessageFromEnvelope(const Json::Value& json, const std::string& fallback) {
+    if (json.isObject() && json.isMember("error") && json["error"].isObject()) {
+        return json["error"].get("message", fallback).asString();
+    }
+    return fallback;
+}
+
 }
 
 // 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
@@ -91,7 +126,7 @@ string getLoginServiceUrl(const string& name) {
 
     // 3. 最后使用默认值 (作为后备)
     if (name == "chaynsapi") {
-        return "http://127.0.0.1:5557/aichat/chayns/login";
+        return "http://127.0.0.1:8004/api/v1/logins";
     }
     
     return ""; // 如果找不到，返回空字符串
@@ -112,14 +147,14 @@ string getRegistServiceUrl(const string& name) {
     }
 
     // 2. 其次从环境变量读取 (作为后备)
-    const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
+    const char* envUrl = std::getenv("REGIST_SERVICE_URL");
     if (envUrl != nullptr && strlen(envUrl) > 0 && name == "chaynsapi") {
         return string(envUrl);
     }
 
     // 3. 最后使用默认值 (作为后备)
     if (name == "chaynsapi") {
-        return "http://127.0.0.1:5557/aichat/chayns/autoregister";
+        return "http://127.0.0.1:8000/api/v1/workflows/register-and-login";
     }
     
     return ""; // 如果找不到，返回空字符串
@@ -530,20 +565,10 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     }
     LOG_INFO << "[账户管理] 完整登录地址: "<<fullUrl;
 
-    // 解析 URL
     string baseUrl, path;
-    size_t protocolPos = fullUrl.find("://");
-    if (protocolPos == string::npos) {
+    if (!splitUrl(fullUrl, baseUrl, path)) {
         LOG_ERROR << "[账户管理] 登录服务地址格式无效: " << fullUrl;
         return Json::Value();
-    }
-    size_t pathPos = fullUrl.find('/', protocolPos + 3);
-    if (pathPos == string::npos) {
-        baseUrl = fullUrl;
-        path = "/";
-    } else {
-        baseUrl = fullUrl.substr(0, pathPos);
-        path = fullUrl.substr(pathPos);
     }
     LOG_INFO << "[账户管理] 解析出的主机地址: "<<baseUrl;
 
@@ -555,8 +580,10 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
     Json::Value json;
-    json["username"] = username;
-    json["password"] = passwd;
+    json["site"] = "chayns";
+    json["credentials"]["email"] = username;
+    json["credentials"]["password"] = passwd;
+    json["strategy"]["mode"] = "api_first";
     request->setMethod(HttpMethod::Post);
     request->setPath(path);
     request->setContentTypeString("application/json");
@@ -566,8 +593,8 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
         LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
         return Json::Value();
     }
-    Json::CharReaderBuilder reader;
     Json::Value responsejson;
+    Json::Value normalized;
     string body="";
     if(response->getStatusCode()==200)
     {
@@ -575,11 +602,34 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
         LOG_INFO << "[账户管理] 登录服务原始响应内容: " << body;
     }
     string errs;
-    istringstream s(body);
-    if (!Json::parseFromStream(reader, s, &responsejson, &errs)) {
+    if (!parseJsonBody(body, responsejson, errs)) {
         LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: " << errs;
+        return Json::Value();
     }
-    return responsejson;
+
+    if (!isSuccessEnvelope(responsejson)) {
+        LOG_ERROR << "[账户管理] 登录服务返回失败: " << extractErrorMessageFromEnvelope(responsejson, body);
+        return Json::Value();
+    }
+
+    const auto& resultJson = responsejson["data"]["result"];
+    if (!resultJson.isObject()) {
+        LOG_ERROR << "[账户管理] 登录服务响应缺少 data.result";
+        return Json::Value();
+    }
+
+    normalized["token"] = resultJson["session"].get("access_token", "").asString();
+    normalized["userid"] = resultJson["site_result"].get("userid", 0).asInt();
+    normalized["personid"] = resultJson["site_result"].get("personid", "").asString();
+    normalized["email"] = resultJson["account"].get("email", username).asString();
+    normalized["password"] = passwd;
+    normalized["has_pro_access"] = resultJson["site_result"].get("has_pro_access", false).asBool();
+
+    if (normalized["token"].asString().empty() || normalized["personid"].asString().empty()) {
+        LOG_ERROR << "[账户管理] 登录服务响应缺少关键字段";
+        return Json::Value();
+    }
+    return normalized;
 }
 void AccountManager::checkToken()
 {
@@ -940,35 +990,36 @@ void AccountManager::autoRegisterAccount(string apiName)
         return;
     }
 
-    // 解析 URL
     string baseUrl, path;
-    size_t protocolPos = fullUrl.find("://");
-    if (protocolPos == string::npos) {
+    if (!splitUrl(fullUrl, baseUrl, path)) {
         LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
         accountDbManager->deleteWaitingAccount(waitingId);
         return ;
-    }
-    size_t pathPos = fullUrl.find('/', protocolPos + 3);
-    if (pathPos == string::npos) {
-        baseUrl = fullUrl;
-        path = "/";
-    } else {
-        baseUrl = fullUrl.substr(0, pathPos);
-        path = fullUrl.substr(pathPos);
     }
     LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
 
     auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
+    Json::Value workflowBody;
+    workflowBody["site"] = "chayns";
+    workflowBody["mail_policy"]["expiry_time_ms"] = 3600000;
+    workflowBody["proxy_policy"]["enabled"] = false;
+    workflowBody["identity"]["first_name"] = firstName;
+    workflowBody["identity"]["last_name"] = lastName;
+    workflowBody["identity"]["password"] = password;
+    workflowBody["strategy"]["registration_mode"] = "api_first";
+    workflowBody["strategy"]["login_mode"] = "api_first";
+    workflowBody["strategy"]["timeout_seconds"] = 360;
+
     request->setMethod(HttpMethod::Post);
     request->setPath(path);
     request->setContentTypeString("application/json");
-    request->setBody(requestBody.toStyledString());
+    request->setBody(workflowBody.toStyledString());
     
     LOG_INFO << "[自动注册] 发送注册请求...";
     auto [result, response] = client->sendRequest(request, 300.0);
 
-    if (result != ReqResult::Ok || response->getStatusCode() != 200) {
+    if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
         LOG_ERROR << "[自动注册] 注册请求失败. Result: " << (int)result
                   << ", Status: " << (response ? response->getStatusCode() : 0)
                   << ", Body: " << (response ? response->getBody() : "");
@@ -979,12 +1030,9 @@ void AccountManager::autoRegisterAccount(string apiName)
     }
 
     Json::Value jsonResponse;
-    Json::CharReaderBuilder reader;
     string errs;
     std::string responseBody(response->getBody());
-    std::istringstream s(responseBody);
-    
-    if (!Json::parseFromStream(reader, s, &jsonResponse, &errs)) {
+    if (!parseJsonBody(responseBody, jsonResponse, errs)) {
         LOG_ERROR << "[自动注册] 解析注册响应失败: " << errs;
         // 解析失败，删除待注册记录
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
@@ -992,14 +1040,97 @@ void AccountManager::autoRegisterAccount(string apiName)
         return;
     }
 
-    string email = jsonResponse["email"].asString();
-    string respPassword = jsonResponse["password"].asString();
-    int userid = jsonResponse["userid"].asInt();
-    string personid = jsonResponse["personid"].asString();
-    string token = jsonResponse["token"].asString();
+    if (!isSuccessEnvelope(jsonResponse)) {
+        LOG_ERROR << "[自动注册] workflow 创建失败: " << extractErrorMessageFromEnvelope(jsonResponse, responseBody);
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
+        return;
+    }
+
+    string taskId = jsonResponse["data"].get("task_id", "").asString();
+    if (taskId.empty()) {
+        LOG_ERROR << "[自动注册] workflow 响应缺少 task_id";
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
+        return;
+    }
+
+    LOG_INFO << "[自动注册] workflow 任务已创建: " << taskId;
+
+    Json::Value workflowDetail;
+    bool workflowSucceeded = false;
+    for (int attempt = 0; attempt < 120; ++attempt) {
+        auto detailRequest = HttpRequest::newHttpRequest();
+        detailRequest->setMethod(HttpMethod::Get);
+        std::string detailPath = path;
+        const std::string workflowCreateSuffix = "/register-and-login";
+        if (detailPath.size() >= workflowCreateSuffix.size() && detailPath.compare(detailPath.size() - workflowCreateSuffix.size(), workflowCreateSuffix.size(), workflowCreateSuffix) == 0) {
+            detailPath = detailPath.substr(0, detailPath.size() - workflowCreateSuffix.size());
+        }
+        if (detailPath.empty()) {
+            detailPath = "/api/v1/workflows";
+        }
+        detailRequest->setPath(detailPath + "/" + taskId);
+        auto [detailResult, detailResponse] = client->sendRequest(detailRequest, 30.0);
+        if (detailResult != ReqResult::Ok || !detailResponse) {
+            LOG_WARN << "[自动注册] 查询 workflow 状态失败, attempt=" << attempt + 1;
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
+        }
+
+        std::string detailBody(detailResponse->getBody());
+        Json::Value detailJson;
+        errs.clear();
+        if (!parseJsonBody(detailBody, detailJson, errs)) {
+            LOG_WARN << "[自动注册] 解析 workflow 详情失败: " << errs;
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
+        }
+        workflowDetail = detailJson;
+        if (!isSuccessEnvelope(detailJson) || !detailJson["data"].isObject() || !detailJson["data"].isMember("task")) {
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
+        }
+
+        string status = detailJson["data"]["task"].get("status", "").asString();
+        string state = detailJson["data"]["task"].get("state", "").asString();
+        LOG_INFO << "[自动注册] workflow 状态: status=" << status << ", state=" << state;
+        if (status == "succeeded") {
+            workflowSucceeded = true;
+            break;
+        }
+        if (status == "failed" || status == "cancelled") {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+
+    if (!workflowSucceeded) {
+        LOG_ERROR << "[自动注册] workflow 未成功完成: " << workflowDetail.toStyledString();
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
+        return;
+    }
+
+    const auto& resultJson = workflowDetail["data"]["result"];
+    const auto& registrationJson = resultJson["registration"];
+    const auto& loginJson = resultJson["login"];
+
+    string email = registrationJson["account"].get("email", "").asString();
+    string respPassword = registrationJson["account"].get("password", password).asString();
+    int userid = loginJson["site_result"].get("userid", 0).asInt();
+    string personid = loginJson["site_result"].get("personid", "").asString();
+    string token = loginJson["session"].get("access_token", "").asString();
     bool hasProAccess = false;
-    if (jsonResponse.isMember("has_pro_access") && jsonResponse["has_pro_access"].asBool()) {
+    if (loginJson.isMember("site_result") && loginJson["site_result"].get("has_pro_access", false).asBool()) {
         hasProAccess = true;
+    }
+
+    if (email.empty() || personid.empty() || token.empty()) {
+        LOG_ERROR << "[自动注册] workflow 结果缺少关键字段: " << workflowDetail.toStyledString();
+        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        accountDbManager->deleteWaitingAccount(waitingId);
+        return;
     }
 
     LOG_INFO << "[自动注册] 注册成功: " << email;
