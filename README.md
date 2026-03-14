@@ -7,21 +7,31 @@
 - ✅ OpenAI Chat Completions API 兼容（流式/非流式）
 - ✅ OpenAI Responses API 兼容（流式/非流式，含 previous_response_id 续聊）
 - ✅ 多 Provider 支持（可扩展工厂模式）
+- ✅ 新增 Nexos Web Provider（`/nexosapi/v1/*`）
+- ✅ OpenAI 兼容 Provider（`/openai/v1/*`）
 - ✅ 工具调用（Tool Calls）完整支持
 - ✅ 工具调用桥接（XML Bridge）— 为不原生支持工具调用的通道提供桥接
 - ✅ 工具调用验证（ToolCallValidator）— 支持 None/Relaxed/Strict 三种校验模式
-- ✅ 参数形状规范化（normalizeToolCallArguments）— 自动修复常见参数格式问题
-- ✅ 强制工具调用兜底（generateForcedToolCall）— tool_choice=required 场景
+- ✅ 参数形状规范化（ToolCallNormalizer）— 自动修复常见参数格式问题
+- ✅ 工具定义编码（ToolDefinitionEncoder）— compact/full 两种模式
+- ✅ 强制工具调用兜底（ForcedToolCallGenerator）— tool_choice=required 场景
+- ✅ 严格客户端规则（StrictClientRules）— Kilo-Code / RooCode 适配
 - ✅ 会话追踪（Hash / ZeroWidth 两种模式）
-- ✅ 会话连续性决策（ContinuityResolver）
+- ✅ 会话连续性决策（ContinuityResolver + TextExtractor）
+- ✅ 响应索引（ResponseIndex）— Responses API GET/DELETE 支持
 - ✅ 并发门控（SessionExecutionGate + CancellationToken + RAII Guard）
 - ✅ 输出清洗（ClientOutputSanitizer）
-- ✅ 严格客户端规则（Kilo-Code / RooCode 适配）
-- ✅ 统一错误模型（Errors）+ 错误统计（ErrorStatsService）
-- ✅ 账号池管理（自动注册、Token 刷新、类型检测、轮转）
+- ✅ 统一错误模型（Errors）+ 错误统计（ErrorStatsService + ErrorStatsConfig）
+- ✅ 账号池管理（自动注册、Token 刷新、类型检测、轮转、备份）
 - ✅ 渠道管理（多渠道、状态控制、并发限制）
 - ✅ 服务状态监控 + Prometheus 指标导出
 - ✅ 内置日志查看 API（文件列表、尾部读取、过滤）
+- ✅ 管理接口认证（AdminAuthFilter）
+- ✅ 请求限流（RateLimitFilter）
+- ✅ 配置校验（ConfigValidator）
+- ✅ 后台任务队列（BackgroundTaskQueue）
+- ✅ 健康检查端点（/health + /ready）
+- ✅ 完善的单元测试（14 个测试文件）
 
 ## 架构概览
 
@@ -29,13 +39,15 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                         HTTP 层                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    AiApi Controller                      │    │
-│  │  POST /chaynsapi/v1/chat/completions                    │    │
-│  │  POST /chaynsapi/v1/responses                           │    │
-│  │  GET  /chaynsapi/v1/models                              │    │
-│  │  GET  /chaynsapi/v1/responses/{id}                      │    │
-│  │  DELETE /chaynsapi/v1/responses/{id}                    │    │
-│  │  + 账号管理 / 渠道管理 / 监控 / 日志 API                │    │
+│  │              Controllers + Filters                      │    │
+│  │  AiApiController     — AI 核心 API 路由                 │    │
+│  │  AccountController   — 账号管理 API                     │    │
+│  │  ChannelController   — 渠道管理 API                     │    │
+│  │  MetricsController   — 监控指标 API                     │    │
+│  │  LogController       — 日志查看 API                     │    │
+│  │  HealthController    — 健康检查 API                     │    │
+│  │  AdminAuthFilter     — 管理接口认证                     │    │
+│  │  RateLimitFilter     — 请求限流                         │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -80,6 +92,10 @@
 │  │  (路由选择)  │     │  - generate()                       │   │
 │  │  ApiFactory  │     │  - ProviderResult                   │   │
 │  └─────────────┘     └─────────────────────────────────────┘   │
+│        │                                                        │
+│        ├── chaynsapi (Chayns AI Provider)                       │
+│        ├── nexosapi  (Nexos Web Provider)                       │
+│        └── openai    (OpenAI 兼容 Provider)                     │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -103,9 +119,10 @@
 
 ```
 aiapi/
-├── CMakeLists.txt                  # CMake 构建配置
+├── CMakeLists.txt                  # CMake 构建配置（根目录）
 ├── Dockerfile                      # Docker 构建文件
-├── config.example.json             # 配置文件模板
+├── config.example.json             # 配置文件模板（JSON）
+├── config.sqlite.example.json      # SQLite 配置模板
 ├── docker-compose.env.yml          # Docker Compose（环境变量方式）
 ├── docker-compose.volume.yml       # Docker Compose（卷挂载方式）
 ├── requirements.txt                # Python 依赖（登录/注册服务）
@@ -113,40 +130,74 @@ aiapi/
 │   └── aiapi_callflow_and_api_examples.md  # 详细调用关系与接口样例
 │
 └── src/
+    ├── CMakeLists.txt              # CMake 构建配置（源码）
     ├── main.cc                     # 程序入口
-    ├── config.json                 # Drogon 运行配置
+    ├── config.yaml                 # Drogon YAML 运行配置
     │
-    ├── controllers/                # HTTP 控制器
-    │   ├── AiApi.h / AiApi.cc      # 主路由控制器（22 个 API 端点）
+    ├── controllers/                # HTTP 控制器 + 过滤器
+    │   ├── AiApiController.h/cc    # AI 核心 API 路由控制器
+    │   ├── AccountController.h/cc  # 账号管理 API 控制器
+    │   ├── ChannelController.h/cc  # 渠道管理 API 控制器
+    │   ├── MetricsController.h/cc  # 监控指标 API 控制器
+    │   ├── LogController.h/cc      # 日志查看 API 控制器
+    │   ├── HealthController.h/cc   # 健康检查 API 控制器
+    │   ├── ControllerUtils.h       # 控制器公共工具
+    │   ├── AdminAuthFilter.h       # 管理接口 Bearer Token 认证过滤器
+    │   ├── RateLimitFilter.h       # 请求限流过滤器（令牌桶）
     │   └── sinks/                  # 输出 Sink 实现
-    │       ├── ChatJsonSink.cpp    # Chat 非流式 JSON 输出
-    │       ├── ChatSseSink.cpp     # Chat 流式 SSE 输出
-    │       ├── ResponsesJsonSink.cpp # Responses 非流式 JSON 输出
-    │       └── ResponsesSseSink.cpp  # Responses 流式 SSE 输出
+    │       ├── ChatJsonSink.h/cpp      # Chat 非流式 JSON 输出
+    │       ├── ChatSseSink.h/cpp       # Chat 流式 SSE 输出
+    │       ├── ResponsesJsonSink.h/cpp # Responses 非流式 JSON 输出
+    │       └── ResponsesSseSink.h/cpp  # Responses 流式 SSE 输出
     │
-    ├── sessionManager/             # 核心业务逻辑
-    │   ├── GenerationRequest.h     # 统一请求结构
-    │   ├── GenerationEvent.h       # 统一事件模型
-    │   ├── IResponseSink.h         # 输出通道接口
-    │   ├── RequestAdapters.h/cpp   # HTTP 请求 → GenerationRequest 适配器
-    │   ├── GenerationService.h/cpp # 生成编排服务（核心）
-    │   ├── Session.h/cpp           # 会话管理 + ZeroWidth/Hash 追踪
-    │   ├── ContinuityResolver.h    # 会话连续性决策器
-    │   ├── ResponseIndex.h         # 响应存储索引（Responses API GET/DELETE）
-    │   ├── SessionExecutionGate.h  # 并发门控（单例 + RAII Guard）
-    │   ├── ToolCallBridge.h/cpp    # 工具调用桥接（Native / TextBridge）
-    │   ├── XmlTagToolCallCodec.h/cpp # XML 格式工具调用编解码
-    │   ├── ToolCallValidator.h/cpp # 工具调用 Schema 校验
-    │   ├── ClientOutputSanitizer.h/cpp # 输出清洗
-    │   └── Errors.h                # 统一错误模型
+    ├── sessionManager/             # 核心业务逻辑（分层组织）
+    │   ├── README.md               # sessionManager 模块文档
+    │   │
+    │   ├── contracts/              # 接口契约与数据结构
+    │   │   ├── README.md           # 契约层文档
+    │   │   ├── GenerationRequest.h # 统一请求结构
+    │   │   ├── GenerationEvent.h   # 统一事件模型
+    │   │   └── IResponseSink.h     # 输出通道接口
+    │   │
+    │   ├── core/                   # 核心服务
+    │   │   ├── README.md           # 核心层文档
+    │   │   ├── GenerationService.h/cpp              # 生成编排服务（主入口）
+    │   │   ├── GenerationServiceEmitAndToolBridge.cpp # 事件发送 + 工具桥接逻辑
+    │   │   ├── RequestAdapters.h/cpp   # HTTP 请求 → GenerationRequest 适配器
+    │   │   ├── Session.h/cpp           # 会话管理 + ZeroWidth/Hash 追踪
+    │   │   ├── SessionExecutionGate.h  # 并发门控（单例 + RAII Guard）
+    │   │   ├── ClientOutputSanitizer.h/cpp # 输出清洗
+    │   │   └── Errors.h                # 统一错误模型
+    │   │
+    │   ├── continuity/             # 会话连续性
+    │   │   ├── README.md           # 连续性模块文档
+    │   │   ├── ContinuityResolver.h/cpp # 会话连续性决策器
+    │   │   ├── ResponseIndex.h/cpp      # 响应存储索引（Responses API GET/DELETE）
+    │   │   └── TextExtractor.h/cpp      # 文本提取工具
+    │   │
+    │   └── tooling/                # 工具调用相关
+    │       ├── README.md           # 工具调用模块文档
+    │       ├── ToolCallBridge.h/cpp         # 工具调用桥接（Native / TextBridge）
+    │       ├── ToolDefinitionEncoder.h/cpp  # 工具定义编码（compact/full）
+    │       ├── XmlTagToolCallCodec.h/cpp    # XML 格式工具调用编解码
+    │       ├── ToolCallValidator.h/cpp      # 工具调用 Schema 校验
+    │       ├── ToolCallNormalizer.h/cpp     # 参数形状规范化
+    │       ├── ForcedToolCallGenerator.h/cpp # 强制工具调用兜底生成
+    │       ├── StrictClientRules.h/cpp      # 严格客户端规则
+    │       └── BridgeHelpers.h/cpp          # 桥接辅助函数
     │
-    ├── apipoint/                   # Provider 抽象
+    ├── apipoint/                   # Provider 抽象与实现
     │   ├── APIinterface.h          # Provider 接口（generate / getModels）
     │   ├── ProviderResult.h        # Provider 结果结构
-    │   └── chaynsapi/              # chayns Provider 实现
-    │       └── chaynsapi.h/cpp
+    │   ├── chaynsapi/              # Chayns Provider 实现
+    │   │   └── chaynsapi.h/cpp
+    │   ├── nexosapi/               # Nexos Web Provider 实现
+    │   │   └── nexosapi.h/cpp
+    │   └── openai/                 # OpenAI 兼容 Provider 实现
+    │       └── OpenAiProvider.h/cpp
     │
     ├── apiManager/                 # Provider 管理
+    │   ├── Apicomn.h               # API 公共定义
     │   ├── ApiFactory.h/cpp        # Provider 工厂
     │   └── ApiManager.h/cpp        # Provider 路由选择
     │
@@ -157,23 +208,59 @@ aiapi/
     │   └── channelManager.h/cpp    # 渠道 CRUD + 状态控制
     │
     ├── dbManager/                  # 数据库管理
-    │   ├── account/accountDbManager.h/cpp   # 账号持久化
-    │   ├── channel/channelDbManager.h/cpp   # 渠道持久化
-    │   └── metrics/                # 指标数据库管理
+    │   ├── DbType.h                # 数据库类型枚举（PostgreSQL/MySQL/SQLite3）
+    │   ├── account/
+    │   │   ├── accountDbManager.h/cpp       # 账号持久化
+    │   │   └── accountBackupDbManager.h/cpp # 账号备份持久化
+    │   ├── channel/
+    │   │   └── channelDbManager.h/cpp       # 渠道持久化
+    │   ├── config/
+    │   │   └── ConfigDbManager.h/cpp        # 配置持久化（app_config 表）
+    │   └── metrics/
     │       ├── ErrorStatsDbManager.h/cpp    # 错误统计持久化
     │       └── StatusDbManager.h/cpp        # 服务状态持久化
     │
     ├── metrics/                    # 错误统计服务
-    │   ├── ErrorStatsService.h     # 错误记录服务
-    │   └── ErrorEvent.h            # 错误事件定义
+    │   ├── ErrorEvent.h            # 错误事件定义
+    │   ├── ErrorStatsConfig.h/cpp  # 错误统计配置
+    │   └── ErrorStatsService.h/cpp # 错误记录服务
     │
-    └── tools/                      # 工具类
-        └── ZeroWidthEncoder.h/cpp  # 零宽字符编码/解码
+    ├── models/                     # 数据模型
+    │   └── model.json              # 模型定义文件
+    │
+    ├── tools/                      # 工具类
+    │   ├── ZeroWidthEncoder.h/cpp  # 零宽字符编码/解码
+    │   └── accountlogin/           # 账号登录自动化
+    │       ├── login_client.cpp    # C++ 登录客户端
+    │       ├── loginlocal.py       # 本地登录脚本
+    │       ├── loginremote.py      # 远程登录脚本
+    │       ├── chayns-login.service # systemd 服务文件
+    │       └── test.py             # 登录测试脚本
+    │
+    ├── utils/                      # 通用工具
+    │   ├── BackgroundTaskQueue.h   # 后台任务队列
+    │   └── ConfigValidator.h/cpp   # 配置校验器
+    │
+    └── test/                       # 单元测试
+        ├── CMakeLists.txt          # 测试构建配置
+        ├── test_main.cc            # 测试入口
+        ├── test_continuity_resolver.cpp     # ContinuityResolver 测试
+        ├── test_error_event.cpp             # ErrorEvent 测试
+        ├── test_error_stats_config.cpp      # ErrorStatsConfig 测试
+        ├── test_forced_tool_call.cpp        # ForcedToolCallGenerator 测试
+        ├── test_generation_service_emit.cpp # GenerationService emit 测试
+        ├── test_normalize_tool_args.cpp     # ToolCallNormalizer 测试
+        ├── test_request_adapters.cpp        # RequestAdapters 测试
+        ├── test_response_index.cpp          # ResponseIndex 测试
+        ├── test_sinks.cpp                   # Sink 输出测试
+        ├── test_strict_client_rules.cpp     # StrictClientRules 测试
+        ├── test_tool_call_validator.cpp      # ToolCallValidator 测试
+        └── test_xml_tool_call_codec.cpp     # XmlTagToolCallCodec 测试
 ```
 
 ## 完整 API 端点清单
 
-### AI 核心 API
+### AI 核心 API（AiApiController）
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
@@ -182,8 +269,20 @@ aiapi/
 | GET | `/chaynsapi/v1/responses/{id}` | 获取已创建的响应 |
 | DELETE | `/chaynsapi/v1/responses/{id}` | 删除已创建的响应 |
 | GET | `/chaynsapi/v1/models` | 获取可用模型列表 |
+| POST | `/nexosapi/v1/chat/completions` | Nexos Web Chat → OpenAI Chat Completions |
+| POST | `/nexosapi/v1/responses` | Nexos Web Chat → OpenAI Responses |
+| GET | `/nexosapi/v1/responses/{id}` | 获取已创建的 Nexos 响应 |
+| DELETE | `/nexosapi/v1/responses/{id}` | 删除已创建的 Nexos 响应 |
+| GET | `/nexosapi/v1/models` | 获取 Nexos 可用模型列表 |
+| GET | `/nexosapi/v1/account/quota` | 获取 Nexos 账号订阅/额度信息 |
 
-### 账号管理 API
+### Nexos Provider 说明
+
+- `nexosapi` 不再从配置文件读取 `cookies/default_model/default_handler_id/model_mapping/models`
+- **账号 cookies 来自账号管理**：请通过 `/aichat/account/add` 添加 `apiName=nexosapi` 的账号，并把完整 cookies 放到 `authToken`
+- **模型列表实时获取**：每次调用 `/nexosapi/v1/models` 或聊天请求时，都会从 Nexos `chat.data` 实时解析当前账号可用模型
+
+### 账号管理 API（AccountController）
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
@@ -195,7 +294,7 @@ aiapi/
 | GET | `/aichat/account/info` | 获取内存中的账号列表 |
 | GET | `/aichat/account/dbinfo` | 获取数据库中的账号列表 |
 
-### 渠道管理 API
+### 渠道管理 API（ChannelController）
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
@@ -205,7 +304,7 @@ aiapi/
 | POST | `/aichat/channel/updatestatus` | 更新渠道启用/禁用状态 |
 | GET | `/aichat/channel/info` | 获取渠道列表 |
 
-### 监控与日志 API
+### 监控与日志 API（MetricsController + LogController）
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
@@ -219,11 +318,20 @@ aiapi/
 | GET | `/aichat/logs/list` | 日志文件列表 |
 | GET | `/aichat/logs/tail` | 日志尾部读取（支持级别/关键词过滤） |
 
+### 健康检查 API（HealthController）
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| GET | `/health` | 返回服务状态、版本、运行时长 |
+| GET | `/ready` | 检查数据库、Provider、账号池可用性（依赖不足时返回 503） |
+
 ## 核心模块说明
 
 ### GenerationService（生成编排服务）
 
-核心编排服务，管理整个生成流程：
+核心编排服务，管理整个生成流程。代码拆分为两个 .cpp 文件：
+- `GenerationService.cpp` — 主流程（runGuarded / materializeSession / executeProvider）
+- `GenerationServiceEmitAndToolBridge.cpp` — 事件发送 + 工具桥接逻辑
 
 ```
 runGuarded(req, sink, policy)
@@ -237,9 +345,9 @@ runGuarded(req, sink, policy)
        ├─ emitResultEvents()       → 结果处理 + 事件发送
        │    ├─ sanitizeOutput()     → 文本清洗
        │    ├─ parseXmlToolCalls()  → XML 工具调用解析
-       │    ├─ normalizeToolCallArguments() → 参数规范化
+       │    ├─ ToolCallNormalizer   → 参数规范化
        │    ├─ ToolCallValidator    → Schema 校验 + 过滤
-       │    ├─ applyStrictClientRules()    → 严格客户端规则
+       │    ├─ StrictClientRules    → 严格客户端规则
        │    └─ 零宽字符会话ID嵌入
        └─ coverSessionresponse()   → 会话上下文更新 + 转移
 ```
@@ -256,19 +364,38 @@ runGuarded(req, sink, policy)
 | `Completed` | 生成完成 | finishReason (stop/tool_calls) |
 | `Error` | 错误 | code, message, detail |
 
-### Tool Bridge 机制
+### Tool Bridge 机制（tooling/ 模块）
 
-为不支持原生 Tool Calls 的上游通道提供 XML 桥接：
+为不支持原生 Tool Calls 的上游通道提供 XML 桥接，模块已拆分为独立组件：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| ToolCallBridge | `ToolCallBridge.h/cpp` | 桥接主逻辑（请求注入 + 响应解析） |
+| ToolDefinitionEncoder | `ToolDefinitionEncoder.h/cpp` | 工具定义编码（compact/full 模式） |
+| XmlTagToolCallCodec | `XmlTagToolCallCodec.h/cpp` | XML 格式工具调用编解码 |
+| ToolCallValidator | `ToolCallValidator.h/cpp` | Schema 校验（None/Relaxed/Strict） |
+| ToolCallNormalizer | `ToolCallNormalizer.h/cpp` | 参数形状规范化（数组/别名/默认值） |
+| ForcedToolCallGenerator | `ForcedToolCallGenerator.h/cpp` | tool_choice=required 兜底生成 |
+| StrictClientRules | `StrictClientRules.h/cpp` | Kilo-Code/RooCode 严格模式适配 |
+| BridgeHelpers | `BridgeHelpers.h/cpp` | 桥接辅助函数 |
 
 **请求侧**：
-1. 将工具定义编码为文本格式（支持 compact/full 两种模式）
+1. ToolDefinitionEncoder 将工具定义编码为文本格式
 2. 生成随机触发标记（如 `<Function_Ab1c_Start/>`）
-3. 构建 `<tool_instructions>` 提示注入到 requestmessage
+3. 构建 `<tool_instructions>` 提示注入到 request message
 
 **响应侧**：
 1. 通过触发标记定位 XML 块（防止误解析历史消息）
-2. 使用 XmlTagToolCallCodec 解析 `<function_calls>/<function_call>` 结构
-3. 参数形状规范化 + Schema 校验 + 降级策略
+2. XmlTagToolCallCodec 解析 `<function_calls>/<function_call>` 结构
+3. ToolCallNormalizer 参数规范化 + ToolCallValidator Schema 校验 + 降级策略
+
+### 会话连续性（continuity/ 模块）
+
+| 组件 | 职责 |
+|------|------|
+| ContinuityResolver | 决策当前请求是否属于已有会话的延续 |
+| ResponseIndex | 响应存储索引，支持 Responses API 的 GET/DELETE 操作 |
+| TextExtractor | 从复杂消息结构中提取纯文本内容 |
 
 ### 客户端适配
 
@@ -303,13 +430,22 @@ runGuarded(req, sink, policy)
 | `TOOL_BRIDGE` | 工具桥接 | XML 未找到、校验过滤、降级、强制生成 |
 | `INTERNAL` | 内部异常 | 运行时异常、未知错误 |
 
+配置通过 `ErrorStatsConfig` 管理，支持运行时调整保留策略。
+
+### HTTP 过滤器
+
+| 过滤器 | 作用范围 | 说明 |
+|--------|----------|------|
+| AdminAuthFilter | `/aichat/*` | Bearer Token 认证，`admin_api_key` 为空时跳过（向后兼容） |
+| RateLimitFilter | AI API 端点 | 令牌桶限流，可配置 `requests_per_second` 和 `burst` |
+
 ## API 使用示例
 
 ### Chat Completions API
 
 ```bash
 # 非流式
-curl -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
+curl -X POST "http://localhost:55555/chaynsapi/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
@@ -317,7 +453,7 @@ curl -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
   }'
 
 # 流式
-curl -N -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
+curl -N -X POST "http://localhost:55555/chaynsapi/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
@@ -330,7 +466,7 @@ curl -N -X POST "http://localhost:5555/chaynsapi/v1/chat/completions" \
 
 ```bash
 # 创建 Response
-curl -X POST "http://localhost:5555/chaynsapi/v1/responses" \
+curl -X POST "http://localhost:55555/chaynsapi/v1/responses" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
@@ -338,7 +474,7 @@ curl -X POST "http://localhost:5555/chaynsapi/v1/responses" \
   }'
 
 # 续聊
-curl -X POST "http://localhost:5555/chaynsapi/v1/responses" \
+curl -X POST "http://localhost:55555/chaynsapi/v1/responses" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "GPT-4o",
@@ -347,18 +483,19 @@ curl -X POST "http://localhost:5555/chaynsapi/v1/responses" \
   }'
 
 # 获取 Response
-curl "http://localhost:5555/chaynsapi/v1/responses/{response_id}"
+curl "http://localhost:55555/chaynsapi/v1/responses/{response_id}"
 
 # 删除 Response
-curl -X DELETE "http://localhost:5555/chaynsapi/v1/responses/{response_id}"
+curl -X DELETE "http://localhost:55555/chaynsapi/v1/responses/{response_id}"
 ```
 
 ### 账号管理
 
 ```bash
 # 添加账号
-curl -X POST "http://localhost:5555/aichat/account/add" \
+curl -X POST "http://localhost:55555/aichat/account/add" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
   -d '{
     "apiname": "chaynsapi",
     "username": "user@example.com",
@@ -366,20 +503,23 @@ curl -X POST "http://localhost:5555/aichat/account/add" \
   }'
 
 # 自动注册 5 个账号
-curl -X POST "http://localhost:5555/aichat/account/autoregister" \
+curl -X POST "http://localhost:55555/aichat/account/autoregister" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
   -d '{"apiname": "chaynsapi", "count": 5}'
 
 # 刷新所有账号状态
-curl -X POST "http://localhost:5555/aichat/account/refresh"
+curl -X POST "http://localhost:55555/aichat/account/refresh" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY"
 ```
 
 ### 渠道管理
 
 ```bash
 # 添加渠道
-curl -X POST "http://localhost:5555/aichat/channel/add" \
+curl -X POST "http://localhost:55555/aichat/channel/add" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
   -d '[{
     "channelname": "main",
     "channeltype": "chaynsapi",
@@ -390,20 +530,31 @@ curl -X POST "http://localhost:5555/aichat/channel/add" \
   }]'
 
 # 获取渠道列表
-curl "http://localhost:5555/aichat/channel/info"
+curl "http://localhost:55555/aichat/channel/info" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY"
 ```
 
 ### 监控
 
 ```bash
 # 服务状态概览
-curl "http://localhost:5555/aichat/status/summary"
+curl "http://localhost:55555/aichat/status/summary" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY"
 
 # 错误时序统计（最近 24 小时）
-curl "http://localhost:5555/aichat/metrics/errors/series"
+curl "http://localhost:55555/aichat/metrics/errors/series" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY"
 
 # 日志尾部（过滤 ERROR 级别）
-curl "http://localhost:5555/aichat/logs/tail?lines=100&level=ERROR"
+curl "http://localhost:55555/aichat/logs/tail?lines=100&level=ERROR" \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY"
+
+# 健康检查
+curl "http://localhost:55555/health"
+curl "http://localhost:55555/ready"
+
+# Prometheus 指标
+curl "http://localhost:55555/metrics"
 ```
 
 ## 构建与运行
@@ -415,7 +566,7 @@ curl "http://localhost:5555/aichat/logs/tail?lines=100&level=ERROR"
 - JsonCpp
 - OpenSSL
 - spdlog
-- PostgreSQL（用于持久化）
+- PostgreSQL / MySQL / SQLite3（可选，通过 `dbtype` 配置切换）
 
 ### 本地构建
 
@@ -426,6 +577,15 @@ cmake ..
 make -j$(nproc)
 ```
 
+### 运行测试
+
+```bash
+cd aiapi/src/build
+ctest --output-on-failure
+# 或直接运行测试可执行文件
+./test/aiapi_test
+```
+
 ### 运行
 
 ```bash
@@ -433,7 +593,7 @@ cd aiapi/src/build
 ./aiapi
 ```
 
-服务默认监听 `0.0.0.0:5555`
+服务默认监听 `0.0.0.0:55555`
 
 ### Docker 构建与运行
 
@@ -466,10 +626,10 @@ Docker 入口脚本支持：
 ```json
 {
   "listeners": [
-    { "address": "0.0.0.0", "port": 5555 }
+    { "address": "0.0.0.0", "port": 55555 }
   ],
   "db_clients": [
-    { "name": "aichatpg", "rdbms": "postgresql", "host": "...", ... }
+    { "name": "aichatpg", "rdbms": "postgresql", "host": "...", "...": "..." }
   ],
   "app": {
     "number_of_threads": 4,
@@ -484,13 +644,17 @@ Docker 入口脚本支持：
     { "name": "drogon::plugin::AccessLogger" }
   ],
   "custom_config": {
+    "dbtype": "sqlite3",
+    "admin_api_key": "",
     "session_tracking": {
       "mode": "zerowidth"
     },
     "tool_bridge": {
       "definition_mode": "compact",
       "include_descriptions": false,
-      "max_description_chars": 160
+      "max_description_chars": 5000,
+      "trigger_random_length": 8,
+      "strict_sentinel": true
     },
     "login_service_urls": [
       { "name": "chaynsapi", "url": "http://login-service:8004/api/v1/logins" }
@@ -514,24 +678,27 @@ Docker 入口脚本支持：
 
 | 配置路径 | 说明 | 可选值 |
 |----------|------|--------|
+| `custom_config.dbtype` | 数据库类型 | `postgresql` / `mysql` / `sqlite3` |
+| `custom_config.admin_api_key` | 管理接口 Bearer Key（为空则兼容放行并告警） | 任意非空字符串 |
 | `custom_config.session_tracking.mode` | 会话追踪模式 | `hash` / `zerowidth` |
 | `custom_config.tool_bridge.definition_mode` | 工具定义编码模式 | `compact` / `full` |
 | `custom_config.tool_bridge.include_descriptions` | 是否包含工具描述 | `true` / `false` |
-| `custom_config.tool_bridge.max_description_chars` | 描述截断长度 | 0-2000 |
-| `custom_config.admin_api_key` | 管理接口 Bearer Key（为空则兼容放行并告警） | 任意非空字符串 |
-| `custom_config.rate_limit.enabled` | AI 接口限流开关 | `true`/`false` |
+| `custom_config.tool_bridge.max_description_chars` | 描述截断长度 | 0-5000 |
+| `custom_config.tool_bridge.trigger_random_length` | 触发标记随机长度 | 6-12 |
+| `custom_config.tool_bridge.strict_sentinel` | 严格哨兵模式（全局默认） | `true` / `false` |
+| `custom_config.tool_bridge.strict_sentinel_by_channel` | 按渠道覆盖严格哨兵 | `{ "channel": bool }` |
+| `custom_config.tool_bridge.strict_sentinel_by_model` | 按模型覆盖严格哨兵 | `{ "model": bool }` |
+| `custom_config.tool_bridge.rewrite_user_input_conflicts` | 是否改写用户输入中的冲突指令 | `true` / `false` |
+| `custom_config.rate_limit.enabled` | AI 接口限流开关 | `true` / `false` |
 | `custom_config.rate_limit.requests_per_second` | 每秒令牌补充速率 | 正整数 |
 | `custom_config.rate_limit.burst` | 瞬时突发上限 | 正整数 |
 | `custom_config.response_index.max_entries` | Responses 索引最大内存条目数 | 正整数 |
 | `custom_config.response_index.max_age_hours` | Responses 索引过期时间（小时） | 正整数 |
 | `custom_config.response_index.cleanup_interval_minutes` | 索引清理周期（分钟） | 正整数 |
-| `custom_config.providers.openai` | OpenAI 兼容 Provider 配置 | `api_key`/`base_url`/`default_model` |
+| `custom_config.providers.openai` | OpenAI 兼容 Provider 配置 | `api_key` / `base_url` / `default_model` |
+| `custom_config.providers.nexos` | Nexos Provider 配置 | `base_url` |
+| `custom_config.upstream_error_texts` | 上游错误文本匹配列表 | 字符串数组 |
 | `custom_config.cors.allowed_origins` | CORS 白名单 | 字符串数组 |
-
-### 健康检查端点
-
-- `GET /health`：返回服务状态、版本、运行时长
-- `GET /ready`：检查数据库、Provider、账号池可用性（依赖不足时返回 503）
 
 ## 错误码
 
@@ -551,6 +718,30 @@ Docker 入口脚本支持：
 ## 详细文档
 
 - [调用关系图与接口样例](doc/aiapi_callflow_and_api_examples.md) — 详细的模块拆解、时序图、数据结构和 curl 示例
+- [sessionManager 模块文档](src/sessionManager/README.md) — 会话管理核心模块说明
+- [contracts 层文档](src/sessionManager/contracts/README.md) — 接口契约说明
+- [core 层文档](src/sessionManager/core/README.md) — 核心服务说明
+- [continuity 模块文档](src/sessionManager/continuity/README.md) — 会话连续性模块说明
+- [tooling 模块文档](src/sessionManager/tooling/README.md) — 工具调用模块说明
+
+## 单元测试
+
+项目包含 14 个测试文件，覆盖核心模块：
+
+| 测试文件 | 覆盖模块 |
+|----------|----------|
+| `test_request_adapters.cpp` | HTTP 请求适配器 |
+| `test_xml_tool_call_codec.cpp` | XML 工具调用编解码 |
+| `test_tool_call_validator.cpp` | 工具调用 Schema 校验 |
+| `test_normalize_tool_args.cpp` | 参数形状规范化 |
+| `test_forced_tool_call.cpp` | 强制工具调用兜底 |
+| `test_strict_client_rules.cpp` | 严格客户端规则 |
+| `test_sinks.cpp` | 输出 Sink |
+| `test_generation_service_emit.cpp` | GenerationService 事件发送 |
+| `test_continuity_resolver.cpp` | 会话连续性决策 |
+| `test_response_index.cpp` | 响应索引 |
+| `test_error_event.cpp` | 错误事件模型 |
+| `test_error_stats_config.cpp` | 错误统计配置 |
 
 ## 开发路线
 
@@ -560,21 +751,29 @@ Docker 入口脚本支持：
 - [x] 工具调用支持（原生 + Bridge）
 - [x] 工具调用桥接（XML Bridge + 随机 Sentinel）
 - [x] 工具调用验证（None/Relaxed/Strict + 降级策略）
-- [x] 参数形状规范化（数组/别名/默认值）
-- [x] 会话追踪（Hash/ZeroWidth + ContinuityResolver）
+- [x] 参数形状规范化（ToolCallNormalizer：数组/别名/默认值）
+- [x] 工具定义编码（ToolDefinitionEncoder：compact/full）
+- [x] 强制工具调用兜底（ForcedToolCallGenerator）
+- [x] 严格客户端规则（StrictClientRules：Kilo-Code / RooCode）
+- [x] 会话追踪（Hash/ZeroWidth + ContinuityResolver + TextExtractor）
 - [x] 并发门控（SessionExecutionGate + CancellationToken + RAII Guard）
 - [x] 输出清洗（ClientOutputSanitizer）
-- [x] 严格客户端规则（Kilo-Code / RooCode）
 - [x] 统一错误模型（Errors）
-- [x] 错误统计系统（ErrorStatsService + 4 域分类）
-- [x] 账号池管理（自动注册 + Token 刷新 + 类型检测）
+- [x] 错误统计系统（ErrorStatsService + ErrorStatsConfig + 4 域分类）
+- [x] 账号池管理（自动注册 + Token 刷新 + 类型检测 + 备份）
 - [x] 渠道管理（CRUD + 状态控制 + supports_tool_calls）
 - [x] 服务状态监控（Summary + Channels + Models）
 - [x] 日志查看 API（文件列表 + 尾部读取 + 过滤）
 - [x] Prometheus 指标导出
 - [x] 增量流式响应（AsyncStreamResponse + SSE 实时推送）
-- [x] 多 Provider 基础（新增 OpenAI 兼容 Provider）
-- [x] 核心单元测试扩展（RequestAdapters/XML Codec/Validator/Sinks）
+- [x] 多 Provider（chaynsapi + nexosapi + OpenAI 兼容）
+- [x] HTTP 过滤器（AdminAuthFilter + RateLimitFilter）
+- [x] 健康检查端点（/health + /ready）
+- [x] 配置校验（ConfigValidator）
+- [x] 后台任务队列（BackgroundTaskQueue）
+- [x] 控制器拆分（6 个独立控制器）
+- [x] sessionManager 分层重构（contracts / core / continuity / tooling）
+- [x] 核心单元测试（14 个测试文件覆盖关键模块）
 
 ## License
 

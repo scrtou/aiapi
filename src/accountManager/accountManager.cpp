@@ -7,6 +7,7 @@
 #include <optional>
 #include <chrono>
 #include <thread>
+#include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/config/ConfigDbManager.h>
 #include "../dbManager/channel/channelDbManager.h"
 using namespace drogon;
@@ -58,6 +59,21 @@ bool parsePositiveIntConfigValue(const std::string& value, int& parsed) {
     }
 }
 
+bool shouldSkipLifecycleRefresh(const std::shared_ptr<Accountinfo_st>& account) {
+    return account &&
+           account->apiName == "nexosapi" &&
+           account->accountType == "trial_budget_exceeded";
+}
+
+bool shouldExcludeFromPoolOnLoad(const std::shared_ptr<Accountinfo_st>& account) {
+    return shouldSkipLifecycleRefresh(account);
+}
+
+bool isTrialBudgetExceededAccount(const Accountinfo_st& account) {
+    return account.apiName == "nexosapi" &&
+           account.accountType == "trial_budget_exceeded";
+}
+
 bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& configDbManager,
                                        const AccountAutomationSettings& settings,
                                        std::string* errorMessage) {
@@ -101,6 +117,135 @@ std::string extractErrorMessageFromEnvelope(const Json::Value& json, const std::
     return fallback;
 }
 
+Json::Value fetchNexosChatDataByCookie(const std::string& cookieHeader) {
+    if (cookieHeader.empty()) {
+        return Json::Value();
+    }
+
+    auto client = HttpClient::newHttpClient("https://workspace.nexos.ai");
+    auto request = HttpRequest::newHttpRequest();
+    request->setMethod(HttpMethod::Get);
+    request->setPath("/chat.data");
+    request->addHeader("accept", "*/*");
+    request->addHeader("user-agent", "Mozilla/5.0");
+    request->addHeader("cookie", cookieHeader);
+
+    auto [result, response] = client->sendRequest(request, 30.0);
+    if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
+        return Json::Value();
+    }
+
+    Json::Value json;
+    std::string errs;
+    if (!parseJsonBody(std::string(response->getBody()), json, errs) || !json.isArray() || json.empty()) {
+        return Json::Value();
+    }
+    return json;
+}
+
+std::string extractNexosCookieHeader(const std::string& authTokenOrSessionHandle) {
+    if (authTokenOrSessionHandle.empty()) {
+        return "";
+    }
+
+    Json::Value json;
+    std::string errs;
+    if (parseJsonBody(authTokenOrSessionHandle, json, errs) && json.isObject()) {
+        if (json.isMember("cookie") && json["cookie"].isString()) {
+            return json["cookie"].asString();
+        }
+        if (json.isMember("cookie_header") && json["cookie_header"].isString()) {
+            return json["cookie_header"].asString();
+        }
+    }
+
+    return authTokenOrSessionHandle;
+}
+
+Json::Value decodeNexosSerializedRef(
+    int index,
+    const Json::Value& root,
+    std::map<int, Json::Value>& memo,
+    std::set<int>& inProgress);
+
+Json::Value decodeNexosSerializedInline(
+    const Json::Value& value,
+    const Json::Value& root,
+    std::map<int, Json::Value>& memo,
+    std::set<int>& inProgress)
+{
+    if (value.isNull() || value.isString() || value.isBool() || value.isDouble()) {
+        return value;
+    }
+    if (value.isInt()) {
+        const int n = value.asInt();
+        if (n < 0) return Json::nullValue;
+        if (!root.isArray() || n >= static_cast<int>(root.size())) return value;
+        return decodeNexosSerializedRef(n, root, memo, inProgress);
+    }
+    if (value.isArray()) {
+        Json::Value out(Json::arrayValue);
+        for (const auto& item : value) out.append(decodeNexosSerializedInline(item, root, memo, inProgress));
+        return out;
+    }
+    if (value.isObject()) {
+        Json::Value out(Json::objectValue);
+        for (const auto& key : value.getMemberNames()) {
+            std::string resolvedKey = key;
+            if (key.size() > 1 && key[0] == '_' &&
+                std::all_of(key.begin() + 1, key.end(), [](unsigned char ch) { return std::isdigit(ch); })) {
+                try {
+                    const unsigned long long idxUll = std::stoull(key.substr(1));
+                    if (root.isArray() && idxUll < static_cast<unsigned long long>(root.size())) {
+                        Json::Value keyValue = decodeNexosSerializedRef(static_cast<int>(idxUll), root, memo, inProgress);
+                        if (keyValue.isString()) {
+                            resolvedKey = keyValue.asString();
+                        }
+                    }
+                } catch (const std::exception&) {
+                    // 保持原始 key，避免异常导致启动阶段崩溃
+                }
+            }
+            out[resolvedKey] = decodeNexosSerializedInline(value[key], root, memo, inProgress);
+        }
+        return out;
+    }
+    return value;
+}
+
+Json::Value decodeNexosSerializedRef(
+    int index,
+    const Json::Value& root,
+    std::map<int, Json::Value>& memo,
+    std::set<int>& inProgress)
+{
+    if (!root.isArray() || index < 0 || index >= static_cast<int>(root.size())) {
+        return Json::Value(index);
+    }
+    auto it = memo.find(index);
+    if (it != memo.end()) return it->second;
+    if (inProgress.count(index)) return Json::Value();
+    inProgress.insert(index);
+    Json::Value resolved = decodeNexosSerializedInline(root[index], root, memo, inProgress);
+    inProgress.erase(index);
+    memo[index] = resolved;
+    return resolved;
+}
+
+std::string extractNexosEmailFromChatData(const Json::Value& chatData) {
+    if (!chatData.isArray() || chatData.empty()) {
+        return "";
+    }
+    std::map<int, Json::Value> memo;
+    std::set<int> inProgress;
+    const Json::Value decoded = decodeNexosSerializedRef(0, chatData, memo, inProgress);
+    const auto& user = decoded["domains/auth/routes/LoggedInLayout"]["data"]["user"];
+    if (user.isObject() && user.isMember("email") && user["email"].isString()) {
+        return user["email"].asString();
+    }
+    return "";
+}
+
 }
 
 // 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
@@ -120,12 +265,13 @@ string getLoginServiceUrl(const string& name) {
 
     // 2. 其次从环境变量读取 (作为后备)
     const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
-    if (envUrl != nullptr && strlen(envUrl) > 0 && name == "chaynsapi") {
+    if (envUrl != nullptr && strlen(envUrl) > 0 &&
+        (name == "chaynsapi" || name == "nexosapi")) {
         return string(envUrl);
     }
 
     // 3. 最后使用默认值 (作为后备)
-    if (name == "chaynsapi") {
+    if (name == "chaynsapi" || name == "nexosapi") {
         return "http://127.0.0.1:8004/api/v1/logins";
     }
     
@@ -148,16 +294,44 @@ string getRegistServiceUrl(const string& name) {
 
     // 2. 其次从环境变量读取 (作为后备)
     const char* envUrl = std::getenv("REGIST_SERVICE_URL");
-    if (envUrl != nullptr && strlen(envUrl) > 0 && name == "chaynsapi") {
+    if (envUrl != nullptr && strlen(envUrl) > 0 &&
+        (name == "chaynsapi" || name == "nexosapi")) {
         return string(envUrl);
     }
 
     // 3. 最后使用默认值 (作为后备)
-    if (name == "chaynsapi") {
+    if (name == "chaynsapi" || name == "nexosapi") {
         return "http://127.0.0.1:8000/api/v1/workflows/register-and-login";
     }
     
     return ""; // 如果找不到，返回空字符串
+}
+
+std::string getDownstreamBearerApiKey(const std::string& name) {
+    auto customConfig = drogon::app().getCustomConfig();
+    if (customConfig.isMember("downstream_service_api_keys") &&
+        customConfig["downstream_service_api_keys"].isArray()) {
+        for (const auto& service : customConfig["downstream_service_api_keys"]) {
+            if (service.isMember("name") && service["name"].asString() == name && service.isMember("api_key")) {
+                const std::string key = service["api_key"].asString();
+                if (!key.empty()) {
+                    return key;
+                }
+            }
+        }
+    }
+
+    const char* envUrl = std::getenv("DOWNSTREAM_SERVICE_API_KEY");
+    if (envUrl != nullptr && strlen(envUrl) > 0) {
+        return std::string(envUrl);
+    }
+
+    const char* legacyEnv = std::getenv("AIAPI_TOOL_BEARER_KEY");
+    if (legacyEnv != nullptr && strlen(legacyEnv) > 0) {
+        return std::string(legacyEnv);
+    }
+
+    return "";
 }
 
 AccountManager::AccountManager()
@@ -288,6 +462,7 @@ void AccountManager::init()
 {
     LOG_INFO << "[账户管理] 初始化开始";
     accountDbManager = AccountDbManager::getInstance();
+    AccountBackupDbManager::getInstance()->ensureTable();
     if(!accountDbManager->isTableExist())
     {
         accountDbManager->createTable();
@@ -296,6 +471,7 @@ void AccountManager::init()
     {
         accountDbManager->checkAndUpgradeTable();
     }
+    normalizeNexosAccountsInDatabase();
     loadAccountAutomationSettings();
     loadAccount();
     // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
@@ -308,7 +484,58 @@ void AccountManager::init()
     const string fullUrl1 = getRegistServiceUrl("chaynsapi");
     LOG_INFO << "[账户管理] 登录服务URL: " << fullUrl;
     LOG_INFO << "[账户管理] 注册服务URL: " << fullUrl1;
+    const string downstreamKey = getDownstreamBearerApiKey("chaynsapi");
+    LOG_INFO << "[账户管理] 下游 Bearer API Key: " << (downstreamKey.empty() ? "未配置" : "已配置");
     LOG_INFO << "[账户管理] 初始化完成";
+}
+
+void AccountManager::normalizeNexosAccountsInDatabase()
+{
+    LOG_INFO << "[账户管理] 开始规范化 Nexos 历史账号用户名";
+    auto dbAccounts = accountDbManager->getAccountDBList();
+    int migratedCount = 0;
+
+    for (const auto& account : dbAccounts) {
+        if (account.apiName != "nexosapi") {
+            continue;
+        }
+        const std::string normalizedToken = extractNexosCookieHeader(account.authToken);
+        if (normalizedToken.empty()) {
+            continue;
+        }
+
+        if (account.userName.find('@') != std::string::npos) {
+            if (normalizedToken != account.authToken) {
+                Accountinfo_st normalized = account;
+                normalized.authToken = normalizedToken;
+                if (accountDbManager->updateAccount(normalized)) {
+                    ++migratedCount;
+                    LOG_INFO << "[账户管理] Nexos 账号 cookies 已规范化: " << account.userName;
+                }
+            }
+            continue;
+        }
+
+        const Json::Value chatData = fetchNexosChatDataByCookie(normalizedToken);
+        const std::string email = extractNexosEmailFromChatData(chatData);
+        if (email.empty() || email == account.userName) {
+            continue;
+        }
+
+        Accountinfo_st migrated = account;
+        migrated.userName = email;
+        migrated.authToken = normalizedToken;
+
+        if (accountDbManager->addAccount(migrated)) {
+            if (accountDbManager->deleteAccount(account.apiName, account.userName)) {
+                ++migratedCount;
+                LOG_INFO << "[账户管理] Nexos 账号用户名已规范化: "
+                         << account.userName << " -> " << email;
+            }
+        }
+    }
+
+    LOG_INFO << "[账户管理] Nexos 历史账号用户名规范化完成，迁移数量: " << migratedCount;
 }
  
 void AccountManager::loadAccount()
@@ -363,6 +590,15 @@ void AccountManager::addAccount(string apiName,string userName,string passwd,str
     auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType,status);
     accountList[apiName][userName] = account;
     
+    if (shouldExcludeFromPoolOnLoad(account)) {
+        LOG_WARN << "[账户管理] 启动时检测到 trial_budget_exceeded 账号，已从账号池排除: "
+                 << userName << ", apiName=" << apiName
+                 << ", status=" << status
+                 << ", tokenStatus=" << tokenStatus
+                 << ", accountStatus=" << accountStatus;
+        return;
+    }
+
     // 只有 active 状态的账号才加入账号池
     if (status == AccountStatus::ACTIVE) {
         if(accountPoolMap[apiName] == nullptr)
@@ -425,6 +661,19 @@ bool AccountManager::deleteAccountbyPost(string apiName,string userName)
         accountList[apiName][userName]->tokenStatus = false;
         accountList[apiName][userName]->accountStatus = false;
         accountList[apiName].erase(userName);
+
+        if (accountList[apiName].empty()) {
+            accountPoolMap.erase(apiName);
+        } else {
+            auto rebuiltQueue = std::make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
+            for (const auto& [_, account] : accountList[apiName]) {
+                if (!account || account->status != AccountStatus::ACTIVE || shouldExcludeFromPoolOnLoad(account)) {
+                    continue;
+                }
+                rebuiltQueue->push(account);
+            }
+            accountPoolMap[apiName] = rebuiltQueue;
+        }
         return true;
     }
     return false;
@@ -555,6 +804,76 @@ bool AccountManager::checkChaynsToken(string token)
     }
     return true;
 }
+
+bool AccountManager::checkNexosToken(string token)
+{
+    LOG_INFO << "[账户管理] 开始校验 Nexos cookies";
+    token = extractNexosCookieHeader(token);
+    if (token.empty()) {
+        LOG_WARN << "[账户管理] Nexos cookies 为空";
+        return false;
+    }
+
+    auto client = HttpClient::newHttpClient("https://workspace.nexos.ai");
+    auto request = HttpRequest::newHttpRequest();
+    request->setMethod(HttpMethod::Get);
+    request->setPath("/chat.data");
+    request->addHeader("accept", "*/*");
+    request->addHeader("user-agent", "Mozilla/5.0");
+    request->addHeader("cookie", token);
+
+    auto [result, response] = client->sendRequest(request);
+    if (result != ReqResult::Ok || !response) {
+        LOG_ERROR << "[账户管理] Nexos cookies 校验失败, result=" << static_cast<int>(result);
+        return false;
+    }
+
+    LOG_INFO << "[账户管理] Nexos cookies 校验响应状态码: " << response->getStatusCode();
+    return response->getStatusCode() == k200OK;
+}
+
+void AccountManager::updateNexosToken(shared_ptr<Accountinfo_st> accountinfo)
+{
+    LOG_INFO << "[账户管理] 开始更新 Nexos 登录态，用户: " << accountinfo->userName;
+
+    // 1. 先规范化 authToken 为 cookie header
+    accountinfo->authToken = extractNexosCookieHeader(accountinfo->authToken);
+
+    // 2. 先检查现有 cookie 是否仍然有效；有效则直接保留，不重复登录
+    if (!accountinfo->authToken.empty() && checkNexosToken(accountinfo->authToken)) {
+        LOG_INFO << "[账户管理] Nexos cookie 仍然有效，跳过重新登录: " << accountinfo->userName;
+        accountinfo->tokenStatus = true;
+        accountinfo->accountStatus = true;
+        if (accountinfo->accountType.empty()) {
+            accountinfo->accountType = "pro";
+        }
+        return;
+    }
+
+    // 3. cookie 已失效时，若具备邮箱 + 密码，则使用账号密码重新登录获取新的 cookie
+    if (!accountinfo->userName.empty() &&
+        !accountinfo->passwd.empty() &&
+        accountinfo->userName.find('@') != std::string::npos) {
+        auto token = getNexosToken(accountinfo->userName, accountinfo->passwd);
+        LOG_INFO << "[账户管理] Nexos 账号密码重新登录结果: " << (token.empty() ? "empty" : "not empty");
+        if (!token.empty()) {
+            accountinfo->tokenStatus = true;
+            accountinfo->authToken = token["token"].asString();
+            accountinfo->accountStatus = true;
+            accountinfo->useCount = 0;
+            accountinfo->userTobitId = token["userid"].asInt();
+            accountinfo->personId = token["personid"].asString();
+            accountinfo->accountType = "pro";
+            return;
+        }
+    }
+
+    // 4. cookie 无效且无法通过账号密码重新登录，则标记失效
+    LOG_WARN << "[账户管理] Nexos 登录态刷新失败，账号将标记为失效: " << accountinfo->userName;
+    accountinfo->tokenStatus = false;
+    accountinfo->accountStatus = false;
+}
+
 Json::Value AccountManager::getChaynsToken(string username,string passwd)
 {
     LOG_INFO << "[账户管理] 开始获取 Chayns 令牌";
@@ -588,6 +907,10 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     request->setPath(path);
     request->setContentTypeString("application/json");
     request->setBody(json.toStyledString());
+    const std::string downstreamApiKey = getDownstreamBearerApiKey("chaynsapi");
+    if (!downstreamApiKey.empty()) {
+        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
+    }
     auto [result, response] = client->sendRequest(request);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
@@ -631,6 +954,99 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     }
     return normalized;
 }
+
+Json::Value AccountManager::getNexosToken(string username,string passwd)
+{
+    LOG_INFO << "[账户管理] 开始获取 Nexos 登录态";
+    const string fullUrl = getLoginServiceUrl("nexosapi");
+    if (fullUrl.empty()) {
+        LOG_ERROR << "[账户管理] 配置中未找到 nexosapi 的登录服务地址";
+        return Json::Value();
+    }
+    LOG_INFO << "[账户管理] Nexos 完整登录地址: " << fullUrl;
+
+    string baseUrl, path;
+    if (!splitUrl(fullUrl, baseUrl, path)) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务地址格式无效: " << fullUrl;
+        return Json::Value();
+    }
+    LOG_INFO << "[账户管理] Nexos 解析出的主机地址: " << baseUrl;
+
+    if (!isServerReachable(baseUrl)) {
+        LOG_ERROR << "[账户管理] 达到最大重试次数后仍无法连通 Nexos 登录主机: " << baseUrl;
+        return Json::Value();
+    }
+
+    auto client = HttpClient::newHttpClient(baseUrl);
+    auto request = HttpRequest::newHttpRequest();
+    Json::Value json;
+    json["site"] = "nexos";
+    json["credentials"]["email"] = username;
+    json["credentials"]["password"] = passwd;
+    json["strategy"]["mode"] = "drission";
+    json["strategy"]["login_mode"] = "drission";
+    json["strategy"]["timeout_seconds"] = 900;
+    request->setMethod(HttpMethod::Post);
+    request->setPath(path);
+    request->setContentTypeString("application/json");
+    request->setBody(json.toStyledString());
+    const std::string downstreamApiKey = getDownstreamBearerApiKey("nexosapi");
+    if (!downstreamApiKey.empty()) {
+        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
+    }
+
+    auto [result, response] = client->sendRequest(request, 300.0);
+    if (result != ReqResult::Ok || !response) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务请求失败, result=" << static_cast<int>(result);
+        return Json::Value();
+    }
+
+    std::string body;
+    if (response->getStatusCode() == 200) {
+        body = std::string(response->getBody());
+        LOG_INFO << "[账户管理] Nexos 登录服务原始响应内容: " << body;
+    }
+
+    Json::Value responsejson;
+    std::string errs;
+    if (!parseJsonBody(body, responsejson, errs)) {
+        LOG_ERROR << "[账户管理] 解析 Nexos 登录响应 JSON 失败: " << errs;
+        return Json::Value();
+    }
+
+    if (!isSuccessEnvelope(responsejson)) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回失败: " << extractErrorMessageFromEnvelope(responsejson, body);
+        return Json::Value();
+    }
+
+    const auto& resultJson = responsejson["data"]["result"];
+    if (!resultJson.isObject()) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务响应缺少 data.result";
+        return Json::Value();
+    }
+
+    Json::Value normalized;
+    normalized["token"] = extractNexosCookieHeader(resultJson["session"].get("access_token", "").asString());
+    normalized["userid"] = 0;
+    normalized["personid"] = resultJson["identity"].get("external_user_id", "").asString();
+    if (normalized["personid"].asString().empty()) {
+        normalized["personid"] = resultJson["identity"].get("external_subject", "").asString();
+    }
+    if (normalized["personid"].asString().empty()) {
+        normalized["personid"] = resultJson["site_result"].get("identity_id", "").asString();
+    }
+    normalized["email"] = resultJson["account"].get("email", username).asString();
+    normalized["password"] = passwd;
+    normalized["has_pro_access"] = true;
+
+    if (normalized["token"].asString().empty() || normalized["personid"].asString().empty()) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务响应缺少关键字段";
+        return Json::Value();
+    }
+
+    return normalized;
+}
+
 void AccountManager::checkToken()
 {
     LOG_INFO << "[账户管理] 开始批量校验账号令牌";
@@ -652,6 +1068,11 @@ void AccountManager::checkToken()
     // 在锁外进行检查操作
     for(auto& account : accountsToCheck)
     {
+        if (shouldSkipLifecycleRefresh(account)) {
+            LOG_INFO << "[账户管理] 跳过 trial_budget_exceeded 账号令牌校验: "
+                     << account->userName;
+            continue;
+        }
         LOG_INFO << "[账户管理] 正在校验账号: " << account->apiName << " " << account->userName;
         if(checkTokenMap[account->apiName])
         {
@@ -679,6 +1100,9 @@ void AccountManager::updateToken()
         {
             for(auto& userName : apiName.second)
             {
+                if (shouldSkipLifecycleRefresh(userName.second)) {
+                    continue;
+                }
                 if(!userName.second->tokenStatus || userName.second->authToken.empty())
                 {
                     accountsToUpdate.push_back(userName.second);
@@ -750,17 +1174,25 @@ void AccountManager::checkUpdateAccountToken()
 // 添加检测服务可用性的函数
 bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
     auto checkClient = HttpClient::newHttpClient(host);
-    auto checkRequest = HttpRequest::newHttpRequest();
-    checkRequest->setMethod(HttpMethod::Get);
-    checkRequest->setPath("/health"); // 假设有健康检查端点，如果没有可以用 "/"
+    const std::vector<std::string> candidatePaths = {
+        "/api/v1/health",
+        "/health",
+        "/"
+    };
 
     int retryCount = 0;
     while (retryCount < maxRetries) {
         try {
-            auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest);
-            if (checkResponse && checkResponse->getStatusCode() == 200) {
-                LOG_INFO << "[账户管理] 目标主机已连通，累计重试次数: " << retryCount << " 次";
-                return true;
+            for (const auto& path : candidatePaths) {
+                auto checkRequest = HttpRequest::newHttpRequest();
+                checkRequest->setMethod(HttpMethod::Get);
+                checkRequest->setPath(path);
+                auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest);
+                if (checkResponse && checkResponse->getStatusCode() == 200) {
+                    LOG_INFO << "[账户管理] 目标主机已连通，探测路径: " << path
+                             << "，累计重试次数: " << retryCount << " 次";
+                    return true;
+                }
             }
         } catch (...) {
             LOG_INFO << "[账户管理] 目标主机暂不可达，准备第 N 次重试: " << retryCount + 1;
@@ -776,12 +1208,30 @@ void AccountManager::loadAccountFromDatebase()
 {
     LOG_INFO << "[账户管理] 开始从数据库加载账号";
     auto accountDBList = accountDbManager->getAccountDBList();
+    int archivedCount = 0;
     for(auto& accountinfo:accountDBList)
     {
         LOG_INFO << "[账户管理] 从数据库加载账号记录: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime << ", status: " << accountinfo.status;
+        if (isTrialBudgetExceededAccount(accountinfo)) {
+            const bool backedUp = AccountBackupDbManager::getInstance()->backupAccount(
+                accountinfo,
+                "startup_trial_budget_exceeded_cleanup"
+            );
+            if (backedUp && accountDbManager->deleteAccount(accountinfo.apiName, accountinfo.userName)) {
+                ++archivedCount;
+                LOG_WARN << "[账户管理] 启动时发现 Trial Budget Exceeded 账号，已迁移到备份库并从主库删除: "
+                         << accountinfo.userName;
+                continue;
+            }
+
+            LOG_ERROR << "[账户管理] 启动时迁移 Trial Budget Exceeded 账号失败，跳过加载: "
+                      << accountinfo.userName;
+            continue;
+        }
         addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
     }
-    LOG_INFO << "[账户管理] 数据库加载完成，账号总数: "<<accountDBList.size();
+    LOG_INFO << "[账户管理] 数据库加载完成，账号总数: "<<accountDBList.size()
+             << "，归档删除数量: " << archivedCount;
 }
 void AccountManager::saveAccountToDatebase()
 {
@@ -815,7 +1265,7 @@ void AccountManager::setStatusTokenStatus(string apiName,string userName,bool st
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->tokenStatus = status;
-        if(!status)
+        if(!status && !shouldSkipLifecycleRefresh(accountList[apiName][userName]))
             {
                 std::lock_guard<std::mutex> lock2(accountListNeedUpdateMutex);
                 accountListNeedUpdate.push_back(accountList[apiName][userName]);
@@ -844,6 +1294,12 @@ void AccountManager::waitUpdateAccountToken()
         // 验证账号
         if (!account) {
             LOG_ERROR << "[账户管理] 账号指针无效，跳过本次更新";
+            continue;
+        }
+
+        if (shouldSkipLifecycleRefresh(account)) {
+            LOG_INFO << "[账户管理] 跳过 trial_budget_exceeded 账号令牌刷新: "
+                     << account->userName;
             continue;
         }
 
@@ -982,9 +1438,9 @@ void AccountManager::autoRegisterAccount(string apiName)
     requestBody["last_name"] = lastName;
     requestBody["password"] = password;
 
-    const string fullUrl = getRegistServiceUrl("chaynsapi");
+    const string fullUrl = getRegistServiceUrl(apiName);
     if (fullUrl.empty()) {
-        LOG_ERROR << "[自动注册] 未找到 chaynsapi 的注册服务URL";
+        LOG_ERROR << "[自动注册] 未找到 " << apiName << " 的注册服务URL";
         // 注册失败，删除待注册记录
         accountDbManager->deleteWaitingAccount(waitingId);
         return;
@@ -1001,20 +1457,36 @@ void AccountManager::autoRegisterAccount(string apiName)
     auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
     Json::Value workflowBody;
-    workflowBody["site"] = "chayns";
     workflowBody["mail_policy"]["expiry_time_ms"] = 3600000;
     workflowBody["proxy_policy"]["enabled"] = false;
     workflowBody["identity"]["first_name"] = firstName;
     workflowBody["identity"]["last_name"] = lastName;
     workflowBody["identity"]["password"] = password;
-    workflowBody["strategy"]["registration_mode"] = "api_first";
-    workflowBody["strategy"]["login_mode"] = "api_first";
-    workflowBody["strategy"]["timeout_seconds"] = 360;
+
+    if (apiName == "nexosapi") {
+        workflowBody["site"] = "nexos";
+        workflowBody["mail_policy"]["providers"] = Json::arrayValue;
+        workflowBody["mail_policy"]["providers"].append("gptmail");
+        workflowBody["mail_policy"]["domain_preference"] = Json::arrayValue;
+        workflowBody["mail_policy"]["domain_preference"].append("666.34555.casacam.net");
+        workflowBody["strategy"]["registration_mode"] = "drission";
+        workflowBody["strategy"]["login_mode"] = "drission";
+        workflowBody["strategy"]["timeout_seconds"] = 900;
+    } else {
+        workflowBody["site"] = "chayns";
+        workflowBody["strategy"]["registration_mode"] = "api_first";
+        workflowBody["strategy"]["login_mode"] = "api_first";
+        workflowBody["strategy"]["timeout_seconds"] = 360;
+    }
 
     request->setMethod(HttpMethod::Post);
     request->setPath(path);
     request->setContentTypeString("application/json");
     request->setBody(workflowBody.toStyledString());
+    const std::string downstreamApiKey = getDownstreamBearerApiKey(apiName);
+    if (!downstreamApiKey.empty()) {
+        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
+    }
     
     LOG_INFO << "[自动注册] 发送注册请求...";
     auto [result, response] = client->sendRequest(request, 300.0);
@@ -1071,6 +1543,9 @@ void AccountManager::autoRegisterAccount(string apiName)
             detailPath = "/api/v1/workflows";
         }
         detailRequest->setPath(detailPath + "/" + taskId);
+        if (!downstreamApiKey.empty()) {
+            detailRequest->addHeader("Authorization", "Bearer " + downstreamApiKey);
+        }
         auto [detailResult, detailResponse] = client->sendRequest(detailRequest, 30.0);
         if (detailResult != ReqResult::Ok || !detailResponse) {
             LOG_WARN << "[自动注册] 查询 workflow 状态失败, attempt=" << attempt + 1;
@@ -1118,12 +1593,29 @@ void AccountManager::autoRegisterAccount(string apiName)
 
     string email = registrationJson["account"].get("email", "").asString();
     string respPassword = registrationJson["account"].get("password", password).asString();
-    int userid = loginJson["site_result"].get("userid", 0).asInt();
-    string personid = loginJson["site_result"].get("personid", "").asString();
+    int userid = 0;
+    string personid;
     string token = loginJson["session"].get("access_token", "").asString();
+    if (apiName == "nexosapi") {
+        token = extractNexosCookieHeader(token);
+    }
+
     bool hasProAccess = false;
-    if (loginJson.isMember("site_result") && loginJson["site_result"].get("has_pro_access", false).asBool()) {
+    if (apiName == "nexosapi") {
+        personid = loginJson["identity"].get("external_user_id", "").asString();
+        if (personid.empty()) {
+            personid = loginJson["identity"].get("external_subject", "").asString();
+        }
+        if (personid.empty()) {
+            personid = loginJson["site_result"].get("identity_id", "").asString();
+        }
         hasProAccess = true;
+    } else {
+        userid = loginJson["site_result"].get("userid", 0).asInt();
+        personid = loginJson["site_result"].get("personid", "").asString();
+        if (loginJson.isMember("site_result") && loginJson["site_result"].get("has_pro_access", false).asBool()) {
+            hasProAccess = true;
+        }
     }
 
     if (email.empty() || personid.empty() || token.empty()) {
@@ -1351,7 +1843,13 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
 // 更新单个账号的 accountType
 void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
 {
-    if (!account || account->authToken.empty() || account->personId.empty()) {
+    if (!account || account->apiName != "chaynsapi") {
+        LOG_INFO << "[账户管理] 跳过账号类型刷新，渠道不需要 accountType 探测: "
+                 << (account ? account->apiName : "null");
+        return;
+    }
+
+    if (account->authToken.empty() || account->personId.empty()) {
         LOG_ERROR << "[账户管理] 更新账号类型失败：账号数据无效";
         return;
     }
@@ -1389,6 +1887,9 @@ void AccountManager::updateAllAccountTypes()
         for (auto& apiName : accountList) {
             for (auto& userName : apiName.second) {
                 auto account = userName.second;
+                if (shouldSkipLifecycleRefresh(account)) {
+                    continue;
+                }
                 // 只更新 token 有效的账号
                 if (account && account->tokenStatus && !account->authToken.empty()) {
                     accountsToUpdate.push_back(account);

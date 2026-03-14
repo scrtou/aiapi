@@ -1,6 +1,7 @@
 #include "AccountController.h"
 #include "ControllerUtils.h"
 #include <accountManager/accountManager.h>
+#include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/account/accountDbManager.h>
 #include <utils/BackgroundTaskQueue.h>
 #include <sstream>
@@ -158,6 +159,24 @@ void AccountController::accountInfo(const HttpRequestPtr &req, std::function<voi
         for (auto &userName : account.second) {
             response.append(buildAccountPublicJson(*userName.second));
         }
+    }
+    if (response.empty()) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k200OK);
+        resp->setContentTypeCode(CT_APPLICATION_JSON);
+        resp->setBody("[]");
+        callback(resp);
+    } else {
+        ctl::sendJson(callback, response);
+    }
+}
+
+void AccountController::accountBackupInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[账号Ctrl] 获取备份账号信息";
+    Json::Value response(Json::arrayValue);
+    for (auto &account : AccountBackupDbManager::getInstance()->getBackupAccountList()) {
+        response.append(buildAccountPublicJson(account));
     }
     if (response.empty()) {
         auto resp = HttpResponse::newHttpResponse();

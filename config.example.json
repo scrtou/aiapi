@@ -184,11 +184,24 @@
                 "url": "http://orchestrator-service:8000/api/v1/workflows/register-and-login"
             }
         ],
+        "downstream_service_api_keys": [
+            {
+                "name": "chaynsapi",
+                "api_key": "tool_web_demo_key"
+            },
+            {
+                "name": "nexosapi",
+                "api_key": "tool_web_demo_key"
+            }
+        ],
         "providers": {
             "openai": {
                 "api_key": "",
                 "base_url": "https://api.openai.com",
                 "default_model": "gpt-4o-mini"
+            },
+            "nexos": {
+                "base_url": "https://workspace.nexos.ai"
             }
         },
         "upstream_error_texts": [

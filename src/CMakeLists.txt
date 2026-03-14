@@ -25,6 +25,7 @@ add_executable(${PROJECT_NAME}
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
+    apipoint/nexosapi/nexosapi.cpp
     apipoint/openai/OpenAiProvider.cpp
     channelManager/channelManager.cpp
     controllers/AiApiController.cc
@@ -38,6 +39,7 @@ add_executable(${PROJECT_NAME}
     controllers/sinks/ResponsesSseSink.cpp
     controllers/sinks/ResponsesJsonSink.cpp
     dbManager/account/accountDbManager.cpp
+    dbManager/account/accountBackupDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     dbManager/config/ConfigDbManager.cpp
     dbManager/metrics/ErrorStatsDbManager.cpp
@@ -95,6 +97,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/openai
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
+                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/nexosapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers/sinks

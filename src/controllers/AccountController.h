@@ -13,6 +13,7 @@
  *   POST /aichat/account/refresh         – 刷新账号状态
  *   POST /aichat/account/autoregister    – 自动注册账号
  *   GET  /aichat/account/info            – 获取账号信息
+ *   GET  /aichat/account/backupinfo      – 获取备份账号信息
  *   GET  /aichat/account/dbinfo          – 获取账号数据库信息
  *   GET  /aichat/account/settings        – 获取账号自动化设置
  *   POST /aichat/account/settings        – 更新账号自动化设置
@@ -27,6 +28,7 @@ class AccountController : public drogon::HttpController<AccountController>
     ADD_METHOD_TO(AccountController::accountRefresh,      "/aichat/account/refresh",      drogon::Post, "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountAutoRegister, "/aichat/account/autoregister", drogon::Post, "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountInfo,         "/aichat/account/info",         drogon::Get,  "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountBackupInfo,   "/aichat/account/backupinfo",   drogon::Get,  "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountDbInfo,       "/aichat/account/dbinfo",       drogon::Get,  "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountSettingsGet,  "/aichat/account/settings",     drogon::Get,  "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountSettingsUpdate,"/aichat/account/settings",     drogon::Post, "AdminAuthFilter");
@@ -38,6 +40,7 @@ class AccountController : public drogon::HttpController<AccountController>
     void accountRefresh(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountAutoRegister(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountInfo(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+    void accountBackupInfo(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountDbInfo(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountSettingsGet(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountSettingsUpdate(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);

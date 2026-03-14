@@ -6,6 +6,7 @@
 #include <random>
 #include <unordered_map>
 #include <apiManager/ApiManager.h>
+#include <apipoint/nexosapi/nexosapi.h>
 #include <sessionManager/core/Session.h>
 #include <sessionManager/core/ClientOutputSanitizer.h>
 #include <sessionManager/core/GenerationService.h>
@@ -29,6 +30,15 @@
 using namespace drogon;
 
 namespace {
+
+std::string inferProviderFromPath(const HttpRequestPtr& req)
+{
+    const auto path = req ? req->path() : "";
+    if (path.rfind("/nexosapi/", 0) == 0) {
+        return "nexosapi";
+    }
+    return "chaynsapi";
+}
 
 generation::ErrorCode toGenerationErrorCode(error::ErrorCode code)
 {
@@ -126,9 +136,7 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromChat(req);
     
 
-    if (genReq.provider.empty()) {
-        genReq.provider = "chaynsapi";
-    }
+    genReq.provider = inferProviderFromPath(req);
     
 
     if (!stream) {
@@ -223,8 +231,33 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
 void AiApiController::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     LOG_INFO << "[AI接口控制器] 获取模型列表";
-    Json::Value response= ApiManager::getInstance().getApiByApiName("chaynsapi")->getModels();
+    const auto providerName = inferProviderFromPath(req);
+    auto provider = ApiManager::getInstance().getApiByApiName(providerName);
+    if (!provider) {
+        ctl::sendError(callback, k500InternalServerError, "provider_not_found", "Provider not found: " + providerName);
+        return;
+    }
+    Json::Value response= provider->getModels();
     ctl::sendJson(callback, response);
+}
+
+void AiApiController::nexosAccountQuota(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    auto provider = ApiManager::getInstance().getApiByApiName("nexosapi");
+    if (!provider) {
+        ctl::sendError(callback, k500InternalServerError, "provider_not_found", "Provider not found: nexosapi");
+        return;
+    }
+
+    auto nexosProvider = std::dynamic_pointer_cast<nexosapi>(provider);
+    if (!nexosProvider) {
+        ctl::sendError(callback, k500InternalServerError, "provider_type_error", "Provider cast failed: nexosapi");
+        return;
+    }
+
+    const auto userName = req->getParameter("userName");
+    Json::Value response = nexosProvider->getAccountQuota(userName);
+    ctl::sendJson(callback, response, response.get("available", false).asBool() ? k200OK : k503ServiceUnavailable);
 }
 
 // ===========================================================
@@ -250,6 +283,7 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
     // 通过 RequestAdapters 构建 GenerationRequest
     LOG_DEBUG << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    genReq.provider = inferProviderFromPath(req);
 
 
     if (genReq.currentInput.empty() && genReq.messages.empty()) {

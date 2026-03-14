@@ -6,6 +6,15 @@
 
 using namespace drogon;
 
+namespace {
+
+bool isBuiltInChannelName(const std::string& name)
+{
+    return name == "chaynsapi" || name == "nexosapi";
+}
+
+}  // namespace
+
 void ChannelController::channelList(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     LOG_INFO << "[渠道Ctrl] 获取渠道信息";
@@ -86,6 +95,29 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
 
         // 解析渠道信息
         Channelinfo_st channelInfo = Channelinfo_st::fromJson(reqBody);
+
+        if (isBuiltInChannelName(channelInfo.channelName)) {
+            Channelinfo_st existing;
+            bool found = false;
+            for (const auto& channel : ChannelManager::getInstance().getChannelList()) {
+                if (channel.channelName == channelInfo.channelName) {
+                    existing = channel;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                ctl::sendError(callback, k404NotFound, "not_found", "Built-in channel not found");
+                return;
+            }
+
+            channelInfo.channelType = existing.channelType;
+            channelInfo.channelUrl = existing.channelUrl;
+            channelInfo.channelKey = existing.channelKey;
+
+            LOG_INFO << "[渠道Ctrl] 内置渠道仅更新部分字段: " << channelInfo.channelName;
+        }
 
         // 更新数据库
         if (ChannelManager::getInstance().updateChannel(channelInfo)) {
