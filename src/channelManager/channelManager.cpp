@@ -21,6 +21,7 @@ std::list<Channelinfo_st> buildDefaultChannels()
             0,
             "Built-in channel: chaynsapi",
             0,
+            0,
             false
         ),
         Channelinfo_st(
@@ -33,6 +34,7 @@ std::list<Channelinfo_st> buildDefaultChannels()
             30,
             0,
             "Built-in channel: nexosapi",
+            0,
             0,
             false
         )

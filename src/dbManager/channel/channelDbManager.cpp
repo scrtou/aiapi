@@ -18,6 +18,7 @@ std::string createChannelTablePgSql = R"(
         createtime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updatetime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         accountcount INT DEFAULT 0,
+        accountretentiondays INT DEFAULT 0,
         supports_tool_calls BOOLEAN DEFAULT true
     );
 )";
@@ -37,6 +38,7 @@ std::string createChannelTableSqlMysql = R"(
         createtime DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
         accountcount INT DEFAULT 0,
+        accountretentiondays INT DEFAULT 0,
         supports_tool_calls TINYINT(1) DEFAULT 1
     ) ENGINE=InnoDB;
 )";
@@ -56,6 +58,7 @@ std::string createChannelTableSqlite3 = R"(
         createtime DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatetime DATETIME DEFAULT CURRENT_TIMESTAMP,
         accountcount INTEGER DEFAULT 0,
+        accountretentiondays INTEGER DEFAULT 0,
         supports_tool_calls INTEGER DEFAULT 1
     );
 )";
@@ -100,7 +103,7 @@ void ChannelDbManager::init()
 bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
 {
     std::string selectsql = "select * from channel where channelname=$1";
-    std::string insertsql = "insert into channel (channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, accountcount, supports_tool_calls) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
+    std::string insertsql = "insert into channel (channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, accountcount, accountretentiondays, supports_tool_calls) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)";
     
     auto result = dbClient->execSqlSync(selectsql, channelinfo.channelName);
     if(result.size() != 0)
@@ -115,7 +118,7 @@ bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
                                              channelinfo.channelKey, channelinfo.channelStatus,
                                              channelinfo.maxConcurrent, channelinfo.timeout,
                                              channelinfo.priority, channelinfo.description,
-                                             channelinfo.accountCount, channelinfo.supportsToolCalls);
+                                             channelinfo.accountCount, channelinfo.accountRetentionDays, channelinfo.supportsToolCalls);
         if(result1.affectedRows() != 0)
         {
             LOG_INFO << "渠道 " << channelinfo.channelName << " 添加成功";
@@ -131,13 +134,13 @@ bool ChannelDbManager::addChannel(struct Channelinfo_st channelinfo)
 
 bool ChannelDbManager::updateChannel(struct Channelinfo_st channelinfo)
 {
-    std::string updatesql = "update channel set channeltype=$1, channelurl=$2, channelkey=$3, channelstatus=$4, maxconcurrent=$5, timeout=$6, priority=$7, description=$8, accountcount=$9, supports_tool_calls=$10, updatetime=CURRENT_TIMESTAMP where channelname=$11";
+    std::string updatesql = "update channel set channeltype=$1, channelurl=$2, channelkey=$3, channelstatus=$4, maxconcurrent=$5, timeout=$6, priority=$7, description=$8, accountcount=$9, accountretentiondays=$10, supports_tool_calls=$11, updatetime=CURRENT_TIMESTAMP where channelname=$12";
     auto result = dbClient->execSqlSync(updatesql, channelinfo.channelType,
                                         channelinfo.channelUrl, channelinfo.channelKey,
                                         channelinfo.channelStatus, channelinfo.maxConcurrent,
                                         channelinfo.timeout, channelinfo.priority,
                                         channelinfo.description, channelinfo.accountCount,
-                                        channelinfo.supportsToolCalls, channelinfo.channelName);
+                                        channelinfo.accountRetentionDays, channelinfo.supportsToolCalls, channelinfo.channelName);
     if(result.affectedRows() != 0)
     {
         LOG_INFO << "渠道 " << channelinfo.channelName << " 更新成功";
@@ -171,10 +174,10 @@ bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& cha
     std::string selectsql;
     if (dbType == DbType::SQLite3) {
 
-        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel where channelname=$1";
+        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(accountretentiondays, 0) as accountretentiondays, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel where channelname=$1";
     } else {
 
-        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel where channelname=$1";
+        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(accountretentiondays, 0) as accountretentiondays, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel where channelname=$1";
     }
     auto result = dbClient->execSqlSync(selectsql, channelName);
     if(result.size() != 0)
@@ -193,6 +196,7 @@ bool ChannelDbManager::getChannel(string channelName, struct Channelinfo_st& cha
         channelinfo.createTime = item["createtime"].as<std::string>();
         channelinfo.updateTime = item["updatetime"].as<std::string>();
         channelinfo.accountCount = item["accountcount"].as<int>();
+        channelinfo.accountRetentionDays = item["accountretentiondays"].as<int>();
         channelinfo.supportsToolCalls = item["supports_tool_calls"].as<bool>();
         return true;
     }
@@ -208,10 +212,10 @@ list<Channelinfo_st> ChannelDbManager::getChannelList()
     std::string selectsql;
     if (dbType == DbType::SQLite3) {
 
-        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel order by id";
+        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, datetime(createtime) as createtime, datetime(updatetime) as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(accountretentiondays, 0) as accountretentiondays, COALESCE(supports_tool_calls, 1) as supports_tool_calls from channel order by id";
     } else {
 
-        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel order by id";
+        selectsql = "select id, channelname, channeltype, channelurl, channelkey, channelstatus, maxconcurrent, timeout, priority, description, to_char(createtime, 'YYYY-MM-DD HH24:MI:SS') as createtime, to_char(updatetime, 'YYYY-MM-DD HH24:MI:SS') as updatetime, COALESCE(accountcount, 0) as accountcount, COALESCE(accountretentiondays, 0) as accountretentiondays, COALESCE(supports_tool_calls, true) as supports_tool_calls from channel order by id";
     }
     auto result = dbClient->execSqlSync(selectsql);
     list<Channelinfo_st> channelList;
@@ -231,6 +235,7 @@ list<Channelinfo_st> ChannelDbManager::getChannelList()
             item["createtime"].as<std::string>(),
             item["updatetime"].as<std::string>(),
             item["accountcount"].as<int>(),
+            item["accountretentiondays"].as<int>(),
             item["supports_tool_calls"].as<bool>()
         );
         channelList.push_back(channelinfo);
@@ -292,6 +297,7 @@ void ChannelDbManager::createTable()
 void ChannelDbManager::checkAndUpgradeTable()
 {
     bool hasAccountCount = false;
+    bool hasAccountRetentionDays = false;
     bool hasSupportsToolCalls = false;
     
     if (dbType == DbType::SQLite3)
@@ -311,6 +317,10 @@ void ChannelDbManager::checkAndUpgradeTable()
             {
                 hasSupportsToolCalls = true;
             }
+            if (colName == "accountretentiondays")
+            {
+                hasAccountRetentionDays = true;
+            }
         }
     }
     else
@@ -321,6 +331,9 @@ void ChannelDbManager::checkAndUpgradeTable()
         
         auto result2 = dbClient->execSqlSync("SELECT column_name FROM information_schema.columns WHERE table_name='channel' AND column_name='supports_tool_calls'");
         hasSupportsToolCalls = (result2.size() > 0);
+
+        auto result3 = dbClient->execSqlSync("SELECT column_name FROM information_schema.columns WHERE table_name='channel' AND column_name='accountretentiondays'");
+        hasAccountRetentionDays = (result3.size() > 0);
     }
     
     if (!hasAccountCount)
@@ -338,6 +351,21 @@ void ChannelDbManager::checkAndUpgradeTable()
         }
     }
     
+    if (!hasAccountRetentionDays)
+    {
+        LOG_INFO << "[渠道数据库] 表'渠道'中缺少列'accountretentiondays'，正在添加...";
+        try {
+            if (dbType == DbType::SQLite3) {
+                dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountretentiondays INTEGER DEFAULT 0");
+            } else {
+                dbClient->execSqlSync("ALTER TABLE channel ADD COLUMN accountretentiondays INT DEFAULT 0");
+            }
+            LOG_INFO << "[渠道数据库] 列'accountretentiondays'添加成功";
+        } catch(const std::exception& e) {
+            LOG_ERROR << "[渠道数据库] 添加列'accountretentiondays'失败：" << e.what();
+        }
+    }
+
     if (!hasSupportsToolCalls)
     {
         LOG_INFO << "[渠道数据库] 表'渠道'中缺少列'supports_tool_calls'，正在添加...";

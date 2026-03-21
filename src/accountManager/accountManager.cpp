@@ -60,8 +60,14 @@ bool parsePositiveIntConfigValue(const std::string& value, int& parsed) {
 }
 
 bool shouldSkipLifecycleRefresh(const std::shared_ptr<Accountinfo_st>& account) {
-    return account &&
-           account->apiName == "nexosapi" &&
+    if (!account) {
+        return false;
+    }
+    if (account->status == AccountStatus::WAITING ||
+        account->status == AccountStatus::REGISTERING) {
+        return true;
+    }
+    return account->apiName == "nexosapi" &&
            account->accountType == "trial_budget_exceeded";
 }
 
@@ -1466,9 +1472,13 @@ void AccountManager::autoRegisterAccount(string apiName)
     if (apiName == "nexosapi") {
         workflowBody["site"] = "nexos";
         workflowBody["mail_policy"]["providers"] = Json::arrayValue;
+        workflowBody["mail_policy"]["providers"].append("smailpro_web");
         workflowBody["mail_policy"]["providers"].append("gptmail");
         workflowBody["mail_policy"]["domain_preference"] = Json::arrayValue;
-        workflowBody["mail_policy"]["domain_preference"].append("666.34555.casacam.net");
+        workflowBody["mail_policy"]["domain_preference"].append("gmail.com");
+        workflowBody["mail_policy"]["domain_preference"].append("googlemail.com");
+        workflowBody["mail_policy"]["domain_preference"].append("outlook.com");
+        workflowBody["mail_policy"]["domain_preference"].append("hotmail.com");
         workflowBody["strategy"]["registration_mode"] = "drission";
         workflowBody["strategy"]["login_mode"] = "drission";
         workflowBody["strategy"]["timeout_seconds"] = 900;
@@ -1531,7 +1541,11 @@ void AccountManager::autoRegisterAccount(string apiName)
 
     Json::Value workflowDetail;
     bool workflowSucceeded = false;
-    for (int attempt = 0; attempt < 120; ++attempt) {
+    bool workflowReachedTerminalState = false;
+    std::string finalWorkflowStatus;
+    std::string finalWorkflowState;
+    constexpr int kWorkflowPollAttempts = 300;  // 约 15 分钟（每次 3 秒）
+    for (int attempt = 0; attempt < kWorkflowPollAttempts; ++attempt) {
         auto detailRequest = HttpRequest::newHttpRequest();
         detailRequest->setMethod(HttpMethod::Get);
         std::string detailPath = path;
@@ -1569,18 +1583,27 @@ void AccountManager::autoRegisterAccount(string apiName)
 
         string status = detailJson["data"]["task"].get("status", "").asString();
         string state = detailJson["data"]["task"].get("state", "").asString();
+        finalWorkflowStatus = status;
+        finalWorkflowState = state;
         LOG_INFO << "[自动注册] workflow 状态: status=" << status << ", state=" << state;
         if (status == "succeeded") {
             workflowSucceeded = true;
+            workflowReachedTerminalState = true;
             break;
         }
         if (status == "failed" || status == "cancelled") {
+            workflowReachedTerminalState = true;
             break;
         }
         std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 
     if (!workflowSucceeded) {
+        if (!workflowReachedTerminalState && !finalWorkflowStatus.empty()) {
+            LOG_ERROR << "[自动注册] workflow 等待超时，最后状态: status=" << finalWorkflowStatus
+                      << ", state=" << finalWorkflowState
+                      << ", 已等待约 " << (kWorkflowPollAttempts * 3) << " 秒";
+        }
         LOG_ERROR << "[自动注册] workflow 未成功完成: " << workflowDetail.toStyledString();
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
@@ -1945,17 +1968,17 @@ bool AccountManager::isAccountRegisteringByUsername(const string& userName)
 void AccountManager::cleanExpiredAccounts()
 {
     const auto automationSettings = getAccountAutomationSettings();
-    if (!automationSettings.autoDeleteEnabled) {
-        LOG_INFO << "[自动清理] 自动删除已禁用，跳过过期账号检查";
-        return;
-    }
-
     LOG_INFO << "[自动清理] 开始检查过期账号...";
     
     // 获取当前时间
     auto now = trantor::Date::now();
     const double expireDurationSeconds =
         static_cast<double>(automationSettings.deleteAfterDays) * 24.0 * 3600.0;
+
+    std::map<std::string, int> channelRetentionDays;
+    for (const auto& channel : ChannelDbManager::getInstance()->getChannelList()) {
+        channelRetentionDays[channel.channelName] = channel.accountRetentionDays;
+    }
     
     // 获取当前所有账号的快照
     auto currentAccountMap = getAccountList();
@@ -1968,12 +1991,10 @@ void AccountManager::cleanExpiredAccounts()
         {
             auto &account = accountPair.second;
             if (!account) continue;
-            
-            // 只清理 free 类型的账号
-            if (account->accountType != "free") continue;
-            
-            // 跳过正在注册中的账号
-            if (account->status == AccountStatus::REGISTERING) continue;
+
+            if (account->status == AccountStatus::WAITING || account->status == AccountStatus::REGISTERING) {
+                continue;
+            }
             
             // 检查 createTime 是否为空
             if (account->createTime.empty()) {
@@ -1986,13 +2007,29 @@ void AccountManager::cleanExpiredAccounts()
             
             // 计算时间差（秒）
             double ageSec = now.secondsSinceEpoch() - createDate.secondsSinceEpoch();
-            
-            if (ageSec >= expireDurationSeconds)
+
+            const int retentionDaysByChannel = channelRetentionDays.count(account->apiName)
+                ? channelRetentionDays[account->apiName]
+                : 0;
+            const bool hitGlobalRule = automationSettings.autoDeleteEnabled &&
+                                       account->accountType == "free" &&
+                                       ageSec >= expireDurationSeconds;
+            const bool hitChannelRule = retentionDaysByChannel > 0 &&
+                                        ageSec >= static_cast<double>(retentionDaysByChannel) * 24.0 * 3600.0;
+
+            if (hitGlobalRule || hitChannelRule)
             {
-                LOG_INFO << "[自动清理] 账号 " << account->userName
-                         << " 创建于 " << account->createTime
-                         << "，已超过" << automationSettings.deleteAfterDays
-                         << "天（" << (ageSec / 86400.0) << "天），标记为待删除";
+                if (hitChannelRule) {
+                    LOG_INFO << "[自动清理] 账号 " << account->userName
+                             << " 创建于 " << account->createTime
+                             << "，已超过渠道保留天数 " << retentionDaysByChannel
+                             << " 天（" << (ageSec / 86400.0) << "天），标记为待删除";
+                } else {
+                    LOG_INFO << "[自动清理] 账号 " << account->userName
+                             << " 创建于 " << account->createTime
+                             << "，已超过全局保留天数 " << automationSettings.deleteAfterDays
+                             << " 天（" << (ageSec / 86400.0) << "天），标记为待删除";
+                }
                 
                 // 复制完整账号信息用于删除
                 Accountinfo_st expiredAccount;

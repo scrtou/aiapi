@@ -28,28 +28,31 @@ struct Channelinfo_st
     string createTime;
     string updateTime;
     int accountCount;  // 渠道规定的账号数量
+    int accountRetentionDays;  // 渠道账号保留天数，0 表示不启用
     bool supportsToolCalls;  // 是否支持函数调用/工具调用
     
-    Channelinfo_st() : id(0), channelStatus(true), maxConcurrent(10), timeout(30), priority(0), accountCount(0), supportsToolCalls(false) {}
+    Channelinfo_st() : id(0), channelStatus(true), maxConcurrent(10), timeout(30), priority(0), accountCount(0), accountRetentionDays(0), supportsToolCalls(false) {}
     
     Channelinfo_st(int id, string channelName, string channelType, string channelUrl,
                    string channelKey, bool channelStatus, int maxConcurrent, int timeout,
                    int priority, string description, string createTime, string updateTime,
-                   int accountCount = 0, bool supportsToolCalls = false)
+                   int accountCount = 0, int accountRetentionDays = 0, bool supportsToolCalls = false)
         : id(id), channelName(channelName), channelType(channelType), channelUrl(channelUrl),
           channelKey(channelKey), channelStatus(channelStatus), maxConcurrent(maxConcurrent),
           timeout(timeout), priority(priority), description(description),
           createTime(createTime), updateTime(updateTime), accountCount(accountCount),
+          accountRetentionDays(accountRetentionDays),
           supportsToolCalls(supportsToolCalls) {}
     
     Channelinfo_st(string channelName, string channelType, string channelUrl,
                    string channelKey, bool channelStatus, int maxConcurrent,
                    int timeout, int priority, string description, int accountCount = 0,
-                   bool supportsToolCalls = false)
+                   int accountRetentionDays = 0, bool supportsToolCalls = false)
         : id(0), channelName(channelName), channelType(channelType), channelUrl(channelUrl),
           channelKey(channelKey), channelStatus(channelStatus), maxConcurrent(maxConcurrent),
           timeout(timeout), priority(priority), description(description),
           createTime(""), updateTime(""), accountCount(accountCount),
+          accountRetentionDays(accountRetentionDays),
           supportsToolCalls(supportsToolCalls) {}
 
     // --- JSON 序列化/反序列化 () ---
@@ -68,6 +71,7 @@ struct Channelinfo_st
         c.createTime        = j.get("createtime", "").asString();
         c.updateTime        = j.get("updatetime", "").asString();
         c.accountCount      = j.get("accountcount", 0).asInt();
+        c.accountRetentionDays = j.get("accountretentiondays", 0).asInt();
         c.supportsToolCalls = j.get("supports_tool_calls", false).asBool();
         return c;
     }
@@ -87,6 +91,7 @@ struct Channelinfo_st
         j["createtime"]          = createTime;
         j["updatetime"]          = updateTime;
         j["accountcount"]        = accountCount;
+        j["accountretentiondays"] = accountRetentionDays;
         j["supports_tool_calls"] = supportsToolCalls;
         return j;
     }

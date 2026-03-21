@@ -2,6 +2,33 @@
 
 基于 Drogon 框架的 AI API 网关服务，提供 OpenAI 兼容的 Chat Completions 和 Responses API 接口。
 
+## 目录
+
+- [功能特性](#功能特性)
+- [架构概览](#架构概览)
+- [项目结构](#项目结构)
+- [完整 API 端点清单](#完整-api-端点清单)
+  - [AI 核心 API](#ai-核心-apiaiapicontroller)
+  - [账号管理 API](#账号管理-apiaccountcontroller)
+  - [渠道管理 API](#渠道管理-apichannelcontroller)
+  - [监控与日志 API](#监控与日志-apimetricscontroller--logcontroller)
+  - [健康检查 API](#健康检查-apihealthcontroller)
+- [核心模块说明](#核心模块说明)
+  - [GenerationService](#generationservice生成编排服务)
+  - [Tool Bridge 机制](#tool-bridge-机制tooling-模块)
+  - [会话连续性](#会话连续性continuity-模块)
+  - [客户端适配](#客户端适配)
+  - [会话追踪](#会话追踪)
+  - [并发门控](#并发门控)
+  - [错误统计系统](#错误统计系统)
+- [API 使用示例](#api-使用示例)
+- [构建与运行](#构建与运行)
+- [配置说明](#配置说明)
+- [错误码](#错误码)
+- [详细文档](#详细文档)
+- [单元测试](#单元测试)
+- [开发路线](#开发路线)
+
 ## 功能特性
 
 - ✅ OpenAI Chat Completions API 兼容（流式/非流式）
@@ -31,7 +58,7 @@
 - ✅ 配置校验（ConfigValidator）
 - ✅ 后台任务队列（BackgroundTaskQueue）
 - ✅ 健康检查端点（/health + /ready）
-- ✅ 完善的单元测试（14 个测试文件）
+- ✅ 完善的单元测试（12 个功能测试 + `test_main.cc` 测试入口）
 
 ## 架构概览
 
@@ -127,7 +154,16 @@ aiapi/
 ├── docker-compose.volume.yml       # Docker Compose（卷挂载方式）
 ├── requirements.txt                # Python 依赖（登录/注册服务）
 ├── doc/                            # 文档目录
-│   └── aiapi_callflow_and_api_examples.md  # 详细调用关系与接口样例
+│   ├── aiapi_callflow_and_api_examples.md  # 详细调用关系与接口样例
+│   ├── development-plan.md                 # 开发计划
+│   ├── optimization-report.md              # 优化报告
+│   ├── error_stats_dev_plan.md             # 错误统计开发计划
+│   ├── service_status_monitoring_design.md # 服务状态监控设计
+│   ├── aiapi 错误统计与监控方案（设计文档）   # 错误统计与监控方案设计
+│   └── session/                            # 会话连续性模块文档
+│       ├── README.md                       #   会话模块索引
+│       ├── session_continuity_refactor_design.md          # 重构设计
+│       └── session_continuity_refactor_development_plan.md # 重构开发计划
 │
 └── src/
     ├── CMakeLists.txt              # CMake 构建配置（源码）
@@ -301,8 +337,8 @@ aiapi/
 | POST | `/aichat/channel/add` | 批量添加渠道 |
 | POST | `/aichat/channel/delete` | 批量删除渠道 |
 | POST | `/aichat/channel/update` | 更新渠道配置 |
-| POST | `/aichat/channel/updatestatus` | 更新渠道启用/禁用状态 |
-| GET | `/aichat/channel/info` | 获取渠道列表 |
+| POST | `/aichat/channel/update-status` | 更新渠道启用/禁用状态 |
+| GET | `/aichat/channel/list` | 获取渠道列表 |
 
 ### 监控与日志 API（MetricsController + LogController）
 
@@ -312,9 +348,9 @@ aiapi/
 | GET | `/aichat/metrics/errors/series` | 错误量时序统计（多维过滤） |
 | GET | `/aichat/metrics/errors/events` | 错误事件列表（分页） |
 | GET | `/aichat/metrics/errors/events/{id}` | 错误事件详情 |
-| GET | `/aichat/status/summary` | 服务状态概览 |
-| GET | `/aichat/status/channels` | 渠道状态列表 |
-| GET | `/aichat/status/models` | 模型状态列表 |
+| GET | `/aichat/metrics/status/summary` | 服务状态概览 |
+| GET | `/aichat/metrics/status/channels` | 渠道状态列表 |
+| GET | `/aichat/metrics/status/models` | 模型状态列表 |
 | GET | `/aichat/logs/list` | 日志文件列表 |
 | GET | `/aichat/logs/tail` | 日志尾部读取（支持级别/关键词过滤） |
 
@@ -530,7 +566,7 @@ curl -X POST "http://localhost:55555/aichat/channel/add" \
   }]'
 
 # 获取渠道列表
-curl "http://localhost:55555/aichat/channel/info" \
+curl "http://localhost:55555/aichat/channel/list" \
   -H "Authorization: Bearer YOUR_ADMIN_KEY"
 ```
 
@@ -538,7 +574,7 @@ curl "http://localhost:55555/aichat/channel/info" \
 
 ```bash
 # 服务状态概览
-curl "http://localhost:55555/aichat/status/summary" \
+curl "http://localhost:55555/aichat/metrics/status/summary" \
   -H "Authorization: Bearer YOUR_ADMIN_KEY"
 
 # 错误时序统计（最近 24 小时）
@@ -717,16 +753,38 @@ Docker 入口脚本支持：
 
 ## 详细文档
 
-- [调用关系图与接口样例](doc/aiapi_callflow_and_api_examples.md) — 详细的模块拆解、时序图、数据结构和 curl 示例
-- [sessionManager 模块文档](src/sessionManager/README.md) — 会话管理核心模块说明
-- [contracts 层文档](src/sessionManager/contracts/README.md) — 接口契约说明
-- [core 层文档](src/sessionManager/core/README.md) — 核心服务说明
-- [continuity 模块文档](src/sessionManager/continuity/README.md) — 会话连续性模块说明
-- [tooling 模块文档](src/sessionManager/tooling/README.md) — 工具调用模块说明
+### 设计与架构
+
+| 文档 | 说明 |
+|------|------|
+| [调用关系图与接口样例](doc/aiapi_callflow_and_api_examples.md) | 详细的模块拆解、时序图、数据结构和 curl 示例 |
+| [开发计划](doc/development-plan.md) | 项目整体开发计划与里程碑 |
+| [优化报告](doc/optimization-report.md) | 性能优化分析与改进记录 |
+| [错误统计开发计划](doc/error_stats_dev_plan.md) | 错误统计系统开发计划 |
+| [错误统计与监控方案](doc/aiapi%20错误统计与监控方案（设计文档）) | 错误统计与监控系统设计文档 |
+| [服务状态监控设计](doc/service_status_monitoring_design.md) | 服务状态监控系统设计 |
+
+### 会话连续性模块
+
+| 文档 | 说明 |
+|------|------|
+| [会话模块索引](doc/session/README.md) | 会话连续性模块文档入口 |
+| [重构设计](doc/session/session_continuity_refactor_design.md) | 会话连续性重构设计方案 |
+| [重构开发计划](doc/session/session_continuity_refactor_development_plan.md) | 会话连续性重构开发计划 |
+
+### 源码内文档
+
+| 文档 | 说明 |
+|------|------|
+| [sessionManager 模块](src/sessionManager/README.md) | 会话管理核心模块说明 |
+| [contracts 层](src/sessionManager/contracts/README.md) | 接口契约说明 |
+| [core 层](src/sessionManager/core/README.md) | 核心服务说明 |
+| [continuity 模块](src/sessionManager/continuity/README.md) | 会话连续性模块说明 |
+| [tooling 模块](src/sessionManager/tooling/README.md) | 工具调用模块说明 |
 
 ## 单元测试
 
-项目包含 14 个测试文件，覆盖核心模块：
+项目包含 12 个功能测试文件（另有 `test_main.cc` 作为测试入口），覆盖核心模块：
 
 | 测试文件 | 覆盖模块 |
 |----------|----------|
@@ -773,7 +831,7 @@ Docker 入口脚本支持：
 - [x] 后台任务队列（BackgroundTaskQueue）
 - [x] 控制器拆分（6 个独立控制器）
 - [x] sessionManager 分层重构（contracts / core / continuity / tooling）
-- [x] 核心单元测试（14 个测试文件覆盖关键模块）
+- [x] 核心单元测试（12 个功能测试 + `test_main.cc` 测试入口）
 
 ## License
 

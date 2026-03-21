@@ -4,6 +4,7 @@
 #include <dbManager/account/accountBackupDbManager.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
+#include <utils/BackgroundTaskQueue.h>
 
 #include <algorithm>
 #include <cctype>
@@ -831,6 +832,11 @@ void nexosapi::markAccountBudgetExceeded(const std::shared_ptr<Accountinfo_st>& 
     }
 
     const bool memoryDeleted = AccountManager::getInstance().deleteAccountbyPost(account->apiName, account->userName);
+
+    BackgroundTaskQueue::instance().enqueue("nexos_budget_exceeded_checkCounts", [apiName = account->apiName]() {
+        LOG_INFO << "[nexosapi] 预算耗尽账号删除后，异步检查渠道账号数量: apiName=" << apiName;
+        AccountManager::getInstance().checkChannelAccountCounts();
+    });
 
     LOG_WARN << "[nexosapi] 账号预算已耗尽，已迁移到备份库并从主库删除: userName="
              << account->userName

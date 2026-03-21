@@ -19,40 +19,63 @@ endif ()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Define all sources in one place
 add_executable(${PROJECT_NAME}
     src/main.cc
     src/accountManager/accountManager.cpp
     src/apiManager/ApiFactory.cpp
     src/apiManager/ApiManager.cpp
     src/apipoint/chaynsapi/chaynsapi.cpp
+    src/apipoint/nexosapi/nexosapi.cpp
+    src/apipoint/openai/OpenAiProvider.cpp
     src/channelManager/channelManager.cpp
-    src/controllers/AiApi.cc
+    src/controllers/AiApiController.cc
+    src/controllers/AccountController.cc
+    src/controllers/ChannelController.cc
+    src/controllers/MetricsController.cc
+    src/controllers/LogController.cc
+    src/controllers/HealthController.cc
     src/controllers/sinks/ChatSseSink.cpp
     src/controllers/sinks/ChatJsonSink.cpp
     src/controllers/sinks/ResponsesSseSink.cpp
     src/controllers/sinks/ResponsesJsonSink.cpp
     src/dbManager/account/accountDbManager.cpp
+    src/dbManager/account/accountBackupDbManager.cpp
     src/dbManager/channel/channelDbManager.cpp
     src/dbManager/config/ConfigDbManager.cpp
-    src/sessionManager/Session.cpp
-    src/sessionManager/ClientOutputSanitizer.cpp
-    src/sessionManager/GenerationService.cpp
-    src/sessionManager/RequestAdapters.cpp
-    src/sessionManager/ToolCallBridge.cpp
-    src/sessionManager/ToolCallValidator.cpp
-    src/sessionManager/XmlTagToolCallCodec.cpp
+    src/dbManager/metrics/ErrorStatsDbManager.cpp
+    src/dbManager/metrics/StatusDbManager.cpp
+    src/metrics/ErrorStatsConfig.cpp
+    src/metrics/ErrorStatsService.cpp
+    src/sessionManager/core/Session.cpp
+    src/sessionManager/core/ClientOutputSanitizer.cpp
+    src/sessionManager/core/GenerationService.cpp
+    src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
+    src/sessionManager/tooling/BridgeHelpers.cpp
+    src/sessionManager/tooling/StrictClientRules.cpp
+    src/sessionManager/tooling/ToolDefinitionEncoder.cpp
+    src/sessionManager/tooling/ForcedToolCallGenerator.cpp
+    src/sessionManager/tooling/ToolCallNormalizer.cpp
+    src/sessionManager/continuity/ResponseIndex.cpp
+    src/sessionManager/continuity/TextExtractor.cpp
+    src/sessionManager/continuity/ContinuityResolver.cpp
+    src/sessionManager/core/RequestAdapters.cpp
+    src/sessionManager/tooling/ToolCallBridge.cpp
+    src/sessionManager/tooling/ToolCallValidator.cpp
+    src/sessionManager/tooling/XmlTagToolCallCodec.cpp
     src/tools/ZeroWidthEncoder.cpp
+    src/utils/ConfigValidator.cpp
 )
 
 # ##############################################################################
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(PostgreSQL REQUIRED)
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(${PROJECT_NAME} PRIVATE PostgreSQL::PostgreSQL)
 # ##############################################################################
 
 if (CMAKE_CXX_STANDARD LESS 17)
@@ -72,16 +95,22 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/accountManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apiManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/openai
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/chaynsapi
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/nexosapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers/sinks
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/channel
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/config
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/metrics
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/models
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/sessionManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/src/tools)
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/utils)
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

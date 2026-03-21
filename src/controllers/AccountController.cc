@@ -157,6 +157,13 @@ void AccountController::accountInfo(const HttpRequestPtr &req, std::function<voi
     Json::Value response(Json::arrayValue);
     for (auto &account : accountList) {
         for (auto &userName : account.second) {
+            if (!userName.second) {
+                continue;
+            }
+            if (userName.second->status == AccountStatus::WAITING ||
+                userName.second->status == AccountStatus::REGISTERING) {
+                continue;
+            }
             response.append(buildAccountPublicJson(*userName.second));
         }
     }
