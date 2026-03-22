@@ -1,6 +1,7 @@
 #ifndef PROVIDER_RESULT_H
 #define PROVIDER_RESULT_H
 
+#include <json/json.h>
 #include <string>
 #include <optional>
 #include <vector>
@@ -105,6 +106,7 @@ struct ProviderResult {
     // Provider 返回字段
     int statusCode = 200;               // HTTP 状态码
     std::string rawResponse;            // 原始响应（调试用）
+    Json::Value meta{Json::objectValue}; // 附加元信息（如实际路由到的 workspaceId）
 
     /**
      * @brief 判断是否成功

@@ -98,6 +98,7 @@ private:
     std::string model_;
     std::string outputText_;     // 累积的输出文本
     std::vector<generation::ToolCallDone> toolCalls_; // 累积的工具调用
+    Json::Value meta_{Json::objectValue};
     int outputItemIndex_ = 0;   // 当前输出项索引
     int64_t createdAt_ = 0;
     int sequenceNumber_ = 0;

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
 project(aiapi CXX)
 
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.deps/drogon-install")
+    list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/.deps/drogon-install")
+endif()
+
 include(CheckIncludeFileCXX)
 
 check_include_file_cxx(any HAS_ANY)
@@ -27,13 +31,18 @@ add_executable(${PROJECT_NAME}
     src/apipoint/chaynsapi/chaynsapi.cpp
     src/apipoint/nexosapi/nexosapi.cpp
     src/apipoint/openai/OpenAiProvider.cpp
+    src/apipoint/retoolapi/retoolapi.cpp
     src/channelManager/channelManager.cpp
+    src/managedAccount/backends/ClassicProviderAccountBackend.cpp
+    src/managedAccount/backends/RetoolWorkspaceBackend.cpp
+    src/managedAccount/service/ManagedAccountService.cpp
     src/controllers/AiApiController.cc
     src/controllers/AccountController.cc
     src/controllers/ChannelController.cc
     src/controllers/MetricsController.cc
     src/controllers/LogController.cc
     src/controllers/HealthController.cc
+    src/controllers/RetoolWorkspaceController.cc
     src/controllers/sinks/ChatSseSink.cpp
     src/controllers/sinks/ChatJsonSink.cpp
     src/controllers/sinks/ResponsesSseSink.cpp
@@ -44,8 +53,11 @@ add_executable(${PROJECT_NAME}
     src/dbManager/config/ConfigDbManager.cpp
     src/dbManager/metrics/ErrorStatsDbManager.cpp
     src/dbManager/metrics/StatusDbManager.cpp
+    src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
     src/metrics/ErrorStatsConfig.cpp
     src/metrics/ErrorStatsService.cpp
+    src/retoolWorkspace/RetoolWorkspaceManager.cpp
+    src/retoolWorkspace/RetoolWorkspaceService.cpp
     src/sessionManager/core/Session.cpp
     src/sessionManager/core/ClientOutputSanitizer.cpp
     src/sessionManager/core/GenerationService.cpp
@@ -98,7 +110,12 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/openai
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/chaynsapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/nexosapi
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/apipoint/retoolapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/channelManager
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/managedAccount
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/managedAccount/backends
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/managedAccount/contracts
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/managedAccount/service
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers/sinks
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager
@@ -106,8 +123,10 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/channel
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/config
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/metrics
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/retoolWorkspace
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/models
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/retoolWorkspace
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/sessionManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/utils)

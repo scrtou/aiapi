@@ -10,6 +10,9 @@
 #include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/config/ConfigDbManager.h>
 #include "../dbManager/channel/channelDbManager.h"
+#include <channelManager/channelManager.h>
+#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <retoolWorkspace/RetoolWorkspaceService.h>
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -19,6 +22,20 @@ constexpr const char* kAutoDeleteEnabledKey = "account_automation.auto_delete_en
 constexpr const char* kDeleteAfterDaysKey = "account_automation.delete_after_days";
 constexpr const char* kAutoRegisterEnabledKey = "account_automation.auto_register_enabled";
 constexpr int kDefaultDeleteAfterDays = 6;
+constexpr const char* kRetoolFailureCountKey = "retoolapi.provision.consecutive_failures";
+constexpr const char* kRetoolLastFailureAtKey = "retoolapi.provision.last_failure_at";
+constexpr const char* kRetoolLastFailureReasonKey = "retoolapi.provision.last_failure_reason";
+constexpr const char* kRetoolCooldownUntilKey = "retoolapi.provision.cooldown_until";
+constexpr int kRetoolFailureThreshold = 3;
+constexpr int kRetoolCooldownMinutes = 30;
+
+struct RetoolProvisionHealth
+{
+    int consecutiveFailures = 0;
+    std::string lastFailureAt;
+    std::string lastFailureReason;
+    std::string cooldownUntil;
+};
 
 AccountAutomationSettings loadAccountAutomationSettingsFromCustomConfig(const Json::Value& customConfig) {
     AccountAutomationSettings settings;
@@ -78,6 +95,76 @@ bool shouldExcludeFromPoolOnLoad(const std::shared_ptr<Accountinfo_st>& account)
 bool isTrialBudgetExceededAccount(const Accountinfo_st& account) {
     return account.apiName == "nexosapi" &&
            account.accountType == "trial_budget_exceeded";
+}
+
+bool isRetoolWorkspaceActive(const RetoolWorkspaceInfo& workspace) {
+    return workspace.status != "disabled";
+}
+
+RetoolProvisionHealth loadRetoolProvisionHealth(std::string* errorMessage = nullptr)
+{
+    RetoolProvisionHealth state;
+    auto configDbManager = ConfigDbManager::getInstance();
+    configDbManager->ensureTable(errorMessage);
+    if (auto value = configDbManager->getValue(kRetoolFailureCountKey, nullptr); value && !value->empty()) {
+        try { state.consecutiveFailures = std::stoi(*value); } catch (...) {}
+    }
+    if (auto value = configDbManager->getValue(kRetoolLastFailureAtKey, nullptr); value) {
+        state.lastFailureAt = *value;
+    }
+    if (auto value = configDbManager->getValue(kRetoolLastFailureReasonKey, nullptr); value) {
+        state.lastFailureReason = *value;
+    }
+    if (auto value = configDbManager->getValue(kRetoolCooldownUntilKey, nullptr); value) {
+        state.cooldownUntil = *value;
+    }
+    return state;
+}
+
+bool persistRetoolProvisionHealth(const RetoolProvisionHealth& state, std::string* errorMessage = nullptr)
+{
+    return ConfigDbManager::getInstance()->setValues({
+        {kRetoolFailureCountKey, std::to_string(std::max(0, state.consecutiveFailures))},
+        {kRetoolLastFailureAtKey, state.lastFailureAt},
+        {kRetoolLastFailureReasonKey, state.lastFailureReason},
+        {kRetoolCooldownUntilKey, state.cooldownUntil},
+    }, errorMessage);
+}
+
+bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state)
+{
+    if (state.cooldownUntil.empty()) return false;
+    try
+    {
+        auto untilDate = trantor::Date::fromDbStringLocal(state.cooldownUntil);
+        return untilDate.secondsSinceEpoch() > trantor::Date::now().secondsSinceEpoch();
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+void markRetoolProvisionSuccess()
+{
+    RetoolProvisionHealth state;
+    state.consecutiveFailures = 0;
+    state.cooldownUntil.clear();
+    persistRetoolProvisionHealth(state, nullptr);
+}
+
+void markRetoolProvisionFailure(const std::string& reason)
+{
+    auto state = loadRetoolProvisionHealth(nullptr);
+    state.consecutiveFailures = std::max(0, state.consecutiveFailures) + 1;
+    state.lastFailureAt = trantor::Date::now().toDbStringLocal();
+    state.lastFailureReason = reason;
+    if (state.consecutiveFailures >= kRetoolFailureThreshold)
+    {
+        auto cooldownUntil = trantor::Date::date().after(static_cast<double>(kRetoolCooldownMinutes) * 60.0);
+        state.cooldownUntil = cooldownUntil.toDbStringLocal();
+    }
+    persistRetoolProvisionHealth(state, nullptr);
 }
 
 bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& configDbManager,
@@ -480,11 +567,22 @@ void AccountManager::init()
     normalizeNexosAccountsInDatabase();
     loadAccountAutomationSettings();
     loadAccount();
-    // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
-    checkUpdateTokenthread();
-    waitUpdateAccountTokenThread();
-    //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
-    checkAccountTypeThread();   // 已改为事件驱动，不再定时检查
+    auto customConfig = app().getCustomConfig();
+    const bool enableBackgroundThreads =
+        !customConfig.isMember("account_background_threads_enabled") ||
+        customConfig["account_background_threads_enabled"].asBool();
+    if (enableBackgroundThreads)
+    {
+        // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
+        checkUpdateTokenthread();
+        waitUpdateAccountTokenThread();
+        //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
+        checkAccountTypeThread();   // 已改为事件驱动，不再定时检查
+    }
+    else
+    {
+        LOG_WARN << "[账户管理] account_background_threads_enabled=false，跳过后台线程启动";
+    }
     LOG_INFO << "[账户管理] 配置信息:";
     const string fullUrl = getLoginServiceUrl("chaynsapi");
     const string fullUrl1 = getRegistServiceUrl("chaynsapi");
@@ -1372,25 +1470,94 @@ void AccountManager::checkChannelAccountCounts()
 
     for(const auto& channel : channelList)
     {
-        if(channel.accountCount > 0)
+        checkChannelAccountCount(channel.channelName);
+    }
+}
+
+void AccountManager::checkChannelAccountCount(string apiName)
+{
+    auto channelDbManager = ChannelDbManager::getInstance();
+    auto channelList = channelDbManager->getChannelList();
+    auto channelIt = std::find_if(channelList.begin(), channelList.end(), [&](const auto& channel) {
+        return channel.channelName == apiName;
+    });
+    if (channelIt == channelList.end())
+    {
+        LOG_WARN << "[账户管理] 未找到渠道，跳过账号数量检查: " << apiName;
+        return;
+    }
+
+    const auto& channel = *channelIt;
+    if (!channel.channelStatus)
+    {
+        LOG_INFO << "[账户管理] 渠道已禁用，跳过自动补注册检查: " << channel.channelName;
+        return;
+    }
+    if (channel.accountCount <= 0)
+    {
+        return;
+    }
+
+    if (channel.channelName == "retoolapi")
+    {
+        const auto health = loadRetoolProvisionHealth(nullptr);
+        if (isRetoolProvisionCoolingDown(health))
         {
-            // 使用数据库统计，包含pending状态的账号
-            int currentCount = accountDbManager->countAccountsByChannel(channel.channelName, true);
+            LOG_WARN << "[账户管理] Retool 渠道处于冷却期，跳过自动补注册。cooldownUntil="
+                     << health.cooldownUntil << " reason=" << health.lastFailureReason;
+            return;
+        }
 
-            LOG_INFO << "[账户管理] 渠道状态 -> 名称: " << channel.channelName << "，目标数量: " << channel.accountCount << "，当前数量（含待注册）: " << currentCount;
-
-            if(currentCount < channel.accountCount)
+        auto workspaces = RetoolWorkspaceManager::getInstance().listWorkspaces();
+        int currentCount = 0;
+        for (const auto& workspace : workspaces)
+        {
+            if (isRetoolWorkspaceActive(workspace))
             {
-                int needed = channel.accountCount - currentCount;
-                LOG_INFO << "[账户管理] 该渠道需补充注册账号数量: " << needed << "，渠道: " << channel.channelName;
-                // 串行注册：逐个补充账号，避免瞬时请求压垮上游服务
-                for(int i=0; i<needed; ++i)
+                ++currentCount;
+            }
+        }
+
+        LOG_INFO << "[账户管理] Retool 渠道状态 -> 名称: " << channel.channelName
+                 << "，目标数量: " << channel.accountCount
+                 << "，当前数量（启用工作区）: " << currentCount;
+
+        if (currentCount < channel.accountCount)
+        {
+            int needed = channel.accountCount - currentCount;
+            LOG_INFO << "[账户管理] Retool 渠道需补充注册 workspace 数量: "
+                     << needed << "，渠道: " << channel.channelName;
+            for (int i = 0; i < needed; ++i)
+            {
+                if (!autoRegisterAccount(channel.channelName))
                 {
-                    autoRegisterAccount(channel.channelName);
-                    // 注册节流：每次注册之间增加短暂间隔，降低触发限流风险
+                    break;
+                }
+                if (i < needed - 1)
+                {
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                 }
             }
+        }
+        return;
+    }
+
+    int currentCount = accountDbManager->countAccountsByChannel(channel.channelName, true);
+    LOG_INFO << "[账户管理] 渠道状态 -> 名称: " << channel.channelName
+             << "，目标数量: " << channel.accountCount
+             << "，当前数量（含待注册）: " << currentCount;
+
+    if(currentCount < channel.accountCount)
+    {
+        int needed = channel.accountCount - currentCount;
+        LOG_INFO << "[账户管理] 该渠道需补充注册账号数量: " << needed << "，渠道: " << channel.channelName;
+        for(int i=0; i<needed; ++i)
+        {
+            if (!autoRegisterAccount(channel.channelName))
+            {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
         }
     }
 }
@@ -1404,15 +1571,64 @@ std::string generateRandomString(int length) {
     return ret;
 }
 
-void AccountManager::autoRegisterAccount(string apiName)
+bool AccountManager::autoRegisterAccount(string apiName)
 {
     LOG_INFO << "[自动注册] 开始为渠道 " << apiName << " 自动注册账号";
+
+    for (const auto& channel : ChannelManager::getInstance().getChannelList())
+    {
+        if (channel.channelName == apiName && !channel.channelStatus)
+        {
+            LOG_WARN << "[自动注册] 渠道已禁用，跳过自动注册: " << apiName;
+            return false;
+        }
+    }
+
+    if (apiName == "retoolapi")
+    {
+        const auto health = loadRetoolProvisionHealth(nullptr);
+        if (isRetoolProvisionCoolingDown(health))
+        {
+            LOG_WARN << "[自动注册] Retool 渠道处于冷却期，跳过自动注册。cooldownUntil="
+                     << health.cooldownUntil << " reason=" << health.lastFailureReason;
+            return false;
+        }
+
+        Json::Value requestBody(Json::objectValue);
+        requestBody["mail_providers"] = Json::Value(Json::arrayValue);
+        requestBody["mail_providers"].append("gptmail");
+        requestBody["password"] = "RetoolFlow123!!";
+        requestBody["full_name"] = "Codex Flow";
+        requestBody["workspace_prefix"] = "codexorg";
+
+        try
+        {
+            std::string error;
+            auto workspace = RetoolWorkspaceService::getInstance().provisionWorkspace(requestBody, &error);
+            if (workspace.workspaceId.empty())
+            {
+                const auto reason = error.empty() ? std::string("unknown error") : error;
+                markRetoolProvisionFailure(reason);
+                LOG_ERROR << "[自动注册] Retool workspace 创建失败: " << reason;
+                return false;
+            }
+            markRetoolProvisionSuccess();
+            LOG_INFO << "[自动注册] Retool workspace 创建成功: " << workspace.workspaceId;
+            return true;
+        }
+        catch (const std::exception& ex)
+        {
+            markRetoolProvisionFailure(ex.what());
+            LOG_ERROR << "[自动注册] Retool workspace 创建异常: " << ex.what();
+            return false;
+        }
+    }
     
     // Step 1: 创建待注册记录，预占位置
     int waitingId = accountDbManager->createWaitingAccount(apiName);
     if (waitingId < 0) {
         LOG_ERROR << "[自动注册] 创建待注册记录失败: " << apiName;
-        return;
+        return false;
     }
     LOG_INFO << "[自动注册] 创建待注册账号成功, ID: " << waitingId;
     
@@ -1449,14 +1665,14 @@ void AccountManager::autoRegisterAccount(string apiName)
         LOG_ERROR << "[自动注册] 未找到 " << apiName << " 的注册服务URL";
         // 注册失败，删除待注册记录
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     string baseUrl, path;
     if (!splitUrl(fullUrl, baseUrl, path)) {
         LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
         accountDbManager->deleteWaitingAccount(waitingId);
-        return ;
+        return false;
     }
     LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
 
@@ -1508,7 +1724,7 @@ void AccountManager::autoRegisterAccount(string apiName)
         // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     Json::Value jsonResponse;
@@ -1519,14 +1735,14 @@ void AccountManager::autoRegisterAccount(string apiName)
         // 解析失败，删除待注册记录
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     if (!isSuccessEnvelope(jsonResponse)) {
         LOG_ERROR << "[自动注册] workflow 创建失败: " << extractErrorMessageFromEnvelope(jsonResponse, responseBody);
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     string taskId = jsonResponse["data"].get("task_id", "").asString();
@@ -1534,7 +1750,7 @@ void AccountManager::autoRegisterAccount(string apiName)
         LOG_ERROR << "[自动注册] workflow 响应缺少 task_id";
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     LOG_INFO << "[自动注册] workflow 任务已创建: " << taskId;
@@ -1607,7 +1823,7 @@ void AccountManager::autoRegisterAccount(string apiName)
         LOG_ERROR << "[自动注册] workflow 未成功完成: " << workflowDetail.toStyledString();
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     const auto& resultJson = workflowDetail["data"]["result"];
@@ -1645,7 +1861,7 @@ void AccountManager::autoRegisterAccount(string apiName)
         LOG_ERROR << "[自动注册] workflow 结果缺少关键字段: " << workflowDetail.toStyledString();
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
-        return;
+        return false;
     }
 
     LOG_INFO << "[自动注册] 注册成功: " << email;
@@ -1678,7 +1894,10 @@ void AccountManager::autoRegisterAccount(string apiName)
         // 激活失败，删除待注册记录（以防万一）
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
+        return false;
     }
+
+    return true;
 }
 
 // 从上游服务删除账号
@@ -1982,8 +2201,10 @@ void AccountManager::cleanExpiredAccounts()
     
     // 获取当前所有账号的快照
     auto currentAccountMap = getAccountList();
+    auto currentRetoolWorkspaces = RetoolWorkspaceManager::getInstance().listWorkspaces();
     
     list<Accountinfo_st> expiredAccounts;
+    std::vector<std::string> expiredRetoolWorkspaceIds;
     
     for (auto &apiPair : currentAccountMap)
     {
@@ -2047,13 +2268,52 @@ void AccountManager::cleanExpiredAccounts()
             }
         }
     }
+
+    const int retoolRetentionDays = channelRetentionDays.count("retoolapi")
+        ? channelRetentionDays["retoolapi"]
+        : 0;
+    if (retoolRetentionDays > 0)
+    {
+        for (const auto& workspace : currentRetoolWorkspaces)
+        {
+            if (!isRetoolWorkspaceActive(workspace))
+            {
+                continue;
+            }
+            if (workspace.createdAt.empty())
+            {
+                LOG_WARN << "[自动清理] Retool workspace " << workspace.workspaceId << " 没有 createdAt，跳过";
+                continue;
+            }
+
+            if (workspace.inUseCount > 0)
+            {
+                LOG_INFO << "[自动清理] Retool workspace " << workspace.workspaceId
+                         << " 当前使用中(inUseCount=" << workspace.inUseCount << ")，跳过";
+                continue;
+            }
+
+            const auto referenceTime = workspace.lastUsedAt.empty() ? workspace.createdAt : workspace.lastUsedAt;
+            auto referenceDate = trantor::Date::fromDbStringLocal(referenceTime);
+            double ageSec = now.secondsSinceEpoch() - referenceDate.secondsSinceEpoch();
+            if (ageSec >= static_cast<double>(retoolRetentionDays) * 24.0 * 3600.0)
+            {
+                LOG_INFO << "[自动清理] Retool workspace " << workspace.workspaceId
+                         << " 最近参考时间 " << referenceTime
+                         << "，已超过渠道保留天数 " << retoolRetentionDays
+                         << " 天（" << (ageSec / 86400.0) << "天），标记为待禁用";
+                expiredRetoolWorkspaceIds.push_back(workspace.workspaceId);
+            }
+        }
+    }
     
-    if (expiredAccounts.empty()) {
-        LOG_INFO << "[自动清理] 没有发现过期账号";
+    if (expiredAccounts.empty() && expiredRetoolWorkspaceIds.empty()) {
+        LOG_INFO << "[自动清理] 没有发现过期资源";
         return;
     }
     
-    LOG_INFO << "[自动清理] 发现 " << expiredAccounts.size() << " 个过期账号，开始删除...";
+    LOG_INFO << "[自动清理] 发现 " << expiredAccounts.size() << " 个过期账号，"
+             << expiredRetoolWorkspaceIds.size() << " 个过期 Retool workspace，开始处理...";
     
     for (auto &account : expiredAccounts)
     {
@@ -2075,6 +2335,20 @@ void AccountManager::cleanExpiredAccounts()
         accountDbManager->deleteAccount(account.apiName, account.userName);
         LOG_INFO << "[自动清理] 数据库记录已删除: " << account.userName;
     }
+
+    for (const auto& workspaceId : expiredRetoolWorkspaceIds)
+    {
+        std::string workspaceError;
+        if (RetoolWorkspaceManager::getInstance().disableWorkspace(workspaceId, &workspaceError))
+        {
+            LOG_INFO << "[自动清理] Retool workspace 已禁用: " << workspaceId;
+        }
+        else
+        {
+            LOG_WARN << "[自动清理] Retool workspace 禁用失败: " << workspaceId
+                     << " error=" << workspaceError;
+        }
+    }
     
     // 重新加载账号
     loadAccount();
@@ -2082,5 +2356,7 @@ void AccountManager::cleanExpiredAccounts()
     // 检查渠道账号数量（可能需要补充账号）
     checkChannelAccountCounts();
     
-    LOG_INFO << "[自动清理] 过期账号清理完成，共删除 " << expiredAccounts.size() << " 个账号";
+    LOG_INFO << "[自动清理] 过期资源清理完成，共删除 " << expiredAccounts.size()
+             << " 个传统账号，禁用 " << expiredRetoolWorkspaceIds.size()
+             << " 个 Retool workspace";
 }

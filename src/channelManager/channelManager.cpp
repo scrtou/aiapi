@@ -4,7 +4,7 @@ namespace {
 
 bool isBuiltInChannelName(const std::string& name)
 {
-    return name == "chaynsapi" || name == "nexosapi";
+    return name == "chaynsapi" || name == "nexosapi" || name == "retoolapi";
 }
 
 std::list<Channelinfo_st> buildDefaultChannels()
@@ -34,6 +34,20 @@ std::list<Channelinfo_st> buildDefaultChannels()
             30,
             0,
             "Built-in channel: nexosapi",
+            0,
+            0,
+            false
+        ),
+        Channelinfo_st(
+            "retoolapi",
+            "retool",
+            "/retoolapi/v1/chat/completions",
+            "",
+            true,
+            10,
+            900,
+            0,
+            "Built-in channel: retool workspace runtime",
             0,
             0,
             false

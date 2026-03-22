@@ -1,6 +1,7 @@
 #include "AccountController.h"
 #include "ControllerUtils.h"
 #include <accountManager/accountManager.h>
+#include <channelManager/channelManager.h>
 #include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/account/accountDbManager.h>
 #include <utils/BackgroundTaskQueue.h>
@@ -370,6 +371,28 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
     std::string apiName = reqBody.get("apiName", "chaynsapi").asString();
     int count = reqBody.get("count", 1).asInt();
 
+    bool channelFound = false;
+    bool channelEnabled = false;
+    for (const auto& channel : ChannelManager::getInstance().getChannelList())
+    {
+        if (channel.channelName == apiName)
+        {
+            channelFound = true;
+            channelEnabled = channel.channelStatus;
+            break;
+        }
+    }
+    if (!channelFound)
+    {
+        ctl::sendError(callback, k404NotFound, "not_found", "channel not found");
+        return;
+    }
+    if (!channelEnabled)
+    {
+        ctl::sendError(callback, k409Conflict, "channel_disabled", "channel is disabled");
+        return;
+    }
+
     // 限制一次最多注册 20 个
     if (count < 1) count = 1;
     if (count > 20) count = 20;
@@ -387,7 +410,10 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
         LOG_INFO << "[账号Ctrl] 后台注册：开始为" << apiName << " 注册 " << count << " 个账号";
         for (int i = 0; i < count; ++i) {
             LOG_INFO << "[账号Ctrl] 后台注册：正在注册第" << (i + 1) << "/" << count << " 个账号";
-            AccountManager::getInstance().autoRegisterAccount(apiName);
+            if (!AccountManager::getInstance().autoRegisterAccount(apiName)) {
+                LOG_WARN << "[账号Ctrl] 后台注册：第" << (i + 1) << " 个账号/资源注册失败，停止继续尝试";
+                break;
+            }
             // 注册间隔 5 秒，避免过快
             if (i < count - 1) {
                 std::this_thread::sleep_for(std::chrono::seconds(5));

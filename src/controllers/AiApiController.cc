@@ -37,6 +37,9 @@ std::string inferProviderFromPath(const HttpRequestPtr& req)
     if (path.rfind("/nexosapi/", 0) == 0) {
         return "nexosapi";
     }
+    if (path.rfind("/retoolapi/", 0) == 0) {
+        return "retoolapi";
+    }
     return "chaynsapi";
 }
 

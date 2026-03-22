@@ -187,7 +187,8 @@ class AccountManager
     void waitUpdateAccountTokenThread();
 
     void checkChannelAccountCounts();
-    void autoRegisterAccount(string apiName);
+    void checkChannelAccountCount(string apiName);
+    bool autoRegisterAccount(string apiName);
     void checkAccountCountThread();
     
     // 竞态条件保护相关方法

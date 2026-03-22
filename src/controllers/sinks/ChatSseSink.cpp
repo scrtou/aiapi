@@ -71,13 +71,19 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
                     usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
                 }
             }
+            if (arg.meta.isObject() && !arg.meta.empty()) {
+                meta_ = arg.meta;
+            }
 
 
 
 
             const std::string finish = arg.finishReason.empty() ? "stop" : arg.finishReason;
             if (finish != "tool_calls") {
-                std::string json = buildChunkJson("", finish, false);
+                std::string json = buildChunkJson("", finish, false, meta_.empty() ? nullptr : &meta_);
+                sendSseEvent(json);
+            } else if (meta_.isObject() && !meta_.empty()) {
+                std::string json = buildChunkJson("", "", false, &meta_);
                 sendSseEvent(json);
             }
 
@@ -145,7 +151,8 @@ void ChatSseSink::sendDone() {
 std::string ChatSseSink::buildChunkJson(
     const std::string& delta,
     const std::string& finishReason,
-    bool includeRole
+    bool includeRole,
+    const Json::Value* meta
 ) {
     Json::Value chunk;
     chunk["id"] = completionId_;
@@ -178,6 +185,9 @@ std::string ChatSseSink::buildChunkJson(
     
     chunk["choices"] = Json::Value(Json::arrayValue);
     chunk["choices"].append(choice);
+    if (meta && meta->isObject() && !meta->empty()) {
+        chunk["_meta"] = *meta;
+    }
     
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";

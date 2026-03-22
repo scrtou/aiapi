@@ -60,6 +60,7 @@ private:
     std::vector<generation::ToolCallDone> toolCalls_;
 
     std::optional<generation::Usage> usage_;
+    Json::Value meta_{Json::objectValue};
     int inputTokensEstimated_ = 0;
 
     int statusCode_ = 200;

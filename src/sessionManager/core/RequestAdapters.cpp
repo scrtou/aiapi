@@ -50,6 +50,11 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(req);
+    if (reqBody.isMember("workspaceId") && reqBody["workspaceId"].isString()) {
+        genReq.clientInfo["workspace_id"] = reqBody["workspaceId"].asString();
+    } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
+        genReq.clientInfo["workspace_id"] = reqBody["workspace_id"].asString();
+    }
     
 
     std::vector<ImageInfo> images;
@@ -138,6 +143,11 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(req);
+    if (reqBody.isMember("workspaceId") && reqBody["workspaceId"].isString()) {
+        genReq.clientInfo["workspace_id"] = reqBody["workspaceId"].asString();
+    } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
+        genReq.clientInfo["workspace_id"] = reqBody["workspace_id"].asString();
+    }
     
     // 3. 处理 previous_响应_id（用于续聊）
     if (reqBody.isMember("previous_response_id") &&

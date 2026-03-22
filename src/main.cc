@@ -4,6 +4,7 @@
 #include <channelManager/channelManager.h>
 #include <sessionManager/core/Session.h>
 #include <metrics/ErrorStatsService.h>
+#include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <utils/BackgroundTaskQueue.h>
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
@@ -11,7 +12,10 @@
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
 #include <chrono>
+#include <execinfo.h>
 #include <fstream>
+#include <iostream>
+#include <exception>
 
 namespace {
 
@@ -106,6 +110,30 @@ bool isOriginAllowed(const std::string& origin, const Json::Value& allowedOrigin
 }
 
 int main() {
+    std::set_terminate([]() {
+        auto current = std::current_exception();
+        if (current) {
+            try {
+                std::rethrow_exception(current);
+            } catch (const std::exception& ex) {
+                LOG_ERROR << "[terminate] uncaught exception: " << ex.what();
+                std::cerr << "[terminate] uncaught exception: " << ex.what() << std::endl;
+            } catch (...) {
+                LOG_ERROR << "[terminate] uncaught non-std exception";
+                std::cerr << "[terminate] uncaught non-std exception" << std::endl;
+            }
+        }
+        void* frames[64];
+        int n = backtrace(frames, 64);
+        char** symbols = backtrace_symbols(frames, n);
+        std::cerr << "[terminate] backtrace:" << std::endl;
+        for (int i = 0; i < n; ++i) {
+            std::cerr << "  " << symbols[i] << std::endl;
+        }
+        free(symbols);
+        std::_Exit(1);
+    });
+
     // 加载并校验配置
     drogon::app().loadConfigFile("../config.json");
     ensureFilterReflectionRegistration();
@@ -163,12 +191,10 @@ int main() {
         LOG_INFO << "[后台任务队列] 已就绪";
     });
 
-    // 事件循环启动后执行初始化任务
     app().getLoop()->queueInLoop([](){
         BackgroundTaskQueue::instance().enqueue("init", []{
             LOG_INFO << "[启动] 后台初始化任务开始";
 
-            // 读取会话追踪模式配置
             auto customConfig = drogon::app().getCustomConfig();
             if (customConfig.isMember("session_tracking")) {
                 std::string mode = customConfig["session_tracking"].get("mode", "hash").asString();
@@ -185,21 +211,19 @@ int main() {
 
             ChannelManager::getInstance().init();
             AccountManager::getInstance().init();
+            RetoolWorkspaceManager::getInstance().init();
             ApiManager::getInstance().init();
 
-            // 初始化错误统计服务（使用默认配置）
             metrics::ErrorStatsConfig statsConfig;
             metrics::ErrorStatsService::getInstance().init(statsConfig);
 
-            // 配置响应索引定时清理任务
-            auto& customConfigRoot = drogon::app().getCustomConfig();
             int maxEntries = 200000;
             int maxAgeHours = 6;
             int cleanupMinutes = 10;
-            if (customConfigRoot.isMember("response_index") && customConfigRoot["response_index"].isObject()) {
-                maxEntries = customConfigRoot["response_index"].get("max_entries", maxEntries).asInt();
-                maxAgeHours = customConfigRoot["response_index"].get("max_age_hours", maxAgeHours).asInt();
-                cleanupMinutes = customConfigRoot["response_index"].get("cleanup_interval_minutes", cleanupMinutes).asInt();
+            if (customConfig.isMember("response_index") && customConfig["response_index"].isObject()) {
+                maxEntries = customConfig["response_index"].get("max_entries", maxEntries).asInt();
+                maxAgeHours = customConfig["response_index"].get("max_age_hours", maxAgeHours).asInt();
+                cleanupMinutes = customConfig["response_index"].get("cleanup_interval_minutes", cleanupMinutes).asInt();
             }
             if (maxEntries > 0 && maxAgeHours > 0 && cleanupMinutes > 0) {
                 app().getLoop()->runEvery(

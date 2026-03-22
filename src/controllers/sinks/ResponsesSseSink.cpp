@@ -197,6 +197,9 @@ void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event)
 }
 
 void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
+    if (event.meta.isObject() && !event.meta.empty()) {
+        meta_ = event.meta;
+    }
 
     Json::Value outputItem;
     outputItem["type"] = "message";
@@ -300,7 +303,10 @@ Json::Value ResponsesSseSink::buildResponseObject(const std::string& status) {
         response["completed_at"] = Json::nullValue;
     }
     response["error"] = Json::nullValue;
-    response["metadata"] = Json::Value(Json::objectValue);
+    response["metadata"] = meta_.isObject() ? meta_ : Json::Value(Json::objectValue);
+    if (meta_.isObject() && !meta_.empty()) {
+        response["_meta"] = meta_;
+    }
     response["output"] = Json::Value(Json::arrayValue);
     response["usage"] = Json::nullValue;
     

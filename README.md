@@ -10,6 +10,7 @@
 - [完整 API 端点清单](#完整-api-端点清单)
   - [AI 核心 API](#ai-核心-apiaiapicontroller)
   - [账号管理 API](#账号管理-apiaccountcontroller)
+  - [Retool Workspace API](#retool-workspace-apiretoolworkspacecontroller)
   - [渠道管理 API](#渠道管理-apichannelcontroller)
   - [监控与日志 API](#监控与日志-apimetricscontroller--logcontroller)
   - [健康检查 API](#健康检查-apihealthcontroller)
@@ -50,6 +51,9 @@
 - ✅ 输出清洗（ClientOutputSanitizer）
 - ✅ 统一错误模型（Errors）+ 错误统计（ErrorStatsService + ErrorStatsConfig）
 - ✅ 账号池管理（自动注册、Token 刷新、类型检测、轮转、备份）
+- ✅ ManagedAccount 抽象层（传统账号 + Retool Workspace 统一管理入口）
+- ✅ Retool Workspace 资产管理（workspace/session/workflow/agent 元数据持久化）
+- ✅ Retool Workspace 创建入口（通过 aiapi_tool 内部编排执行）
 - ✅ 渠道管理（多渠道、状态控制、并发限制）
 - ✅ 服务状态监控 + Prometheus 指标导出
 - ✅ 内置日志查看 API（文件列表、尾部读取、过滤）
@@ -69,6 +73,7 @@
 │  │              Controllers + Filters                      │    │
 │  │  AiApiController     — AI 核心 API 路由                 │    │
 │  │  AccountController   — 账号管理 API                     │    │
+│  │  RetoolWorkspaceController — Retool Workspace API       │    │
 │  │  ChannelController   — 渠道管理 API                     │    │
 │  │  MetricsController   — 监控指标 API                     │    │
 │  │  LogController       — 日志查看 API                     │    │
@@ -173,6 +178,7 @@ aiapi/
     ├── controllers/                # HTTP 控制器 + 过滤器
     │   ├── AiApiController.h/cc    # AI 核心 API 路由控制器
     │   ├── AccountController.h/cc  # 账号管理 API 控制器
+    │   ├── RetoolWorkspaceController.h/cc # Retool Workspace API 控制器
     │   ├── ChannelController.h/cc  # 渠道管理 API 控制器
     │   ├── MetricsController.h/cc  # 监控指标 API 控制器
     │   ├── LogController.h/cc      # 日志查看 API 控制器
@@ -240,6 +246,21 @@ aiapi/
     ├── accountManager/             # 账号池管理
     │   └── accountManager.h/cpp    # 账号 CRUD + Token 刷新 + 自动注册
     │
+    ├── managedAccount/            # 更高层账号/工作区抽象
+    │   ├── contracts/
+    │   │   └── ManagedAccount.h    # 统一资产记录 / 执行上下文
+    │   ├── backends/
+    │   │   ├── IManagedAccountBackend.h
+    │   │   ├── ClassicProviderAccountBackend.h/cpp
+    │   │   └── RetoolWorkspaceBackend.h/cpp
+    │   └── service/
+    │       └── ManagedAccountService.h/cpp
+    │
+    ├── retoolWorkspace/           # Retool Workspace 子系统
+    │   ├── RetoolWorkspaceInfo.h
+    │   ├── RetoolWorkspaceManager.h/cpp
+    │   └── RetoolWorkspaceService.h/cpp
+    │
     ├── channelManager/             # 渠道管理
     │   └── channelManager.h/cpp    # 渠道 CRUD + 状态控制
     │
@@ -252,6 +273,8 @@ aiapi/
     │   │   └── channelDbManager.h/cpp       # 渠道持久化
     │   ├── config/
     │   │   └── ConfigDbManager.h/cpp        # 配置持久化（app_config 表）
+    │   ├── retoolWorkspace/
+    │   │   └── RetoolWorkspaceDbManager.h/cpp # Retool Workspace 持久化
     │   └── metrics/
     │       ├── ErrorStatsDbManager.h/cpp    # 错误统计持久化
     │       └── StatusDbManager.h/cpp        # 服务状态持久化
@@ -311,12 +334,36 @@ aiapi/
 | DELETE | `/nexosapi/v1/responses/{id}` | 删除已创建的 Nexos 响应 |
 | GET | `/nexosapi/v1/models` | 获取 Nexos 可用模型列表 |
 | GET | `/nexosapi/v1/account/quota` | 获取 Nexos 账号订阅/额度信息 |
+| POST | `/retoolapi/v1/chat/completions` | Retool Workspace Chat Completions |
+| POST | `/retoolapi/v1/responses` | Retool Workspace Responses |
+| GET | `/retoolapi/v1/responses/{id}` | 获取已创建的 Retool 响应 |
+| DELETE | `/retoolapi/v1/responses/{id}` | 删除已创建的 Retool 响应 |
+| GET | `/retoolapi/v1/models` | 获取 Retool 可用模型列表 |
 
 ### Nexos Provider 说明
 
 - `nexosapi` 不再从配置文件读取 `cookies/default_model/default_handler_id/model_mapping/models`
 - **账号 cookies 来自账号管理**：请通过 `/aichat/account/add` 添加 `apiName=nexosapi` 的账号，并把完整 cookies 放到 `authToken`
 - **模型列表实时获取**：每次调用 `/nexosapi/v1/models` 或聊天请求时，都会从 Nexos `chat.data` 实时解析当前账号可用模型
+
+### Retool Provider 说明
+
+- `retoolapi` 通过 Retool Workspace 池路由请求；标准 OpenAI 兼容接口本身**不要求**显式传 `workspaceId`，未传时会从可用 workspace 池自动分配。
+- 成功响应会在 `_meta` 中返回本次实际命中的 `workspaceId / routeType / provider / resourceName`，便于排查路由结果。
+- `claude-*` 的 **workflow** 路径已支持，包括 `claude-sonnet-4-6`。
+- `agent-claude-sonnet-4-6` **当前明确不支持**：Retool 原生 agent thread 链路会返回 Anthropic 上游错误  
+  `This model does not support assistant message prefill. The conversation must end with a user message.`
+- 因此当前支持性应按实际链路理解，而**不要仅以 `/retoolapi/v1/models` 暴露的模型名判断可用性**。
+
+#### Retool Anthropic 兼容性说明（当前已验证）
+
+| 模型 | workflow | agent |
+|------|----------|-------|
+| `claude-sonnet-4-20250514` | 支持 | `agent-claude-sonnet-4-20250514` 支持 |
+| `claude-sonnet-4-5-20250929` | 支持 | `agent-claude-sonnet-4-5-20250929` 支持 |
+| `claude-sonnet-4-6` | 支持 | `agent-claude-sonnet-4-6` **不支持** |
+
+> 说明：`claude-opus-*` 是否可用还会受到目标 workspace 的 Anthropic 资源限流配置影响；若 workspace 侧 RPM 为 0，则会直接返回 rate limit 错误。
 
 ### 账号管理 API（AccountController）
 
@@ -329,6 +376,21 @@ aiapi/
 | POST | `/aichat/account/autoregister` | 自动注册新账号（最多 20 个/次） |
 | GET | `/aichat/account/info` | 获取内存中的账号列表 |
 | GET | `/aichat/account/dbinfo` | 获取数据库中的账号列表 |
+
+### Retool Workspace API（RetoolWorkspaceController）
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| POST | `/aichat/retool/workspace/create` | 调 aiapi_tool 完整创建 Retool workspace 并入库 |
+| POST | `/aichat/retool/workspace/upsert` | 手动写入/覆盖 workspace 资产 |
+| GET | `/aichat/retool/workspace/info` | 获取单个 workspace 信息 |
+| GET | `/aichat/retool/workspace/list` | 获取 workspace 列表 |
+| POST | `/aichat/retool/workspace/disable` | 禁用 workspace |
+| POST | `/aichat/retool/workspace/verify` | 本地验证 workspace 资产字段完整性 |
+
+`create` 当前会同步调用 aiapi_tool 内部接口：
+
+- `POST /api/v1/workflows/retool-workspace/provision-sync`
 
 ### 渠道管理 API（ChannelController）
 

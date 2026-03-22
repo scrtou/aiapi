@@ -50,6 +50,9 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
                     usage_->totalTokens = usage_->inputTokens + usage_->outputTokens;
                 }
             }
+            if (arg.meta.isObject() && !arg.meta.empty()) {
+                meta_ = arg.meta;
+            }
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
             hasError_ = true;
@@ -151,6 +154,9 @@ Json::Value ChatJsonSink::buildResponse() {
     
     response["choices"] = Json::Value(Json::arrayValue);
     response["choices"].append(choice);
+    if (meta_.isObject() && !meta_.empty()) {
+        response["_meta"] = meta_;
+    }
     
     return response;
 }

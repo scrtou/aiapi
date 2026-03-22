@@ -1,6 +1,7 @@
 #ifndef GENERATION_EVENT_H
 #define GENERATION_EVENT_H
 
+#include <json/json.h>
 #include <string>
 #include <variant>
 #include <optional>
@@ -75,6 +76,7 @@ struct Usage {
 struct Completed {
     std::string finishReason;   // 完成原因： "停止"，""，"content_filter"，"tool_calls"
     std::optional<Usage> usage; // 可选的使用量信息
+    Json::Value meta{Json::objectValue}; // 附加元信息（如实际路由到的 workspaceId）
 };
 
 /**

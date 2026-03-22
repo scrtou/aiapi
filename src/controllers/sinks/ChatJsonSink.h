@@ -66,6 +66,7 @@ private:
     std::vector<generation::ToolCallDone> toolCalls_;
     std::string finishReason_ = "stop";
     std::optional<generation::Usage> usage_;
+    Json::Value meta_{Json::objectValue};
     int statusCode_ = 200;
     bool hasError_ = false;
     std::string errorMessage_;

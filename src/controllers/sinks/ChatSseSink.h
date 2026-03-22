@@ -67,7 +67,8 @@ private:
     std::string buildChunkJson(
         const std::string& delta,
         const std::string& finishReason = "",
-        bool includeRole = false
+        bool includeRole = false,
+        const Json::Value* meta = nullptr
     );
 
     /**
@@ -96,6 +97,7 @@ private:
     bool firstChunk_ = true;
     bool sentText_ = false;
     std::optional<generation::Usage> usage_;
+    Json::Value meta_{Json::objectValue};
     bool closed_ = false;
 };
 

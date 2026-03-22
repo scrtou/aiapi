@@ -370,6 +370,9 @@ bool GenerationService::executeProvider(session_st& session) {
     // 将结果写回 会话.响应. 以保持旧链路兼容
     session.response.message["message"] = result.text;
     session.response.message["statusCode"] = result.statusCode;
+    if (result.meta.isObject() && !result.meta.empty()) {
+        session.response.message["_meta"] = result.meta;
+    }
     
     if (!result.isSuccess()) {
         LOG_ERROR << "[生成服务] 上游返回错误，状态码: " << result.statusCode

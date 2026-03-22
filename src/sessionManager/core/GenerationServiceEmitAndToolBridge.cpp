@@ -226,6 +226,174 @@ bool isStrictSentinelEnabled(const session_st& session, bool strictToolClient, b
     return strictSentinel;
 }
 
+bool isRetoolAgentModel(const std::string& model) {
+    return !model.empty() && model.rfind("agent-", 0) == 0;
+}
+
+void appendForcedToolRule(std::ostringstream& policy,
+                          const std::string& forcedToolName,
+                          const std::string& fallbackLine) {
+    if (!forcedToolName.empty()) {
+        policy << "Required tool for this task: " << forcedToolName << "\n";
+    } else {
+        policy << fallbackLine;
+    }
+}
+
+void appendXmlFunctionCallTemplate(std::ostringstream& policy,
+                                   const std::string& triggerSignal) {
+    policy << triggerSignal << "\n";
+    policy << "<function_calls>\n";
+    policy << "  <function_call>\n";
+    policy << "    <tool>TOOL_NAME</tool>\n";
+    policy << "    <args_json><![CDATA[{\"PARAM_NAME\":\"VALUE\"}]]></args_json>\n";
+    policy << "  </function_call>\n";
+    policy << "</function_calls>\n";
+}
+
+void appendRetoolAgentRoutePolicy(std::ostringstream& policy,
+                                  const std::string& triggerSignal,
+                                  const std::string& forcedToolName) {
+    policy << "You are a strict XML tool router.\n\n";
+    policy << "Primary rule:\n";
+    policy << "- Your entire response must be exactly one XML tool call.\n";
+    policy << "- No explanations.\n";
+    policy << "- No markdown.\n";
+    policy << "- No prose.\n";
+    policy << "- No analysis.\n";
+    policy << "- No greeting.\n";
+    policy << "- No text outside XML.\n";
+    policy << "- If you output anything except valid XML in the required format, the response is invalid.\n\n";
+    policy << "Decision rule:\n";
+    policy << "- If a tool is needed, output exactly one tool call.\n";
+    policy << "- If no tool is needed, output exactly one attempt_completion call.\n\n";
+    appendForcedToolRule(policy, forcedToolName, "Output exactly one function_call only.\n");
+    policy << "\nMandatory format:\n";
+    appendXmlFunctionCallTemplate(policy, triggerSignal);
+    policy << "\nHard constraints:\n";
+    policy << "- Exactly one function_call only.\n";
+    policy << "- TOOL_NAME must exist in API Definitions.\n";
+    policy << "- args_json must be valid JSON.\n";
+    policy << "- Include every required argument.\n";
+    policy << "- Argument names must exactly match the schema.\n";
+    policy << "- Do not summarize the user task.\n";
+    policy << "- Do not explain why you selected the tool.\n";
+    policy << "- Do not apologize.\n";
+    policy << "- Do not mention limitations or permissions.\n";
+    policy << "- Do not ask for file contents if file tools can retrieve them.\n\n";
+    policy << "Valid example:\n";
+    policy << triggerSignal << "\n";
+    policy << "<function_calls>\n";
+    policy << "  <function_call>\n";
+    policy << "    <tool>list_files</tool>\n";
+    policy << "    <args_json><![CDATA[{\"path\":\"src\",\"recursive\":true}]]></args_json>\n";
+    policy << "  </function_call>\n";
+    policy << "</function_calls>\n\n";
+    policy << "Invalid example:\n";
+    policy << "I will use list_files.\n";
+    policy << triggerSignal << "\n";
+    policy << "<function_calls>...</function_calls>\n";
+    policy << "Reason invalid: contains non-XML text before the tool call.\n";
+}
+
+void appendRetoolProviderPolicy(std::ostringstream& policy,
+                                const std::string& triggerSignal,
+                                const std::string& forcedToolName) {
+    policy << "You are a tool router, not a general chat assistant.\n\n";
+    policy << "Your job:\n";
+    policy << "- Output exactly ONE tool call when a tool is needed.\n";
+    policy << "- If no tool is needed, output exactly ONE attempt_completion call.\n";
+    policy << "- Output XML ONLY.\n";
+    policy << "- Do NOT output explanations.\n";
+    policy << "- Do NOT output markdown.\n";
+    policy << "- Do NOT repeat the user's request.\n";
+    policy << "- Do NOT add any text before or after the XML.\n";
+    policy << "- Any extra text is an error.\n\n";
+    appendForcedToolRule(policy, forcedToolName, "Output exactly one function_call only.\n");
+    policy << "\nRequired output format:\n";
+    appendXmlFunctionCallTemplate(policy, triggerSignal);
+    policy << "\nRules:\n";
+    policy << "- <tool> must be one of the tools defined below.\n";
+    policy << "- <args_json> must be valid JSON.\n";
+    policy << "- Include all required arguments.\n";
+    policy << "- Argument names are case-sensitive.\n";
+    policy << "- Output exactly one <function_call>.\n";
+    policy << "- If the task is already complete or no tool is needed, use attempt_completion.\n";
+    policy << "- Do not ask the user to paste file contents if a file-reading tool can be used.\n";
+    policy << "- Prefer direct file/system tools over explanations.\n\n";
+    policy << "Valid examples:\n";
+    policy << triggerSignal << "\n";
+    policy << "<function_calls>\n";
+    policy << "  <function_call>\n";
+    policy << "    <tool>list_files</tool>\n";
+    policy << "    <args_json><![CDATA[{\"path\":\"src\",\"recursive\":true}]]></args_json>\n";
+    policy << "  </function_call>\n";
+    policy << "</function_calls>\n\n";
+    policy << triggerSignal << "\n";
+    policy << "<function_calls>\n";
+    policy << "  <function_call>\n";
+    policy << "    <tool>attempt_completion</tool>\n";
+    policy << "    <args_json><![CDATA[{\"result\":\"Task completed successfully.\"}]]></args_json>\n";
+    policy << "  </function_call>\n";
+    policy << "</function_calls>\n";
+}
+
+void appendRetoolChannelSpecialRules(std::ostringstream& policy);
+
+void appendGenericXmlBridgePolicy(std::ostringstream& policy,
+                                  bool strictToolClient,
+                                  const std::string& forcedToolName,
+                                  const std::string& toolChoice,
+                                  const std::string& triggerSignal,
+                                  const std::string& apiName) {
+    if (strictToolClient) {
+        policy << "Context: Software engineering collaboration\n";
+        policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
+        policy << "Goal: Based on the user request, select and output exactly 1 tool to call.\n";
+        policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+    } else {
+        policy << "Context: Software engineering collaboration\n";
+        policy << "Task: Generate tool call instructions (tools are executed by an external system)\n";
+        policy << "Goal: Based on the user request, select and output one or more tools to call.\n";
+        policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+    }
+
+    if (!forcedToolName.empty()) {
+        policy << "Required tool for this task: " << forcedToolName << "\n";
+    } else if (toolChoice == "required") {
+        policy << "This task MUST output exactly 1 tool call (choose the most appropriate API).\n";
+    } else if (strictToolClient) {
+        policy << "Each response MUST output exactly 1 tool call.\n";
+        policy << "If no other tool is needed, use attempt_completion to output the final result.\n";
+    } else {
+        policy << "Output tool calls in XML format ONLY when an API call is needed to complete the task; otherwise respond normally.\n";
+    }
+
+    policy << "\nRequirements:\n";
+    policy << "- When outputting a tool call, output ONLY the XML (no explanations, no prefixes/suffixes, no markdown code blocks).\n";
+    policy << "- You MUST follow this exact XML format (line 1 is the trigger marker, line 2 starts <function_calls>):\n";
+    appendXmlFunctionCallTemplate(policy, triggerSignal);
+    policy << "- <tool> MUST be a name that exists in the API definitions below.\n";
+    policy << "- <args_json> MUST be a valid JSON object containing all required arguments for that tool.\n";
+    policy << "- Parameter keys MUST exactly match the API definition (case-sensitive).\n";
+
+    if (apiName == "retoolapi") {
+        appendRetoolChannelSpecialRules(policy);
+    }
+}
+
+void appendRetoolChannelSpecialRules(std::ostringstream& policy) {
+    policy << "- Retool channel special rule: Each response MUST output exactly 1 tool call.\n";
+    policy << "- If no other tool is needed, use attempt_completion to output the final result.\n";
+    policy << "- You are being called by an automated executor. If you output any text outside XML, the task fails immediately.\n";
+    policy << "- Do NOT output explanations, plans, reasoning, acknowledgements, apologies, markdown, prefixes, suffixes, or summaries.\n";
+    policy << "- Do NOT describe the tool you are about to use.\n";
+    policy << "- Do NOT output natural-language prefaces such as 'I need to use write_to_file' or 'Let me update the file now'.\n";
+    policy << "- Even if you know the correct tool, do not explain it; directly output the XML tool call.\n";
+    policy << "- Wrong example (invalid because it is not XML-only): 我需要使用 write_to_file 工具来更新 README，但我注意到我应该直接执行工具调用。让我现在更新 codex/README.md 文件。\n";
+    policy << "- Correct behavior: directly output the write_to_file XML function_call and nothing else.\n";
+}
+
 } // 匿名命名空间
 
 /**
@@ -583,6 +751,9 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // finish_reason： "停止"（普通文本结束）或 "tool_calls"（工具调用结束）
     generation::Completed completed;
     completed.finishReason = toolCalls.empty() ? "stop" : "tool_calls";
+    if (session.response.message.isMember("_meta") && session.response.message["_meta"].isObject()) {
+        completed.meta = session.response.message["_meta"];
+    }
     sink.onEvent(completed);
 }
 
@@ -1590,58 +1761,33 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     session.provider.toolBridgeTrigger = generateRandomTriggerSignal(static_cast<size_t>(triggerRandomLength));
     const std::string& triggerSignal = session.provider.toolBridgeTrigger;
 
-    // 使用低阻抗“任务型”提示词（英文文本对模型约束更稳定）：
-    // 现代 RLHF 对齐模型可能拒绝“强覆盖式系统指令”。
-    // 因此将其表述为格式化/抽取任务，并要求模型输出
-    // 在需要调用工具时输出严格定界的 XML 块（ 风格）。
+    // 使用 provider 定制的 bridge prompt：
+    // - 默认保留现有通用 XML bridge prompt
+    // - retoolapi/workflow 使用更短、更硬的单轮 tool-bridge prompt
+    // - retoolapi/agent 使用更严格的多轮 tool-router prompt
     //
-    // 重要：外层标签 <tool_instructions> 故意与以下解析标签不同：
-
+    // 重要：外层标签 <tool_instructions> 故意与解析标签不同，
     // 用于防止提示词本身被误判为工具调用。
     {
-        std::ostringstream policy;
+         const bool isRetoolProvider = (session.request.api == "retoolapi");
+         const bool isRetoolAgentRoute = isRetoolAgentModel(session.request.model);
         
-        // 为提升格式约束稳定性，这里继续使用英文指令
+        std::ostringstream policy;
         policy << "<tool_instructions>\n";
-
-        if (strictToolClient) {
-            policy << "Context: Software engineering collaboration\n";
-            policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
-            policy << "Goal: Based on the user request, select and output exactly 1 tool to call.\n";
-            policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+        if (isRetoolProvider && isRetoolAgentRoute) {
+            appendRetoolAgentRoutePolicy(policy, triggerSignal, forcedToolName);
+        } else if (isRetoolProvider) {
+            appendRetoolProviderPolicy(policy, triggerSignal, forcedToolName);
         } else {
-            policy << "Context: Software engineering collaboration\n";
-            policy << "Task: Generate tool call instructions (tools are executed by an external system)\n";
-            policy << "Goal: Based on the user request, select and output one or more tools to call.\n";
-            policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
+            appendGenericXmlBridgePolicy(policy,
+                                         strictToolClient,
+                                         forcedToolName,
+                                         toolChoice,
+                                         triggerSignal,
+                                         session.request.api);
         }
 
-        if (!forcedToolName.empty()) {
-            policy << "Required tool for this task: " << forcedToolName << "\n";
-        } else if (toolChoice == "required") {
-            policy << "This task MUST output exactly 1 tool call (choose the most appropriate API).\n";
-        } else if (strictToolClient) {
-            policy << "Each response MUST output exactly 1 tool call.\n";
-            policy << "If no other tool is needed, use attempt_completion to output the final result.\n";
-        } else {
-            policy << "Output tool calls in XML format ONLY when an API call is needed to complete the task; otherwise respond normally.\n";
-        }
-
-        policy << "\nRequirements:\n";
-        policy << "- When outputting a tool call, output ONLY the XML (no explanations, no prefixes/suffixes, no markdown code blocks).\n";
-        policy << "- You MUST follow this exact XML format (line 1 is the trigger marker, line 2 starts <function_calls>):\n";
-        policy << triggerSignal << "\n";
-        policy << "<function_calls>\n";
-        policy << "  <function_call>\n";
-        policy << "    <tool>TOOL_NAME</tool>\n";
-        policy << "    <args_json><![CDATA[{\"PARAM_NAME\":\"VALUE\"}]]></args_json>\n";
-        policy << "  </function_call>\n";
-        policy << "</function_calls>\n";
-        policy << "- <tool> MUST be a name that exists in the API definitions below.\n";
-        policy << "- <args_json> MUST be a valid JSON object containing all required arguments for that tool.\n";
-        policy << "- Parameter keys MUST exactly match the API definition (case-sensitive).\n";
         policy << "\nAPI Definitions{\n";
-
         toolDefinitions = policy.str() + toolDefinitions;
         toolDefinitions += "}</tool_instructions>\n\n";
     }

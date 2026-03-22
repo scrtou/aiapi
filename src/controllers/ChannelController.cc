@@ -10,7 +10,7 @@ namespace {
 
 bool isBuiltInChannelName(const std::string& name)
 {
-    return name == "chaynsapi" || name == "nexosapi";
+    return name == "chaynsapi" || name == "nexosapi" || name == "retoolapi";
 }
 
 }  // namespace
@@ -70,10 +70,16 @@ void ChannelController::channelAdd(const HttpRequestPtr &req, std::function<void
             response.append(responseItem);
         }
 
-        // 渠道添加后，异步检查渠道账号数量
-        BackgroundTaskQueue::instance().enqueue("channelAdd_checkCounts", [](){
-            AccountManager::getInstance().checkChannelAccountCounts();
-        });
+        for (const auto &reqBody : reqItems)
+        {
+            const auto channelName = reqBody.get("channelname", "").asString();
+            if (!channelName.empty())
+            {
+                BackgroundTaskQueue::instance().enqueue("channelAdd_checkCounts_" + channelName, [channelName](){
+                    AccountManager::getInstance().checkChannelAccountCount(channelName);
+                });
+            }
+        }
 
         ctl::sendJson(callback, response);
         LOG_INFO << "[渠道Ctrl] 添加渠道完成";
@@ -125,9 +131,8 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
             response["message"] = "Channel updated successfully";
             response["id"] = channelInfo.id;
 
-            // 渠道更新后，异步检查渠道账号数量
-            BackgroundTaskQueue::instance().enqueue("channelUpdate_checkCounts", [](){
-                AccountManager::getInstance().checkChannelAccountCounts();
+            BackgroundTaskQueue::instance().enqueue("channelUpdate_checkCounts_" + channelInfo.channelName, [channelName = channelInfo.channelName](){
+                AccountManager::getInstance().checkChannelAccountCount(channelName);
             });
         } else {
             response["status"] = "failed";

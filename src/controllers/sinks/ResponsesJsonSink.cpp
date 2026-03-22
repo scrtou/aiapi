@@ -48,6 +48,9 @@ void ResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
             if (arg.usage.has_value()) {
                 usage_ = *arg.usage;
             }
+            if (arg.meta.isObject() && !arg.meta.empty()) {
+                meta_ = arg.meta;
+            }
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
             hasError_ = true;
@@ -149,6 +152,10 @@ Json::Value ResponsesJsonSink::buildResponse() {
         usage["total_tokens"] = inputTokens + outputTokens;
     }
     response["usage"] = usage;
+    response["metadata"] = meta_.isObject() ? meta_ : Json::Value(Json::objectValue);
+    if (meta_.isObject() && !meta_.empty()) {
+        response["_meta"] = meta_;
+    }
 
     return response;
 }
