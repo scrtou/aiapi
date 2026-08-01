@@ -3,6 +3,8 @@
 #include <ApiManager.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <optional>
 #include <chrono>
@@ -197,6 +199,30 @@ bool parseJsonBody(const std::string& body, Json::Value& out, std::string& errs)
     Json::CharReaderBuilder reader;
     std::istringstream s(body);
     return Json::parseFromStream(reader, s, &out, &errs);
+}
+
+std::string diagnosticBodyPreview(const std::string& body, std::size_t maxBytes = 512) {
+    const std::size_t previewSize = std::min(body.size(), maxBytes);
+    std::string preview;
+    preview.reserve(previewSize + 16);
+    for (std::size_t index = 0; index < previewSize; ++index) {
+        const unsigned char ch = static_cast<unsigned char>(body[index]);
+        if (ch == '\r') {
+            preview += "\\r";
+        } else if (ch == '\n') {
+            preview += "\\n";
+        } else if (ch == '\t') {
+            preview += "\\t";
+        } else if (std::isprint(ch)) {
+            preview.push_back(static_cast<char>(ch));
+        } else {
+            preview.push_back('?');
+        }
+    }
+    if (body.size() > maxBytes) {
+        preview += "...<truncated>";
+    }
+    return preview;
 }
 
 bool isSuccessEnvelope(const Json::Value& json) {
@@ -835,6 +861,82 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
         }
     }
 }
+
+bool AccountManager::getEligibleAccount(const string& apiName,
+                                        shared_ptr<Accountinfo_st>& account,
+                                        AccountRequirement requirement,
+                                        const set<string>& excludedUsers)
+{
+    std::lock_guard<std::mutex> lock(accountListMutex);
+    account.reset();
+
+    auto poolIt = accountPoolMap.find(apiName);
+    if (poolIt == accountPoolMap.end() || !poolIt->second || poolIt->second->empty()) {
+        LOG_ERROR << "[账户管理] 账户池 [" << apiName << "] 为空或未找到";
+        return false;
+    }
+
+    auto isValid = [&](const shared_ptr<Accountinfo_st>& candidate) {
+        if (!candidate || excludedUsers.count(candidate->userName) > 0) {
+            return false;
+        }
+        if (!candidate->tokenStatus || !candidate->accountStatus ||
+            candidate->status != AccountStatus::ACTIVE || candidate->authToken.empty()) {
+            return false;
+        }
+        return requirement != AccountRequirement::ProOnly || candidate->accountType == "pro";
+    };
+
+    vector<shared_ptr<Accountinfo_st>> accounts;
+    shared_ptr<Accountinfo_st> preferred;
+    shared_ptr<Accountinfo_st> fallback;
+    auto& pool = *poolIt->second;
+
+    while (!pool.empty()) {
+        auto candidate = pool.top();
+        pool.pop();
+        accounts.push_back(candidate);
+
+        if (!isValid(candidate)) {
+            continue;
+        }
+        if (!fallback) {
+            fallback = candidate;
+        }
+        if (requirement == AccountRequirement::ProOnly || candidate->accountType == "free") {
+            preferred = candidate;
+            break;
+        }
+    }
+
+    account = preferred ? preferred : fallback;
+    if (account) {
+        account->useCount++;
+    }
+
+    for (const auto& candidate : accounts) {
+        pool.push(candidate);
+    }
+
+    if (!account) {
+        if (excludedUsers.empty()) {
+            LOG_ERROR << "[账户管理] 未找到满足要求的有效账户, API: " << apiName
+                      << ", 要求: "
+                      << (requirement == AccountRequirement::ProOnly ? "ProOnly" : "AnyValid");
+        } else {
+            LOG_WARN << "[账户管理] 未找到可切换的其它有效账户, API: " << apiName
+                     << ", 要求: "
+                     << (requirement == AccountRequirement::ProOnly ? "ProOnly" : "AnyValid")
+                     << ", 已排除: " << excludedUsers.size();
+        }
+        return false;
+    }
+
+    LOG_INFO << "[账户管理] 已选择有效账户: " << account->userName
+             << " (" << account->accountType << "), 新使用次数: " << account->useCount;
+    return true;
+}
+
 void AccountManager::getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account)
 {
     std::lock_guard<std::mutex> lock(accountListMutex);
@@ -1105,16 +1207,35 @@ Json::Value AccountManager::getNexosToken(string username,string passwd)
         return Json::Value();
     }
 
-    std::string body;
-    if (response->getStatusCode() == 200) {
-        body = std::string(response->getBody());
-        LOG_INFO << "[账户管理] Nexos 登录服务原始响应内容: " << body;
+    const int httpStatus = static_cast<int>(response->getStatusCode());
+    const std::string contentType = response->getHeader("content-type");
+    const std::string body(response->getBody());
+
+    if (httpStatus != 200) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回非 200 响应: status="
+                  << httpStatus
+                  << ", contentType=" << (contentType.empty() ? "<empty>" : contentType)
+                  << ", bodySize=" << body.size()
+                  << ", bodyPreview=" << diagnosticBodyPreview(body);
+        return Json::Value();
+    }
+
+    LOG_INFO << "[账户管理] Nexos 登录服务原始响应内容: " << body;
+    if (body.empty()) {
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回 200 但响应体为空: contentType="
+                  << (contentType.empty() ? "<empty>" : contentType);
+        return Json::Value();
     }
 
     Json::Value responsejson;
     std::string errs;
     if (!parseJsonBody(body, responsejson, errs)) {
-        LOG_ERROR << "[账户管理] 解析 Nexos 登录响应 JSON 失败: " << errs;
+        LOG_ERROR << "[账户管理] 解析 Nexos 登录响应 JSON 失败: status="
+                  << httpStatus
+                  << ", contentType=" << (contentType.empty() ? "<empty>" : contentType)
+                  << ", bodySize=" << body.size()
+                  << ", parseError=" << errs
+                  << ", bodyPreview=" << diagnosticBodyPreview(body);
         return Json::Value();
     }
 

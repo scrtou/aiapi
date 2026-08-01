@@ -11,6 +11,7 @@
 #include <controllers/HealthController.h>
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
+#include <algorithm>
 #include <chrono>
 #include <execinfo.h>
 #include <fstream>
@@ -192,6 +193,25 @@ int main() {
     });
 
     app().getLoop()->queueInLoop([](){
+        const auto& customConfig = drogon::app().getCustomConfig();
+        int requestedWorkerThreads = static_cast<int>(
+            BackgroundTaskQueue::kDefaultWorkerThreads);
+        if (customConfig.isMember("background_task_threads")) {
+            if (customConfig["background_task_threads"].isIntegral()) {
+                requestedWorkerThreads = customConfig["background_task_threads"].asInt();
+            } else {
+                LOG_WARN << "[后台任务队列] background_task_threads 不是整数，使用默认值 "
+                         << BackgroundTaskQueue::kDefaultWorkerThreads;
+            }
+        }
+        const int workerThreads = std::clamp(requestedWorkerThreads, 2, 64);
+        if (workerThreads != requestedWorkerThreads) {
+            LOG_WARN << "[后台任务队列] background_task_threads="
+                     << requestedWorkerThreads << " 超出 2-64 范围，已调整为 "
+                     << workerThreads;
+        }
+        BackgroundTaskQueue::instance().start(static_cast<size_t>(workerThreads));
+
         BackgroundTaskQueue::instance().enqueue("init", []{
             LOG_INFO << "[启动] 后台初始化任务开始";
 

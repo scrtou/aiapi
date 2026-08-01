@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_normalize_tool_args.cpp
     test_sinks.cpp
     test_generation_service_emit.cpp
+    test_chayns_model_catalog.cpp
 )
 
 # 需要链接的项目源文件（用于测试）
@@ -41,6 +42,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesSseSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiFactory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsModelCatalog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
 )
 

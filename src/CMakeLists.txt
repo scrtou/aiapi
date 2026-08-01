@@ -29,6 +29,7 @@ add_executable(${PROJECT_NAME}
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
+    apipoint/chaynsapi/ChaynsModelCatalog.cpp
     apipoint/nexosapi/nexosapi.cpp
     apipoint/openai/OpenAiProvider.cpp
     apipoint/retoolapi/retoolapi.cpp

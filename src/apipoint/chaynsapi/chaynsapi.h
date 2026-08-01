@@ -9,12 +9,15 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
+#include <chrono>
+#include <shared_mutex>
+#include "ChaynsModelCatalog.h"
+#include "ChaynsPollingPolicy.h"
 
 using std::list;
 using std::map;
 using std::string;
 
-const int MAX_RETRIES = 6000;  // 轮询最大重试次数
 const int BASE_DELAY = 100;  // 轮询重试间隔（毫秒）
 const int CONSECUTIVE_FAILS_BEFORE_SWITCH = 3;  // 连续失败n次后换账号
 const int MAX_UPSTREAM_RETRIES = 4;  // 上游最大总重试次数（外层循环，每次创建新线程或换账号）
@@ -40,10 +43,14 @@ class chaynsapi:public APIinterface
 
     private:
         DEClARE_RUNTIME(chaynsapi);
-        map<string,Json::Value> modelInfoMap; // key=模型名称，value=模型详情
-        Json::Value model_info_openai_format; // OpenAI 兼容格式的模型列表
+        chayns::ModelCatalog m_modelCatalog;
+        mutable std::shared_mutex m_modelCatalogMutex;
+        std::mutex m_modelRefreshMutex;
+        std::chrono::steady_clock::time_point m_modelsLoadedAt{};
+        std::chrono::steady_clock::time_point m_lastModelRefreshAttempt{};
 
-        void loadModels();
+        bool loadModels(bool forceRefresh = false);
+        bool findModel(const std::string& modelName, chayns::ModelDescriptor& model) const;
         bool checkAlivableToken(string token);
         // 上传图片到图片服务，返回上传后的 URL
         std::string uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken);
@@ -55,6 +62,7 @@ class chaynsapi:public APIinterface
         std::string threadId;
         std::string userAuthorId; // Bot在该线程中的AuthorID，用于轮询时过滤
         std::string accountUserName; // 创建该线程时使用的账户userName，用于后续请求使用相同账户
+        std::string modelId; // 创建线程时所选模型，防止续聊时错误复用其它模型的线程
     };
 
 

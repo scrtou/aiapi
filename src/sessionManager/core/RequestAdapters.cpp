@@ -1,8 +1,59 @@
 #include "sessionManager/core/RequestAdapters.h"
 #include <tools/ZeroWidthEncoder.h>
 #include <drogon/drogon.h>
+#include <drogon/utils/Utilities.h>
+#include <algorithm>
+#include <cctype>
+#include <iterator>
 
 using namespace drogon;
+
+namespace {
+
+constexpr std::size_t kMaxRequestIdLength = 128;
+
+std::string normalizeIncomingRequestId(const std::string& value)
+{
+    auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    });
+    auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    }).base();
+    if (begin >= end) {
+        return "";
+    }
+
+    std::string normalized;
+    normalized.reserve(std::min<std::size_t>(
+        static_cast<std::size_t>(std::distance(begin, end)),
+        kMaxRequestIdLength));
+    for (auto it = begin; it != end && normalized.size() < kMaxRequestIdLength; ++it) {
+        const unsigned char ch = static_cast<unsigned char>(*it);
+        if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ':') {
+            normalized.push_back(static_cast<char>(ch));
+        } else {
+            // Keep correlation semantics while preventing control characters or
+            // arbitrary header content from being injected into diagnostic logs.
+            normalized.push_back('_');
+        }
+    }
+    return normalized;
+}
+
+std::string requestIdFromHeaders(const HttpRequestPtr& req)
+{
+    std::string requestId = normalizeIncomingRequestId(req->getHeader("x-request-id"));
+    if (requestId.empty()) {
+        requestId = normalizeIncomingRequestId(req->getHeader("x-correlation-id"));
+    }
+    if (requestId.empty()) {
+        requestId = "req_" + drogon::utils::getUuid();
+    }
+    return requestId;
+}
+
+}  // namespace
 
 GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     const HttpRequestPtr& req
@@ -11,6 +62,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     
     GenerationRequest genReq;
     genReq.endpointType = EndpointType::ChatCompletions;
+    genReq.requestId = requestIdFromHeaders(req);
     
     auto jsonPtr = req->getJsonObject();
     if (!jsonPtr) {
@@ -109,6 +161,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     
     GenerationRequest genReq;
     genReq.endpointType = EndpointType::Responses;
+    genReq.requestId = requestIdFromHeaders(req);
     
     auto jsonPtr = req->getJsonObject();
     if (!jsonPtr) {

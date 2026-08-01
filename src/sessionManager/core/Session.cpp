@@ -88,6 +88,7 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     // 更新 API 类型和相关标记
     stored.state.apiType = session.state.apiType;
     stored.state.hasPreviousResponseId = session.state.hasPreviousResponseId;
+    stored.state.requestId = session.state.requestId;
     
     // 关键约束：在 Response API 的续聊请求中，`session.state.conversationId` 属于当前请求临时新值，
     // 而 `stored.state.conversationId` 必须保持稳定，并与 session_map 的键一致。

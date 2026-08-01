@@ -17,6 +17,7 @@
 #include <metrics/ErrorStatsService.h>
 #include <metrics/ErrorEvent.h>
 #include <drogon/drogon.h>
+#include <drogon/utils/Utilities.h>
 #include <iomanip>
 #include <random>
 #include <sstream>
@@ -73,6 +74,9 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
     session.request.toolsRaw = req.tools;       // 保留原始工具定义（用于工具桥接场景下的兜底解析）
     session.request.toolChoice = req.toolChoice; // 传递工具选择策略
     session.request.rawMessage = req.currentInput; // 保留原始输入（工具桥接注入前）
+    session.state.requestId = req.requestId.empty()
+        ? ("req_" + drogon::utils::getUuid())
+        : req.requestId;
     session.state.lastActiveAt = time(nullptr);
     session.state.createdAt = time(nullptr);
     
@@ -332,7 +336,11 @@ std::optional<AppError> GenerationService::runGuarded(
              << " 会话ID=" << decision.sessionId
              << (decision.debug.empty() ? "" : (" 调试信息=" + decision.debug));
 
+    const std::string currentRequestId = session.state.requestId;
     sessionManager.getOrCreateSession(decision.sessionId, session);
+    // Session continuation restores persisted state. requestId is request
+    // scoped and must never be inherited from the previous turn.
+    session.state.requestId = currentRequestId;
 
     LOG_INFO << "[生成服务] 会话 " << (session.state.isContinuation ? "续接" : "新建")
              << ", 会话ID: " << session.state.conversationId

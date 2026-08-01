@@ -79,7 +79,7 @@ void RetoolWorkspaceController::createWorkspace(
         auto workspace = RetoolWorkspaceService::getInstance().provisionWorkspace(*jsonPtr);
         Json::Value response(Json::objectValue);
         response["status"] = "success";
-        response["workspace"] = workspace.toJson(false);
+        response["workspace"] = workspace.toJson(true);
         ctl::sendJson(callback, response, k200OK);
     }
     catch (const std::exception& ex)
@@ -126,7 +126,7 @@ void RetoolWorkspaceController::upsertWorkspace(
 
     Json::Value response(Json::objectValue);
     response["status"] = "success";
-    response["workspace"] = info.toJson(false);
+    response["workspace"] = info.toJson(true);
     ctl::sendJson(callback, response, k200OK);
 }
 
@@ -150,7 +150,7 @@ void RetoolWorkspaceController::workspaceInfo(
     }
 
     Json::Value response(Json::objectValue);
-    response["workspace"] = workspace->toJson(false);
+    response["workspace"] = workspace->toJson(true);
     auto executionContext = ManagedAccountService::getInstance().buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, *workspaceId, nullptr);
     response["hasExecutionContext"] = executionContext.has_value();

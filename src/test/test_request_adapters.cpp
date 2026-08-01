@@ -51,6 +51,7 @@ DROGON_TEST(RequestAdapters_Chat_BasicFields)
     CHECK(genReq.currentInput.find("hello") != std::string::npos);
     CHECK(genReq.clientInfo["client_type"].asString() == "Kilo-Code");
     CHECK(genReq.clientInfo["client_authorization"].asString() == "test-key");
+    CHECK(genReq.requestId.rfind("req_", 0) == 0);
 }
 
 DROGON_TEST(RequestAdapters_Chat_ContentArrayWithImage)
@@ -138,6 +139,25 @@ DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
     CHECK(genReq.previousResponseId.has_value());
     CHECK(*genReq.previousResponseId == "resp_123");
     CHECK(genReq.clientInfo["client_type"].asString() == "RooCode");
+    CHECK(genReq.requestId.rfind("req_", 0) == 0);
+}
+
+DROGON_TEST(RequestAdapters_RequestIdHeaders)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["messages"] = Json::Value(Json::arrayValue);
+
+    auto requestWithBoth = makeJsonRequest(body);
+    requestWithBoth->addHeader("x-request-id", "client-request-123");
+    requestWithBoth->addHeader("x-correlation-id", "correlation-ignored");
+    const auto chatReq = RequestAdapters::buildGenerationRequestFromChat(requestWithBoth);
+    CHECK(chatReq.requestId == "client-request-123");
+
+    auto correlationOnly = makeJsonRequest(body);
+    correlationOnly->addHeader("x-correlation-id", "corr:456");
+    const auto responsesReq = RequestAdapters::buildGenerationRequestFromResponses(correlationOnly);
+    CHECK(responsesReq.requestId == "corr:456");
 }
 
 DROGON_TEST(RequestAdapters_Responses_InputItems)

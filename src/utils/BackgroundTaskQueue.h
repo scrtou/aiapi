@@ -25,6 +25,8 @@
 class BackgroundTaskQueue
 {
 public:
+    static constexpr size_t kDefaultWorkerThreads = 8;
+
     static BackgroundTaskQueue& instance()
     {
         static BackgroundTaskQueue inst;
@@ -32,7 +34,7 @@ public:
     }
 
     // / 初始化工作线程（如未手动调用，en队列 时会自动初始化）
-    void start(size_t numThreads = 2)
+    void start(size_t numThreads = kDefaultWorkerThreads)
     {
         std::lock_guard<std::mutex> lk(mu_);
         if (started_) return;
@@ -53,10 +55,11 @@ public:
                 // 自动启动
                 started_ = true;
                 stopping_ = false;
-                for (size_t i = 0; i < 2; ++i) {
+                for (size_t i = 0; i < kDefaultWorkerThreads; ++i) {
                     workers_.emplace_back([this, i]() { workerLoop(i); });
                 }
-                LOG_INFO << "[后台任务队列] 自动启动 2 个工作线程";
+                LOG_INFO << "[后台任务队列] 自动启动 "
+                         << kDefaultWorkerThreads << " 个工作线程";
             }
             if (stopping_) {
                 LOG_WARN << "[后台任务队列] 已停机，忽略任务：" << name;

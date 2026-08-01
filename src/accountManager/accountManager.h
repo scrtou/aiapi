@@ -106,6 +106,12 @@ struct AccountAutomationSettings
     int deleteAfterDays = 6;
     bool autoRegisterEnabled = true;
 };
+
+enum class AccountRequirement
+{
+    AnyValid,
+    ProOnly
+};
 //定义函数指针
 
 class AccountManager
@@ -155,6 +161,10 @@ class AccountManager
     bool updateAccount(Accountinfo_st accountinfo);
     bool deleteAccountbyPost(string apiName,string userName);
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType = "");
+    bool getEligibleAccount(const string& apiName,
+                            shared_ptr<Accountinfo_st>& account,
+                            AccountRequirement requirement,
+                            const set<string>& excludedUsers = {});
     void getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account);
     void checkAccount();
     void checkToken();

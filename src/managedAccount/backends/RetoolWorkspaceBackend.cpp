@@ -14,7 +14,7 @@ std::vector<ManagedAccountRecord> RetoolWorkspaceBackend::list()
         record.provider = "retool";
         record.displayName = item.baseUrl.empty() ? item.email : item.baseUrl;
         record.status = item.status;
-        record.metadata = item.toJson(false);
+        record.metadata = item.toJson(true);
         records.push_back(record);
     }
     return records;
@@ -34,7 +34,7 @@ std::optional<ManagedAccountRecord> RetoolWorkspaceBackend::get(const std::strin
     record.provider = "retool";
     record.displayName = workspace->baseUrl.empty() ? workspace->email : workspace->baseUrl;
     record.status = workspace->status;
-    record.metadata = workspace->toJson(false);
+    record.metadata = workspace->toJson(true);
     return record;
 }
 
