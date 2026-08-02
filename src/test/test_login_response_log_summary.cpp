@@ -50,3 +50,32 @@ DROGON_TEST(LoginResponseLogSummary_RedactsUntrustedErrorValues)
     CHECK(summary.find("token-value-should-not-be-logged") == std::string::npos);
     CHECK(summary.find("password=should-not-be-logged") == std::string::npos);
 }
+
+DROGON_TEST(LoginResponseLogSummary_WorkflowEnvelopeOmitsCredentials)
+{
+    Json::Value workflow(Json::objectValue);
+    workflow["success"] = true;
+    workflow["data"]["task"]["status"] = "failed";
+    workflow["data"]["task"]["state"] = "create_account";
+    workflow["data"]["result"]["registration"]["account"]["email"] =
+        "account-should-not-be-logged@example.test";
+    workflow["data"]["result"]["registration"]["account"]["password"] =
+        "password-should-not-be-logged";
+    workflow["data"]["result"]["login"]["session"]["access_token"] =
+        "token-should-not-be-logged";
+    workflow["data"]["error"]["code"] = "MAIL_CREATE_FAILED";
+    workflow["data"]["error"]["message"] = "secret response should not be logged";
+
+    const auto summary = account_logging::summarizeWorkflowEnvelope(workflow);
+
+    CHECK(summary.find("envelopeSuccess=true") != std::string::npos);
+    CHECK(summary.find("taskPresent=true") != std::string::npos);
+    CHECK(summary.find("taskStatus=failed") != std::string::npos);
+    CHECK(summary.find("taskState=create_account") != std::string::npos);
+    CHECK(summary.find("resultPresent=true") != std::string::npos);
+    CHECK(summary.find("errorCode=MAIL_CREATE_FAILED") != std::string::npos);
+    CHECK(summary.find("account-should-not-be-logged@example.test") == std::string::npos);
+    CHECK(summary.find("password-should-not-be-logged") == std::string::npos);
+    CHECK(summary.find("token-should-not-be-logged") == std::string::npos);
+    CHECK(summary.find("secret response should not be logged") == std::string::npos);
+}

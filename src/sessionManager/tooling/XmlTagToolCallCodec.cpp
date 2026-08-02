@@ -985,8 +985,10 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
             }
 
             if (!ok) {
-                LOG_WARN << "[XML工具调用编解码器] args_json 解析 失败 ="
-                         << currentContext_.toolName << ": " << errors;
+                LOG_WARN << "[XML工具调用编解码器] args_json 解析失败: tool="
+                         << currentContext_.toolName
+                         << ", parseErrorPresent=" << !errors.empty()
+                         << ", parseErrorSize=" << errors.size();
             } else if (!parsed.isObject()) {
                 LOG_WARN << "[XML工具调用编解码器] args_json 已解析 ="
                          << currentContext_.toolName;

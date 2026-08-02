@@ -99,6 +99,45 @@ inline std::string summarizeLoginError(const Json::Value& envelope)
            ", errorMessageSize=" + std::to_string(messageSize);
 }
 
+// Workflow task state is useful for operations diagnostics, but it arrives
+// from a downstream service and must not be copied to the application log
+// verbatim.  Keep only a small, machine-readable identifier alphabet.
+inline std::string safeWorkflowField(const Json::Value& value)
+{
+    if (!value.isString() || value.asString().empty()) {
+        return "<absent>";
+    }
+
+    const std::string field = value.asString();
+    const bool isSafe = field.size() <= 64 &&
+        std::all_of(field.begin(), field.end(), [](unsigned char character) {
+            return std::islower(character) || std::isdigit(character) ||
+                   character == '_' || character == '-';
+        });
+    return isSafe ? field : "<redacted>";
+}
+
+// A workflow result may contain registered-account credentials, email
+// verification links, cookies, and access tokens.  Report only its envelope
+// shape and the bounded task identifiers needed to diagnose control flow.
+inline std::string summarizeWorkflowEnvelope(const Json::Value& envelope)
+{
+    const auto& data = envelope["data"];
+    const auto& task = data["task"];
+    const auto& error = data["error"];
+
+    std::string summary = "envelopeSuccess=" +
+        std::string(boolText(envelope.get("success", false).asBool()));
+    summary += ", dataPresent=" + std::string(boolText(data.isObject()));
+    summary += ", taskPresent=" + std::string(boolText(task.isObject()));
+    summary += ", taskStatus=" + safeWorkflowField(task["status"]);
+    summary += ", taskState=" + safeWorkflowField(task["state"]);
+    summary += ", resultPresent=" + std::string(boolText(data["result"].isObject()));
+    summary += ", errorPresent=" + std::string(boolText(error.isObject()));
+    summary += ", errorCode=" + safeErrorCode(error);
+    return summary;
+}
+
 inline std::string summarizeParseError(const std::string& parseError)
 {
     return "parseErrorPresent=" + std::string(boolText(!parseError.empty())) +

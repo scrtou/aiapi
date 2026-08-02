@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_forced_tool_call.cpp
     test_normalize_tool_args.cpp
     test_sinks.cpp
+    test_io_loop_response_stream.cpp
     test_generation_service_emit.cpp
     test_chayns_model_catalog.cpp
     test_nexos_user_agent.cpp

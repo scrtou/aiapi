@@ -396,7 +396,11 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
 }
 
 void ResponsesSseSink::handleError(const generation::Error& event) {
-    LOG_ERROR << "[响应SSE] 错误：" << event.message;
+    LOG_ERROR << "[响应SSE] 错误: code=" << generation::errorCodeToString(event.code)
+              << ", messagePresent=" << !event.message.empty()
+              << ", messageSize=" << event.message.size()
+              << ", detailPresent=" << !event.detail.empty()
+              << ", detailSize=" << event.detail.size();
     
     Json::Value error;
     error["type"] = generation::errorCodeToString(event.code);

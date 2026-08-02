@@ -769,9 +769,12 @@ Json::Value chatSession::generateJsonbySession(const session_st& session,bool co
      keyData["messages"] = messages;
      keyData["clientInfo"] = session.provider.clientInfo;
      keyData["model"] = session.request.model;
-     Json::StreamWriterBuilder writer;
-     writer["emitUTF8"] = true;  // 确保输出UTF-8编码
-     LOG_INFO << "生成ConversationId使用的数据: " << Json::writeString(writer,keyData);
+     // Context includes the user's prompt, conversation history, and may
+     // include image URLs.  It is used as hash input but must never be copied
+     // verbatim to application logs.
+     LOG_INFO << "生成 ConversationId 输入摘要: messageCount=" << messages.size()
+              << ", clientInfoPresent=" << session.provider.clientInfo.isObject()
+              << ", modelPresent=" << !session.request.model.empty();
      return keyData;
 }
 

@@ -946,15 +946,12 @@ void GenerationService::parseXmlToolCalls(
                 
             case toolcall::EventType::Error:
                 // 解析错误：记录日志但不中断处理
-                LOG_WARN << "[生成服务] 解析错误: " << event.errorMessage
-                         << " (输入长度=" << xmlInput.size() << ")";
-                {
-                    // 输出 XML 尾部用于调试
-                    const size_t kTail = 320;
-                    const std::string tail =
-                        xmlInput.size() > kTail ? xmlInput.substr(xmlInput.size() - kTail) : xmlInput;
-                    LOG_DEBUG << "[生成服务] 输入尾部片段（已截断）: " << tail;
-                }
+                // XML and parser text can contain model output, tool args, or
+                // user-controlled strings.  Preserve only bounded metadata.
+                LOG_WARN << "[生成服务] 工具调用解析错误: errorPresent="
+                         << !event.errorMessage.empty()
+                         << ", errorSize=" << event.errorMessage.size()
+                         << ", inputLength=" << xmlInput.size();
                 break;
         }
     }

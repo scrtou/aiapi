@@ -17,6 +17,7 @@
 #include <sessionManager/core/RequestAdapters.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <utils/BackgroundTaskQueue.h>
+#include <utils/IoLoopResponseStream.h>
 #include "ControllerUtils.h"
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ChatJsonSink.h>
@@ -212,16 +213,18 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
                 return;
             }
 
-            auto sharedStream = std::shared_ptr<ResponseStream>(stream.release());
-            BackgroundTaskQueue::instance().enqueue("chat_stream_generation", [sharedStream, genReq]() mutable {
+            auto streamBridge = IoLoopResponseStream::create(std::move(stream));
+            if (!streamBridge) {
+                LOG_WARN << "[AI接口控制器] 无法绑定聊天流到当前 IO 事件循环";
+                return;
+            }
+            BackgroundTaskQueue::instance().enqueue("chat_stream_generation", [streamBridge, genReq]() mutable {
                 ChatSseSink sseSink(
-                    [sharedStream](const std::string& chunk) {
-                        return sharedStream && sharedStream->send(chunk);
+                    [streamBridge](const std::string& chunk) {
+                        return streamBridge->send(chunk);
                     },
-                    [sharedStream]() {
-                        if (sharedStream) {
-                            sharedStream->close();
-                        }
+                    [streamBridge]() {
+                        streamBridge->close();
                     },
                     genReq.model
                 );
@@ -366,19 +369,21 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
                 return;
             }
 
-            auto sharedStream = std::shared_ptr<ResponseStream>(stream.release());
+            auto streamBridge = IoLoopResponseStream::create(std::move(stream));
+            if (!streamBridge) {
+                LOG_WARN << "[AI接口控制器] 无法绑定 Responses 流到当前 IO 事件循环";
+                return;
+            }
             BackgroundTaskQueue::instance().enqueue(
                 "responses_stream_generation",
-                [sharedStream, genReq, nativeResponsesToolItems]() mutable {
+                [streamBridge, genReq, nativeResponsesToolItems]() mutable {
                     CollectorSink collector;
                     ResponsesSseSink sseSink(
-                        [sharedStream](const std::string& chunk) {
-                            return sharedStream && sharedStream->send(chunk);
+                        [streamBridge](const std::string& chunk) {
+                            return streamBridge->send(chunk);
                         },
-                        [sharedStream]() {
-                            if (sharedStream) {
-                                sharedStream->close();
-                            }
+                        [streamBridge]() {
+                            streamBridge->close();
                         },
                         genReq.model,
                         nativeResponsesToolItems

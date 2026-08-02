@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
+#include <string>
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 
@@ -27,6 +28,19 @@ void setChaynsSessionError(session_st& session,
     session.response.message["error"] = message;
     session.response.message["errorCode"] = code;
     session.response.message["statusCode"] = statusCode;
+}
+
+// Upstream bodies may carry conversation content, identifiers, cookies, or
+// error details.  Logging only transport metadata keeps failure diagnostics
+// useful without duplicating that sensitive data into aiapi.log.
+std::string summarizeUpstreamResponse(const HttpResponsePtr& response)
+{
+    if (!response) {
+        return "responsePresent=false";
+    }
+    return "responsePresent=true, status=" +
+           std::to_string(static_cast<int>(response->statusCode())) +
+           ", bodySize=" + std::to_string(response->getBody().size());
 }
 
 }  // namespace
@@ -61,11 +75,11 @@ void chaynsapi::init()
 
 std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken)
 {
-    LOG_INFO << "[chaynsAPI] 正在上传图片到图片服务，personId：" << personId;
+    LOG_INFO << "[chaynsAPI] 正在上传图片到图片服务，personIdPresent=" << !personId.empty();
     
     // 如果已经有 URL，直接返回
     if (!image.uploadedUrl.empty()) {
-        LOG_INFO << "[chaynsAPI] 图片已有URL：" << image.uploadedUrl;
+        LOG_INFO << "[chaynsAPI] 图片已有已上传 URL，urlPresent=true";
         return image.uploadedUrl;
     }
     
@@ -125,7 +139,7 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
     }
     
     if (response->statusCode() != k200OK && response->statusCode() != k201Created) {
-        LOG_ERROR << "[chaynsAPI] 上传图片失败： 状态码" << response->statusCode() << " 响应: " << response->getBody();
+        LOG_ERROR << "[chaynsAPI] 上传图片失败： " << summarizeUpstreamResponse(response);
         return "";
     }
     
@@ -141,7 +155,7 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
         std::string baseDomain = (*jsonResp)["baseDomain"].asString();
         std::string imagePath = (*jsonResp)["image"]["path"].asString();
         std::string imageUrl = baseDomain + imagePath;
-        LOG_INFO << "[chaynsAPI] 图片上传成功：" << imageUrl;
+        LOG_INFO << "[chaynsAPI] 图片上传成功：urlPresent=true";
         return imageUrl;
     }
     
@@ -332,15 +346,18 @@ void chaynsapi::postChatMessage(session_st& session)
                 if (jsonResp) {
                     if (jsonResp->isMember("personId")) {
                         accountinfo->personId = (*jsonResp)["personId"].asString();
-                        LOG_INFO << "[chaynsAPI] 成功获取personId：" << accountinfo->personId;
+                        LOG_INFO << "[chaynsAPI] 成功获取 personId：personIdPresent=true";
                     } else {
-                        LOG_ERROR << "[chaynsAPI] 用户设置响应JSON中未找到personId，响应：" << response->getBody();
+                        LOG_ERROR << "[chaynsAPI] 用户设置响应JSON中未找到 personId，"
+                                  << summarizeUpstreamResponse(response);
                     }
                 } else {
-                    LOG_ERROR << "[chaynsAPI] 解析用户设置响应为JSON对象失败，响应：" << response->getBody();
+                    LOG_ERROR << "[chaynsAPI] 解析用户设置响应为JSON对象失败，"
+                              << summarizeUpstreamResponse(response);
                 }
             } else {
-                LOG_ERROR << "[chaynsAPI] 获取用户设置失败，状态码：" << (response ? response->statusCode() : 0) << ", 响应: " << (response ? std::string(response->getBody()) : "无响应");
+                LOG_ERROR << "[chaynsAPI] 获取用户设置失败，"
+                          << summarizeUpstreamResponse(response);
             }
         }
         
@@ -384,8 +401,8 @@ void chaynsapi::postChatMessage(session_st& session)
             threadId = continuationContext.threadId;
             userAuthorId = continuationContext.userAuthorId;
             isFollowUp = true;
-            LOG_INFO << "[chaynsAPI] 找到现有线程Id：" << threadId
-                     << " (prevProviderKey: " << session.provider.prevProviderKey << ")";
+            LOG_INFO << "[chaynsAPI] 找到现有线程: threadIdPresent=" << !threadId.empty()
+                     << ", previousProviderPresent=" << !session.provider.prevProviderKey.empty();
         } else if (hasContinuationContext && continuationContext.modelId != modelname) {
             LOG_INFO << "[chaynsAPI] 续聊请求模型发生变化，将创建新线程: old="
                      << continuationContext.modelId << ", new=" << modelname;
@@ -402,7 +419,7 @@ void chaynsapi::postChatMessage(session_st& session)
             string messageText = session.request.message;
             
             messageBody["text"] = messageText;
-            LOG_DEBUG << "发送的消息" << messageText;
+            LOG_DEBUG << "[chaynsAPI] 发送后续消息: textLength=" << messageText.size();
             messageBody["cursorPosition"] = messageText.size();
             
             if (!uploadedImageUrls.empty()) {
@@ -422,7 +439,7 @@ void chaynsapi::postChatMessage(session_st& session)
             reqSend->setPath(path);
             reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
             
-            LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程：" << threadId;
+            LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
             
             auto sendResult = client->sendRequest(reqSend);
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
@@ -445,7 +462,8 @@ void chaynsapi::postChatMessage(session_st& session)
                         userAuthorId = sendResponseJson["author"]["id"].asString();
                     }
                 } else {
-                    LOG_ERROR << "[chaynsAPI] 后续消息发送失败，状态码：" << responseSend->statusCode() << ", 响应体: " << responseSend->getBody();
+                    LOG_ERROR << "[chaynsAPI] 后续消息发送失败，"
+                              << summarizeUpstreamResponse(responseSend);
                     sendFailed = true;
                 }
             }
@@ -482,7 +500,8 @@ void chaynsapi::postChatMessage(session_st& session)
             
             Json::Value message;
             message["text"] = full_message;
-            LOG_DEBUG<<"发送的消息"<<full_message;
+            LOG_DEBUG << "[chaynsAPI] 发送新线程消息: textLength=" << full_message.size()
+                      << ", historyPresent=" << !session.provider.messageContext.empty();
             
             if (!uploadedImageUrls.empty()) {
                 Json::Value imagesArray(Json::arrayValue);
@@ -667,7 +686,7 @@ void chaynsapi::postChatMessage(session_st& session)
                                     response_statusCode = 200;
                                     pollFound = true;
                                     LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount << " 次, 成功获取响应";
-                                    LOG_INFO << "[chaynsAPI] 回复内容" << response_message;
+                                    LOG_INFO << "[chaynsAPI] 回复已接收: textLength=" << response_message.size();
                                     break;
                                 }
                             }

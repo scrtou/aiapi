@@ -95,7 +95,9 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             sendDone();
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
-            LOG_ERROR << "[聊天SSE] 错误：" << arg.message;
+            LOG_ERROR << "[聊天SSE] 错误: code=" << generation::errorCodeToString(arg.code)
+                      << ", messagePresent=" << !arg.message.empty()
+                      << ", messageSize=" << arg.message.size();
             // 构建错误响应
             Json::Value errorJson;
             errorJson["error"]["message"] = arg.message;

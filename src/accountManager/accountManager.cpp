@@ -956,13 +956,13 @@ void AccountManager::printAccountPoolMap()
        while(!tempQueue.empty())
        {
             auto account = tempQueue.top();
-            LOG_INFO << "[账户管理] 用户名: " << account->userName;
-            LOG_INFO << "[账户管理] 密码: " << account->passwd;
+            LOG_INFO << "[账户管理] 账户摘要: userNamePresent=" << !account->userName.empty()
+                     << ", passwordPresent=" << !account->passwd.empty();
             LOG_INFO << "[账户管理] Token状态: " << account->tokenStatus;
             LOG_INFO << "[账户管理] 账户状态: " << account->accountStatus;
-            LOG_INFO << "[账户管理] 用户TobitId: " << account->userTobitId;
+            LOG_INFO << "[账户管理] 用户 TobitId 已提供=" << (account->userTobitId != 0);
             LOG_INFO << "[账户管理] 使用次数: " << account->useCount;
-            LOG_INFO << "[账户管理] 认证Token: " << account->authToken;
+            LOG_INFO << "[账户管理] 认证 Token 已提供=" << !account->authToken.empty();
             LOG_INFO << "[账户管理] --------------------------------"; 
             tempQueue.pop();
        }
@@ -1913,7 +1913,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
         Json::Value detailJson;
         errs.clear();
         if (!parseJsonBody(detailBody, detailJson, errs)) {
-            LOG_WARN << "[自动注册] 解析 workflow 详情失败: " << errs;
+            LOG_WARN << "[自动注册] 解析 workflow 详情失败: "
+                     << account_logging::summarizeLoginTransport(
+                            static_cast<int>(detailResponse->getStatusCode()),
+                            detailResponse->getHeader("content-type"),
+                            detailBody.size())
+                     << ", " << account_logging::summarizeParseError(errs);
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
@@ -1927,7 +1932,10 @@ bool AccountManager::autoRegisterAccount(string apiName)
         string state = detailJson["data"]["task"].get("state", "").asString();
         finalWorkflowStatus = status;
         finalWorkflowState = state;
-        LOG_INFO << "[自动注册] workflow 状态: status=" << status << ", state=" << state;
+        LOG_INFO << "[自动注册] workflow 状态: status="
+                 << account_logging::safeWorkflowField(detailJson["data"]["task"]["status"])
+                 << ", state="
+                 << account_logging::safeWorkflowField(detailJson["data"]["task"]["state"]);
         if (status == "succeeded") {
             workflowSucceeded = true;
             workflowReachedTerminalState = true;
@@ -1942,11 +1950,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
     if (!workflowSucceeded) {
         if (!workflowReachedTerminalState && !finalWorkflowStatus.empty()) {
-            LOG_ERROR << "[自动注册] workflow 等待超时，最后状态: status=" << finalWorkflowStatus
-                      << ", state=" << finalWorkflowState
+            LOG_ERROR << "[自动注册] workflow 等待超时，最后状态已接收: statusPresent=true"
+                      << ", statePresent=" << (!finalWorkflowState.empty())
                       << ", 已等待约 " << (kWorkflowPollAttempts * 3) << " 秒";
         }
-        LOG_ERROR << "[自动注册] workflow 未成功完成: " << workflowDetail.toStyledString();
+        LOG_ERROR << "[自动注册] workflow 未成功完成: "
+                  << account_logging::summarizeWorkflowEnvelope(workflowDetail);
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
         return false;
@@ -1984,13 +1993,17 @@ bool AccountManager::autoRegisterAccount(string apiName)
     }
 
     if (email.empty() || personid.empty() || token.empty()) {
-        LOG_ERROR << "[自动注册] workflow 结果缺少关键字段: " << workflowDetail.toStyledString();
+        LOG_ERROR << "[自动注册] workflow 结果缺少关键字段: "
+                  << account_logging::summarizeWorkflowEnvelope(workflowDetail)
+                  << ", emailPresent=" << (!email.empty())
+                  << ", identityPresent=" << (!personid.empty())
+                  << ", sessionCredentialPresent=" << (!token.empty());
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
         return false;
     }
 
-    LOG_INFO << "[自动注册] 注册成功: " << email;
+    LOG_INFO << "[自动注册] 注册成功: emailPresent=true";
     
     string createTime = trantor::Date::now().toDbStringLocal();
     string accountType = hasProAccess ? "pro" : "free";
@@ -1999,7 +2012,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     Accountinfo_st newAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
     
     if (accountDbManager->activateAccount(waitingId, newAccount)) {
-        LOG_INFO << "[自动注册] 账号激活成功: " << email;
+        LOG_INFO << "[自动注册] 账号激活成功: emailPresent=true";
         addAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
         
         // 自动注册账号后，检查并更新该账号的 accountType
@@ -2012,7 +2025,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
             }
         }
         if (newAccountPtr) {
-            LOG_INFO << "[自动注册] 检查账号类型: " << email;
+            LOG_INFO << "[自动注册] 检查账号类型: emailPresent=true";
             updateAccountType(newAccountPtr);
         }
     } else {
