@@ -43,6 +43,31 @@ std::string inferProviderFromPath(const HttpRequestPtr& req)
     return "chaynsapi";
 }
 
+void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
+{
+    if (!req) {
+        LOG_DEBUG << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+                  << ", requestPresent=false";
+        return;
+    }
+
+    const auto& body = req->getBody();
+    const auto contentType = req->getHeader("content-type");
+    const auto authorization = req->getHeader("authorization");
+    const auto cookie = req->getHeader("cookie");
+    const char* contentTypeKind = contentType.empty() ? "absent" :
+        (contentType.find("application/json") != std::string::npos ? "json" : "other");
+    LOG_DEBUG << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+              << ", method=" << req->methodString()
+              << ", path=" << req->path()
+              << ", bodyPresent=" << (!body.empty())
+              << ", bodySize=" << body.size()
+              << ", contentTypePresent=" << (!contentType.empty())
+              << ", contentTypeKind=" << contentTypeKind
+              << ", authorizationPresent=" << (!authorization.empty())
+              << ", cookiePresent=" << (!cookie.empty());
+}
+
 generation::ErrorCode toGenerationErrorCode(error::ErrorCode code)
 {
     switch (code) {
@@ -114,12 +139,7 @@ private:
 void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     LOG_INFO << "[AI接口控制器] 收到聊天补全请求";
-    LOG_DEBUG<<"请求头：";
-    for(auto &header : req->getHeaders())
-    {
-        LOG_DEBUG<<header.first<<":"<<header.second;
-    }
-    LOG_DEBUG<<"请求体："<<req->getBody();
+    logSafeRequestMetadata(req, "chat.completions");
 
     std::shared_ptr<Json::Value> jsonPtr;
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
@@ -270,30 +290,25 @@ void AiApiController::nexosAccountQuota(const HttpRequestPtr &req, std::function
 void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     LOG_INFO << "[AI接口控制器] 收到 Responses 创建请求";
-    
-    LOG_DEBUG << "请求头：";
-    for(auto &header : req->getHeaders()) {
-        LOG_DEBUG << header.first << ":" << header.second;
-    }
-    LOG_DEBUG << "请求体：" << req->getBody();
+    logSafeRequestMetadata(req, "responses.create");
 
     std::shared_ptr<Json::Value> jsonPtr;
     if (!ctl::parseJsonOrError(req, callback, jsonPtr, "invalid_json", "Invalid JSON in request body")) return;
-    
+
     auto& reqBody = *jsonPtr;
     const bool stream = reqBody.get("stream", false).asBool();
 
-    // 通过 RequestAdapters 构建 GenerationRequest
     LOG_DEBUG << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
     genReq.provider = inferProviderFromPath(req);
-
+    const bool nativeResponsesToolItems =
+        genReq.clientInfo.isObject() &&
+        genReq.clientInfo.get("client_type", "").asString() == "Codex";
 
     if (genReq.currentInput.empty() && genReq.messages.empty()) {
         ctl::sendError(callback, k400BadRequest, "missing_input", "Input cannot be empty");
         return;
     }
-
 
     if (!stream) {
         LOG_INFO << "[AI接口控制器] 执行 GenerationService::runGuarded（非流式 Responses）";
@@ -312,7 +327,8 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
                 httpStatus = status;
             },
             genReq.model,
-            static_cast<int>(genReq.currentInput.length() / 4)
+            static_cast<int>(genReq.currentInput.length() / 4),
+            nativeResponsesToolItems
         );
 
         GenerationService genService;
@@ -337,72 +353,75 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
         } else {
             ctl::sendError(callback, k500InternalServerError, "internal_error", "Failed to generate response");
         }
-
         return;
     }
 
-    // 流式 Responses：通过 ResponsesSseSink 输出事件流
-    LOG_INFO << "[AI接口控制器] Responses 进入流式响应模式";
+    LOG_INFO << "[AI接口控制器] Responses 进入流式响应模式"
+             << ", nativeToolItems=" << nativeResponsesToolItems;
 
     auto resp = HttpResponse::newAsyncStreamResponse(
-        [genReq](ResponseStreamPtr stream) mutable {
+        [genReq, nativeResponsesToolItems](ResponseStreamPtr stream) mutable {
             if (!stream) {
                 LOG_WARN << "[AI接口控制器] Responses 流对象为空，终止处理";
                 return;
             }
 
             auto sharedStream = std::shared_ptr<ResponseStream>(stream.release());
-            BackgroundTaskQueue::instance().enqueue("responses_stream_generation", [sharedStream, genReq]() mutable {
-                CollectorSink collector;
-                ResponsesSseSink sseSink(
-                    [sharedStream](const std::string& chunk) {
-                        return sharedStream && sharedStream->send(chunk);
-                    },
-                    [sharedStream]() {
-                        if (sharedStream) {
-                            sharedStream->close();
+            BackgroundTaskQueue::instance().enqueue(
+                "responses_stream_generation",
+                [sharedStream, genReq, nativeResponsesToolItems]() mutable {
+                    CollectorSink collector;
+                    ResponsesSseSink sseSink(
+                        [sharedStream](const std::string& chunk) {
+                            return sharedStream && sharedStream->send(chunk);
+                        },
+                        [sharedStream]() {
+                            if (sharedStream) {
+                                sharedStream->close();
+                            }
+                        },
+                        genReq.model,
+                        nativeResponsesToolItems
+                    );
+
+                    FanoutSink fanout(sseSink, collector);
+                    GenerationService genService;
+                    auto runErr = genService.runGuarded(
+                        genReq,
+                        fanout,
+                        session::ConcurrencyPolicy::RejectConcurrent
+                    );
+
+                    if (runErr.has_value()) {
+                        if (sseSink.isValid()) {
+                            emitAppErrorToSink(*runErr, sseSink);
+                            sseSink.onClose();
                         }
-                    },
-                    genReq.model
-                );
-
-                FanoutSink fanout(sseSink, collector);
-
-                GenerationService genService;
-                auto runErr = genService.runGuarded(
-                    genReq,
-                    fanout,
-                    session::ConcurrencyPolicy::RejectConcurrent
-                );
-
-                if (runErr.has_value()) {
-                    if (sseSink.isValid()) {
-                        emitAppErrorToSink(*runErr, sseSink);
-                        sseSink.onClose();
+                        return;
                     }
-                    return;
-                }
 
-                Json::Value builtResponse;
-                int builtStatus = 200;
-                ResponsesJsonSink jsonBuilder(
-                    [&builtResponse, &builtStatus](const Json::Value& resp, int status) {
-                        builtResponse = resp;
-                        builtStatus = status;
-                    },
-                    genReq.model,
-                    static_cast<int>(genReq.currentInput.length() / 4)
-                );
-                for (const auto& ev : collector.getEvents()) {
-                    jsonBuilder.onEvent(ev);
-                }
-                jsonBuilder.onClose();
+                    Json::Value builtResponse;
+                    int builtStatus = 200;
+                    ResponsesJsonSink jsonBuilder(
+                        [&builtResponse, &builtStatus](const Json::Value& built, int status) {
+                            builtResponse = built;
+                            builtStatus = status;
+                        },
+                        genReq.model,
+                        static_cast<int>(genReq.currentInput.length() / 4),
+                        nativeResponsesToolItems
+                    );
+                    for (const auto& ev : collector.getEvents()) {
+                        jsonBuilder.onEvent(ev);
+                    }
+                    jsonBuilder.onClose();
 
-                if (builtStatus == 200 && !builtResponse.isMember("error") &&
-                    builtResponse.isMember("id") && builtResponse["id"].isString()) {
-                    ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
+                    if (builtStatus == 200 && !builtResponse.isMember("error") &&
+                        builtResponse.isMember("id") && builtResponse["id"].isString()) {
+                        ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
+                    }
                 }
-            });
+            );
         },
         true
     );

@@ -47,7 +47,20 @@ ContinuityDecision ContinuityResolver::resolve(const GenerationRequest& req) con
         }
     }
 
-    // 无 previous_响应_id：按配置模式决策
+    // Codex 自带稳定的 thread-id/session-id。优先使用该标识，避免零宽字符
+    // 污染补丁、JSON 和工具参数，并确保没有 previous_response_id 时仍可续聊。
+    if (req.clientInfo.get("client_type", "").asString() == "Codex" &&
+        req.clientInfo.isMember("client_session_id") &&
+        req.clientInfo["client_session_id"].isString() &&
+        !req.clientInfo["client_session_id"].asString().empty()) {
+        decision.source = ContinuityDecision::Source::ClientSession;
+        decision.mode = SessionTrackingMode::Hash;
+        decision.sessionId = "codex_" + req.clientInfo["client_session_id"].asString();
+        decision.debug = "codex client session";
+        return decision;
+    }
+
+    // 无 previous_response_id：按配置模式决策
     if (mode == SessionTrackingMode::ZeroWidth) {
         const std::string sid = resolveZeroWidthSessionId(req);
         if (!sid.empty()) {

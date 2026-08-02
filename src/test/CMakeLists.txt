@@ -17,11 +17,15 @@ set(TEST_SOURCES
     test_sinks.cpp
     test_generation_service_emit.cpp
     test_chayns_model_catalog.cpp
+    test_nexos_user_agent.cpp
+    test_nexos_registration_mail_policy.cpp
+    test_login_response_log_summary.cpp
 )
 
 # 需要链接的项目源文件（用于测试）
 set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ConfigValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/metrics/ErrorStatsDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ResponseIndex.cpp

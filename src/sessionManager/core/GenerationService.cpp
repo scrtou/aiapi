@@ -70,9 +70,12 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
     session.provider.clientInfo = req.clientInfo;
     session.request.message = req.currentInput;
     session.request.images = req.images;  // 传递图片列表
-    session.request.tools = req.tools;           // 传递工具定义
-    session.request.toolsRaw = req.tools;       // 保留原始工具定义（用于工具桥接场景下的兜底解析）
+    session.request.tools = req.tools;           // 传递规范化后的工具定义
+    session.request.toolsRaw = (!req.toolsRaw.isNull() && req.toolsRaw.isArray())
+        ? req.toolsRaw
+        : req.tools;                             // 保留客户端原始工具定义
     session.request.toolChoice = req.toolChoice; // 传递工具选择策略
+    session.request.parallelToolCalls = req.parallelToolCalls;
     session.request.rawMessage = req.currentInput; // 保留原始输入（工具桥接注入前）
     session.state.requestId = req.requestId.empty()
         ? ("req_" + drogon::utils::getUuid())
@@ -253,10 +256,15 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             return AppError::cancelled("请求已取消");
         }
         
-        // 5. 预生成下一轮 会话Id（用于在响应文本中嵌入，支持客户端续聊）
-        // 必须在 emitResultEvents 之前调用，这样嵌入的是新 ID
-        // ZeroWidth 和 Hash 模式都需要每轮生成新的 会话Id
-        sessionManager.prepareNextSessionId(session);
+        // 5. 预生成下一轮会话 ID。Codex 使用客户端 thread-id 作为稳定键，
+        // 因此在原键上提交；其他客户端保留现有 Hash/ZeroWidth 迁移行为。
+        const bool isCodexClient =
+            session.provider.clientInfo.get("client_type", "").asString() == "Codex";
+        if (isCodexClient) {
+            session.state.nextSessionId = session.state.conversationId;
+        } else {
+            sessionManager.prepareNextSessionId(session);
+        }
         
         // 6. 发送结果事件（内部会使用 会话..next会话Id 进行会话标识嵌入）
         emitResultEvents(session, sink);

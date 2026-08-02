@@ -57,8 +57,9 @@ struct OutputTextDone {
 struct ToolCallDone {
     std::string id;             // 工具调用唯一标识（call_id）
     std::string name;           // 工具函数名称
-    std::string arguments;      // 工具函数参数（JSON 字符串）
+    std::string arguments;      // function 参数 JSON；custom 工具为 {"input":"..."}
     int index = 0;              // 工具调用在当前响应中的顺序索引
+    std::string type = "function"; // function 或 custom
 };
 
 /**

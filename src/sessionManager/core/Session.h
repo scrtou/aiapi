@@ -69,6 +69,8 @@ struct session_st
     Json::Value toolsRaw;
     /// 工具选择策略（auto/none/required 或对象 JSON 字符串），直接映射客户端语义。
     std::string toolChoice="";
+    /// 是否允许同一轮返回多个工具调用；Codex 由 parallel_tool_calls 控制。
+    bool parallelToolCalls = true;
     /// 原始用户输入文本（保留零宽字符/特殊标记），用于会话连续性与追踪解析。
     std::string rawMessage="";
   };

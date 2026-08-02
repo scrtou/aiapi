@@ -1,13 +1,49 @@
 #include "ResponsesJsonSink.h"
 #include <chrono>
+#include <sstream>
+
+namespace {
+std::string customInput(const generation::ToolCallDone& call)
+{
+    Json::Value parsed;
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream input(call.arguments);
+    if (Json::parseFromStream(builder, input, &parsed, &errors) && parsed.isObject() &&
+        parsed.isMember("input") && parsed["input"].isString()) {
+        return parsed["input"].asString();
+    }
+    return call.arguments;
+}
+
+Json::Value nativeToolItem(const generation::ToolCallDone& call)
+{
+    const std::string callId = call.id.empty() ? "call_missing" : call.id;
+    Json::Value item(Json::objectValue);
+    item["id"] = (call.type == "custom" ? "ctc_" : "fc_") + callId;
+    item["call_id"] = callId;
+    item["name"] = call.name;
+    item["status"] = "completed";
+    if (call.type == "custom") {
+        item["type"] = "custom_tool_call";
+        item["input"] = customInput(call);
+    } else {
+        item["type"] = "function_call";
+        item["arguments"] = call.arguments;
+    }
+    return item;
+}
+}
 
 ResponsesJsonSink::ResponsesJsonSink(
     ResponseCallback responseCallback,
     const std::string& model,
-    int inputTokensEstimated
+    int inputTokensEstimated,
+    bool nativeToolItems
 ) : responseCallback_(std::move(responseCallback)),
     model_(model),
-    inputTokensEstimated_(inputTokensEstimated)
+    inputTokensEstimated_(inputTokensEstimated),
+    nativeToolItems_(nativeToolItems)
 {
     createdAt_ = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -107,35 +143,40 @@ Json::Value ResponsesJsonSink::buildResponse() {
     messageOutput["status"] = "completed";
     messageOutput["role"] = "assistant";
 
-
     Json::Value contentArray(Json::arrayValue);
     if (!collectedText_.empty()) {
         Json::Value textContent;
         textContent["type"] = "output_text";
         textContent["text"] = collectedText_;
+        textContent["annotations"] = Json::Value(Json::arrayValue);
         contentArray.append(textContent);
     }
     messageOutput["content"] = contentArray;
 
-
-    if (!toolCalls_.empty()) {
-        Json::Value toolCallsJson(Json::arrayValue);
+    if (nativeToolItems_) {
         for (const auto& tc : toolCalls_) {
-            Json::Value call;
-            call["id"] = tc.id;
-            call["type"] = "function";
-
-            Json::Value func;
-            func["name"] = tc.name;
-            func["arguments"] = tc.arguments;
-            call["function"] = func;
-
-            toolCallsJson.append(call);
+            outputArray.append(nativeToolItem(tc));
         }
-        messageOutput["tool_calls"] = toolCallsJson;
+        if (!collectedText_.empty()) {
+            outputArray.append(messageOutput);
+        }
+    } else {
+        if (!toolCalls_.empty()) {
+            Json::Value toolCallsJson(Json::arrayValue);
+            for (const auto& tc : toolCalls_) {
+                Json::Value call;
+                call["id"] = tc.id;
+                call["type"] = "function";
+                Json::Value func;
+                func["name"] = tc.name;
+                func["arguments"] = tc.arguments;
+                call["function"] = func;
+                toolCallsJson.append(call);
+            }
+            messageOutput["tool_calls"] = toolCallsJson;
+        }
+        outputArray.append(messageOutput);
     }
-
-    outputArray.append(messageOutput);
     response["output"] = outputArray;
 
 

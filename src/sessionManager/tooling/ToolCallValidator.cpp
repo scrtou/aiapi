@@ -57,19 +57,20 @@ ToolCallValidator::ToolCallValidator(const Json::Value& toolDefs, const std::str
     : toolDefs_(toolDefs)
     , clientType_(clientType)
 {
-    // 从工具定义中构建有效工具名集合
+    // 同时支持 Chat Completions 嵌套格式和 Responses 扁平 function/custom 格式。
     if (toolDefs_.isArray()) {
         for (const auto& tool : toolDefs_) {
             if (!tool.isObject()) continue;
-            if (tool.get("type", "").asString() != "function") continue;
-            
-            const auto& func = tool["function"];
-            if (!func.isObject()) continue;
-            
-            std::string name = func.get("name", "").asString();
-            if (!name.empty()) {
-                validToolNames_.insert(name);
+            const std::string type = tool.get("type", "").asString();
+            if (type != "function" && type != "custom") continue;
+
+            std::string name;
+            if (tool.isMember("function") && tool["function"].isObject()) {
+                name = tool["function"].get("name", "").asString();
+            } else {
+                name = tool.get("name", "").asString();
             }
+            if (!name.empty()) validToolNames_.insert(name);
         }
     }
     
@@ -103,19 +104,21 @@ const std::unordered_set<std::string>& ToolCallValidator::getValidToolNames() co
 
 const Json::Value* ToolCallValidator::findToolDefinition(const std::string& toolName) const {
     if (!toolDefs_.isArray()) return nullptr;
-    
+
     for (const auto& tool : toolDefs_) {
         if (!tool.isObject()) continue;
-        if (tool.get("type", "").asString() != "function") continue;
-        
-        const auto& func = tool["function"];
-        if (!func.isObject()) continue;
-        
-        if (func.get("name", "").asString() == toolName) {
-            return &tool;
+        const std::string type = tool.get("type", "").asString();
+        if (type != "function" && type != "custom") continue;
+
+        std::string name;
+        if (tool.isMember("function") && tool["function"].isObject()) {
+            name = tool["function"].get("name", "").asString();
+        } else {
+            name = tool.get("name", "").asString();
         }
+        if (name == toolName) return &tool;
     }
-    
+
     return nullptr;
 }
 
@@ -379,8 +382,12 @@ ValidationResult ToolCallValidator::validate(
         return ValidationResult::failure("工具定义未找到（内部错误）");
     }
     
-    const auto& func = (*toolDef)["function"];
-    const auto& schema = func["parameters"];
+    const Json::Value* schema = nullptr;
+    if (toolDef->isMember("function") && (*toolDef)["function"].isObject()) {
+        schema = &(*toolDef)["function"]["parameters"];
+    } else {
+        schema = &(*toolDef)["parameters"];
+    }
     
 
     // 只校验关键字段存在且非空，跳过完整的 必填 字段校验和类型检查
@@ -389,7 +396,7 @@ ValidationResult ToolCallValidator::validate(
                   << " (客户端=" << (clientType_.empty() ? "default" : clientType_) << ")";
         
         // 检查关键字段是否存在（使用 isCriticalField 逻辑）
-        auto requiredResult = validateRequiredFields(toolCall.name, parsedArgs, schema);
+        auto requiredResult = validateRequiredFields(toolCall.name, parsedArgs, *schema);
         if (!requiredResult.valid) {
             return requiredResult;
         }
@@ -407,7 +414,7 @@ ValidationResult ToolCallValidator::validate(
     LOG_INFO << "[工具调用校验器] 模式=Strict，执行完整校验：" << toolCall.name;
     
     // 校验所有 必填 字段（不仅仅是关键字段）
-    const auto& required = schema["required"];
+    const auto& required = (*schema)["required"];
     if (required.isArray()) {
         for (const auto& req : required) {
             if (!req.isString()) continue;
@@ -428,7 +435,7 @@ ValidationResult ToolCallValidator::validate(
     }
     
     // 校验字段类型
-    auto typeResult = validateFieldTypes(toolCall.name, parsedArgs, schema);
+    auto typeResult = validateFieldTypes(toolCall.name, parsedArgs, *schema);
     if (!typeResult.valid) {
         return typeResult;
     }

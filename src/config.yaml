@@ -309,4 +309,15 @@ plugins:
       # show_microseconds: true
       # custom_time_format: ''
       # use_real_ip: false
-# custom_config: custom configuration for users. This object can be get by the app().getCustomConfig() method. 
+# custom_config: custom configuration for users. This object can be get by the app().getCustomConfig() method.
+# custom_config:
+#   nexos_registration:
+#     mail_policy:
+#       # Defaults intentionally use only the verified Gmail/SmailPro path.
+#       # Add alternate providers/domains only after confirming that the
+#       # provider honours the requested domain and receives Nexos mail.
+#       providers:
+#         - smailpro_web
+#       domain_preference:
+#         - gmail.com
+#       expiry_time_ms: 3600000

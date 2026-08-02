@@ -35,7 +35,8 @@ public:
     ResponsesJsonSink(
         ResponseCallback responseCallback,
         const std::string& model,
-        int inputTokensEstimated = 0
+        int inputTokensEstimated = 0,
+        bool nativeToolItems = false
     );
 
     ~ResponsesJsonSink() override = default;
@@ -62,6 +63,7 @@ private:
     std::optional<generation::Usage> usage_;
     Json::Value meta_{Json::objectValue};
     int inputTokensEstimated_ = 0;
+    bool nativeToolItems_ = false;
 
     int statusCode_ = 200;
     bool hasError_ = false;

@@ -163,6 +163,96 @@ DROGON_TEST(Sinks_ResponsesJson_ToolCalls)
     CHECK(cap.body["output"][0]["tool_calls"][0]["function"]["name"].asString() == "write_to_file");
 }
 
+DROGON_TEST(Sinks_ResponsesJson_CodexNativeFunctionCall)
+{
+    CapturedResponse cap;
+    ResponsesJsonSink sink(
+        [&cap](const Json::Value& body, int statusCode) {
+            cap.body = body;
+            cap.status = statusCode;
+            cap.called = true;
+        },
+        "Grok 4.5",
+        0,
+        true
+    );
+
+    generation::Started started;
+    started.responseId = "resp_codex_json";
+    started.model = "Grok 4.5";
+    sink.onEvent(started);
+
+    generation::ToolCallDone call;
+    call.id = "call_123";
+    call.name = "exec_command";
+    call.arguments = R"({"cmd":"ls -la"})";
+    call.type = "function";
+    sink.onEvent(call);
+
+    generation::Completed completed;
+    completed.finishReason = "tool_calls";
+    sink.onEvent(completed);
+    sink.onClose();
+
+    CHECK(cap.called);
+    CHECK(cap.status == 200);
+    REQUIRE(cap.body["output"].isArray());
+    REQUIRE(cap.body["output"].size() == 1);
+    const auto& item = cap.body["output"][0];
+    CHECK(item["type"].asString() == "function_call");
+    CHECK(item["call_id"].asString() == "call_123");
+    CHECK(item["name"].asString() == "exec_command");
+    CHECK(item["arguments"].asString() == R"({"cmd":"ls -la"})");
+    CHECK(!item.isMember("tool_calls"));
+}
+
+DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
+{
+    std::string stream;
+    int closeCount = 0;
+    ResponsesSseSink sink(
+        [&stream](const std::string& chunk) {
+            stream += chunk;
+            return true;
+        },
+        [&closeCount]() {
+            ++closeCount;
+        },
+        "Grok 4.5",
+        true
+    );
+
+    generation::Started started;
+    started.responseId = "resp_codex_sse";
+    started.model = "Grok 4.5";
+    sink.onEvent(started);
+
+    generation::ToolCallDone call;
+    call.id = "call_123";
+    call.name = "exec_command";
+    call.arguments = R"({"cmd":"ls -la"})";
+    call.type = "function";
+    sink.onEvent(call);
+
+    generation::Completed completed;
+    completed.finishReason = "tool_calls";
+    sink.onEvent(completed);
+    sink.onClose();
+
+    CHECK(closeCount == 1);
+    CHECK(stream.find("event: response.created") != std::string::npos);
+    CHECK(stream.find("event: response.output_item.added") != std::string::npos);
+    CHECK(stream.find("event: response.function_call_arguments.delta") != std::string::npos);
+    CHECK(stream.find("event: response.function_call_arguments.done") != std::string::npos);
+    CHECK(stream.find("event: response.output_item.done") != std::string::npos);
+    CHECK(stream.find("event: response.completed") != std::string::npos);
+    CHECK(stream.find("\"type\":\"function_call\"") != std::string::npos);
+    CHECK(stream.find("\"call_id\":\"call_123\"") != std::string::npos);
+    CHECK(stream.find("\"name\":\"exec_command\"") != std::string::npos);
+    CHECK(stream.find("\"tool_calls\"") == std::string::npos);
+    CHECK(stream.find("\"type\":\"message\"") == std::string::npos);
+}
+
 DROGON_TEST(Sinks_ChatSse_CloseOnStreamFailure_OnlyOnce)
 {
     int closeCount = 0;

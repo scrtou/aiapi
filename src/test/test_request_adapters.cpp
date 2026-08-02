@@ -142,6 +142,47 @@ DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
     CHECK(genReq.requestId.rfind("req_", 0) == 0);
 }
 
+DROGON_TEST(RequestAdapters_Responses_InputSystemAndDeveloperInstructions)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o-mini";
+    body["instructions"] = "base instruction";
+
+    Json::Value input(Json::arrayValue);
+    {
+        Json::Value message;
+        message["role"] = "system";
+        message["content"] = "system instruction";
+        input.append(message);
+    }
+    {
+        Json::Value message;
+        message["role"] = "developer";
+        Json::Value content(Json::arrayValue);
+        Json::Value part;
+        part["type"] = "input_text";
+        part["text"] = "developer instruction";
+        content.append(part);
+        message["content"] = content;
+        input.append(message);
+    }
+    {
+        Json::Value message;
+        message["role"] = "user";
+        message["content"] = "question";
+        input.append(message);
+    }
+    body["input"] = input;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body));
+
+    CHECK(genReq.systemPrompt.find("base instruction") != std::string::npos);
+    CHECK(genReq.systemPrompt.find("system instruction") != std::string::npos);
+    CHECK(genReq.systemPrompt.find("developer instruction") != std::string::npos);
+    CHECK(genReq.currentInput.find("question") != std::string::npos);
+}
+
 DROGON_TEST(RequestAdapters_RequestIdHeaders)
 {
     Json::Value body;

@@ -35,7 +35,8 @@ public:
     ResponsesSseSink(
         StreamCallback streamCallback,
         CloseCallback closeCallback,
-        const std::string& model
+        const std::string& model,
+        bool nativeToolItems = false
     );
     
     ~ResponsesSseSink() override = default;
@@ -91,6 +92,10 @@ private:
      * @param status 状态 ("in_progress", "completed", "failed")
      */
     Json::Value buildResponseObject(const std::string& status);
+    Json::Value buildTextOutputItem(const std::string& status) const;
+    void ensureTextItemAdded();
+    void emitNativeToolCall(const generation::ToolCallDone& event);
+    static std::string customToolInput(const generation::ToolCallDone& event);
     
     StreamCallback streamCallback_;
     CloseCallback closeCallback_;
@@ -99,9 +104,13 @@ private:
     std::string outputText_;     // 累积的输出文本
     std::vector<generation::ToolCallDone> toolCalls_; // 累积的工具调用
     Json::Value meta_{Json::objectValue};
-    int outputItemIndex_ = 0;   // 当前输出项索引
+    Json::Value nativeOutputItems_{Json::arrayValue};
+    int outputItemIndex_ = 0;   // legacy 文本输出项索引
+    int textOutputIndex_ = -1;
     int64_t createdAt_ = 0;
     int sequenceNumber_ = 0;
+    bool nativeToolItems_ = false;
+    bool textItemAdded_ = false;
     bool sawDelta_ = false;
     bool closed_ = false;
 };

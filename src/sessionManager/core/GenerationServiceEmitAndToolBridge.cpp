@@ -338,6 +338,64 @@ void appendRetoolProviderPolicy(std::ostringstream& policy,
     policy << "</function_calls>\n";
 }
 
+void appendCodexXmlBridgePolicy(std::ostringstream& policy,
+                                const std::string& forcedToolName,
+                                const std::string& toolChoice,
+                                const std::string& triggerSignal,
+                                bool parallelToolCalls) {
+    policy << "Context: Codex software-engineering agent. Tools are executed by the Codex client.\n";
+    policy << "Use the listed tools directly when files, commands, patches, MCP resources, or other external state are needed.\n";
+    policy << "Do not claim that filesystem or command tools are unavailable when a matching tool is listed.\n";
+    policy << "A normal final answer is allowed when no tool is needed; do not invent or call attempt_completion.\n";
+
+    if (!forcedToolName.empty()) {
+        policy << "Required tool for this response: " << forcedToolName << ".\n";
+    } else if (toolChoice == "required") {
+        policy << "At least one listed tool must be called in this response.\n";
+    } else {
+        policy << "Call tools only when needed; otherwise return the final answer as normal text.\n";
+    }
+
+    policy << "\nWhen calling a tool:\n";
+    policy << "- Output only the XML tool-call block, with no prose or markdown before or after it.\n";
+    policy << "- The first line must be the exact trigger marker below.\n";
+    policy << "- Tool names and parameter names must exactly match the API definitions.\n";
+    policy << "- args_json must be a valid JSON object containing all required arguments.\n";
+    policy << "- For a custom/free-form tool, place its free-form payload in the JSON field named input.\n";
+    if (parallelToolCalls) {
+        policy << "- One or more function_call elements are allowed when independent calls can run in parallel.\n";
+    } else {
+        policy << "- Exactly one function_call element is allowed in a tool-call response.\n";
+    }
+    appendXmlFunctionCallTemplate(policy, triggerSignal);
+}
+
+std::string inferToolCallType(const session_st& session, const std::string& toolName) {
+    auto findType = [&](const Json::Value& tools) -> std::string {
+        if (!tools.isArray()) return "";
+        for (const auto& tool : tools) {
+            if (!tool.isObject()) continue;
+            const std::string type = tool.get("type", "").asString();
+            if (tool.isMember("function") && tool["function"].isObject()) {
+                const auto& function = tool["function"];
+                if (function.get("name", "").asString() != toolName) continue;
+                if (function.get("_aiapi_original_type", "").asString() == "custom") {
+                    return "custom";
+                }
+                return "function";
+            }
+            if (tool.get("name", "").asString() != toolName) continue;
+            if (type == "custom") return "custom";
+            if (type == "function") return "function";
+        }
+        return "";
+    };
+
+    std::string type = findType(session.request.toolsRaw);
+    if (type.empty()) type = findType(session.request.tools);
+    return type.empty() ? "function" : type;
+}
+
 void appendRetoolChannelSpecialRules(std::ostringstream& policy);
 
 void appendGenericXmlBridgePolicy(std::ostringstream& policy,
@@ -428,7 +486,11 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     const ToolChoiceSpec toolChoiceSpec = parseToolChoiceSpec(session.request.toolChoice);
     const bool toolChoiceNone = toolChoiceSpec.none;
     const bool toolChoiceRequired = toolChoiceSpec.required;
-    const bool strictSentinelEnabled = isStrictSentinelEnabled(session, strictToolClient, toolChoiceRequired);
+    const bool strictSentinelEnabled = isStrictSentinelEnabled(
+        session,
+        strictToolClient || clientType == "Codex",
+        toolChoiceRequired
+    );
     const bool allowFunctionCallsFallback = !strictSentinelEnabled;
     const bool requireBridgeSentinel = strictSentinelEnabled;
     const std::string forcedToolName = toolChoiceSpec.forcedToolName;
@@ -572,6 +634,9 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // - 填充缺失的可选字段默认值
     // - 规范化 ask_followup_question 的 字段
     normalizeToolCallArguments(session, toolCalls);
+    for (auto& toolCall : toolCalls) {
+        toolCall.type = inferToolCallType(session, toolCall.name);
+    }
 
     // ==================== 步骤 4： 校验与无效调用过滤 ====================
     // 【这是防止“缺少 nativeArgs”错误的关键步骤】
@@ -690,6 +755,14 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         }
     }
 
+    if (clientType == "Codex" && !session.request.parallelToolCalls && toolCalls.size() > 1) {
+        LOG_WARN << "[生成服务][Codex] parallel_tool_calls=false，已仅保留第一个工具调用";
+        toolCalls.erase(toolCalls.begin() + 1, toolCalls.end());
+    }
+    for (size_t i = 0; i < toolCalls.size(); ++i) {
+        toolCalls[i].index = static_cast<int>(i);
+    }
+
     // ==================== 步骤 7: 零宽字符会话ID嵌入 ====================
     // 【功能说明】
     // 使用零宽字符将会话ID嵌入到响应文本中，客户端下次请求时可以提取该ID实现续聊。
@@ -708,7 +781,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     const std::string& sessionIdToEmbed =
         !session.state.nextSessionId.empty() ? session.state.nextSessionId : session.state.conversationId;
 
-    if (sessionManager.isZeroWidthMode() && !sessionIdToEmbed.empty()) {
+    if (sessionManager.isZeroWidthMode() && clientType != "Codex" && !sessionIdToEmbed.empty()) {
         if (!toolCalls.empty() && clientType == "claudecode") {
             // 客户端 + 有工具调用：单独发送零宽会话ID
             std::string zwOnly = chatSession::embedSessionIdInText("", sessionIdToEmbed);
@@ -1175,12 +1248,15 @@ void GenerationService::normalizeToolCallArguments(
         if (!toolDefs.isArray()) return nullptr;
         for (const auto& t : toolDefs) {
             if (!t.isObject()) continue;
-            if (t.get("type", "").asString() != "function") continue;
-            const auto& func = t["function"];
-            if (!func.isObject()) continue;
-            if (func.get("name", "").asString() == toolName) {
-                return &t;
+            const std::string type = t.get("type", "").asString();
+            if (type != "function" && type != "custom") continue;
+            std::string name;
+            if (t.isMember("function") && t["function"].isObject()) {
+                name = t["function"].get("name", "").asString();
+            } else {
+                name = t.get("name", "").asString();
             }
+            if (name == toolName) return &t;
         }
         return nullptr;
     };
@@ -1317,8 +1393,13 @@ void GenerationService::normalizeToolCallArguments(
             continue;
         }
 
-        const auto& paramsSchema = (*toolObj)["function"]["parameters"];
-        if (!paramsSchema.isObject() || !paramsSchema.isMember("properties") || !paramsSchema["properties"].isObject()) {
+        const Json::Value* paramsSchema = nullptr;
+        if (toolObj->isMember("function") && (*toolObj)["function"].isObject()) {
+            paramsSchema = &(*toolObj)["function"]["parameters"];
+        } else {
+            paramsSchema = &(*toolObj)["parameters"];
+        }
+        if (!paramsSchema->isObject() || !paramsSchema->isMember("properties") || !(*paramsSchema)["properties"].isObject()) {
             continue;
         }
 
@@ -1336,7 +1417,7 @@ void GenerationService::normalizeToolCallArguments(
             }
         }
 
-        const auto& props = paramsSchema["properties"];
+        const auto& props = (*paramsSchema)["properties"];
         for (const auto& paramName : props.getMemberNames()) {
             const auto& paramSchema = props[paramName];
             const std::string type = safeGetType(paramSchema);
@@ -1778,6 +1859,14 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             appendRetoolAgentRoutePolicy(policy, triggerSignal, forcedToolName);
         } else if (isRetoolProvider) {
             appendRetoolProviderPolicy(policy, triggerSignal, forcedToolName);
+        } else if (clientType == "Codex") {
+            appendCodexXmlBridgePolicy(
+                policy,
+                forcedToolName,
+                toolChoice,
+                triggerSignal,
+                session.request.parallelToolCalls
+            );
         } else {
             appendGenericXmlBridgePolicy(policy,
                                          strictToolClient,

@@ -75,14 +75,17 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     stored.request.images = session.request.images;
     if (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0) {
         stored.request.tools = session.request.tools;
-        stored.request.toolsRaw = session.request.tools;  // 更新原始工具定义
+        stored.request.toolsRaw =
+            (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray())
+                ? session.request.toolsRaw
+                : session.request.tools;
     } else if (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray() && session.request.toolsRaw.size() > 0) {
-        // 如果本次请求未携带 tools，保留旧的 toolsRaw（用于 tool bridge 兜底）
         stored.request.toolsRaw = session.request.toolsRaw;
     }
     if (!session.request.toolChoice.empty()) {
         stored.request.toolChoice = session.request.toolChoice;
     }
+    stored.request.parallelToolCalls = session.request.parallelToolCalls;
 
     // 协议标记需要同步更新（主要用于 Response API 复用本辅助方法时保持状态一致）。
     // 更新 API 类型和相关标记
@@ -371,6 +374,15 @@ void chatSession::commitSessionTransfer(session_st& session)
     
     if (newSessionId.empty()) {
         LOG_ERROR << "[SessionTransfer] nextSessionId 为空，拒绝执行会话转移（请先调用 prepareNextSessionId）";
+        return;
+    }
+
+    // Codex 使用客户端 thread-id 作为稳定会话键，不应每轮迁移到 Hash/ZeroWidth ID。
+    if (newSessionId == oldSessionId) {
+        session.provider.prevProviderKey = oldSessionId;
+        session.state.nextSessionId.clear();
+        updateSession(oldSessionId, session);
+        LOG_INFO << "[SessionTransfer] 已原位提交稳定会话: " << oldSessionId;
         return;
     }
     

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cctype>
 #include <iterator>
+#include <sstream>
+#include <unordered_set>
 
 using namespace drogon;
 
@@ -33,8 +35,6 @@ std::string normalizeIncomingRequestId(const std::string& value)
         if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ':') {
             normalized.push_back(static_cast<char>(ch));
         } else {
-            // Keep correlation semantics while preventing control characters or
-            // arbitrary header content from being injected into diagnostic logs.
             normalized.push_back('_');
         }
     }
@@ -51,6 +51,143 @@ std::string requestIdFromHeaders(const HttpRequestPtr& req)
         requestId = "req_" + drogon::utils::getUuid();
     }
     return requestId;
+}
+
+Json::StreamWriterBuilder& compactJsonWriter()
+{
+    static thread_local Json::StreamWriterBuilder writer = [] {
+        Json::StreamWriterBuilder value;
+        value["indentation"] = "";
+        return value;
+    }();
+    return writer;
+}
+
+std::string compactJson(const Json::Value& value)
+{
+    if (value.isString()) return value.asString();
+    return Json::writeString(compactJsonWriter(), value);
+}
+
+std::string toolNameFromDefinition(const Json::Value& tool)
+{
+    if (!tool.isObject()) return "";
+    if (tool.isMember("function") && tool["function"].isObject()) {
+        return tool["function"].get("name", "").asString();
+    }
+    return tool.get("name", "").asString();
+}
+
+Json::Value normalizeToolDefinition(const Json::Value& tool)
+{
+    if (!tool.isObject()) return Json::Value();
+    const std::string type = tool.get("type", "").asString();
+
+    if (type == "function") {
+        if (tool.isMember("function") && tool["function"].isObject()) return tool;
+        const std::string name = tool.get("name", "").asString();
+        if (name.empty()) return Json::Value();
+
+        Json::Value normalized(Json::objectValue);
+        normalized["type"] = "function";
+        normalized["function"]["name"] = name;
+        normalized["function"]["description"] = tool.get("description", "").asString();
+        if (tool.isMember("parameters") && tool["parameters"].isObject()) {
+            normalized["function"]["parameters"] = tool["parameters"];
+        } else {
+            normalized["function"]["parameters"]["type"] = "object";
+            normalized["function"]["parameters"]["properties"] = Json::Value(Json::objectValue);
+        }
+        if (tool.isMember("strict")) normalized["function"]["strict"] = tool["strict"];
+        return normalized;
+    }
+
+    if (type == "custom") {
+        const std::string name = tool.get("name", "").asString();
+        if (name.empty()) return Json::Value();
+
+        Json::Value normalized(Json::objectValue);
+        normalized["type"] = "function";
+        auto& function = normalized["function"];
+        function["name"] = name;
+        function["description"] = tool.get("description", "").asString();
+        function["parameters"]["type"] = "object";
+        function["parameters"]["properties"]["input"]["type"] = "string";
+        function["parameters"]["required"].append("input");
+        function["_aiapi_original_type"] = "custom";
+        return normalized;
+    }
+
+    return Json::Value();
+}
+
+void appendToolDefinitions(const Json::Value& tools,
+                           Json::Value& rawTools,
+                           Json::Value& normalizedTools,
+                           std::unordered_set<std::string>& seen)
+{
+    if (!tools.isArray()) return;
+    for (const auto& tool : tools) {
+        if (!tool.isObject()) continue;
+        const std::string type = tool.get("type", "").asString();
+        const std::string name = toolNameFromDefinition(tool);
+        const std::string key = type + ":" + name;
+        if (!name.empty() && !seen.insert(key).second) continue;
+        rawTools.append(tool);
+        Json::Value normalized = normalizeToolDefinition(tool);
+        if (!normalized.isNull()) normalizedTools.append(std::move(normalized));
+    }
+}
+
+void collectAdditionalTools(const Json::Value& items,
+                            Json::Value& rawTools,
+                            Json::Value& normalizedTools,
+                            std::unordered_set<std::string>& seen)
+{
+    if (!items.isArray()) return;
+    for (const auto& item : items) {
+        if (item.isObject() && item.get("type", "").asString() == "additional_tools") {
+            appendToolDefinitions(item["tools"], rawTools, normalizedTools, seen);
+        }
+    }
+}
+
+bool isCodexToolOutputType(const std::string& type)
+{
+    return type == "function_call_output" || type == "tool_call_output" ||
+           type == "custom_tool_call_output" || type == "mcp_tool_call_output" ||
+           type == "local_shell_call_output" || type == "tool_search_output";
+}
+
+bool isCodexToolCallType(const std::string& type)
+{
+    return type == "function_call" || type == "tool_call" ||
+           type == "custom_tool_call" || type == "mcp_tool_call" ||
+           type == "local_shell_call" || type == "tool_search_call";
+}
+
+void appendCodexToolOutput(const Json::Value& item, std::string& currentInput)
+{
+    const std::string type = item.get("type", "tool_call_output").asString();
+    const std::string callId = item.get("call_id", "").asString();
+    currentInput += "\n[tool_result type=" + type;
+    if (!callId.empty()) currentInput += " call_id=" + callId;
+    currentInput += "]\n" + compactJson(item.get("output", Json::Value(""))) +
+                    "\n[/tool_result]\n";
+}
+
+Message makeCodexToolCallHistory(const Json::Value& item)
+{
+    const std::string type = item.get("type", "tool_call").asString();
+    const std::string callId = item.get("call_id", item.get("id", "")).asString();
+    const std::string name = item.get("name", "").asString();
+    const Json::Value payload = item.isMember("arguments")
+        ? item["arguments"] : item.get("input", Json::Value(""));
+    std::string text = "[tool_call type=" + type;
+    if (!callId.empty()) text += " call_id=" + callId;
+    if (!name.empty()) text += " name=" + name;
+    text += "]\n" + compactJson(payload) + "\n[/tool_call]";
+    return Message::assistant(text);
 }
 
 }  // namespace
@@ -85,7 +222,11 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
 
     if (reqBody.isMember("tools") && reqBody["tools"].isArray()) {
         genReq.tools = reqBody["tools"];
+        genReq.toolsRaw = reqBody["tools"];
         LOG_INFO << "[请求适配器] API 请求包含" << genReq.tools.size() << " 个工具定义";
+    }
+    if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
+        genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();
     }
     
 
@@ -178,9 +319,20 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     genReq.provider = "chaynsapi";  // 默认 上游
     
 
-    if (reqBody.isMember("tools") && reqBody["tools"].isArray()) {
-        genReq.tools = reqBody["tools"];
-        LOG_INFO << "[请求适配器] Responses API 请求包含" << genReq.tools.size() << " 个工具定义";
+    Json::Value rawTools(Json::arrayValue);
+    Json::Value normalizedTools(Json::arrayValue);
+    std::unordered_set<std::string> seenTools;
+    appendToolDefinitions(reqBody["tools"], rawTools, normalizedTools, seenTools);
+    collectAdditionalTools(reqBody["input"], rawTools, normalizedTools, seenTools);
+    collectAdditionalTools(reqBody["input_items"], rawTools, normalizedTools, seenTools);
+    genReq.toolsRaw = std::move(rawTools);
+    genReq.tools = std::move(normalizedTools);
+    if (!genReq.toolsRaw.empty()) {
+        LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.size()
+                 << ", 可桥接=" << genReq.tools.size();
+    }
+    if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
+        genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();
     }
     
 
@@ -188,9 +340,17 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
         if (reqBody["tool_choice"].isString()) {
             genReq.toolChoice = reqBody["tool_choice"].asString();
         } else if (reqBody["tool_choice"].isObject()) {
-            Json::StreamWriterBuilder writer;
-            writer["indentation"] = "";
-            genReq.toolChoice = Json::writeString(writer, reqBody["tool_choice"]);
+            Json::Value choice = reqBody["tool_choice"];
+            const std::string choiceType = choice.get("type", "").asString();
+            if ((choiceType == "function" || choiceType == "custom") &&
+                choice.isMember("name") && choice["name"].isString() &&
+                !choice.isMember("function")) {
+                Json::Value nested(Json::objectValue);
+                nested["type"] = "function";
+                nested["function"]["name"] = choice["name"];
+                choice = std::move(nested);
+            }
+            genReq.toolChoice = Json::writeString(compactJsonWriter(), choice);
         }
     }
     
@@ -222,6 +382,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
             return;
         }
         if (!v.isObject()) return;
+        if (v.get("type", "").asString() == "additional_tools") return;
 
         if (v.isMember("text") && v["text"].isString()) {
             genReq.continuityTexts.push_back(v["text"].asString());
@@ -262,6 +423,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
         parseResponseInput(
             reqBody["input"],
             genReq.messages,
+            genReq.systemPrompt,
             genReq.currentInput,
             images
         );
@@ -291,17 +453,35 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
 Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     Json::Value clientInfo;
     
-    // 提取 User-Agent 并识别客户端类型
-    std::string userAgent = req->getHeader("user-agent");
+    // 提取客户端标识。User-Agent 只能用于协议适配，不能用于鉴权。
+    const std::string userAgent = req->getHeader("user-agent");
+    const std::string originator = req->getHeader("originator");
+    const std::string codexWindowId = req->getHeader("x-codex-window-id");
+    const bool isCodex = originator == "codex-tui" ||
+                         userAgent.rfind("codex-tui/", 0) == 0 ||
+                         !codexWindowId.empty();
     std::string clientType = userAgent;
-    
-    if (userAgent.find("Kilo-Code") != std::string::npos) {
+
+    if (isCodex) {
+        clientType = "Codex";
+        clientInfo["client_variant"] = "codex-tui";
+        std::string clientSessionId = normalizeIncomingRequestId(req->getHeader("thread-id"));
+        if (clientSessionId.empty()) {
+            clientSessionId = normalizeIncomingRequestId(req->getHeader("session-id"));
+        }
+        if (!clientSessionId.empty()) {
+            clientInfo["client_session_id"] = clientSessionId;
+        }
+    } else if (userAgent.find("Kilo-Code") != std::string::npos) {
         clientType = "Kilo-Code";
     } else if (userAgent.find("RooCode") != std::string::npos) {
         clientType = "RooCode";
     }
-    
+
     clientInfo["client_type"] = clientType;
+    if (!userAgent.empty()) {
+        clientInfo["raw_user_agent"] = userAgent;
+    }
     
 
     std::string auth = req->getHeader("authorization");
@@ -323,7 +503,8 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     clientInfo["client_authorization"] = auth;
     
     LOG_INFO << "[请求适配器] 识别到客户端类型：" << (clientType.empty() ? "未知" : clientType);
-    LOG_INFO << "[请求适配器] 识别到客户端凭证：" << (auth.empty() ? "空" : auth);
+    LOG_INFO << "[请求适配器] 客户端凭证："
+             << (auth.empty() ? "未提供" : ("已提供(长度=" + std::to_string(auth.size()) + ")"));
     
     return clientInfo;
 }
@@ -419,6 +600,7 @@ void RequestAdapters::parseChatMessages(
 void RequestAdapters::parseResponseInput(
     const Json::Value& input,
     std::vector<Message>& messages,
+    std::string& systemPrompt,
     std::string& currentInput,
     std::vector<ImageInfo>& images
 ) {
@@ -471,9 +653,37 @@ void RequestAdapters::parseResponseInput(
         
         std::string type = item.get("type", "").asString();
         std::string role = item.get("role", "").asString();
+
+        if (type == "additional_tools") {
+            continue;
+        }
+        if (isCodexToolOutputType(type)) {
+            appendCodexToolOutput(item, currentInput);
+            continue;
+        }
+        if (isCodexToolCallType(type)) {
+            messages.push_back(makeCodexToolCallHistory(item));
+            continue;
+        }
         
         // 处理带 的消息（历史对话格式）
         if (!role.empty()) {
+            // Responses API 的 developer/system 消息是本轮指令，不应混入用户输入。
+            // 顶层 instructions 已先写入 systemPrompt，因此这里只做追加。
+            if (role == "system" || role == "developer") {
+                if (item.isMember("content")) {
+                    std::string instruction = extractContentText(
+                        item["content"], historyImages, isZeroWidthMode);
+                    if (!instruction.empty()) {
+                        if (!systemPrompt.empty() && systemPrompt.back() != '\n') {
+                            systemPrompt += '\n';
+                        }
+                        systemPrompt += instruction;
+                    }
+                }
+                continue;
+            }
+
             if (i <= splitIndex) {
                 // 历史消息：添加到 列表
                 Message message;
@@ -581,6 +791,16 @@ void RequestAdapters::parseResponseInputItems(
         if (!item.isObject()) continue;
 
         const std::string type = item.get("type", "").asString();
+
+        if (type == "additional_tools") continue;
+        if (isCodexToolOutputType(type)) {
+            appendCodexToolOutput(item, currentInput);
+            continue;
+        }
+        if (isCodexToolCallType(type)) {
+            currentInput += "\n" + makeCodexToolCallHistory(item).getTextContent() + "\n";
+            continue;
+        }
 
         if ((type == "input_text" || type == "text") &&
             item.isMember("text") && item["text"].isString()) {

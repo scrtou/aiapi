@@ -141,8 +141,10 @@ struct GenerationRequest {
     std::vector<ImageInfo> images;  // 当前请求中的图片列表
     
     // ========== 工具调用 ==========
-    Json::Value tools;               // 工具定义列表
+    Json::Value tools;               // 规范化后的工具定义列表
+    Json::Value toolsRaw;            // 客户端原始工具定义（用于协议输出/诊断）
     std::string toolChoice;          // 工具选择策略 (//必填)
+    bool parallelToolCalls = true;   // 是否允许同一轮返回多个工具调用
     
     // ========== 输出要求 ==========
     bool stream = false;            // 是否流式输出

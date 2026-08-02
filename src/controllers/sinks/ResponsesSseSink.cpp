@@ -2,16 +2,19 @@
 #include <json/json.h>
 #include <chrono>
 #include <algorithm>
+#include <sstream>
 
 using namespace drogon;
 
 ResponsesSseSink::ResponsesSseSink(
     StreamCallback streamCallback,
     CloseCallback closeCallback,
-    const std::string& model
+    const std::string& model,
+    bool nativeToolItems
 ) : streamCallback_(std::move(streamCallback)),
     closeCallback_(std::move(closeCallback)),
-    model_(model)
+    model_(model),
+    nativeToolItems_(nativeToolItems)
 {
     createdAt_ = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -92,6 +95,109 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Va
     sendSseEvent(eventType, Json::writeString(writer, data));
 }
 
+Json::Value ResponsesSseSink::buildTextOutputItem(const std::string& status) const {
+    Json::Value item(Json::objectValue);
+    item["type"] = "message";
+    item["id"] = "msg_" + responseId_;
+    item["status"] = status;
+    item["role"] = "assistant";
+    Json::Value content(Json::arrayValue);
+    if (status == "completed" && !outputText_.empty()) {
+        Json::Value text(Json::objectValue);
+        text["type"] = "output_text";
+        text["text"] = outputText_;
+        text["annotations"] = Json::Value(Json::arrayValue);
+        content.append(text);
+    }
+    item["content"] = content;
+    return item;
+}
+
+void ResponsesSseSink::ensureTextItemAdded() {
+    if (textItemAdded_) return;
+    textItemAdded_ = true;
+    textOutputIndex_ = nativeToolItems_
+        ? static_cast<int>(nativeOutputItems_.size())
+        : outputItemIndex_;
+    Json::Value event(Json::objectValue);
+    event["type"] = "response.output_item.added";
+    event["sequence_number"] = sequenceNumber_++;
+    event["output_index"] = textOutputIndex_;
+    event["item"] = buildTextOutputItem("in_progress");
+    sendSseEvent("response.output_item.added", event);
+}
+
+std::string ResponsesSseSink::customToolInput(const generation::ToolCallDone& event) {
+    Json::Value parsed;
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream input(event.arguments);
+    if (Json::parseFromStream(builder, input, &parsed, &errors) && parsed.isObject() &&
+        parsed.isMember("input") && parsed["input"].isString()) {
+        return parsed["input"].asString();
+    }
+    return event.arguments;
+}
+
+void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event) {
+    const bool custom = event.type == "custom";
+    const std::string callId = event.id.empty()
+        ? ("call_" + responseId_ + "_" + std::to_string(nativeOutputItems_.size()))
+        : event.id;
+    const std::string itemId = (custom ? "ctc_" : "fc_") + callId;
+    const int index = static_cast<int>(nativeOutputItems_.size());
+    const std::string payload = custom ? customToolInput(event) : event.arguments;
+
+    Json::Value addedItem(Json::objectValue);
+    addedItem["type"] = custom ? "custom_tool_call" : "function_call";
+    addedItem["id"] = itemId;
+    addedItem["call_id"] = callId;
+    addedItem["name"] = event.name;
+    addedItem[custom ? "input" : "arguments"] = "";
+    addedItem["status"] = "in_progress";
+
+    Json::Value added(Json::objectValue);
+    added["type"] = "response.output_item.added";
+    added["sequence_number"] = sequenceNumber_++;
+    added["output_index"] = index;
+    added["item"] = addedItem;
+    sendSseEvent("response.output_item.added", added);
+
+    const std::string deltaType = custom
+        ? "response.custom_tool_call_input.delta"
+        : "response.function_call_arguments.delta";
+    Json::Value delta(Json::objectValue);
+    delta["type"] = deltaType;
+    delta["sequence_number"] = sequenceNumber_++;
+    delta["item_id"] = itemId;
+    delta["output_index"] = index;
+    delta["delta"] = payload;
+    sendSseEvent(deltaType, delta);
+
+    const std::string doneType = custom
+        ? "response.custom_tool_call_input.done"
+        : "response.function_call_arguments.done";
+    Json::Value done(Json::objectValue);
+    done["type"] = doneType;
+    done["sequence_number"] = sequenceNumber_++;
+    done["item_id"] = itemId;
+    done["output_index"] = index;
+    done[custom ? "input" : "arguments"] = payload;
+    sendSseEvent(doneType, done);
+
+    Json::Value finalItem = addedItem;
+    finalItem[custom ? "input" : "arguments"] = payload;
+    finalItem["status"] = "completed";
+    nativeOutputItems_.append(finalItem);
+
+    Json::Value itemDone(Json::objectValue);
+    itemDone["type"] = "response.output_item.done";
+    itemDone["sequence_number"] = sequenceNumber_++;
+    itemDone["output_index"] = index;
+    itemDone["item"] = finalItem;
+    sendSseEvent("response.output_item.done", itemDone);
+}
+
 void ResponsesSseSink::handleStarted(const generation::Started& event) {
     LOG_DEBUG << "[响应SSE] 开始事件，响应ID：" << event.responseId;
 
@@ -109,6 +215,11 @@ void ResponsesSseSink::handleStarted(const generation::Started& event) {
     createdEvent["response"] = buildResponseObject("in_progress");
     sendSseEvent("response.created", createdEvent);
 
+    if (nativeToolItems_) {
+        return;
+    }
+    textItemAdded_ = true;
+    textOutputIndex_ = outputItemIndex_;
 
     Json::Value outputItem;
     outputItem["type"] = "message";
@@ -126,16 +237,15 @@ void ResponsesSseSink::handleStarted(const generation::Started& event) {
 }
 
 void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& event) {
+    ensureTextItemAdded();
     sawDelta_ = true;
-    // 累积文本
     outputText_ += event.delta;
-    
 
     Json::Value deltaEvent(Json::objectValue);
     deltaEvent["type"] = "response.output_text.delta";
     deltaEvent["sequence_number"] = sequenceNumber_++;
     deltaEvent["item_id"] = "msg_" + responseId_;
-    deltaEvent["output_index"] = outputItemIndex_;
+    deltaEvent["output_index"] = textOutputIndex_;
     deltaEvent["content_index"] = 0;
     deltaEvent["delta"] = event.delta;
     
@@ -146,6 +256,9 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
     // 如果之前没有通过 发送，使用完整文本
     if (outputText_.empty()) {
         outputText_ = event.text;
+    }
+    if (!outputText_.empty()) {
+        ensureTextItemAdded();
     }
 
     // 当前项目没有上游真实 ；为了兼容 SSE 客户端，若未见 ，则把 拆分为多个 发送。
@@ -184,7 +297,7 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
             deltaEvent["type"] = "response.output_text.delta";
             deltaEvent["sequence_number"] = sequenceNumber_++;
             deltaEvent["item_id"] = "msg_" + responseId_;
-            deltaEvent["output_index"] = outputItemIndex_;
+            deltaEvent["output_index"] = textOutputIndex_;
             deltaEvent["content_index"] = 0;
             deltaEvent["delta"] = chunk;
             sendSseEvent("response.output_text.delta", deltaEvent);
@@ -194,6 +307,9 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
 
 void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event) {
     toolCalls_.push_back(event);
+    if (nativeToolItems_) {
+        emitNativeToolCall(event);
+    }
 }
 
 void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
@@ -201,66 +317,77 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
         meta_ = event.meta;
     }
 
-    Json::Value outputItem;
-    outputItem["type"] = "message";
-    outputItem["id"] = "msg_" + responseId_;
-    outputItem["status"] = "completed";
-    outputItem["role"] = "assistant";
-    
-    Json::Value content(Json::arrayValue);
-    // 只有当有文本时才添加文本内容
-    if (!outputText_.empty()) {
-        Json::Value textContent;
-        textContent["type"] = "output_text";
-        textContent["text"] = outputText_;
-        textContent["annotations"] = Json::Value(Json::arrayValue);
-        content.append(textContent);
+    auto addUsage = [&event](Json::Value& responseObj) {
+        if (!event.usage.has_value()) return;
+        Json::Value usage(Json::objectValue);
+        usage["input_tokens"] = event.usage->inputTokens;
+        usage["output_tokens"] = event.usage->outputTokens;
+        usage["total_tokens"] = event.usage->totalTokens;
+        responseObj["usage"] = usage;
+    };
+
+    if (nativeToolItems_) {
+        if (textItemAdded_) {
+            Json::Value textDone(Json::objectValue);
+            textDone["type"] = "response.output_text.done";
+            textDone["sequence_number"] = sequenceNumber_++;
+            textDone["item_id"] = "msg_" + responseId_;
+            textDone["output_index"] = textOutputIndex_;
+            textDone["content_index"] = 0;
+            textDone["text"] = outputText_;
+            sendSseEvent("response.output_text.done", textDone);
+
+            Json::Value textItem = buildTextOutputItem("completed");
+            Json::Value itemDone(Json::objectValue);
+            itemDone["type"] = "response.output_item.done";
+            itemDone["sequence_number"] = sequenceNumber_++;
+            itemDone["output_index"] = textOutputIndex_;
+            itemDone["item"] = textItem;
+            sendSseEvent("response.output_item.done", itemDone);
+            nativeOutputItems_.append(textItem);
+        }
+
+        Json::Value responseObj = buildResponseObject("completed");
+        addUsage(responseObj);
+        responseObj["output"] = nativeOutputItems_;
+
+        Json::Value completedEvent(Json::objectValue);
+        completedEvent["type"] = "response.completed";
+        completedEvent["sequence_number"] = sequenceNumber_++;
+        completedEvent["response"] = responseObj;
+        sendSseEvent("response.completed", completedEvent);
+        return;
     }
-    outputItem["content"] = content;
 
-
+    Json::Value outputItem = buildTextOutputItem("completed");
     if (!toolCalls_.empty()) {
         Json::Value toolCallsJson(Json::arrayValue);
         for (const auto& tc : toolCalls_) {
-            Json::Value call;
+            Json::Value call(Json::objectValue);
             call["id"] = tc.id;
             call["type"] = "function";
-            
-            Json::Value func;
+            Json::Value func(Json::objectValue);
             func["name"] = tc.name;
             func["arguments"] = tc.arguments;
             call["function"] = func;
-            
             toolCallsJson.append(call);
         }
         outputItem["tool_calls"] = toolCallsJson;
     }
-    
-    // 发送 response.output_item.done（OpenAI Responses 事件）
+
     Json::Value outputItemDoneEvent(Json::objectValue);
     outputItemDoneEvent["type"] = "response.output_item.done";
     outputItemDoneEvent["sequence_number"] = sequenceNumber_++;
     outputItemDoneEvent["output_index"] = outputItemIndex_;
     outputItemDoneEvent["item"] = outputItem;
     sendSseEvent("response.output_item.done", outputItemDoneEvent);
-    
-    // 响应已完成
+
     Json::Value responseObj = buildResponseObject("completed");
-    
-    // 添加 usage 信息（如果有）
-    if (event.usage.has_value()) {
-        Json::Value usage;
-        usage["input_tokens"] = event.usage->inputTokens;
-        usage["output_tokens"] = event.usage->outputTokens;
-        usage["total_tokens"] = event.usage->totalTokens;
-        responseObj["usage"] = usage;
-    }
-    
-    // 添加输出内容
+    addUsage(responseObj);
     Json::Value output(Json::arrayValue);
     output.append(outputItem);
     responseObj["output"] = output;
-    
+
     Json::Value completedEvent(Json::objectValue);
     completedEvent["type"] = "response.completed";
     completedEvent["sequence_number"] = sequenceNumber_++;

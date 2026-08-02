@@ -15,6 +15,9 @@
 #include <channelManager/channelManager.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <retoolWorkspace/RetoolWorkspaceService.h>
+#include <utils/LoginResponseLogSummary.h>
+#include <utils/NexosRegistrationMailPolicy.h>
+#include <utils/NexosUserAgent.h>
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -30,7 +33,6 @@ constexpr const char* kRetoolLastFailureReasonKey = "retoolapi.provision.last_fa
 constexpr const char* kRetoolCooldownUntilKey = "retoolapi.provision.cooldown_until";
 constexpr int kRetoolFailureThreshold = 3;
 constexpr int kRetoolCooldownMinutes = 30;
-
 struct RetoolProvisionHealth
 {
     int consecutiveFailures = 0;
@@ -201,30 +203,6 @@ bool parseJsonBody(const std::string& body, Json::Value& out, std::string& errs)
     return Json::parseFromStream(reader, s, &out, &errs);
 }
 
-std::string diagnosticBodyPreview(const std::string& body, std::size_t maxBytes = 512) {
-    const std::size_t previewSize = std::min(body.size(), maxBytes);
-    std::string preview;
-    preview.reserve(previewSize + 16);
-    for (std::size_t index = 0; index < previewSize; ++index) {
-        const unsigned char ch = static_cast<unsigned char>(body[index]);
-        if (ch == '\r') {
-            preview += "\\r";
-        } else if (ch == '\n') {
-            preview += "\\n";
-        } else if (ch == '\t') {
-            preview += "\\t";
-        } else if (std::isprint(ch)) {
-            preview.push_back(static_cast<char>(ch));
-        } else {
-            preview.push_back('?');
-        }
-    }
-    if (body.size() > maxBytes) {
-        preview += "...<truncated>";
-    }
-    return preview;
-}
-
 bool isSuccessEnvelope(const Json::Value& json) {
     return json.isObject() && json.isMember("success") && json["success"].asBool() && json.isMember("data");
 }
@@ -246,7 +224,10 @@ Json::Value fetchNexosChatDataByCookie(const std::string& cookieHeader) {
     request->setMethod(HttpMethod::Get);
     request->setPath("/chat.data");
     request->addHeader("accept", "*/*");
-    request->addHeader("user-agent", "Mozilla/5.0");
+    request->addHeader("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
+    request->addHeader("cache-control", "no-cache");
+    request->addHeader("referer", "https://workspace.nexos.ai/");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookieHeader);
 
     auto [result, response] = client->sendRequest(request, 30.0);
@@ -1025,7 +1006,10 @@ bool AccountManager::checkNexosToken(string token)
     request->setMethod(HttpMethod::Get);
     request->setPath("/chat.data");
     request->addHeader("accept", "*/*");
-    request->addHeader("user-agent", "Mozilla/5.0");
+    request->addHeader("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
+    request->addHeader("cache-control", "no-cache");
+    request->addHeader("referer", "https://workspace.nexos.ai/");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", token);
 
     auto [result, response] = client->sendRequest(request);
@@ -1124,22 +1108,30 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     }
     Json::Value responsejson;
     Json::Value normalized;
+    const int httpStatus = static_cast<int>(response->getStatusCode());
+    const std::string contentType = response->getHeader("content-type");
     string body="";
-    if(response->getStatusCode()==200)
+    if(httpStatus==200)
     {
         body=std::string(response->getBody());
-        LOG_INFO << "[账户管理] 登录服务原始响应内容: " << body;
     }
     string errs;
     if (!parseJsonBody(body, responsejson, errs)) {
-        LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: " << errs;
+        LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
+                  << ", " << account_logging::summarizeParseError(errs);
         return Json::Value();
     }
 
     if (!isSuccessEnvelope(responsejson)) {
-        LOG_ERROR << "[账户管理] 登录服务返回失败: " << extractErrorMessageFromEnvelope(responsejson, body);
+        LOG_ERROR << "[账户管理] 登录服务返回失败: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
+                  << ", " << account_logging::summarizeLoginError(responsejson);
         return Json::Value();
     }
+
+    LOG_INFO << "[账户管理] 登录服务响应摘要: "
+             << account_logging::summarizeLoginResponse(responsejson, httpStatus, contentType, body.size());
 
     const auto& resultJson = responsejson["data"]["result"];
     if (!resultJson.isObject()) {
@@ -1212,37 +1204,35 @@ Json::Value AccountManager::getNexosToken(string username,string passwd)
     const std::string body(response->getBody());
 
     if (httpStatus != 200) {
-        LOG_ERROR << "[账户管理] Nexos 登录服务返回非 200 响应: status="
-                  << httpStatus
-                  << ", contentType=" << (contentType.empty() ? "<empty>" : contentType)
-                  << ", bodySize=" << body.size()
-                  << ", bodyPreview=" << diagnosticBodyPreview(body);
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回非 200 响应: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size());
         return Json::Value();
     }
 
-    LOG_INFO << "[账户管理] Nexos 登录服务原始响应内容: " << body;
     if (body.empty()) {
-        LOG_ERROR << "[账户管理] Nexos 登录服务返回 200 但响应体为空: contentType="
-                  << (contentType.empty() ? "<empty>" : contentType);
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回 200 但响应体为空: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size());
         return Json::Value();
     }
 
     Json::Value responsejson;
     std::string errs;
     if (!parseJsonBody(body, responsejson, errs)) {
-        LOG_ERROR << "[账户管理] 解析 Nexos 登录响应 JSON 失败: status="
-                  << httpStatus
-                  << ", contentType=" << (contentType.empty() ? "<empty>" : contentType)
-                  << ", bodySize=" << body.size()
-                  << ", parseError=" << errs
-                  << ", bodyPreview=" << diagnosticBodyPreview(body);
+        LOG_ERROR << "[账户管理] 解析 Nexos 登录响应 JSON 失败: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
+                  << ", " << account_logging::summarizeParseError(errs);
         return Json::Value();
     }
 
     if (!isSuccessEnvelope(responsejson)) {
-        LOG_ERROR << "[账户管理] Nexos 登录服务返回失败: " << extractErrorMessageFromEnvelope(responsejson, body);
+        LOG_ERROR << "[账户管理] Nexos 登录服务返回失败: "
+                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
+                  << ", " << account_logging::summarizeLoginError(responsejson);
         return Json::Value();
     }
+
+    LOG_INFO << "[账户管理] Nexos 登录服务响应摘要: "
+             << account_logging::summarizeLoginResponse(responsejson, httpStatus, contentType, body.size());
 
     const auto& resultJson = responsejson["data"]["result"];
     if (!resultJson.isObject()) {
@@ -1807,15 +1797,17 @@ bool AccountManager::autoRegisterAccount(string apiName)
     workflowBody["identity"]["password"] = password;
 
     if (apiName == "nexosapi") {
+        const auto nexosMailPolicy = nexos::resolveRegistrationMailPolicy(app().getCustomConfig());
         workflowBody["site"] = "nexos";
         workflowBody["mail_policy"]["providers"] = Json::arrayValue;
-        workflowBody["mail_policy"]["providers"].append("smailpro_web");
-        workflowBody["mail_policy"]["providers"].append("gptmail");
+        for (const auto& provider : nexosMailPolicy.providers) {
+            workflowBody["mail_policy"]["providers"].append(provider);
+        }
         workflowBody["mail_policy"]["domain_preference"] = Json::arrayValue;
-        workflowBody["mail_policy"]["domain_preference"].append("gmail.com");
-        workflowBody["mail_policy"]["domain_preference"].append("googlemail.com");
-        workflowBody["mail_policy"]["domain_preference"].append("outlook.com");
-        workflowBody["mail_policy"]["domain_preference"].append("hotmail.com");
+        for (const auto& domain : nexosMailPolicy.domainPreference) {
+            workflowBody["mail_policy"]["domain_preference"].append(domain);
+        }
+        workflowBody["mail_policy"]["expiry_time_ms"] = nexosMailPolicy.expiryTimeMs;
         workflowBody["strategy"]["registration_mode"] = "drission";
         workflowBody["strategy"]["login_mode"] = "drission";
         workflowBody["strategy"]["timeout_seconds"] = 900;
@@ -1839,9 +1831,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
     auto [result, response] = client->sendRequest(request, 300.0);
 
     if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
+        const int httpStatus = response ? static_cast<int>(response->getStatusCode()) : 0;
+        const std::string contentType = response ? response->getHeader("content-type") : "";
+        const std::size_t bodySize = response ? response->getBody().size() : 0;
         LOG_ERROR << "[自动注册] 注册请求失败. Result: " << (int)result
-                  << ", Status: " << (response ? response->getStatusCode() : 0)
-                  << ", Body: " << (response ? response->getBody() : "");
+                  << ", " << account_logging::summarizeLoginTransport(
+                         httpStatus, contentType, bodySize);
         // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
@@ -1852,7 +1847,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
     string errs;
     std::string responseBody(response->getBody());
     if (!parseJsonBody(responseBody, jsonResponse, errs)) {
-        LOG_ERROR << "[自动注册] 解析注册响应失败: " << errs;
+        LOG_ERROR << "[自动注册] 解析注册响应失败: "
+                  << account_logging::summarizeLoginTransport(
+                         static_cast<int>(response->getStatusCode()),
+                         response->getHeader("content-type"),
+                         responseBody.size())
+                  << ", " << account_logging::summarizeParseError(errs);
         // 解析失败，删除待注册记录
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
@@ -1860,7 +1860,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
     }
 
     if (!isSuccessEnvelope(jsonResponse)) {
-        LOG_ERROR << "[自动注册] workflow 创建失败: " << extractErrorMessageFromEnvelope(jsonResponse, responseBody);
+        LOG_ERROR << "[自动注册] workflow 创建失败: "
+                  << account_logging::summarizeLoginTransport(
+                         static_cast<int>(response->getStatusCode()),
+                         response->getHeader("content-type"),
+                         responseBody.size())
+                  << ", " << account_logging::summarizeLoginError(jsonResponse);
         accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
         accountDbManager->deleteWaitingAccount(waitingId);
         return false;
@@ -2190,11 +2195,19 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
                     return hasProAccess;
                 }
             } else {
-                LOG_ERROR << "[账户管理] 解析 Pro 权限响应 JSON 失败: " << errs;
+                LOG_ERROR << "[账户管理] 解析 Pro 权限响应 JSON 失败: "
+                          << account_logging::summarizeLoginTransport(
+                                 static_cast<int>(response->getStatusCode()),
+                                 response->getHeader("content-type"),
+                                 body.size())
+                          << ", " << account_logging::summarizeParseError(errs);
             }
         } else {
             LOG_ERROR << "[账户管理] 查询 Pro 权限接口返回错误: " << response->getStatusCode()
-                      << " - " << response->getBody();
+                      << ", " << account_logging::summarizeLoginTransport(
+                             static_cast<int>(response->getStatusCode()),
+                             response->getHeader("content-type"),
+                             response->getBody().size());
         }
     } catch (const std::exception& e) {
         LOG_ERROR << "[账户管理] 查询 Pro 权限时捕获异常: " << e.what();

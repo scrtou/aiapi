@@ -4,6 +4,7 @@
 #include <dbManager/account/accountBackupDbManager.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
+#include <utils/NexosUserAgent.h>
 #include <utils/BackgroundTaskQueue.h>
 
 #include <algorithm>
@@ -485,7 +486,7 @@ nexosapi::ChatDataPayload nexosapi::fetchChatDataPayload(const std::string& cook
     request->addHeader("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
     request->addHeader("cache-control", "no-cache");
     request->addHeader("referer", baseUrl_ + "/");
-    request->addHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookies);
 
     auto [result, response] = client->sendRequest(request);
@@ -858,7 +859,7 @@ std::string nexosapi::createChatId(const std::string& cookies) const
     request->addHeader("accept-language", "zh-CN,zh;q=0.9,en;q=0.8");
     request->addHeader("cache-control", "no-cache");
     request->addHeader("referer", baseUrl_ + "/");
-    request->addHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookies);
 
     auto [result, response] = client->sendRequest(request);
@@ -931,7 +932,7 @@ std::string nexosapi::fetchLastMessageId(const std::string& chatId, const std::s
     request->addHeader("cache-control", "no-cache");
     request->addHeader("content-type", "application/json");
     request->addHeader("referer", baseUrl_ + "/chat/" + chatId);
-    request->addHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookies);
 
     auto [result, response] = client->sendRequest(request);
@@ -1021,7 +1022,7 @@ std::string nexosapi::sendChatRequest(
     request->addHeader("sec-fetch-dest", "empty");
     request->addHeader("sec-fetch-mode", "cors");
     request->addHeader("sec-fetch-site", "same-origin");
-    request->addHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookies);
 
     auto [result, response] = client->sendRequest(request);
@@ -1076,7 +1077,7 @@ Json::Value nexosapi::fetchWhoamiPayload(const std::string& cookies) const
     request->setMethod(Get);
     request->setPath("/oryBridge/.ory/sessions/whoami");
     request->addHeader("accept", "application/json");
-    request->addHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36");
+    request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookies);
 
     auto [result, response] = client->sendRequest(request);

@@ -1,4 +1,5 @@
 #include "ConfigValidator.h"
+#include "NexosRegistrationMailPolicy.h"
 #include <algorithm>
 
 namespace {
@@ -106,6 +107,12 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
             result.valid = false;
             result.errors.emplace_back("account_automation.auto_register_enabled 必须为布尔值");
         }
+    }
+
+    std::string nexosMailPolicyError;
+    if (!nexos::validateRegistrationMailPolicy(custom, &nexosMailPolicyError)) {
+        result.valid = false;
+        result.errors.emplace_back(nexosMailPolicyError);
     }
 
     if (custom.isMember("error_stats") && custom["error_stats"].isObject()) {

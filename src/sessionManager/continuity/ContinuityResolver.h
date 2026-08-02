@@ -9,7 +9,8 @@
  */
 struct ContinuityDecision {
     enum class Source {
-        PreviousResponseId,  // // Responses： previous_响应_id 命中
+        PreviousResponseId,  // Responses：previous_response_id 命中
+        ClientSession,       // Codex thread-id/session-id 稳定会话
         ZeroWidth,           // 零宽字符解析命中
         Hash,                // Hash 规则
         NewSession           // 创建新会话
