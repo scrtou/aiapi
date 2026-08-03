@@ -201,6 +201,50 @@ DROGON_TEST(RequestAdapters_RequestIdHeaders)
     CHECK(responsesReq.requestId == "corr:456");
 }
 
+DROGON_TEST(RequestAdapters_CodexCliStableSessionFromHeader)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "hello";
+
+    auto req = makeJsonRequest(body, "codex_cli_rs/0.133.0");
+    req->addHeader("session-id", "codex-session-123");
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
+    CHECK(genReq.clientInfo["client_session_id"].asString() == "codex-session-123");
+    CHECK(genReq.clientInfo["client_session_source"].asString() == "header.session-id");
+}
+
+DROGON_TEST(RequestAdapters_CodexCliStableSessionFromBodyFallback)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "hello";
+    body["conversation_id"] = "conversation-body-456";
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body, "codex_cli_rs/0.133.0"));
+
+    CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
+    CHECK(genReq.clientInfo["client_session_id"].asString() == "conversation-body-456");
+    CHECK(genReq.clientInfo["client_session_source"].asString() == "body.conversation_id");
+}
+
+DROGON_TEST(RequestAdapters_CodexWindowIdIsNotUsedAsConversationId)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "hello";
+
+    auto req = makeJsonRequest(body);
+    req->addHeader("x-codex-window-id", "window-only-789");
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+
+    CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
+    CHECK(!genReq.clientInfo.isMember("client_session_id"));
+}
+
 DROGON_TEST(RequestAdapters_Responses_InputItems)
 {
     Json::Value body;

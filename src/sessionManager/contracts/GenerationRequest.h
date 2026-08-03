@@ -115,6 +115,18 @@ struct ImageInfo {
     int height = 0;
 };
 
+namespace continuity {
+
+inline bool hasStableClientSession(const Json::Value& clientInfo) {
+    return clientInfo.isObject() &&
+           clientInfo.get("client_type", "").asString() == "Codex" &&
+           clientInfo.isMember("client_session_id") &&
+           clientInfo["client_session_id"].isString() &&
+           !clientInfo["client_session_id"].asString().empty();
+}
+
+} // namespace continuity
+
 /**
  * @brief 统一生成请求
  *

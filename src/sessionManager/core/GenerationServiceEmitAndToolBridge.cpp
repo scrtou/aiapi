@@ -781,9 +781,13 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     const std::string& sessionIdToEmbed =
         !session.state.nextSessionId.empty() ? session.state.nextSessionId : session.state.conversationId;
 
-    if (sessionManager.isZeroWidthMode() && clientType != "Codex" && !sessionIdToEmbed.empty()) {
-        if (!toolCalls.empty() && clientType == "claudecode") {
-            // 客户端 + 有工具调用：单独发送零宽会话ID
+    const bool usesStableClientSession =
+        continuity::hasStableClientSession(session.provider.clientInfo);
+    if (sessionManager.isZeroWidthMode() &&
+        !usesStableClientSession &&
+        !sessionIdToEmbed.empty()) {
+        if (!toolCalls.empty() && (clientType == "claudecode" || clientType == "Codex")) {
+            // 工具客户端可能在 tool_calls 后停止消费文本，因此先发送仅含零宽 ID 的文本事件。
             std::string zwOnly = chatSession::embedSessionIdInText("", sessionIdToEmbed);
             if (!zwOnly.empty()) {
                 generation::OutputTextDone zwDone;
@@ -794,7 +798,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
                          << "（当前会话: " << session.state.conversationId << ")";
             }
         } else {
-            // 其他情况：在文本末尾嵌入会话ID
+            // 普通文本回复在正文末尾嵌入会话 ID。
             textContent = chatSession::embedSessionIdInText(textContent, sessionIdToEmbed);
             LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << sessionIdToEmbed
                      << "（当前会话: " << session.state.conversationId << ")";

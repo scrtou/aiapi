@@ -103,6 +103,51 @@ DROGON_TEST(ContinuityResolver_ZeroWidth_Decode_Miss_NewSession)
     CHECK(d.sessionId.rfind("sess_", 0) == 0);
 }
 
+DROGON_TEST(ContinuityResolver_CodexStableSession_WinsWithoutChangingConfiguredMode)
+{
+    auto* mgr = chatSession::getInstance();
+    mgr->setTrackingMode(SessionTrackingMode::ZeroWidth);
+
+    GenerationRequest req;
+    req.endpointType = EndpointType::Responses;
+    req.model = "GPT-4o";
+    req.clientInfo["client_type"] = "Codex";
+    req.clientInfo["client_session_id"] = "conversation-123";
+    req.clientInfo["client_session_source"] = "body.conversation_id";
+    req.clientInfo["client_authorization"] = "tenant-a";
+
+    ContinuityResolver resolver;
+    const auto first = resolver.resolve(req);
+    const auto second = resolver.resolve(req);
+
+    CHECK(first.source == ContinuityDecision::Source::ClientSession);
+    CHECK(first.mode == SessionTrackingMode::ZeroWidth);
+    CHECK(first.sessionId.rfind("codex_", 0) == 0);
+    CHECK(first.sessionId == second.sessionId);
+
+    req.clientInfo["client_authorization"] = "tenant-b";
+    const auto otherTenant = resolver.resolve(req);
+    CHECK(otherTenant.sessionId != first.sessionId);
+}
+
+DROGON_TEST(ContinuityResolver_CodexWithoutStableSession_UsesConfiguredHash)
+{
+    auto* mgr = chatSession::getInstance();
+    mgr->setTrackingMode(SessionTrackingMode::Hash);
+
+    GenerationRequest req;
+    req.endpointType = EndpointType::ChatCompletions;
+    req.model = "GPT-4o";
+    req.clientInfo["client_type"] = "Codex";
+    req.messages.push_back(Message::user("hi"));
+
+    ContinuityResolver resolver;
+    const auto d = resolver.resolve(req);
+
+    CHECK(d.source == ContinuityDecision::Source::Hash);
+    CHECK(isHex64(d.sessionId));
+}
+
 DROGON_TEST(ContinuityResolver_Hash_Path_NonEmpty)
 {
     auto* mgr = chatSession::getInstance();

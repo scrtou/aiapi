@@ -53,6 +53,58 @@ std::string requestIdFromHeaders(const HttpRequestPtr& req)
     return requestId;
 }
 
+bool assignClientSessionId(Json::Value& clientInfo,
+                           const std::string& rawValue,
+                           const std::string& source)
+{
+    const std::string normalized = normalizeIncomingRequestId(rawValue);
+    if (normalized.empty()) {
+        return false;
+    }
+
+    clientInfo["client_session_id"] = normalized;
+    clientInfo["client_session_source"] = source;
+    return true;
+}
+
+void supplementClientSessionIdFromBody(Json::Value& clientInfo,
+                                       const Json::Value& requestBody)
+{
+    if (clientInfo.get("client_type", "").asString() != "Codex" ||
+        continuity::hasStableClientSession(clientInfo)) {
+        return;
+    }
+
+    const auto tryFields = [&clientInfo](const Json::Value& object,
+                                         const std::string& prefix) {
+        if (!object.isObject()) {
+            return false;
+        }
+
+        static const char* kFields[] = {
+            "thread_id",
+            "session_id",
+            "conversation_id"
+        };
+        for (const char* field : kFields) {
+            if (object.isMember(field) && object[field].isString() &&
+                assignClientSessionId(clientInfo,
+                                      object[field].asString(),
+                                      prefix + field)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (tryFields(requestBody, "body.")) {
+        return;
+    }
+    if (requestBody.isMember("metadata")) {
+        tryFields(requestBody["metadata"], "body.metadata.");
+    }
+}
+
 Json::StreamWriterBuilder& compactJsonWriter()
 {
     static thread_local Json::StreamWriterBuilder writer = [] {
@@ -248,6 +300,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
         genReq.clientInfo["workspace_id"] = reqBody["workspace_id"].asString();
     }
+    supplementClientSessionIdFromBody(genReq.clientInfo, reqBody);
     
 
     std::vector<ImageInfo> images;
@@ -361,6 +414,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
         genReq.clientInfo["workspace_id"] = reqBody["workspace_id"].asString();
     }
+    supplementClientSessionIdFromBody(genReq.clientInfo, reqBody);
     
     // 3. 处理 previous_响应_id（用于续聊）
     if (reqBody.isMember("previous_response_id") &&
@@ -459,18 +513,20 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     const std::string codexWindowId = req->getHeader("x-codex-window-id");
     const bool isCodex = originator == "codex-tui" ||
                          userAgent.rfind("codex-tui/", 0) == 0 ||
+                         userAgent.rfind("codex_cli_rs/", 0) == 0 ||
                          !codexWindowId.empty();
     std::string clientType = userAgent;
 
     if (isCodex) {
         clientType = "Codex";
         clientInfo["client_variant"] = "codex-tui";
-        std::string clientSessionId = normalizeIncomingRequestId(req->getHeader("thread-id"));
-        if (clientSessionId.empty()) {
-            clientSessionId = normalizeIncomingRequestId(req->getHeader("session-id"));
-        }
-        if (!clientSessionId.empty()) {
-            clientInfo["client_session_id"] = clientSessionId;
+        if (!assignClientSessionId(clientInfo, req->getHeader("thread-id"), "header.thread-id") &&
+            !assignClientSessionId(clientInfo, req->getHeader("session-id"), "header.session-id") &&
+            !assignClientSessionId(clientInfo, req->getHeader("session_id"), "header.session_id") &&
+            !assignClientSessionId(clientInfo, req->getHeader("conversation-id"), "header.conversation-id")) {
+            assignClientSessionId(clientInfo,
+                                  req->getHeader("conversation_id"),
+                                  "header.conversation_id");
         }
     } else if (userAgent.find("Kilo-Code") != std::string::npos) {
         clientType = "Kilo-Code";

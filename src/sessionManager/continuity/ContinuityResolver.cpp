@@ -47,16 +47,24 @@ ContinuityDecision ContinuityResolver::resolve(const GenerationRequest& req) con
         }
     }
 
-    // Codex 自带稳定的 thread-id/session-id。优先使用该标识，避免零宽字符
-    // 污染补丁、JSON 和工具参数，并确保没有 previous_response_id 时仍可续聊。
-    if (req.clientInfo.get("client_type", "").asString() == "Codex" &&
-        req.clientInfo.isMember("client_session_id") &&
-        req.clientInfo["client_session_id"].isString() &&
-        !req.clientInfo["client_session_id"].asString().empty()) {
+    // 只有当前请求确实携带稳定客户端会话 ID 时才绕过 ZeroWidth/Hash。
+    // 内部主键加入调用方作用域，避免不同 API 用户使用相同客户端 ID 时串话。
+    if (continuity::hasStableClientSession(req.clientInfo)) {
+        Json::Value keyData(Json::objectValue);
+        keyData["kind"] = "client_session";
+        keyData["client_type"] = req.clientInfo.get("client_type", "").asString();
+        keyData["session_id"] = req.clientInfo["client_session_id"].asString();
+
+        std::string scope = req.clientInfo.get("client_authorization", "").asString();
+        if (scope.empty()) {
+            scope = req.clientInfo.get("workspace_id", "").asString();
+        }
+        keyData["scope"] = scope;
+
         decision.source = ContinuityDecision::Source::ClientSession;
-        decision.mode = SessionTrackingMode::Hash;
-        decision.sessionId = "codex_" + req.clientInfo["client_session_id"].asString();
-        decision.debug = "codex client session";
+        decision.sessionId = "codex_" + chatSession::generateConversationKey(keyData);
+        decision.debug = "codex client session (" +
+                         req.clientInfo.get("client_session_source", "unknown").asString() + ")";
         return decision;
     }
 

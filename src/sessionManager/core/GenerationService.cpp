@@ -256,11 +256,11 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             return AppError::cancelled("请求已取消");
         }
         
-        // 5. 预生成下一轮会话 ID。Codex 使用客户端 thread-id 作为稳定键，
-        // 因此在原键上提交；其他客户端保留现有 Hash/ZeroWidth 迁移行为。
-        const bool isCodexClient =
-            session.provider.clientInfo.get("client_type", "").asString() == "Codex";
-        if (isCodexClient) {
+        // 5. 仅当当前请求确实提供稳定客户端会话 ID 时原位提交。
+        // Codex 未提供稳定 ID 时必须与其他客户端一样按全局 ZeroWidth/Hash 模式迁移。
+        const bool usesStableClientSession =
+            continuity::hasStableClientSession(session.provider.clientInfo);
+        if (usesStableClientSession) {
             session.state.nextSessionId = session.state.conversationId;
         } else {
             sessionManager.prepareNextSessionId(session);
