@@ -8,6 +8,7 @@ set(TEST_SOURCES
     test_error_stats_config.cpp
     test_response_index.cpp
     test_continuity_resolver.cpp
+    test_history_replay_budget.cpp
     test_request_adapters.cpp
     test_xml_tool_call_codec.cpp
     test_tool_call_validator.cpp
@@ -30,6 +31,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/metrics/ErrorStatsDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ResponseIndex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/HistoryReplayBudget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/TextExtractor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ContinuityResolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/Session.cpp

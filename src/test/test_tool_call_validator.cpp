@@ -16,11 +16,35 @@ Json::Value makeToolDefs() {
     required.append("path");
     required.append("content");
     tool["function"]["parameters"]["required"] = required;
-
     tool["function"]["parameters"]["properties"]["path"]["type"] = "string";
     tool["function"]["parameters"]["properties"]["content"]["type"] = "string";
-
     tools.append(tool);
+
+    Json::Value suggest;
+    suggest["type"] = "function";
+    suggest["function"]["name"] = "suggest";
+    auto& parameters = suggest["function"]["parameters"];
+    parameters["type"] = "object";
+
+    Json::Value suggestRequired(Json::arrayValue);
+    suggestRequired.append("actions");
+    suggestRequired.append("answer");
+    parameters["required"] = suggestRequired;
+
+    auto& actions = parameters["properties"]["actions"];
+    actions["type"] = "array";
+    actions["minItems"] = 1;
+    actions["items"]["type"] = "object";
+    Json::Value itemRequired(Json::arrayValue);
+    itemRequired.append("label");
+    actions["items"]["required"] = itemRequired;
+    actions["items"]["properties"]["label"]["type"] = "string";
+    actions["items"]["properties"]["label"]["minLength"] = 1;
+
+    parameters["properties"]["answer"]["type"] = "string";
+    parameters["properties"]["answer"]["minLength"] = 1;
+    tools.append(suggest);
+
     return tools;
 }
 
@@ -96,4 +120,74 @@ DROGON_TEST(ToolCallValidator_Relaxed_CriticalFieldEmpty)
     );
 
     CHECK(!result.valid);
+}
+
+DROGON_TEST(ToolCallValidator_Relaxed_SuggestRejectsEmptyActions)
+{
+    ToolCallValidator validator(makeToolDefs(), "Kilo-Code");
+    auto result = validator.validate(
+        makeToolCall("suggest", R"({"actions":[],"answer":"Apply the fix"})"),
+        ValidationMode::Relaxed
+    );
+
+    CHECK(!result.valid);
+}
+
+DROGON_TEST(ToolCallValidator_Relaxed_SuggestRejectsMalformedAction)
+{
+    ToolCallValidator validator(makeToolDefs(), "Kilo-Code");
+    auto result = validator.validate(
+        makeToolCall("suggest", R"({"actions":[{}],"answer":"Apply the fix"})"),
+        ValidationMode::Relaxed
+    );
+
+    CHECK(!result.valid);
+}
+
+DROGON_TEST(ToolCallValidator_Relaxed_SuggestRequiresCriticalFields)
+{
+    ToolCallValidator validator(makeToolDefs(), "Kilo-Code");
+    auto result = validator.validate(
+        makeToolCall("suggest", R"({"answer":"Apply the fix"})"),
+        ValidationMode::Relaxed
+    );
+
+    CHECK(!result.valid);
+}
+
+DROGON_TEST(ToolCallValidator_Relaxed_SuggestAcceptsValidActions)
+{
+    ToolCallValidator validator(makeToolDefs(), "Kilo-Code");
+    auto result = validator.validate(
+        makeToolCall("suggest", R"({"actions":[{"label":"Apply fix"}],"answer":"Apply the fix"})"),
+        ValidationMode::Relaxed
+    );
+
+    CHECK(result.valid);
+}
+
+DROGON_TEST(ToolCallValidator_Relaxed_EnumErrorIncludesActualAndAllowed)
+{
+    Json::Value tools(Json::arrayValue);
+    Json::Value tool;
+    tool["type"] = "function";
+    tool["function"]["name"] = "read_file";
+    auto& parameters = tool["function"]["parameters"];
+    parameters["type"] = "object";
+    parameters["properties"]["path"]["type"] = "string";
+    auto& mode = parameters["properties"]["mode"];
+    mode["type"] = "string";
+    mode["enum"].append("slice");
+    mode["enum"].append("indentation");
+    tools.append(tool);
+
+    ToolCallValidator validator(tools, "RooCode");
+    auto result = validator.validate(
+        makeToolCall("read_file", R"({"path":"README.md","mode":"read"})"),
+        ValidationMode::Relaxed
+    );
+
+    CHECK(!result.valid);
+    CHECK(result.errorMessage.find("actual=\"read\"") != std::string::npos);
+    CHECK(result.errorMessage.find("allowed=[\"slice\",\"indentation\"]") != std::string::npos);
 }

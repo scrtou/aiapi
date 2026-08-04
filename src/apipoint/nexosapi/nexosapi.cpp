@@ -4,6 +4,7 @@
 #include <dbManager/account/accountBackupDbManager.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
+#include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <utils/NexosUserAgent.h>
 #include <utils/BackgroundTaskQueue.h>
 
@@ -1120,34 +1121,76 @@ std::string nexosapi::extractEmailFromWhoami(const Json::Value& whoamiPayload) c
     return "";
 }
 
-std::string nexosapi::buildUserPrompt(const session_st& session, bool useExistingChat) const
+std::string nexosapi::buildUserPrompt(
+    const session_st& session,
+    bool useExistingChat,
+    bool includeHistory,
+    bool* historyIncluded
+) const
 {
+    if (historyIncluded) {
+        *historyIncluded = false;
+    }
     if (useExistingChat) {
         return session.request.message;
     }
 
-    std::ostringstream prompt;
+    static const std::string historyHeader =
+        "接下来是 OpenAI 风格的历史消息，请继续保持上下文一致：\n";
+    static const std::string currentHeader = "用户当前的问题是：\n";
 
+    continuity::HistoryReplaySelection historySelection;
+    if (includeHistory) {
+        const size_t fixedBytes = session.request.systemPrompt.size() +
+            session.request.message.size() + historyHeader.size() + currentHeader.size() + 8;
+        const std::string currentHistoryMessage = session.request.rawMessage.empty()
+            ? session.request.message
+            : session.request.rawMessage;
+        historySelection = continuity::selectRecentHistory(
+            session.provider.messageContext,
+            continuity::remainingHistoryBudget(
+                continuity::historyReplayMaxRequestBytes(),
+                fixedBytes
+            ),
+            continuity::historyReplayMaxMessageBytes(),
+            false,
+            currentHistoryMessage
+        );
+    }
+
+    const bool selectedHistory = !historySelection.messages.empty();
+    if (historyIncluded) {
+        *historyIncluded = selectedHistory;
+    }
+
+    std::ostringstream prompt;
     if (!session.request.systemPrompt.empty()) {
         prompt << session.request.systemPrompt;
     }
-
-    if (!session.provider.messageContext.empty()) {
-        if (prompt.tellp() > 0) {
-            prompt << "\n\n";
-        }
-        prompt << "接下来是 OpenAI 风格的历史消息，请继续保持上下文一致：\n";
-        prompt << jsonCompactString(session.provider.messageContext);
+    if (selectedHistory) {
+        if (prompt.tellp() > 0) prompt << "\n\n";
+        prompt << historyHeader << jsonCompactString(historySelection.messages);
     }
-
     if (!session.request.message.empty()) {
-        if (prompt.tellp() > 0) {
-            prompt << "\n\n";
-        }
-        prompt << "用户当前的问题是：\n" << session.request.message;
+        if (prompt.tellp() > 0) prompt << "\n\n";
+        prompt << currentHeader << session.request.message;
     }
 
-    return prompt.str();
+    const std::string result = prompt.str();
+    if (includeHistory) {
+        LOG_INFO << "[nexosapi] 新会话历史预算: original="
+                 << historySelection.originalMessages
+                 << ", selected=" << historySelection.selectedMessages
+                 << ", selectedTurns=" << historySelection.selectedTurns
+                 << ", selectedBytes=" << historySelection.selectedBytes
+                 << ", replacedOversize=" << historySelection.skippedOversizeMessages
+                 << ", normalizedTools=" << historySelection.normalizedToolMessages
+                 << ", skippedForBudget=" << historySelection.skippedForBudget
+                 << ", omissionNotice=" << historySelection.omissionNoticeAdded
+                 << ", skippedDuplicateCurrent=" << historySelection.skippedDuplicateCurrentMessage
+                 << ", promptBytes=" << result.size();
+    }
+    return result;
 }
 
 provider::ProviderResult nexosapi::requestChatCompletion(session_st& session)
@@ -1190,10 +1233,16 @@ provider::ProviderResult nexosapi::requestChatCompletion(session_st& session)
         const std::string lastMessageId = reuseExistingChat
             ? fetchLastMessageId(chatId, account->authToken)
             : "";
-        const std::string prompt = buildUserPrompt(session, reuseExistingChat);
+        bool promptIncludedHistory = false;
+        std::string prompt = buildUserPrompt(
+            session,
+            reuseExistingChat,
+            true,
+            &promptIncludedHistory
+        );
 
         int httpStatus = 0;
-        const std::string raw = sendChatRequest(
+        std::string raw = sendChatRequest(
             chatId,
             handlerId,
             prompt,
@@ -1201,6 +1250,26 @@ provider::ProviderResult nexosapi::requestChatCompletion(session_st& session)
             account->authToken,
             httpStatus
         );
+
+        if (httpStatus == 413 && !reuseExistingChat && promptIncludedHistory) {
+            const std::string retryPrompt = buildUserPrompt(
+                session,
+                false,
+                false,
+                nullptr
+            );
+            LOG_WARN << "[nexosapi] 新会话请求因历史负载返回 413，去除历史后重试: originalBytes="
+                     << prompt.size() << ", retryBytes=" << retryPrompt.size();
+            prompt = retryPrompt;
+            raw = sendChatRequest(
+                chatId,
+                handlerId,
+                prompt,
+                lastMessageId,
+                account->authToken,
+                httpStatus
+            );
+        }
 
         if (httpStatus != 200) {
             std::string message = "Nexos upstream returned error";

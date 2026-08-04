@@ -1,6 +1,6 @@
 #include "sessionManager/tooling/StrictClientRules.h"
 #include <drogon/drogon.h>
-#include <json/json.h>
+#include <array>
 #include <iomanip>
 #include <random>
 #include <sstream>
@@ -24,9 +24,128 @@ std::string generateFallbackToolCallId() {
     return oss.str();
 }
 
+constexpr std::array<const char*, 4> kApplyDiffFailureMarkers = {
+    "No sufficiently similar match found",
+    "Unable to apply diff to file",
+    "But unable to apply all diff parts",
+    "Invalid diff format - missing required sections"
+};
+
+bool textContainsApplyDiffFailure(const std::string& text) {
+    if (text.empty()) return false;
+    for (const char* marker : kApplyDiffFailureMarkers) {
+        if (text.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
+bool looksLikeReadFileResult(const std::string& text) {
+    const size_t firstNonSpace = text.find_first_not_of(" \t\r\n");
+    if (firstNonSpace == std::string::npos || text.compare(firstNonSpace, 6, "File: ") != 0) {
+        return false;
+    }
+    return text.find('\n', firstNonSpace) != std::string::npos &&
+        text.find(" | ", firstNonSpace) != std::string::npos;
+}
+
+void collectTextValuesInOrder(const Json::Value& value, std::vector<std::string>& output) {
+    if (value.isString()) {
+        output.push_back(value.asString());
+        return;
+    }
+    if (value.isArray()) {
+        for (const auto& item : value) {
+            collectTextValuesInOrder(item, output);
+        }
+        return;
+    }
+    if (!value.isObject()) return;
+
+    // Message objects should be traversed through content first; this preserves
+    // conversational order and avoids treating metadata as recovery evidence.
+    if (value.isMember("content")) {
+        collectTextValuesInOrder(value["content"], output);
+        return;
+    }
+    if (value.isMember("text")) {
+        collectTextValuesInOrder(value["text"], output);
+        return;
+    }
+
+    for (const auto& name : value.getMemberNames()) {
+        collectTextValuesInOrder(value[name], output);
+    }
+}
+
+void updateApplyDiffRecoveryState(const std::string& text, bool& pendingRecovery) {
+    if (textContainsApplyDiffFailure(text)) {
+        pendingRecovery = true;
+        return;
+    }
+    if (pendingRecovery && looksLikeReadFileResult(text)) {
+        pendingRecovery = false;
+    }
+}
+
 }
 
 namespace toolcall {
+
+bool hasToolNamed(const Json::Value& tools, const std::string& toolName) {
+    if (!tools.isArray() || toolName.empty()) return false;
+
+    for (const auto& tool : tools) {
+        if (!tool.isObject() || tool.get("type", "").asString() != "function") continue;
+        const auto& function = tool["function"];
+        if (function.isObject() && function.get("name", "").asString() == toolName) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasApplyDiffFailureContext(
+    const Json::Value& messageContext,
+    const std::string& currentMessage,
+    const std::string& rawMessage
+) {
+    std::vector<std::string> orderedTexts;
+    collectTextValuesInOrder(messageContext, orderedTexts);
+
+    bool pendingRecovery = false;
+    for (const auto& text : orderedTexts) {
+        updateApplyDiffRecoveryState(text, pendingRecovery);
+    }
+
+    // currentMessage/rawMessage can carry the latest tool result depending on
+    // the request adapter. Inspect them last, but avoid processing duplicates.
+    updateApplyDiffRecoveryState(currentMessage, pendingRecovery);
+    if (rawMessage != currentMessage) {
+        updateApplyDiffRecoveryState(rawMessage, pendingRecovery);
+    }
+    return pendingRecovery;
+}
+
+std::string buildStrictApplyDiffPolicy(bool recoveringFromFailure) {
+    std::ostringstream policy;
+    policy << "\nStrict apply_diff safety rules for RooCode/Kilo-Code:\n";
+    policy << "- Use only Roo SEARCH/REPLACE blocks (<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE); never use ---/+++ Unified Diff syntax.\n";
+    policy << "- Copy every SEARCH line verbatim from the latest read_file result or the tool error's Best Match Found block.\n";
+    policy << "- SEARCH matching is case-sensitive and requires a 100% exact match. Preserve capitalization, whitespace, punctuation, and Unicode characters.\n";
+    policy << "- Never normalize or rewrite identifiers, comments, paths, or filenames inside SEARCH text.\n";
+    policy << "- Verify identifiers and filename capitalization from the latest read/list result before placing them in REPLACE text.\n";
+    policy << "- Prefer a small block for one logical edit instead of combining unrelated edits.\n";
+
+    if (recoveringFromFailure) {
+        policy << "\nRecovery required: a previous apply_diff attempt failed or only partially modified the file.\n";
+        policy << "- Do NOT resend the same path+diff payload.\n";
+        policy << "- Your next tool call should read_file the smallest affected range before retrying the edit.\n";
+        policy << "- If the error contains Best Match Found, copy its relevant lines exactly; do not paraphrase or change case.\n";
+        policy << "- If the result says operation: modified but not all parts applied, treat the file as changed and re-read it before any retry.\n";
+    }
+
+    return policy.str();
+}
 
 void applyStrictClientRules(
     const std::string& clientType,

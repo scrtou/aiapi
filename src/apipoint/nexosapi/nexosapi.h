@@ -63,7 +63,12 @@ class nexosapi : public APIinterface
     std::shared_ptr<Accountinfo_st> selectAccountByUserName(const std::string& userName);
     ChatDataPayload fetchChatDataPayload(const std::string& cookies) const;
     RuntimeModelData fetchRuntimeModelData(const std::string& cookies);
-    std::string buildUserPrompt(const session_st& session, bool useExistingChat) const;
+    std::string buildUserPrompt(
+        const session_st& session,
+        bool useExistingChat,
+        bool includeHistory = true,
+        bool* historyIncluded = nullptr
+    ) const;
     std::string ensureChatId(const session_st& session, const std::shared_ptr<Accountinfo_st>& account, bool reuseExistingChat);
     std::string createChatId(const std::string& cookies) const;
     std::string resolveHandlerId(const RuntimeModelData& runtimeModels, const std::string& requestedModel) const;

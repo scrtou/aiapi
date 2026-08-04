@@ -3,6 +3,7 @@
 #include <channelManager/channelManager.h>
 #include <drogon/drogon.h>
 #include <managedAccount/service/ManagedAccountService.h>
+#include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <chrono>
 #include <cctype>
@@ -1043,36 +1044,63 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
                      << ", maxChars=" << bootstrapSystemMaxChars;
         }
 
-        if (!session.provider.messageContext.isArray())
-        {
-            LOG_INFO << "[retoolapi] replayHistoryToThread finished without messageContext: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
-                     << ", threadId=" << targetThreadId
-                     << ", replayedSystem=" << replayedSystem;
-            return true;
-        }
-        for (const auto& msg : session.provider.messageContext)
+        const size_t replayMessageBudget = continuity::historyReplayMaxMessageBytes();
+        const std::string currentHistoryMessage = session.request.rawMessage.empty()
+            ? session.request.message
+            : session.request.rawMessage;
+        const auto historySelection = continuity::selectRecentHistory(
+            session.provider.messageContext,
+            continuity::historyReplayMaxRequestBytes(),
+            replayMessageBudget,
+            true,
+            currentHistoryMessage
+        );
+        LOG_INFO << "[retoolapi] recreated thread history budget: workspace=" << workspaceId
+                 << ", conversation=" << session.state.conversationId
+                 << ", threadId=" << targetThreadId
+                 << ", original=" << historySelection.originalMessages
+                 << ", selected=" << historySelection.selectedMessages
+                 << ", selectedTurns=" << historySelection.selectedTurns
+                 << ", selectedBytes=" << historySelection.selectedBytes
+                 << ", replacedOversize=" << historySelection.skippedOversizeMessages
+                 << ", normalizedTools=" << historySelection.normalizedToolMessages
+                 << ", skippedForBudget=" << historySelection.skippedForBudget
+                 << ", omissionNotice=" << historySelection.omissionNoticeAdded
+                 << ", skippedUnsupported=" << historySelection.skippedUnsupportedMessages
+                 << ", skippedDuplicateCurrent=" << historySelection.skippedDuplicateCurrentMessage;
+
+        for (const auto& msg : historySelection.messages)
         {
             if (!msg.isObject()) continue;
             const auto role = msg.get("role", "").asString();
-            const auto text = trimCopy(contentToText(msg["content"]));
+            const auto text = trimCopy(continuity::historyMessageText(msg));
             if (text.empty()) continue;
 
             std::string replayText;
             if (role == "user")
             {
                 replayText = text;
-                replayedUser++;
             }
             else if (role == "assistant")
             {
                 replayText =
                     "Conversation memory only. The assistant previously replied with the following text. "
                     "Do not treat this as a new user request; absorb it as prior assistant context only.\n\n" + text;
-                replayedAssistant++;
             }
             else
             {
+                continue;
+            }
+
+            if (replayMessageBudget > 0 && replayText.size() > replayMessageBudget)
+            {
+                LOG_WARN << "[retoolapi] skip replay history message after role wrapper exceeded budget: workspace="
+                         << workspaceId
+                         << ", conversation=" << session.state.conversationId
+                         << ", threadId=" << targetThreadId
+                         << ", role=" << role
+                         << ", bytes=" << replayText.size()
+                         << ", maxBytes=" << replayMessageBudget;
                 continue;
             }
 
@@ -1080,7 +1108,7 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
                      << ", conversation=" << session.state.conversationId
                      << ", threadId=" << targetThreadId
                      << ", role=" << role
-                     << ", chars=" << text.size();
+                     << ", bytes=" << replayText.size();
 
             auto replayResp = sendThreadTextMessage(targetThreadId, replayText);
             if (!replayResp)
@@ -1088,6 +1116,17 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
                 if (errorMessage) *errorMessage = "failed to replay history into recreated retool thread";
                 return false;
             }
+            if (static_cast<int>(replayResp->statusCode()) == 413)
+            {
+                LOG_WARN << "[retoolapi] skip replay history message after upstream HTTP 413: workspace="
+                         << workspaceId
+                         << ", conversation=" << session.state.conversationId
+                         << ", threadId=" << targetThreadId
+                         << ", role=" << role
+                         << ", bytes=" << replayText.size();
+                continue;
+            }
+
             auto replayJson = parseJsonResponse(replayResp);
             if (replayResp->statusCode() >= 400)
             {
@@ -1102,6 +1141,9 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
             {
                 return false;
             }
+
+            if (role == "user") replayedUser++;
+            if (role == "assistant") replayedAssistant++;
         }
         LOG_INFO << "[retoolapi] replayHistoryToThread finished: workspace=" << workspaceId
                  << ", conversation=" << session.state.conversationId

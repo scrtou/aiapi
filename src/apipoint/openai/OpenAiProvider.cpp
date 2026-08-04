@@ -2,6 +2,8 @@
 #include <drogon/drogon.h>
 #include <apipoint/ProviderResult.h>
 #include <apiManager/ApiManager.h>
+#include <sessionManager/continuity/HistoryReplayBudget.h>
+#include <sstream>
 
 using namespace drogon;
 
@@ -43,28 +45,55 @@ provider::ProviderResult OpenAiProvider::requestChatCompletions(session_st& sess
         return provider::ProviderResult::fail(provider::ProviderError::network("Failed to create HTTP client"));
     }
 
-    auto req = HttpRequest::newHttpJsonRequest(buildChatRequest(session));
-    req->setMethod(Post);
-    req->setPath("/v1/chat/completions");
-    req->addHeader("Authorization", "Bearer " + apiKey_);
+    auto sendBody = [&](const Json::Value& requestBody) {
+        auto req = HttpRequest::newHttpJsonRequest(requestBody);
+        req->setMethod(Post);
+        req->setPath("/v1/chat/completions");
+        req->addHeader("Authorization", "Bearer " + apiKey_);
+        return client->sendRequest(req);
+    };
 
-    auto [result, resp] = client->sendRequest(req);
-    if (result != ReqResult::Ok || !resp) {
-        return provider::ProviderResult::fail(provider::ProviderError::network("OpenAI request failed"));
+    bool requestIncludedHistory = false;
+    Json::Value requestBody = buildChatRequest(session, true, &requestIncludedHistory);
+    auto [result, resp] = sendBody(requestBody);
+
+    if (result == ReqResult::Ok && resp &&
+        static_cast<int>(resp->statusCode()) == 413 && requestIncludedHistory) {
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        const size_t originalBytes = Json::writeString(writer, requestBody).size();
+        requestBody = buildChatRequest(session, false, nullptr);
+        const size_t retryBytes = Json::writeString(writer, requestBody).size();
+        LOG_WARN << "[OpenAi上游] 请求因历史负载返回 413，去除历史后重试: originalBytes="
+                 << originalBytes << ", retryBytes=" << retryBytes;
+
+        auto retryResult = sendBody(requestBody);
+        result = retryResult.first;
+        resp = retryResult.second;
     }
 
-    auto json = resp->getJsonObject();
-    if (!json) {
-        provider::ProviderError err = provider::ProviderError::internal("OpenAI response JSON parse failed");
-        err.httpStatusCode = static_cast<int>(resp->statusCode());
-        return provider::ProviderResult::fail(err);
+    if (result != ReqResult::Ok || !resp) {
+        return provider::ProviderResult::fail(provider::ProviderError::network("OpenAI request failed"));
     }
 
     if (resp->statusCode() != k200OK) {
         provider::ProviderError err;
         err.code = provider::ProviderErrorCode::Unknown;
         err.httpStatusCode = static_cast<int>(resp->statusCode());
-        err.message = (*json).get("error", Json::Value(Json::objectValue)).get("message", "OpenAI API error").asString();
+        err.message = "OpenAI API error";
+        if (auto errorJson = resp->getJsonObject()) {
+            err.message = (*errorJson)
+                .get("error", Json::Value(Json::objectValue))
+                .get("message", err.message)
+                .asString();
+        }
+        return provider::ProviderResult::fail(err);
+    }
+
+    auto json = resp->getJsonObject();
+    if (!json) {
+        provider::ProviderError err = provider::ProviderError::internal("OpenAI response JSON parse failed");
+        err.httpStatusCode = static_cast<int>(resp->statusCode());
         return provider::ProviderResult::fail(err);
     }
 
@@ -103,35 +132,17 @@ provider::ProviderResult OpenAiProvider::requestChatCompletions(session_st& sess
     return out;
 }
 
-Json::Value OpenAiProvider::buildChatRequest(const session_st& session) const {
+Json::Value OpenAiProvider::buildChatRequest(
+    const session_st& session,
+    bool includeHistory,
+    bool* historyIncluded
+) const {
+    if (historyIncluded) {
+        *historyIncluded = false;
+    }
+
     Json::Value body(Json::objectValue);
     body["model"] = session.request.model.empty() ? defaultModel_ : session.request.model;
-
-    Json::Value messages(Json::arrayValue);
-
-    if (!session.request.systemPrompt.empty()) {
-        Json::Value systemMsg;
-        systemMsg["role"] = "system";
-        systemMsg["content"] = session.request.systemPrompt;
-        messages.append(systemMsg);
-    }
-
-    for (const auto& m : session.provider.messageContext) {
-        if (!m.isObject()) continue;
-        Json::Value msg;
-        msg["role"] = m.get("role", "user").asString();
-        msg["content"] = m.get("content", "").asString();
-        messages.append(msg);
-    }
-
-    if (!session.request.message.empty()) {
-        Json::Value userMsg;
-        userMsg["role"] = "user";
-        userMsg["content"] = session.request.message;
-        messages.append(userMsg);
-    }
-
-    body["messages"] = messages;
 
     if (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0) {
         body["tools"] = session.request.tools;
@@ -149,8 +160,85 @@ Json::Value OpenAiProvider::buildChatRequest(const session_st& session) const {
             }
         }
     }
-
     body["stream"] = false;
+
+    Json::Value prefixMessages(Json::arrayValue);
+    if (!session.request.systemPrompt.empty()) {
+        Json::Value systemMsg;
+        systemMsg["role"] = "system";
+        systemMsg["content"] = session.request.systemPrompt;
+        prefixMessages.append(systemMsg);
+    }
+
+    Json::Value fixedMessages = prefixMessages;
+    if (!session.request.message.empty()) {
+        Json::Value userMsg;
+        userMsg["role"] = "user";
+        userMsg["content"] = session.request.message;
+        fixedMessages.append(userMsg);
+    }
+
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    Json::Value fixedBody = body;
+    fixedBody["messages"] = fixedMessages;
+    const size_t fixedBytes = Json::writeString(writer, fixedBody).size();
+
+    continuity::HistoryReplaySelection historySelection;
+    if (includeHistory) {
+        const std::string currentHistoryMessage = session.request.rawMessage.empty()
+            ? session.request.message
+            : session.request.rawMessage;
+        historySelection = continuity::selectRecentHistory(
+            session.provider.messageContext,
+            continuity::remainingHistoryBudget(
+                continuity::historyReplayMaxRequestBytes(),
+                fixedBytes
+            ),
+            continuity::historyReplayMaxMessageBytes(),
+            false,
+            currentHistoryMessage
+        );
+    }
+
+    if (historyIncluded) {
+        *historyIncluded = !historySelection.messages.empty();
+    }
+
+    Json::Value messages = prefixMessages;
+    for (const auto& historyMessage : historySelection.messages) {
+        if (!historyMessage.isObject()) continue;
+        const std::string content = continuity::historyMessageText(historyMessage);
+        if (content.empty()) continue;
+
+        Json::Value message;
+        message["role"] = historyMessage.get("role", "user").asString();
+        message["content"] = content;
+        messages.append(message);
+    }
+
+    if (!session.request.message.empty()) {
+        Json::Value userMsg;
+        userMsg["role"] = "user";
+        userMsg["content"] = session.request.message;
+        messages.append(userMsg);
+    }
+    body["messages"] = messages;
+
+    if (includeHistory) {
+        LOG_INFO << "[OpenAi上游] 历史预算: original="
+                 << historySelection.originalMessages
+                 << ", selected=" << historySelection.selectedMessages
+                 << ", selectedTurns=" << historySelection.selectedTurns
+                 << ", selectedBytes=" << historySelection.selectedBytes
+                 << ", replacedOversize=" << historySelection.skippedOversizeMessages
+                 << ", normalizedTools=" << historySelection.normalizedToolMessages
+                 << ", skippedForBudget=" << historySelection.skippedForBudget
+                 << ", omissionNotice=" << historySelection.omissionNoticeAdded
+                 << ", skippedDuplicateCurrent=" << historySelection.skippedDuplicateCurrentMessage
+                 << ", requestBytes=" << Json::writeString(writer, body).size();
+    }
+
     return body;
 }
 

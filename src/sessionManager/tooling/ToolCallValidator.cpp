@@ -214,58 +214,202 @@ ValidationResult ToolCallValidator::validateRequiredFields(
     return ValidationResult::success();
 }
 
+static bool isKnownSchemaType(const std::string& type) {
+    return type == "string" || type == "number" || type == "integer" ||
+           type == "boolean" || type == "array" || type == "object" ||
+           type == "null";
+}
+
+static bool matchesSchemaType(const Json::Value& value, const std::string& type) {
+    if (type == "string") return value.isString();
+    if (type == "number") return value.isNumeric();
+    if (type == "integer") return value.isIntegral();
+    if (type == "boolean") return value.isBool();
+    if (type == "array") return value.isArray();
+    if (type == "object") return value.isObject();
+    if (type == "null") return value.isNull();
+    return true;
+}
+
+static ValidationResult validateSchemaValue(
+    const std::string& toolName,
+    const std::string& path,
+    const Json::Value& value,
+    const Json::Value& schema
+) {
+    if (!schema.isObject()) {
+        return ValidationResult::success();
+    }
+
+    if (schema.isMember("type")) {
+        const auto& type = schema["type"];
+        bool sawKnownType = false;
+        bool typeMatches = false;
+        std::string expected;
+
+        auto inspectType = [&](const Json::Value& candidate) {
+            if (!candidate.isString()) return;
+            const std::string name = candidate.asString();
+            if (!expected.empty()) expected += "|";
+            expected += name;
+            if (!isKnownSchemaType(name)) return;
+            sawKnownType = true;
+            if (matchesSchemaType(value, name)) typeMatches = true;
+        };
+
+        if (type.isString()) {
+            inspectType(type);
+        } else if (type.isArray()) {
+            for (const auto& candidate : type) inspectType(candidate);
+        }
+
+        if (sawKnownType && !typeMatches) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path +
+                "' 类型不匹配: 期望 " + expected
+            );
+        }
+    }
+
+    const auto& enumValues = schema["enum"];
+    if (enumValues.isArray()) {
+        bool matched = false;
+        for (const auto& allowed : enumValues) {
+            if (allowed == value) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            Json::StreamWriterBuilder writer;
+            writer["indentation"] = "";
+
+            auto compactForDebug = [&](const Json::Value& json, size_t maxChars) {
+                std::string encoded = Json::writeString(writer, json);
+                if (encoded.size() > maxChars) {
+                    encoded.resize(maxChars - 3);
+                    encoded += "...";
+                }
+                return encoded;
+            };
+
+            const std::string actual = compactForDebug(value, 160);
+            const std::string allowed = compactForDebug(enumValues, 512);
+            const std::string detail =
+                "工具 '" + toolName + "' 字段 '" + path +
+                "' 不在允许值范围内: actual=" + actual +
+                ", allowed=" + allowed;
+
+            LOG_WARN << "[工具调用校验器] enum 校验失败: tool=" << toolName
+                     << ", field=" << path
+                     << ", actual=" << actual
+                     << ", allowed=" << allowed;
+            return ValidationResult::failure(detail);
+        }
+    }
+
+    if (value.isString()) {
+        const auto length = value.asString().size();
+        if (schema["minLength"].isIntegral() && length < schema["minLength"].asUInt()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 字符串长度不足"
+            );
+        }
+        if (schema["maxLength"].isIntegral() && length > schema["maxLength"].asUInt()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 字符串长度超限"
+            );
+        }
+    }
+
+    if (value.isNumeric()) {
+        if (schema["minimum"].isNumeric() && value.asDouble() < schema["minimum"].asDouble()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 小于最小值"
+            );
+        }
+        if (schema["maximum"].isNumeric() && value.asDouble() > schema["maximum"].asDouble()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 大于最大值"
+            );
+        }
+    }
+
+    if (value.isArray()) {
+        if (schema["minItems"].isIntegral() && value.size() < schema["minItems"].asUInt()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 数组元素数量不足"
+            );
+        }
+        if (schema["maxItems"].isIntegral() && value.size() > schema["maxItems"].asUInt()) {
+            return ValidationResult::failure(
+                "工具 '" + toolName + "' 字段 '" + path + "' 数组元素数量超限"
+            );
+        }
+
+        const auto& itemSchema = schema["items"];
+        if (itemSchema.isObject()) {
+            for (Json::ArrayIndex i = 0; i < value.size(); ++i) {
+                auto result = validateSchemaValue(
+                    toolName,
+                    path + "[" + std::to_string(i) + "]",
+                    value[i],
+                    itemSchema
+                );
+                if (!result.valid) return result;
+            }
+        }
+    }
+
+    if (value.isObject()) {
+        const auto& required = schema["required"];
+        if (required.isArray()) {
+            for (const auto& req : required) {
+                if (!req.isString()) continue;
+                const std::string key = req.asString();
+                if (!value.isMember(key) || value[key].isNull()) {
+                    return ValidationResult::failure(
+                        "工具 '" + toolName + "' 字段 '" + path +
+                        "' 缺少必需子字段: " + key
+                    );
+                }
+            }
+        }
+
+        const auto& properties = schema["properties"];
+        if (properties.isObject()) {
+            for (const auto& key : value.getMemberNames()) {
+                if (!properties.isMember(key)) continue;
+                auto result = validateSchemaValue(
+                    toolName,
+                    path.empty() ? key : path + "." + key,
+                    value[key],
+                    properties[key]
+                );
+                if (!result.valid) return result;
+            }
+        }
+    }
+
+    return ValidationResult::success();
+}
+
 ValidationResult ToolCallValidator::validateFieldTypes(
     const std::string& toolName,
     const Json::Value& args,
     const Json::Value& schema
 ) const {
-    if (!schema.isObject() || !schema.isMember("properties")) {
+    if (!schema.isObject() || !schema["properties"].isObject()) {
         return ValidationResult::success();
     }
-    
+
     const auto& properties = schema["properties"];
-    if (!properties.isObject()) {
-        return ValidationResult::success();
-    }
-    
     for (const auto& fieldName : args.getMemberNames()) {
-        if (!properties.isMember(fieldName)) {
-            // 字段不在 中 - 可以在这里检查 additionalProperties
-            continue;
-        }
-        
-        const auto& propSchema = properties[fieldName];
-        if (!propSchema.isObject()) continue;
-        
-        const std::string expectedType = propSchema.get("type", "").asString();
-        if (expectedType.empty()) continue;
-        
-        const auto& value = args[fieldName];
-        bool typeMatch = false;
-        
-        if (expectedType == "string") {
-            typeMatch = value.isString();
-        } else if (expectedType == "number" || expectedType == "integer") {
-            typeMatch = value.isNumeric();
-        } else if (expectedType == "boolean") {
-            typeMatch = value.isBool();
-        } else if (expectedType == "array") {
-            typeMatch = value.isArray();
-        } else if (expectedType == "object") {
-            typeMatch = value.isObject();
-        } else {
-            // 未知类型，跳过校验
-            typeMatch = true;
-        }
-        
-        if (!typeMatch) {
-            return ValidationResult::failure(
-                "工具 '" + toolName + "' 字段 '" + fieldName + 
-                "' 类型不匹配: 期望 " + expectedType
-            );
-        }
+        if (!properties.isMember(fieldName)) continue;
+        auto result = validateSchemaValue(toolName, fieldName, args[fieldName], properties[fieldName]);
+        if (!result.valid) return result;
     }
-    
+
     return ValidationResult::success();
 }
 
@@ -300,6 +444,9 @@ bool ToolCallValidator::isCriticalField(
     }
     if (toolName == "attempt_completion") {
         return fieldName == "result";
+    }
+    if (toolName == "suggest") {
+        return fieldName == "actions" || fieldName == "answer";
     }
     
     return false;
@@ -405,6 +552,13 @@ ValidationResult ToolCallValidator::validate(
         auto nonEmptyResult = validateCriticalFieldsNonEmpty(toolCall.name, parsedArgs);
         if (!nonEmptyResult.valid) {
             return nonEmptyResult;
+        }
+
+        // Relaxed 不强制所有顶层 required 字段，但必须验证已经出现字段的
+        // 类型、enum、minItems/maxItems 以及嵌套 required。
+        auto schemaResult = validateFieldTypes(toolCall.name, parsedArgs, *schema);
+        if (!schemaResult.valid) {
+            return schemaResult;
         }
         
         return ValidationResult::success();

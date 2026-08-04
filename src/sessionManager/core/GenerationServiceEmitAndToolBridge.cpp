@@ -343,7 +343,8 @@ void appendCodexXmlBridgePolicy(std::ostringstream& policy,
                                 const std::string& toolChoice,
                                 const std::string& triggerSignal,
                                 bool parallelToolCalls) {
-    policy << "Context: Codex software-engineering agent. Tools are executed by the Codex client.\n";
+    //policy << "Context: Codex software-engineering agent. Tools are executed by the Codex client.\n";
+    policy << "Context: Software engineering collaboration\n";
     policy << "Use the listed tools directly when files, commands, patches, MCP resources, or other external state are needed.\n";
     policy << "Do not claim that filesystem or command tools are unavailable when a matching tool is listed.\n";
     policy << "A normal final answer is allowed when no tool is needed; do not invent or call attempt_completion.\n";
@@ -1281,11 +1282,7 @@ void GenerationService::normalizeToolCallArguments(
                 if (r.isString()) requiredKeys.push_back(r.asString());
             }
         }
-        if (requiredKeys.empty() && items.isMember("properties") && items["properties"].isObject()) {
-            for (const auto& p : items["properties"].getMemberNames()) {
-                requiredKeys.push_back(p);
-            }
-        }
+        // 未声明 required 时不猜测必填字段，避免误删只包含可选属性的元素。
         if (requiredKeys.empty()) {
             return;
         }
@@ -1317,6 +1314,7 @@ void GenerationService::normalizeToolCallArguments(
             return requiredKeys[0];
         };
 
+        const Json::ArrayIndex originalSize = args[paramName].size();
         Json::Value out(Json::arrayValue);
         for (const auto& el : args[paramName]) {
             Json::Value obj;
@@ -1374,7 +1372,20 @@ void GenerationService::normalizeToolCallArguments(
             }
         }
 
-        // 始终替换为规范化数组（即使为空），避免下游处理崩溃。
+        // 规范化不能静默丢失元素，否则非空输入可能被改写成 actions: []。
+        // 保留原始非法值交给后续 schema 校验器拒绝并触发降级。
+        if (out.size() != originalSize) {
+            LOG_WARN << "[生成服务] 数组参数规范化未完成，保留原始参数: "
+                     << paramName << ", original=" << originalSize
+                     << ", normalized=" << out.size();
+            return;
+        }
+        if (paramSchema["minItems"].isIntegral() &&
+            out.size() < paramSchema["minItems"].asUInt()) {
+            LOG_WARN << "[生成服务] 数组参数规范化结果不满足 minItems，保留原始参数: "
+                     << paramName;
+            return;
+        }
         args[paramName] = out;
     };
 
@@ -1616,46 +1627,83 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             return false;
         };
 
-        // compact 模式：输出简化类型（string/object/array 等）
-        auto describeSchemaCompact = [&](const Json::Value& schema) -> std::string {
-            if (!schema.isObject()) return "any";
-            if (schemaHasType(schema, "array")) return "array";
-            if (schemaHasType(schema, "object")) return "object";
-            const std::string typeStr = schema.isMember("type") ? schemaTypeToString(schema["type"]) : "";
-            return typeStr.empty() ? "any" : typeStr;
+        auto describeArrayBounds = [](const Json::Value& schema) -> std::string {
+            std::string bounds;
+            if (schema["minItems"].isIntegral()) {
+                bounds += " minItems=" + std::to_string(schema["minItems"].asUInt());
+            }
+            if (schema["maxItems"].isIntegral()) {
+                bounds += " maxItems=" + std::to_string(schema["maxItems"].asUInt());
+            }
+            return bounds;
         };
 
-        // full 模式：输出详细类型（包含数组元素与对象键）
-        auto describeSchemaFull = [&](const Json::Value& schema) -> std::string {
+        // 保留 JSON Schema enum，避免模型只看到 string 后猜测取值。
+        // 为防止工具提示膨胀，最多输出 20 个值，并截断异常长的字符串枚举项。
+        auto describeEnumValues = [&](const Json::Value& schema) -> std::string {
+            const auto& enumValues = schema["enum"];
+            if (!enumValues.isArray() || enumValues.empty()) return "";
+
+            constexpr Json::ArrayIndex kMaxEnumValues = 20;
+            constexpr size_t kMaxStringValueChars = 80;
+            Json::Value displayed(Json::arrayValue);
+            const Json::ArrayIndex count = enumValues.size() < kMaxEnumValues
+                ? enumValues.size()
+                : kMaxEnumValues;
+
+            for (Json::ArrayIndex i = 0; i < count; ++i) {
+                const auto& value = enumValues[i];
+                if (value.isString() && value.asString().size() > kMaxStringValueChars) {
+                    displayed.append(value.asString().substr(0, kMaxStringValueChars - 3) + "...");
+                } else {
+                    displayed.append(value);
+                }
+            }
+            if (enumValues.size() > kMaxEnumValues) {
+                displayed.append("...");
+            }
+
+            return " enum=" + toCompactJson(displayed);
+        };
+
+        // compact 也保留数组元素结构、长度约束和枚举取值。
+        auto describeSchemaCompact = [&](const Json::Value& schema) -> std::string {
             if (!schema.isObject()) return "any";
 
-            const bool isArrayType = schemaHasType(schema, "array");
-            const bool isObjectType = schemaHasType(schema, "object");
-            const std::string typeStr = schema.isMember("type") ? schemaTypeToString(schema["type"]) : "";
-
-            if (isArrayType) {
+            if (schemaHasType(schema, "array")) {
+                std::string result = "array";
                 const auto& items = schema["items"];
                 if (items.isObject()) {
-                    const bool itemsIsObject = schemaHasType(items, "object");
-                    const std::string itemTypeStr = items.isMember("type") ? schemaTypeToString(items["type"]) : "";
-
-                    if (itemsIsObject) {
+                    if (schemaHasType(items, "object")) {
                         const auto keys = collectSchemaKeys(items);
-                        return "[{" + join(keys, ",") + "}]";
-                    }
-                    if (!itemTypeStr.empty()) {
-                        return itemTypeStr + "[]";
+                        result = "[{" + join(keys, ",") + "}]";
+                    } else {
+                        const std::string itemType = items.isMember("type")
+                            ? schemaTypeToString(items["type"])
+                            : "";
+                        if (!itemType.empty()) {
+                            result = itemType + describeEnumValues(items) + "[]";
+                        }
                     }
                 }
-                return "array";
+                return result + describeArrayBounds(schema) + describeEnumValues(schema);
             }
 
-            if (isObjectType) {
+            if (schemaHasType(schema, "object")) {
                 const auto keys = collectSchemaKeys(schema);
-                return "{" + join(keys, ",") + "}";
+                return (keys.empty() ? "object" : "{" + join(keys, ",") + "}") +
+                    describeEnumValues(schema);
             }
 
-            return typeStr.empty() ? "any" : typeStr;
+            const std::string typeStr = schema.isMember("type")
+                ? schemaTypeToString(schema["type"])
+                : "";
+            return (typeStr.empty() ? "any" : typeStr) + describeEnumValues(schema);
+        };
+
+        // full 模式沿用完整结构表示，参数描述仍由下方单独追加。
+        auto describeSchemaFull = [&](const Json::Value& schema) -> std::string {
+            return describeSchemaCompact(schema);
         };
 
         std::ostringstream oss;
@@ -1843,6 +1891,20 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     session.provider.toolBridgeTrigger = generateRandomTriggerSignal(static_cast<size_t>(triggerRandomLength));
     const std::string& triggerSignal = session.provider.toolBridgeTrigger;
 
+    const bool hasStrictApplyDiffTool = strictToolClient &&
+        (toolcall::hasToolNamed(session.request.tools, "apply_diff") ||
+         toolcall::hasToolNamed(session.request.toolsRaw, "apply_diff"));
+    const bool recoveringApplyDiffFailure = hasStrictApplyDiffTool &&
+        toolcall::hasApplyDiffFailureContext(
+            session.provider.messageContext,
+            session.request.message,
+            session.request.rawMessage
+        );
+    if (recoveringApplyDiffFailure) {
+        LOG_WARN << "[生成服务][" << clientType
+                 << "] 检测到历史 apply_diff 失败，已注入精确匹配与重新读取恢复规则";
+    }
+
     // 使用 provider 定制的 bridge prompt：
     // - 默认保留现有通用 XML bridge prompt
     // - retoolapi/workflow 使用更短、更硬的单轮 tool-bridge prompt
@@ -1875,6 +1937,10 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
                                          toolChoice,
                                          triggerSignal,
                                          session.request.api);
+        }
+
+        if (hasStrictApplyDiffTool) {
+            policy << toolcall::buildStrictApplyDiffPolicy(recoveringApplyDiffFailure);
         }
 
         policy << "\nAPI Definitions{\n";

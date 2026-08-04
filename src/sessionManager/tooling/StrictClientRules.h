@@ -2,6 +2,7 @@
 #define STRICT_CLIENT_RULES_H
 
 #include "sessionManager/contracts/GenerationEvent.h"
+#include <json/json.h>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,25 @@ void applyStrictClientRules(
 inline bool isStrictToolClient(const std::string& clientType) {
     return clientType == "Kilo-Code" || clientType == "RooCode";
 }
+
+/**
+ * @brief 判断工具定义列表中是否存在指定函数工具
+ */
+bool hasToolNamed(const Json::Value& tools, const std::string& toolName);
+
+/**
+ * @brief 检测最近一次 apply_diff 失败是否尚未被后续 read_file 结果消解
+ */
+bool hasApplyDiffFailureContext(
+    const Json::Value& messageContext,
+    const std::string& currentMessage,
+    const std::string& rawMessage
+);
+
+/**
+ * @brief 构建 Roo/Kilo 的 apply_diff 精确匹配与失败恢复规则
+ */
+std::string buildStrictApplyDiffPolicy(bool recoveringFromFailure);
 
 }
 

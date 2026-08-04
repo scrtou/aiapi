@@ -2,6 +2,8 @@
 
 基于 Drogon 框架的 AI API 网关服务，提供 OpenAI 兼容的 Chat Completions 和 Responses API 接口。
 
+> 最后更新：2026-08-04
+
 ## 目录
 
 - [功能特性](#功能特性)
@@ -34,9 +36,10 @@
 
 - ✅ OpenAI Chat Completions API 兼容（流式/非流式）
 - ✅ OpenAI Responses API 兼容（流式/非流式，含 previous_response_id 续聊）
-- ✅ 多 Provider 支持（可扩展工厂模式）
-- ✅ 新增 Nexos Web Provider（`/nexosapi/v1/*`）
-- ✅ OpenAI 兼容 Provider（`/openai/v1/*`）
+- ✅ 多 Provider 支持（可扩展工厂模式：chaynsapi / nexosapi / retoolapi / openai）
+- ✅ Nexos Web Provider（对外 HTTP：`/nexosapi/v1/*`）
+- ✅ Retool Workspace Provider（对外 HTTP：`/retoolapi/v1/*`）
+- ✅ OpenAI 兼容上游 Provider（`OpenAiProvider`，通过 `custom_config.providers.openai` 配置，非独立 `/openai/v1/*` 路由）
 - ✅ 工具调用（Tool Calls）完整支持
 - ✅ 工具调用桥接（XML Bridge）— 为不原生支持工具调用的通道提供桥接
 - ✅ 工具调用验证（ToolCallValidator）— 支持 None/Relaxed/Strict 三种校验模式
@@ -46,6 +49,7 @@
 - ✅ 严格客户端规则（StrictClientRules）— Kilo-Code / RooCode 适配
 - ✅ 会话追踪（Hash / ZeroWidth 两种模式）
 - ✅ 会话连续性决策（ContinuityResolver + TextExtractor）
+- ✅ 历史回放预算（HistoryReplayBudget）— 按完整 turn 截取近期历史，超限整段省略并写入提示，不截断单条内容
 - ✅ 响应索引（ResponseIndex）— Responses API GET/DELETE 支持
 - ✅ 并发门控（SessionExecutionGate + CancellationToken + RAII Guard）
 - ✅ 输出清洗（ClientOutputSanitizer）
@@ -55,14 +59,14 @@
 - ✅ Retool Workspace 资产管理（workspace/session/workflow/agent 元数据持久化）
 - ✅ Retool Workspace 创建入口（通过 aiapi_tool 内部编排执行）
 - ✅ 渠道管理（多渠道、状态控制、并发限制）
-- ✅ 服务状态监控 + Prometheus 指标导出
+- ✅ 服务状态监控（请求/错误时序、渠道与模型状态；JSON Metrics API）
 - ✅ 内置日志查看 API（文件列表、尾部读取、过滤）
 - ✅ 管理接口认证（AdminAuthFilter）
 - ✅ 请求限流（RateLimitFilter）
 - ✅ 配置校验（ConfigValidator）
 - ✅ 后台任务队列（BackgroundTaskQueue）
 - ✅ 健康检查端点（/health + /ready）
-- ✅ 完善的单元测试（12 个功能测试 + `test_main.cc` 测试入口）
+- ✅ 完善的单元测试（18 个功能测试 + `test_main.cc` 测试入口）
 
 ## 架构概览
 
@@ -127,6 +131,7 @@
 │        │                                                        │
 │        ├── chaynsapi (Chayns AI Provider)                       │
 │        ├── nexosapi  (Nexos Web Provider)                       │
+│        ├── retoolapi (Retool Workspace Provider)                │
 │        └── openai    (OpenAI 兼容 Provider)                     │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -214,6 +219,7 @@ aiapi/
     │   ├── continuity/             # 会话连续性
     │   │   ├── README.md           # 连续性模块文档
     │   │   ├── ContinuityResolver.h/cpp # 会话连续性决策器
+    │   │   ├── HistoryReplayBudget.h/cpp # 历史回放预算控制
     │   │   ├── ResponseIndex.h/cpp      # 响应存储索引（Responses API GET/DELETE）
     │   │   └── TextExtractor.h/cpp      # 文本提取工具
     │   │
@@ -235,6 +241,8 @@ aiapi/
     │   │   └── chaynsapi.h/cpp
     │   ├── nexosapi/               # Nexos Web Provider 实现
     │   │   └── nexosapi.h/cpp
+    │   ├── retoolapi/              # Retool Workspace Provider 实现
+    │   │   └── retoolapi.h/cpp
     │   └── openai/                 # OpenAI 兼容 Provider 实现
     │       └── OpenAiProvider.h/cpp
     │
@@ -298,23 +306,33 @@ aiapi/
     │
     ├── utils/                      # 通用工具
     │   ├── BackgroundTaskQueue.h   # 后台任务队列
-    │   └── ConfigValidator.h/cpp   # 配置校验器
+    │   ├── ConfigValidator.h/cpp   # 配置校验器
+    │   ├── IoLoopResponseStream.h  # IO 循环响应流
+    │   ├── LoginResponseLogSummary.h # 登录响应日志摘要
+    │   ├── NexosRegistrationMailPolicy.h # Nexos 注册邮件策略
+    │   └── NexosUserAgent.h        # Nexos User-Agent 工具
     │
     └── test/                       # 单元测试
         ├── CMakeLists.txt          # 测试构建配置
         ├── test_main.cc            # 测试入口
-        ├── test_continuity_resolver.cpp     # ContinuityResolver 测试
-        ├── test_error_event.cpp             # ErrorEvent 测试
-        ├── test_error_stats_config.cpp      # ErrorStatsConfig 测试
-        ├── test_forced_tool_call.cpp        # ForcedToolCallGenerator 测试
-        ├── test_generation_service_emit.cpp # GenerationService emit 测试
-        ├── test_normalize_tool_args.cpp     # ToolCallNormalizer 测试
-        ├── test_request_adapters.cpp        # RequestAdapters 测试
-        ├── test_response_index.cpp          # ResponseIndex 测试
-        ├── test_sinks.cpp                   # Sink 输出测试
-        ├── test_strict_client_rules.cpp     # StrictClientRules 测试
-        ├── test_tool_call_validator.cpp      # ToolCallValidator 测试
-        └── test_xml_tool_call_codec.cpp     # XmlTagToolCallCodec 测试
+        ├── test_chayns_model_catalog.cpp            # chayns 模型目录测试
+        ├── test_continuity_resolver.cpp             # ContinuityResolver 测试
+        ├── test_error_event.cpp                     # ErrorEvent 测试
+        ├── test_error_stats_config.cpp              # ErrorStatsConfig 测试
+        ├── test_forced_tool_call.cpp                # ForcedToolCallGenerator 测试
+        ├── test_generation_service_emit.cpp         # GenerationService emit 测试
+        ├── test_history_replay_budget.cpp           # HistoryReplayBudget 测试
+        ├── test_io_loop_response_stream.cpp         # IoLoopResponseStream 测试
+        ├── test_login_response_log_summary.cpp      # LoginResponseLogSummary 测试
+        ├── test_nexos_registration_mail_policy.cpp  # Nexos 注册邮件策略测试
+        ├── test_nexos_user_agent.cpp                 # NexosUserAgent 测试
+        ├── test_normalize_tool_args.cpp             # ToolCallNormalizer 测试
+        ├── test_request_adapters.cpp                # RequestAdapters 测试
+        ├── test_response_index.cpp                  # ResponseIndex 测试
+        ├── test_sinks.cpp                           # Sink 输出测试
+        ├── test_strict_client_rules.cpp             # StrictClientRules 测试
+        ├── test_tool_call_validator.cpp             # ToolCallValidator 测试
+        └── test_xml_tool_call_codec.cpp             # XmlTagToolCallCodec 测试
 ```
 
 ## 完整 API 端点清单
@@ -346,6 +364,8 @@ aiapi/
 - **账号 cookies 来自账号管理**：请通过 `/aichat/account/add` 添加 `apiName=nexosapi` 的账号，并把完整 cookies 放到 `authToken`
 - **模型列表实时获取**：每次调用 `/nexosapi/v1/models` 或聊天请求时，都会从 Nexos `chat.data` 实时解析当前账号可用模型
 
+- **额度查询**：`GET /nexosapi/v1/account/quota` 返回当前 Nexos 账号订阅/额度信息
+
 ### Retool Provider 说明
 
 - `retoolapi` 通过 Retool Workspace 池路由请求；标准 OpenAI 兼容接口本身**不要求**显式传 `workspaceId`，未传时会从可用 workspace 池自动分配。
@@ -375,7 +395,10 @@ aiapi/
 | POST | `/aichat/account/refresh` | 异步刷新所有账号 token + 类型 |
 | POST | `/aichat/account/autoregister` | 自动注册新账号（最多 20 个/次） |
 | GET | `/aichat/account/info` | 获取内存中的账号列表 |
+| GET | `/aichat/account/backupinfo` | 获取账号备份信息 |
 | GET | `/aichat/account/dbinfo` | 获取数据库中的账号列表 |
+| GET | `/aichat/account/settings` | 获取账号自动化设置 |
+| POST | `/aichat/account/settings` | 更新账号自动化设置 |
 
 ### Retool Workspace API（RetoolWorkspaceController）
 
@@ -385,7 +408,10 @@ aiapi/
 | POST | `/aichat/retool/workspace/upsert` | 手动写入/覆盖 workspace 资产 |
 | GET | `/aichat/retool/workspace/info` | 获取单个 workspace 信息 |
 | GET | `/aichat/retool/workspace/list` | 获取 workspace 列表 |
+| GET | `/aichat/retool/workspace/pool-status` | 获取 workspace 池状态 |
 | POST | `/aichat/retool/workspace/disable` | 禁用 workspace |
+| POST | `/aichat/retool/workspace/enable` | 启用 workspace |
+| POST | `/aichat/retool/workspace/delete` | 删除 workspace |
 | POST | `/aichat/retool/workspace/verify` | 本地验证 workspace 资产字段完整性 |
 
 `create` 当前会同步调用 aiapi_tool 内部接口：
@@ -492,17 +518,28 @@ runGuarded(req, sink, policy)
 | 组件 | 职责 |
 |------|------|
 | ContinuityResolver | 决策当前请求是否属于已有会话的延续 |
+| HistoryReplayBudget | 控制上游历史回放体积：按完整 conversation turn 保留最近消息；超单条/总预算时整段省略并插入提示，不截断原文 |
 | ResponseIndex | 响应存储索引，支持 Responses API 的 GET/DELETE 操作 |
 | TextExtractor | 从复杂消息结构中提取纯文本内容 |
+
+`HistoryReplayBudget` 已接入 `chaynsapi` / `nexosapi` / `retoolapi` / `openai` 各 Provider 的历史组装路径。可通过 `custom_config.history_replay` 调整预算（单位：字节）：
+
+| 配置项 | 默认 | 说明 |
+|--------|------|------|
+| `max_request_bytes` | `262144`（256KiB） | 整次历史回放总预算 |
+| `max_message_bytes` | `131072`（128KiB） | 单条消息上限；超出则整条替换为提示 |
+| `max_tool_message_bytes` | `49152`（48KiB） | tool 角色消息上限（与单条上限取更小值） |
+
+上限硬封顶为 8MiB。未配置时使用上表默认值。
 
 ### 客户端适配
 
 | 客户端 | 标识 | 特殊处理 |
 |--------|------|----------|
-| Kilo-Code | `Kilo-Code` | 严格模式：每次只能 1 个 tool call，纯文本自动包装为 attempt_completion |
-| RooCode | `RooCode` | 同 Kilo-Code |
+| Kilo-Code | `Kilo-Code` | 严格模式：`StrictClientRules` 注入 apply_diff SEARCH/REPLACE 精确匹配与失败恢复策略；配合 ToolCallValidator 做工具参数约束 |
+| RooCode | `RooCode` | 同 Kilo-Code（仅 Roo/Kilo 启用严格客户端规则） |
 | Claude Code | `claudecode` | 零宽会话 ID 在 tool_calls 前单独发送 |
-| 其他 | — | 宽松模式，不强制校验工具调用 |
+| 其他 | — | 宽松模式，不强制 Roo/Kilo 专用规则 |
 
 ### 会话追踪
 
@@ -651,7 +688,7 @@ curl "http://localhost:55555/aichat/logs/tail?lines=100&level=ERROR" \
 curl "http://localhost:55555/health"
 curl "http://localhost:55555/ready"
 
-# Prometheus 指标
+# 监控指标示例
 curl "http://localhost:55555/metrics"
 ```
 
@@ -798,6 +835,8 @@ Docker 入口脚本支持：
 | `custom_config.upstream_error_texts` | 上游错误文本匹配列表 | 字符串数组 |
 | `custom_config.cors.allowed_origins` | CORS 白名单 | 字符串数组 |
 
+- `history_replay`：历史回放预算（`max_request_bytes` / `max_message_bytes` / `max_tool_message_bytes`，默认 256KiB / 128KiB / 48KiB）
+
 ## 错误码
 
 | 错误码 | HTTP Status | 说明 |
@@ -846,7 +885,7 @@ Docker 入口脚本支持：
 
 ## 单元测试
 
-项目包含 12 个功能测试文件（另有 `test_main.cc` 作为测试入口），覆盖核心模块：
+项目包含 18 个功能测试文件（另有 `test_main.cc` 作为测试入口），覆盖核心模块：
 
 | 测试文件 | 覆盖模块 |
 |----------|----------|
@@ -862,6 +901,12 @@ Docker 入口脚本支持：
 | `test_response_index.cpp` | 响应索引 |
 | `test_error_event.cpp` | 错误事件模型 |
 | `test_error_stats_config.cpp` | 错误统计配置 |
+| `test_chayns_model_catalog.cpp` | chayns 模型目录 |
+| `test_io_loop_response_stream.cpp` | IO 循环响应流 |
+| `test_login_response_log_summary.cpp` | 登录响应日志摘要 |
+| `test_nexos_registration_mail_policy.cpp` | Nexos 注册邮件策略 |
+| `test_nexos_user_agent.cpp` | Nexos User-Agent |
+| `test_history_replay_budget.cpp` | HistoryReplayBudget 历史回放预算 |
 
 ## 开发路线
 
@@ -884,16 +929,17 @@ Docker 入口脚本支持：
 - [x] 渠道管理（CRUD + 状态控制 + supports_tool_calls）
 - [x] 服务状态监控（Summary + Channels + Models）
 - [x] 日志查看 API（文件列表 + 尾部读取 + 过滤）
-- [x] Prometheus 指标导出
+- [x] 服务状态/错误统计 Metrics API（JSON；非 Prometheus exposition 格式）
 - [x] 增量流式响应（AsyncStreamResponse + SSE 实时推送）
-- [x] 多 Provider（chaynsapi + nexosapi + OpenAI 兼容）
+- [x] 多 Provider（chaynsapi + nexosapi + retoolapi + OpenAI 兼容）
 - [x] HTTP 过滤器（AdminAuthFilter + RateLimitFilter）
 - [x] 健康检查端点（/health + /ready）
 - [x] 配置校验（ConfigValidator）
 - [x] 后台任务队列（BackgroundTaskQueue）
 - [x] 控制器拆分（6 个独立控制器）
 - [x] sessionManager 分层重构（contracts / core / continuity / tooling）
-- [x] 核心单元测试（12 个功能测试 + `test_main.cc` 测试入口）
+- [x] HistoryReplayBudget（多 Provider 历史回放预算与完整 turn 截取）
+- [x] 核心单元测试（18 个功能测试 + `test_main.cc` 测试入口）
 
 ## License
 

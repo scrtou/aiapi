@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
+#include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <string>
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
@@ -473,17 +474,47 @@ void chaynsapi::postChatMessage(session_st& session)
             // =================================================
             LOG_INFO << "[chaynsAPI] 正在创建新线程： 注入系统提示词 (" << session.request.systemPrompt.length() << " 字符)";
             string full_message;
-            
-            if(!session.provider.messageContext.empty())
-            {
-                full_message=session.request.systemPrompt + "\n""接下来，我会发给你openai接口格式的历史消息，：\n";
-                full_message = full_message+session.provider.messageContext.toStyledString();
-                full_message = full_message+"\n用户现在的问题是:\n"+session.request.message;
+            const std::string historyHeader = "\n接下来是 OpenAI 接口格式的历史消息：\n";
+            const std::string currentHeader = "\n用户现在的问题是:\n";
+            const size_t fixedBytes = session.request.systemPrompt.size() +
+                historyHeader.size() + currentHeader.size() + session.request.message.size();
+            const size_t historyBudget = continuity::remainingHistoryBudget(
+                continuity::historyReplayMaxRequestBytes(),
+                fixedBytes
+            );
+            const std::string currentHistoryMessage = session.request.rawMessage.empty()
+                ? session.request.message
+                : session.request.rawMessage;
+            const auto historySelection = continuity::selectRecentHistory(
+                session.provider.messageContext,
+                historyBudget,
+                continuity::historyReplayMaxMessageBytes(),
+                false,
+                currentHistoryMessage
+            );
+            const bool historyIncluded = !historySelection.messages.empty();
+
+            if (historyIncluded) {
+                Json::StreamWriterBuilder historyWriter;
+                historyWriter["indentation"] = "";
+                full_message = session.request.systemPrompt + historyHeader +
+                    Json::writeString(historyWriter, historySelection.messages) +
+                    currentHeader + session.request.message;
+            } else {
+                full_message = session.request.systemPrompt + "\n" + session.request.message;
             }
-            else
-            {
-                full_message =session.request.systemPrompt +"\n"+ session.request.message;
-            }
+
+            LOG_INFO << "[chaynsAPI] 新线程历史预算: original="
+                     << historySelection.originalMessages
+                     << ", selected=" << historySelection.selectedMessages
+                     << ", selectedTurns=" << historySelection.selectedTurns
+                     << ", selectedBytes=" << historySelection.selectedBytes
+                     << ", replacedOversize=" << historySelection.skippedOversizeMessages
+                     << ", normalizedTools=" << historySelection.normalizedToolMessages
+                     << ", skippedForBudget=" << historySelection.skippedForBudget
+                     << ", omissionNotice=" << historySelection.omissionNoticeAdded
+                     << ", skippedDuplicateCurrent=" << historySelection.skippedDuplicateCurrentMessage
+                     << ", requestTextBytes=" << full_message.size();
             
             Json::Value sendMessageRequest;
             Json::Value member1;
@@ -501,7 +532,7 @@ void chaynsapi::postChatMessage(session_st& session)
             Json::Value message;
             message["text"] = full_message;
             LOG_DEBUG << "[chaynsAPI] 发送新线程消息: textLength=" << full_message.size()
-                      << ", historyPresent=" << !session.provider.messageContext.empty();
+                      << ", historyPresent=" << historyIncluded;
             
             if (!uploadedImageUrls.empty()) {
                 Json::Value imagesArray(Json::arrayValue);
@@ -524,6 +555,22 @@ void chaynsapi::postChatMessage(session_st& session)
             LOG_INFO << "[chaynsAPI] 正在创建新线程";
             
             auto sendResult = client->sendRequest(reqSend);
+            if (sendResult.first == ReqResult::Ok && sendResult.second &&
+                static_cast<int>(sendResult.second->statusCode()) == 413 && historyIncluded) {
+                const std::string fallbackMessage =
+                    session.request.systemPrompt + "\n" + session.request.message;
+                LOG_WARN << "[chaynsAPI] 新线程请求因历史负载返回 413，去除历史后重试: originalBytes="
+                         << full_message.size() << ", retryBytes=" << fallbackMessage.size();
+
+                message["text"] = fallbackMessage;
+                sendMessageRequest["messages"][0] = message;
+                auto retryReq = HttpRequest::newHttpJsonRequest(sendMessageRequest);
+                retryReq->setMethod(HttpMethod::Post);
+                retryReq->setPath("/intercom-backend/v2/thread?forceCreate=true");
+                retryReq->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+                sendResult = client->sendRequest(retryReq);
+            }
+
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 创建线程失败(网络错误)";
                 sendFailed = true;

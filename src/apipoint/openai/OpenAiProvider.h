@@ -27,7 +27,11 @@ private:
     DEClARE_RUNTIME(OpenAiProvider);
 
     provider::ProviderResult requestChatCompletions(session_st& session);
-    Json::Value buildChatRequest(const session_st& session) const;
+    Json::Value buildChatRequest(
+        const session_st& session,
+        bool includeHistory = true,
+        bool* historyIncluded = nullptr
+    ) const;
 
     std::string apiKey_;
     std::string baseUrl_;

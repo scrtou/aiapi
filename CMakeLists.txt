@@ -68,6 +68,7 @@ add_executable(${PROJECT_NAME}
     src/sessionManager/tooling/ForcedToolCallGenerator.cpp
     src/sessionManager/tooling/ToolCallNormalizer.cpp
     src/sessionManager/continuity/ResponseIndex.cpp
+    src/sessionManager/continuity/HistoryReplayBudget.cpp
     src/sessionManager/continuity/TextExtractor.cpp
     src/sessionManager/continuity/ContinuityResolver.cpp
     src/sessionManager/core/RequestAdapters.cpp
