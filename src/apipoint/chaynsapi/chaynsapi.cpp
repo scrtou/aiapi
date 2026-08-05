@@ -4,8 +4,12 @@
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
+#include <memory>
+#include <mutex>
 #include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utils/chaynsBrowserImpersonation.h>
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
@@ -15,11 +19,30 @@ namespace {
 constexpr auto MODEL_CACHE_TTL = std::chrono::minutes(15);
 constexpr auto MODEL_REFRESH_MIN_INTERVAL = std::chrono::seconds(30);
 
+std::mutex g_chaynsAccountGateMapMutex;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> g_chaynsAccountGates;
+
+std::shared_ptr<std::mutex> accountExecutionGate(const std::string& accountUserName)
+{
+    std::lock_guard<std::mutex> lock(g_chaynsAccountGateMapMutex);
+    auto& gate = g_chaynsAccountGates[accountUserName];
+    if (!gate) {
+        gate = std::make_shared<std::mutex>();
+    }
+    return gate;
+}
+
 bool isUsableChaynsAccount(const std::shared_ptr<Accountinfo_st>& account, bool requiresPro)
 {
     return account && account->tokenStatus && account->accountStatus &&
            account->status == AccountStatus::ACTIVE && !account->authToken.empty() &&
            (!requiresPro || account->accountType == "pro");
+}
+
+bool postFailureMayHaveBeenAccepted(HttpStatusCode status)
+{
+    const int code = static_cast<int>(status);
+    return code == 408 || code >= 500;
 }
 
 void setChaynsSessionError(session_st& session,
@@ -240,23 +263,32 @@ void chaynsapi::postChatMessage(session_st& session)
     }
     
     // ========== 上游重试外层循环 ==========
-    // 重试策略（三层）:
-    // 内层： 同一线程上重复询问 SAME_线程_RETRIES 次
-    // 中层： 同一账号创建新线程重试（consecutiveFails < CONSECUTIVE_FAILS_BEFORE_SWITCH）
-    // 外层： 切换账号重试（consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH）
-    // totalAttempts： 外层总重试计数，达到 MAX_UPSTREAM_RETRIES 时放弃
+    // POST 一旦返回消息锚点，就只重试 GET 轮询，绝不重新发送尚未得到最终
+    // 回复的用户消息。只有 POST 被明确拒绝，或已收到可判定的上游错误最终
+    // 消息时，外层循环才允许创建新线程/切换账号重试。
     int totalAttempts = 0;
     int consecutiveFails = 0;  // 跨线程的连续失败计数，用于判断是否需要换账号
     bool upstreamSuccess = false;
-    const auto requestDeadline = std::chrono::steady_clock::now() +
-                                 chayns::kRequestPollingDeadline;
+    bool fatalAmbiguousSend = false;
+    bool fatalCorrelationConflict = false;
+    bool fatalResponseTimeout = false;
+    // Queueing behind another request on the same account must not consume the
+    // upstream polling budget.  The deadline starts only after the first
+    // account lease has been acquired.
+    auto requestDeadline = std::chrono::steady_clock::time_point::max();
+    bool requestDeadlineStarted = false;
     
     // 最终结果保存
     string final_response_message;
     int final_response_statusCode = 204;
     string final_threadId;
     string final_userAuthorId;
+    string final_agentAuthorId;
     string final_accountUserName;
+    string final_requestMessageId;
+    string final_requestCreationTime;
+    string final_assistantMessageId;
+    Json::Value final_reasoningMessages(Json::arrayValue);
     
     // 上传的图片URL（在首次尝试时上传，后续重试复用）
     std::vector<std::string> uploadedImageUrls;
@@ -279,9 +311,18 @@ void chaynsapi::postChatMessage(session_st& session)
         }
     }
     
+    std::unique_lock<std::mutex> accountExecutionLock;
     while (totalAttempts < MAX_UPSTREAM_RETRIES && !upstreamSuccess &&
-           std::chrono::steady_clock::now() < requestDeadline) {
+           (!requestDeadlineStarted || std::chrono::steady_clock::now() < requestDeadline)) {
         totalAttempts++;
+        final_threadId.clear();
+        final_userAuthorId.clear();
+        final_agentAuthorId.clear();
+        final_accountUserName.clear();
+        final_requestMessageId.clear();
+        final_requestCreationTime.clear();
+        final_assistantMessageId.clear();
+        final_reasoningMessages = Json::Value(Json::arrayValue);
         bool needSwitchAccount = (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH);
         
         if (totalAttempts > 1) {
@@ -336,6 +377,21 @@ void chaynsapi::postChatMessage(session_st& session)
         }
 
         shared_ptr<Accountinfo_st> accountinfo = selectedAccount;
+
+        if (accountExecutionLock.owns_lock()) {
+            accountExecutionLock.unlock();
+        }
+        const auto accountGate = accountExecutionGate(accountinfo->userName);
+        const auto accountWaitStartedAt = std::chrono::steady_clock::now();
+        accountExecutionLock = std::unique_lock<std::mutex>(*accountGate);
+        const auto accountWaitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - accountWaitStartedAt).count();
+        LOG_INFO << "[chaynsAPI] 已获取账号单飞租约: waitMs=" << accountWaitMs;
+        if (!requestDeadlineStarted) {
+            requestDeadline = std::chrono::steady_clock::now() +
+                              chayns::kRequestPollingDeadline;
+            requestDeadlineStarted = true;
+        }
         
 
         if (accountinfo->personId.empty()) {
@@ -397,7 +453,9 @@ void chaynsapi::postChatMessage(session_st& session)
         auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
         string threadId;
         string userAuthorId;
+        string agentAuthorId;
         string lastMessageTime;
+        string requestMessageId;
         
         // 只在首次尝试且未要求换账号时，尝试使用已有线程
         bool isFollowUp = false;
@@ -406,6 +464,7 @@ void chaynsapi::postChatMessage(session_st& session)
             (continuationContext.modelId.empty() || continuationContext.modelId == modelname)) {
             threadId = continuationContext.threadId;
             userAuthorId = continuationContext.userAuthorId;
+            agentAuthorId = continuationContext.agentAuthorId;
             isFollowUp = true;
             LOG_INFO << "[chaynsAPI] 找到现有线程: threadIdPresent=" << !threadId.empty()
                      << ", previousProviderPresent=" << !session.provider.prevProviderKey.empty();
@@ -452,6 +511,7 @@ void chaynsapi::postChatMessage(session_st& session)
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 发送后续消息失败(网络错误)";
                 sendFailed = true;
+                fatalAmbiguousSend = true;
             } else {
                 auto responseSend = sendResult.second;
                 if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
@@ -459,11 +519,15 @@ void chaynsapi::postChatMessage(session_st& session)
                     if (!sendJson) {
                         LOG_ERROR << "[chaynsAPI] 后续消息发送成功但响应JSON为空";
                         sendFailed = true;
+                        fatalAmbiguousSend = true;
                     } else {
                         sendResponseJson = *sendJson;
                     }
                     if (sendResponseJson.isMember("creationTime")) {
                         lastMessageTime = sendResponseJson["creationTime"].asString();
+                    }
+                    if (sendResponseJson.isMember("id") && sendResponseJson["id"].isString()) {
+                        requestMessageId = sendResponseJson["id"].asString();
                     }
                     if (sendResponseJson.isMember("author") && sendResponseJson["author"].isMember("id")) {
                         userAuthorId = sendResponseJson["author"]["id"].asString();
@@ -472,6 +536,8 @@ void chaynsapi::postChatMessage(session_st& session)
                     LOG_ERROR << "[chaynsAPI] 后续消息发送失败，"
                               << summarizeUpstreamResponse(responseSend);
                     sendFailed = true;
+                    fatalAmbiguousSend = postFailureMayHaveBeenAccepted(
+                        responseSend->statusCode());
                 }
             }
         } else {
@@ -582,6 +648,7 @@ void chaynsapi::postChatMessage(session_st& session)
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 创建线程失败(网络错误)";
                 sendFailed = true;
+                fatalAmbiguousSend = true;
             } else {
                 auto responseSend = sendResult.second;
                 if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
@@ -589,6 +656,7 @@ void chaynsapi::postChatMessage(session_st& session)
                     if (!sendJson) {
                         LOG_ERROR << "[chaynsAPI] 创建线程成功但响应JSON为空";
                         sendFailed = true;
+                        fatalAmbiguousSend = true;
                     } else {
                         sendResponseJson = *sendJson;
                     }
@@ -601,18 +669,28 @@ void chaynsapi::postChatMessage(session_st& session)
                                     if (member.isMember("id") && member["id"].isString()) {
                                         userAuthorId = member["id"].asString();
                                     }
-                                    break;
+                                }
+                                if (member.isMember("personId") && member["personId"].asString() == selectedModel.personId &&
+                                    member.isMember("id") && member["id"].isString()) {
+                                    agentAuthorId = member["id"].asString();
                                 }
                             }
                         }
                         
                         if (sendResponseJson.isMember("messages") && sendResponseJson["messages"].isArray() && sendResponseJson["messages"].size() > 0) {
-                            lastMessageTime = sendResponseJson["messages"][0]["creationTime"].asString();
+                            const auto& sentMessage = sendResponseJson["messages"][0];
+                            lastMessageTime = sentMessage.get("creationTime", "").asString();
+                            requestMessageId = sentMessage.get("id", "").asString();
+                            if (sentMessage.isMember("author") && sentMessage["author"].isObject()) {
+                                userAuthorId = sentMessage["author"].get("id", userAuthorId).asString();
+                            }
                         }
                     }
                 } else {
                     LOG_ERROR << "[chaynsAPI] 创建线程失败，状态码：" << responseSend->statusCode();
                     sendFailed = true;
+                    fatalAmbiguousSend = postFailureMayHaveBeenAccepted(
+                        responseSend->statusCode());
                 }
             }
         }
@@ -621,6 +699,10 @@ void chaynsapi::postChatMessage(session_st& session)
         if (sendFailed) {
             consecutiveFails++;
             LOG_WARN << "[chaynsAPI] 发送请求失败，连续失败次数：" << consecutiveFails;
+            if (fatalAmbiguousSend) {
+                LOG_ERROR << "[chaynsAPI] POST 结果不确定，禁止自动重发以避免同账号产生重叠生成";
+                break;
+            }
             if (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH) {
                 LOG_WARN << "[chaynsAPI] 连续失败" << consecutiveFails << " 次, 下次将切换账号";
             }
@@ -628,194 +710,147 @@ void chaynsapi::postChatMessage(session_st& session)
             continue;
         }
         
-        if (threadId.empty() || lastMessageTime.empty()) {
-            LOG_ERROR << "[chaynsAPI] 关键信息缺失： 线程Id或lastMessageTime";
-            consecutiveFails++;
-            if (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH) {
-                LOG_WARN << "[chaynsAPI] 连续失败" << consecutiveFails << " 次, 下次将切换账号";
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 5));
-            continue;
-        }
-        
-        // ========== 5. 同线程重试内层循环 ==========
-        // 在同一线程上进行 SAME_线程_RETRIES 次尝试：
-        //   第1次: 已经发送了消息，只需轮询结果
-        //   第2~n次: 在同一线程上重新发送消息，然后轮询结果
-        bool sameThreadSuccess = false;
-        
-        for (int sameThreadAttempt = 1;
-             sameThreadAttempt <= SAME_THREAD_RETRIES &&
-             std::chrono::steady_clock::now() < requestDeadline;
-             ++sameThreadAttempt) {
-            
-            // 第2次及以后: 需要在同一线程上重新发送消息
-            if (sameThreadAttempt > 1) {
-                LOG_INFO << "[chaynsAPI] 同线程重试第" << sameThreadAttempt << "/" << SAME_THREAD_RETRIES 
-                         << " 次 (threadId: " << threadId << ")";
-                
-                // 重新发送消息到同一线程
-                Json::Value retryMessageBody;
-                retryMessageBody["text"] = session.request.message;
-                retryMessageBody["cursorPosition"] = (int)session.request.message.size();
-                
-                if (!uploadedImageUrls.empty()) {
-                    Json::Value imagesArray(Json::arrayValue);
-                    for (const auto& url : uploadedImageUrls) {
-                        Json::Value imgObj;
-                        imgObj["url"] = url;
-                        imagesArray.append(imgObj);
-                    }
-                    retryMessageBody["images"] = imagesArray;
-                }
-                
-                auto reqRetry = HttpRequest::newHttpJsonRequest(retryMessageBody);
-                reqRetry->setMethod(HttpMethod::Post);
-                string retryPath = "/intercom-backend/v2/thread/" + threadId + "/message";
-                reqRetry->setPath(retryPath);
-                reqRetry->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-                chayns_browser::applyBrowserHeadersForAccount(reqRetry, accountinfo->userName, accountinfo->personId);
-                
-                LOG_INFO << "[chaynsAPI] 正在重新发送消息到线程：" << threadId;
-                
-                auto retryResult = client->sendRequest(reqRetry);
-                if (retryResult.first != ReqResult::Ok || !retryResult.second) {
-                    LOG_ERROR << "[chaynsAPI] 同线程重试发送失败(网络错误)";
-                    continue; // 尝试下一次同线程重试
-                }
-                
-                auto retryResponse = retryResult.second;
-                if (retryResponse->statusCode() != k200OK && retryResponse->statusCode() != k201Created) {
-                    LOG_ERROR << "[chaynsAPI] 同线程重试发送失败，状态码：" << retryResponse->statusCode();
-                    continue; // 尝试下一次同线程重试
-                }
-                
-
-                auto retryJson = retryResponse->getJsonObject();
-                if (retryJson && retryJson->isMember("creationTime")) {
-                    lastMessageTime = (*retryJson)["creationTime"].asString();
-                }
-                if (retryJson && retryJson->isMember("author") && (*retryJson)["author"].isMember("id")) {
-                    userAuthorId = (*retryJson)["author"]["id"].asString();
-                }
-                
-                // 添加短暂延迟
-                std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 5));
-            }
-            
-            // ---- 轮询获取结果 ----
-            string response_message;
-            int response_statusCode = 204;
-            int pollCount = 0;
-            bool pollFound = false;
-            
-            string pollPath = "/intercom-backend/v2/thread/" + threadId + "/message?take=50&afterDate=" + lastMessageTime;
-            const auto pollingStartedAt = std::chrono::steady_clock::now();
-            LOG_INFO << "[chaynsAPI] 开始轮询 (同线程第" << sameThreadAttempt
-                     << " 次), 请求总截止时间: "
-                     << std::chrono::duration_cast<std::chrono::seconds>(
-                            chayns::kRequestPollingDeadline).count()
-                     << " 秒";
-            
-            while (std::chrono::steady_clock::now() < requestDeadline) {
-                pollCount++;
-                auto reqGet = HttpRequest::newHttpRequest();
-                reqGet->setMethod(HttpMethod::Get);
-                reqGet->setPath(pollPath);
-                reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-                chayns_browser::applyBrowserHeadersForAccount(reqGet, accountinfo->userName, accountinfo->personId);
-                
-                auto getResult = client->sendRequest(reqGet);
-                if (getResult.first == ReqResult::Ok && getResult.second) {
-                    auto responseGet = getResult.second;
-                    if (responseGet->statusCode() == k200OK) {
-                        auto jsonResp = responseGet->getJsonObject();
-                        if (jsonResp && jsonResp->isArray() && !jsonResp->empty()) {
-                            for (int i = jsonResp->size() - 1; i >= 0; --i) {
-                                const auto& msg = (*jsonResp)[i];
-                                if (msg.isMember("author") && msg["author"].isMember("id") &&
-                                    msg["author"]["id"].asString() != userAuthorId &&
-                                    msg.isMember("typeId") && msg["typeId"].asInt() == 1) {
-
-                                    if (msg.isMember("text") && msg["text"].isString()) {
-                                        response_message = msg["text"].asString();
-                                    }
-                                    response_statusCode = 200;
-                                    pollFound = true;
-                                    LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount << " 次, 成功获取响应";
-                                    LOG_INFO << "[chaynsAPI] 回复已接收: textLength=" << response_message.size();
-                                    break;
-                                }
-                            }
-                            if (pollFound) break;
-                        }
-                    }
-                }
-
-                const auto now = std::chrono::steady_clock::now();
-                if (now >= requestDeadline) {
-                    break;
-                }
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - pollingStartedAt);
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    requestDeadline - now);
-                std::this_thread::sleep_for(
-                    std::min(chayns::pollingDelayForElapsed(elapsed), remaining));
-            }
-            
-            if (!pollFound) {
-                LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount << " 次, 未获取到响应";
-            }
-            
-            // ---- 检查上游响应是否为错误 ----
-            bool isUpstreamError = false;
-            
-            if (response_statusCode != 200) {
-                isUpstreamError = true;
-                LOG_WARN << "[chaynsAPI] 上游错误： 轮询超时未获取响应 (线程Id：" << threadId 
-                         << ", 同线程第 " << sameThreadAttempt << "/" << SAME_THREAD_RETRIES << " 次)";
-            } else {
-                for (const auto& errorText : m_upstreamErrorTexts) {
-                    if (response_message == errorText) {
-                        isUpstreamError = true;
-                        LOG_WARN << "[chaynsAPI] 上游错误： 收到错误文本 '" << errorText << "' (线程Id：" << threadId
-                                 << ", 同线程第 " << sameThreadAttempt << "/" << SAME_THREAD_RETRIES << " 次)";
-                        break;
-                    }
-                }
-            }
-            
-            if (!isUpstreamError) {
-                // 上游成功！
-                sameThreadSuccess = true;
-                upstreamSuccess = true;
-                final_response_message = response_message;
-                final_response_statusCode = response_statusCode;
-                final_threadId = threadId;
-                final_userAuthorId = userAuthorId;
-                final_accountUserName = accountinfo->userName;
-                LOG_INFO << "[chaynsAPI] 上游请求成功 (外层第" << totalAttempts << " 次, 同线程第 " << sameThreadAttempt << " 次)";
-                break; // 退出同线程重试循环
-            }
-            
-            // 同线程重试失败，如果还有重试机会则在同线程上重新发送
-            if (sameThreadAttempt < SAME_THREAD_RETRIES &&
-                std::chrono::steady_clock::now() < requestDeadline) {
-                LOG_INFO << "[chaynsAPI] 同线程重试： 将在同一线程上重新发送消息";
-                std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 10));
-            }
-            
-        } // 同线程重试循环结束
-        
-        // 如果同线程重试成功，退出外层循环
-        if (upstreamSuccess) {
+        if (threadId.empty() || lastMessageTime.empty() || requestMessageId.empty() || userAuthorId.empty()) {
+            LOG_ERROR << "[chaynsAPI] 关键信息缺失：线程、用户消息锚点或作者信息不完整";
+            fatalAmbiguousSend = true;
             break;
         }
         
-        // 同线程所有重试都失败了
+        // ========== 5. 根据 POST 返回的消息锚点轮询 ==========
+        chayns::MessageAnchor messageAnchor;
+        messageAnchor.messageId = requestMessageId;
+        messageAnchor.threadId = threadId;
+        messageAnchor.userAuthorId = userAuthorId;
+        messageAnchor.agentAuthorId = agentAuthorId;
+        messageAnchor.creationTime = lastMessageTime;
+        std::unordered_set<std::string> consumedMessageIds;
+        Json::Value reasoningMessages(Json::arrayValue);
+        string response_message;
+        int response_statusCode = 204;
+        int pollCount = 0;
+        bool pollFound = false;
+
+        const string pollPath = "/intercom-backend/v2/thread/" + threadId + "/message";
+        const auto pollingStartedAt = std::chrono::steady_clock::now();
+        LOG_INFO << "[chaynsAPI] 开始轮询锚定消息，请求总截止时间: "
+                 << std::chrono::duration_cast<std::chrono::seconds>(
+                        chayns::kRequestPollingDeadline).count()
+                 << " 秒";
+
+        while (std::chrono::steady_clock::now() < requestDeadline) {
+            pollCount++;
+            auto reqGet = HttpRequest::newHttpRequest();
+            reqGet->setMethod(HttpMethod::Get);
+            reqGet->setPath(pollPath);
+            reqGet->setParameter("take", "1000");
+            reqGet->setParameter("viewMode", "user");
+            reqGet->setParameter("afterDate", lastMessageTime);
+            reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+            chayns_browser::applyBrowserHeadersForAccount(
+                reqGet, accountinfo->userName, accountinfo->personId);
+
+            auto getResult = client->sendRequest(reqGet);
+            if (getResult.first == ReqResult::Ok && getResult.second) {
+                auto responseGet = getResult.second;
+                if (responseGet->statusCode() == k200OK) {
+                    auto jsonResp = responseGet->getJsonObject();
+                    if (jsonResp && jsonResp->isArray() && !jsonResp->empty()) {
+                        const auto correlated = chayns::correlateMessageBatch(
+                            *jsonResp, messageAnchor, consumedMessageIds);
+                        if (messageAnchor.agentAuthorId.empty() &&
+                            !correlated.inferredAgentAuthorId.empty()) {
+                            messageAnchor.agentAuthorId = correlated.inferredAgentAuthorId;
+                        }
+                        for (const auto& reasoning : correlated.reasoningMessages) {
+                            reasoningMessages.append(reasoning);
+                        }
+                        if (correlated.status == chayns::CorrelationStatus::Superseded) {
+                            LOG_ERROR << "[chaynsAPI] 当前消息最终回复前出现另一条用户消息，拒绝猜测回复归属";
+                            response_statusCode = 409;
+                            fatalCorrelationConflict = true;
+                            pollFound = true;
+                            break;
+                        }
+                        if (correlated.status == chayns::CorrelationStatus::FinalFound) {
+                            const auto& msg = correlated.finalMessage;
+                            response_message = msg.get("text", "").asString();
+                            final_assistantMessageId = msg.get("id", "").asString();
+                            response_statusCode = 200;
+                            pollFound = true;
+                            LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount
+                                     << " 次, 成功获取锚定响应"
+                                     << ", reasoningCount=" << reasoningMessages.size();
+                            LOG_INFO << "[chaynsAPI] 回复已接收: textLength="
+                                     << response_message.size();
+                            break;
+                        }
+                    }
+                }
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= requestDeadline) {
+                break;
+            }
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - pollingStartedAt);
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                requestDeadline - now);
+            std::this_thread::sleep_for(
+                std::min(chayns::pollingDelayForElapsed(elapsed), remaining));
+        }
+
+        if (!pollFound) {
+            LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount << " 次, 未获取到响应";
+            fatalResponseTimeout = true;
+        }
+
+        // Preserve the exact upstream anchor and any reasoning observed even
+        // when correlation ends in a conflict or timeout.
+        final_threadId = threadId;
+        final_userAuthorId = userAuthorId;
+        final_agentAuthorId = messageAnchor.agentAuthorId;
+        final_accountUserName = accountinfo->userName;
+        final_requestMessageId = requestMessageId;
+        final_requestCreationTime = lastMessageTime;
+        final_reasoningMessages = reasoningMessages;
+
+        bool isUpstreamError = response_statusCode != 200;
+        if (response_statusCode == 409) {
+            LOG_WARN << "[chaynsAPI] 上游线程消息顺序冲突，当前响应不具备确定关联";
+        } else if (response_statusCode != 200) {
+            LOG_WARN << "[chaynsAPI] 上游错误：轮询超时未获取响应 (线程Id："
+                     << threadId << ")";
+        } else {
+            for (const auto& errorText : m_upstreamErrorTexts) {
+                if (response_message == errorText) {
+                    isUpstreamError = true;
+                    LOG_WARN << "[chaynsAPI] 上游错误：收到错误文本 '" << errorText
+                             << "' (线程Id：" << threadId << ")";
+                    break;
+                }
+            }
+        }
+
+        if (!isUpstreamError) {
+            upstreamSuccess = true;
+            final_response_message = response_message;
+            final_response_statusCode = response_statusCode;
+            LOG_INFO << "[chaynsAPI] 上游请求成功 (外层第" << totalAttempts << " 次)";
+        }
+        
+        // 已取得当前锚点对应的最终回复，结束外层循环。
+        if (upstreamSuccess) {
+            break;
+        }
+        if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
+            break;
+        }
+        
+        // POST 被明确拒绝或已经收到错误最终消息时，才允许外层重试。
+        // 轮询超时会耗尽总截止时间，不会再次 POST。
         consecutiveFails++;
-        LOG_WARN << "[chaynsAPI] 同线程" << SAME_THREAD_RETRIES << " 次重试均失败, 连续失败次数: " << consecutiveFails 
+        LOG_WARN << "[chaynsAPI] 当前上游尝试失败, 连续失败次数: " << consecutiveFails
                  << ", 总尝试次数: " << totalAttempts << "/" << MAX_UPSTREAM_RETRIES;
         
         if (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH) {
@@ -847,18 +882,61 @@ void chaynsapi::postChatMessage(session_st& session)
             ThreadContext ctx;
             ctx.threadId = final_threadId;
             ctx.userAuthorId = final_userAuthorId;
+            ctx.agentAuthorId = final_agentAuthorId;
             ctx.accountUserName = final_accountUserName;
             ctx.modelId = modelname;
+            ctx.lastRequestMessageId = final_requestMessageId;
+            ctx.lastRequestCreationTime = final_requestCreationTime;
+            ctx.lastAssistantMessageId = final_assistantMessageId;
+            ctx.lastReasoningMessages = final_reasoningMessages;
             m_threadMap[session.state.conversationId] = ctx;
         }
         
         session.response.message["message"] = final_response_message;
         session.response.message["statusCode"] = final_response_statusCode;
+        auto& chaynsMeta = session.response.message["_meta"]["chayns"];
+        chaynsMeta["request_message_id"] = final_requestMessageId;
+        chaynsMeta["request_creation_time"] = final_requestCreationTime;
+        chaynsMeta["assistant_message_id"] = final_assistantMessageId;
+        chaynsMeta["reasoning_messages"] = final_reasoningMessages;
     } else {
         LOG_ERROR << "[chaynsAPI] 所有上游重试均失败 (总尝试次数：" << totalAttempts 
                  << "/" << MAX_UPSTREAM_RETRIES << ")";
-        session.response.message["error"] = "Upstream failed after all retries";
-        session.response.message["statusCode"] = 500;
+        if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
+            // The old upstream thread may still receive a delayed response.
+            // Remove its continuation mapping so the next request cannot reuse
+            // a thread whose message ordering is no longer deterministic.
+            std::lock_guard<std::mutex> lock(m_threadMapMutex);
+            if (!session.provider.prevProviderKey.empty()) {
+                m_threadMap.erase(session.provider.prevProviderKey);
+            }
+            m_threadMap.erase(session.state.conversationId);
+        }
+        if (!final_requestMessageId.empty()) {
+            auto& chaynsMeta = session.response.message["_meta"]["chayns"];
+            chaynsMeta["request_message_id"] = final_requestMessageId;
+            chaynsMeta["request_creation_time"] = final_requestCreationTime;
+            chaynsMeta["reasoning_messages"] = final_reasoningMessages;
+        }
+        if (fatalCorrelationConflict) {
+            session.response.message["error"] =
+                "Upstream thread contains an overlapping user message";
+            session.response.message["errorCode"] = "upstream_message_conflict";
+            session.response.message["statusCode"] = 409;
+        } else if (fatalAmbiguousSend) {
+            session.response.message["error"] =
+                "Upstream message submission outcome is ambiguous";
+            session.response.message["errorCode"] = "upstream_send_ambiguous";
+            session.response.message["statusCode"] = 502;
+        } else if (fatalResponseTimeout) {
+            session.response.message["error"] =
+                "Timed out waiting for the anchored upstream response";
+            session.response.message["errorCode"] = "upstream_response_timeout";
+            session.response.message["statusCode"] = 504;
+        } else {
+            session.response.message["error"] = "Upstream failed after all retries";
+            session.response.message["statusCode"] = 500;
+        }
     }
 }
 void chaynsapi::checkAlivableTokens()

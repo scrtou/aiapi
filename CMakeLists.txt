@@ -30,6 +30,7 @@ add_executable(${PROJECT_NAME}
     src/apiManager/ApiManager.cpp
     src/apipoint/chaynsapi/chaynsapi.cpp
     src/apipoint/chaynsapi/ChaynsModelCatalog.cpp
+    src/apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
     src/apipoint/nexosapi/nexosapi.cpp
     src/apipoint/openai/OpenAiProvider.cpp
     src/apipoint/retoolapi/retoolapi.cpp
