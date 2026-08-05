@@ -21,6 +21,7 @@ set(TEST_SOURCES
     test_generation_service_emit.cpp
     test_chayns_model_catalog.cpp
     test_nexos_user_agent.cpp
+    test_chayns_browser_impersonation.cpp
     test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
 )

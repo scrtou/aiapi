@@ -6,6 +6,7 @@
 #include <chrono>
 #include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <string>
+#include <utils/chaynsBrowserImpersonation.h>
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 
@@ -57,6 +58,8 @@ chaynsapi::~chaynsapi()
 
 void chaynsapi::init()
 {
+    chayns_browser::reloadConfigFromDrogon();
+
     loadModels(true);
 
     // 从配置 custom_config.upstream_error_texts 加载上游错误文本列表
@@ -114,6 +117,7 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
     request->setMethod(HttpMethod::Post);
     request->setPath(uploadPath);
     request->addHeader("Authorization", "Bearer " + authToken);
+    chayns_browser::applyBrowserHeaders(request, chayns_browser::accountKeyFor("", personId));
     
 
     std::string boundary = "----WebKitFormBoundary" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
@@ -341,6 +345,7 @@ void chaynsapi::postChatMessage(session_st& session)
             request->setMethod(HttpMethod::Get);
             request->setPath("/v2/userSettings");
             request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+            chayns_browser::applyBrowserHeadersForAccount(request, accountinfo->userName, accountinfo->personId);
             auto [result, response] = authClient->sendRequest(request);
             if (result == ReqResult::Ok && response && response->statusCode() == k200OK) {
                 auto jsonResp = response->getJsonObject();
@@ -439,6 +444,7 @@ void chaynsapi::postChatMessage(session_st& session)
             string path = "/intercom-backend/v2/thread/" + threadId + "/message";
             reqSend->setPath(path);
             reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+            chayns_browser::applyBrowserHeadersForAccount(reqSend, accountinfo->userName, accountinfo->personId);
             
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
             
@@ -551,6 +557,7 @@ void chaynsapi::postChatMessage(session_st& session)
             reqSend->setMethod(HttpMethod::Post);
             reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
             reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+            chayns_browser::applyBrowserHeadersForAccount(reqSend, accountinfo->userName, accountinfo->personId);
             
             LOG_INFO << "[chaynsAPI] 正在创建新线程";
             
@@ -568,6 +575,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 retryReq->setMethod(HttpMethod::Post);
                 retryReq->setPath("/intercom-backend/v2/thread?forceCreate=true");
                 retryReq->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+                chayns_browser::applyBrowserHeadersForAccount(retryReq, accountinfo->userName, accountinfo->personId);
                 sendResult = client->sendRequest(retryReq);
             }
 
@@ -666,6 +674,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 string retryPath = "/intercom-backend/v2/thread/" + threadId + "/message";
                 reqRetry->setPath(retryPath);
                 reqRetry->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+                chayns_browser::applyBrowserHeadersForAccount(reqRetry, accountinfo->userName, accountinfo->personId);
                 
                 LOG_INFO << "[chaynsAPI] 正在重新发送消息到线程：" << threadId;
                 
@@ -714,6 +723,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 reqGet->setMethod(HttpMethod::Get);
                 reqGet->setPath(pollPath);
                 reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+                chayns_browser::applyBrowserHeadersForAccount(reqGet, accountinfo->userName, accountinfo->personId);
                 
                 auto getResult = client->sendRequest(reqGet);
                 if (getResult.first == ReqResult::Ok && getResult.second) {
@@ -862,6 +872,7 @@ bool chaynsapi::checkAlivableToken(string token)
     request->setMethod(HttpMethod::Get);
     request->setPath("/v2/userSettings");
     request->addHeader("Authorization", "Bearer " + token);
+    chayns_browser::applyBrowserHeaders(request);
     auto [result, response] = client->sendRequest(request);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[chaynsAPI] 验证Token失败：网络错误";
@@ -926,6 +937,7 @@ bool chaynsapi::loadModels(bool forceRefresh)
     
     request->setMethod(HttpMethod::Get);
     request->setPath("/chayns-ai-chatbot/nativeModelChatbot");
+    chayns_browser::applyBrowserHeaders(request);
     
     auto [result, response] = client->sendRequest(request);
     

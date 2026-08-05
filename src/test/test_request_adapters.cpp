@@ -271,3 +271,178 @@ DROGON_TEST(RequestAdapters_Responses_InputItems)
     CHECK(genReq.images[0].uploadedUrl == "https://example.com/b.png");
     CHECK(!genReq.continuityTexts.empty());
 }
+
+DROGON_TEST(RequestAdapters_Responses_FullTranscriptDoesNotReplayHistoricalToolOutput)
+{
+    Json::Value body;
+    body["model"] = "Grok 4.5";
+
+    Json::Value input(Json::arrayValue);
+    {
+        Json::Value item;
+        item["type"] = "message";
+        item["role"] = "user";
+        item["content"] = "old question";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "function_call";
+        item["call_id"] = "call_old";
+        item["name"] = "read_file";
+        item["arguments"] = R"({"path":"old.txt"})";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "function_call_output";
+        item["call_id"] = "call_old";
+        item["output"] = "HISTORICAL_TOOL_OUTPUT_MUST_NOT_BE_CURRENT";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "message";
+        item["role"] = "assistant";
+        item["content"] = "old task finished";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "message";
+        item["role"] = "user";
+        item["content"] = "new question";
+        input.append(item);
+    }
+    body["input"] = input;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body, "codex_cli_rs/0.133.0"));
+
+    CHECK(genReq.currentInput.find("new question") != std::string::npos);
+    CHECK(genReq.currentInput.find("HISTORICAL_TOOL_OUTPUT_MUST_NOT_BE_CURRENT") ==
+          std::string::npos);
+
+    bool foundHistoricalToolResult = false;
+    for (const auto& message : genReq.messages) {
+        if (message.role == MessageRole::Tool &&
+            message.toolCallId == "call_old" &&
+            message.getTextContent().find("HISTORICAL_TOOL_OUTPUT_MUST_NOT_BE_CURRENT") !=
+                std::string::npos) {
+            foundHistoricalToolResult = true;
+        }
+    }
+    CHECK(foundHistoricalToolResult);
+}
+
+DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsLatestParallelToolResults)
+{
+    Json::Value body;
+    body["model"] = "Grok 4.5";
+
+    Json::Value input(Json::arrayValue);
+    {
+        Json::Value item;
+        item["type"] = "message";
+        item["role"] = "user";
+        item["content"] = "read both files";
+        input.append(item);
+    }
+    for (const auto& callId : {"call_a", "call_b"}) {
+        Json::Value item;
+        item["type"] = "function_call";
+        item["call_id"] = callId;
+        item["name"] = "read_file";
+        item["arguments"] = "{}";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "function_call_output";
+        item["call_id"] = "call_a";
+        item["output"] = "LATEST_RESULT_A";
+        input.append(item);
+    }
+    {
+        Json::Value item;
+        item["type"] = "function_call_output";
+        item["call_id"] = "call_b";
+        item["output"] = "LATEST_RESULT_B";
+        input.append(item);
+    }
+    body["input"] = input;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body, "codex_cli_rs/0.133.0"));
+
+    CHECK(genReq.currentInput.find("LATEST_RESULT_A") != std::string::npos);
+    CHECK(genReq.currentInput.find("LATEST_RESULT_B") != std::string::npos);
+    CHECK(genReq.currentInput.find("call_id=call_a") != std::string::npos);
+    CHECK(genReq.currentInput.find("call_id=call_b") != std::string::npos);
+}
+
+DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsIncrementalToolOutputWithoutBoundary)
+{
+    Json::Value body;
+    body["model"] = "Grok 4.5";
+
+    Json::Value input(Json::arrayValue);
+    Json::Value item;
+    item["type"] = "custom_tool_call_output";
+    item["call_id"] = "call_incremental";
+    item["output"] = "INCREMENTAL_TOOL_RESULT";
+    input.append(item);
+    body["input"] = input;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body, "codex_cli_rs/0.133.0"));
+
+    CHECK(genReq.currentInput.find("INCREMENTAL_TOOL_RESULT") != std::string::npos);
+    CHECK(genReq.currentInput.find("call_id=call_incremental") != std::string::npos);
+}
+
+DROGON_TEST(RequestAdapters_Responses_XmlBridgeOnlyReplaysNewestToolCycle)
+{
+    Json::Value body;
+    body["model"] = "Grok 4.5";
+
+    Json::Value input(Json::arrayValue);
+    auto appendMessage = [&](const std::string& role, const std::string& content) {
+        Json::Value item;
+        item["type"] = "message";
+        item["role"] = role;
+        item["content"] = content;
+        input.append(item);
+    };
+    auto appendCall = [&](const std::string& callId) {
+        Json::Value item;
+        item["type"] = "function_call";
+        item["call_id"] = callId;
+        item["name"] = "read_file";
+        item["arguments"] = "{}";
+        input.append(item);
+    };
+    auto appendOutput = [&](const std::string& callId, const std::string& output) {
+        Json::Value item;
+        item["type"] = "function_call_output";
+        item["call_id"] = callId;
+        item["output"] = output;
+        input.append(item);
+    };
+
+    appendMessage("user", "old request");
+    appendCall("call_old_cycle");
+    appendOutput("call_old_cycle", "OLD_CYCLE_RESULT");
+    appendMessage("assistant", "old cycle complete");
+    appendMessage("user", "new request that caused the latest XML tool call");
+    appendCall("call_new_cycle");
+    appendOutput("call_new_cycle", "NEW_CYCLE_RESULT");
+    body["input"] = input;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body, "codex_cli_rs/0.133.0"));
+
+    CHECK(genReq.currentInput.find("NEW_CYCLE_RESULT") != std::string::npos);
+    CHECK(genReq.currentInput.find("OLD_CYCLE_RESULT") == std::string::npos);
+    CHECK(genReq.currentInput.find("new request that caused") == std::string::npos);
+}

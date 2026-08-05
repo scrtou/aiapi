@@ -227,14 +227,33 @@ bool isCodexToolCallType(const std::string& type)
            type == "local_shell_call" || type == "tool_search_call";
 }
 
-void appendCodexToolOutput(const Json::Value& item, std::string& currentInput)
+std::string codexToolOutputText(const Json::Value& item)
 {
     const std::string type = item.get("type", "tool_call_output").asString();
     const std::string callId = item.get("call_id", "").asString();
-    currentInput += "\n[tool_result type=" + type;
-    if (!callId.empty()) currentInput += " call_id=" + callId;
-    currentInput += "]\n" + compactJson(item.get("output", Json::Value(""))) +
-                    "\n[/tool_result]\n";
+    std::string text = "\n[tool_result type=" + type;
+    if (!callId.empty()) text += " call_id=" + callId;
+    text += "]\n" + compactJson(item.get("output", Json::Value(""))) +
+            "\n[/tool_result]\n";
+    return text;
+}
+
+void appendCodexToolOutput(const Json::Value& item, std::string& currentInput)
+{
+    currentInput += codexToolOutputText(item);
+}
+
+Message makeCodexToolOutputHistory(const Json::Value& item)
+{
+    Message message;
+    message.role = MessageRole::Tool;
+    message.toolCallId = item.get("call_id", "").asString();
+
+    ContentPart part;
+    part.type = ContentPartType::Text;
+    part.text = codexToolOutputText(item);
+    message.content.push_back(std::move(part));
+    return message;
 }
 
 Message makeCodexToolCallHistory(const Json::Value& item)
@@ -249,6 +268,13 @@ Message makeCodexToolCallHistory(const Json::Value& item)
     if (!name.empty()) text += " name=" + name;
     text += "]\n" + compactJson(payload) + "\n[/tool_call]";
     return Message::assistant(text);
+}
+
+bool isResponsesModelOutputBoundary(const Json::Value& item)
+{
+    if (!item.isObject()) return false;
+    if (item.get("role", "").asString() == "assistant") return true;
+    return isCodexToolCallType(item.get("type", "").asString());
 }
 
 }  // namespace
@@ -673,8 +699,8 @@ void RequestAdapters::parseResponseInput(
     std::vector<ImageInfo>& images
 ) {
     // 检查是否使用零宽字符模式
-    bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
-    
+    const bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
+
     if (input.isString()) {
         // 简单字符串输入
         currentInput = input.asString();
@@ -683,61 +709,90 @@ void RequestAdapters::parseResponseInput(
         }
         return;
     }
-    
+
     if (!input.isArray()) {
         return;
     }
-    
-    // 查找最后一个 消息的索引
-    int splitIndex = -1;
-    for (int i = static_cast<int>(input.size()) - 1; i >= 0; i--) {
-        const auto& item = input[i];
-        if (item.isObject() && item.get("role", "").asString() == "assistant") {
-            splitIndex = i;
+
+    // Responses 请求可能携带完整客户端转录。chayns 上游不具备原生
+    // 工具调用：我们只能把最近一次模型输出之后的用户/工具结果作为
+    // 本轮 XML bridge 后续消息。更早的工具结果属于历史，不能每轮
+    // 重复拼入 currentInput。
+    //
+    // 边界不能只看 role=assistant：Codex Responses 在模型请求工具时
+    // 可能只有 function_call/custom_tool_call 等模型输出项。
+    int lastModelOutputIndex = -1;
+    for (int i = static_cast<int>(input.size()) - 1; i >= 0; --i) {
+        if (isResponsesModelOutputBoundary(input[i])) {
+            lastModelOutputIndex = i;
             break;
         }
     }
-    
-    // 用于临时存储历史消息中的图片
+    const int currentInputStart = lastModelOutputIndex + 1;
+
+    // 历史图片不应重复上传到本轮。
     std::vector<ImageInfo> historyImages;
-    
-    // 解析 数组中的每个元素
-    for (int i = 0; i < static_cast<int>(input.size()); i++) {
+    size_t currentToolOutputCount = 0;
+    size_t currentToolOutputBytes = 0;
+    size_t historicalToolOutputCount = 0;
+    size_t historicalToolOutputBytes = 0;
+
+    auto appendTextByPosition = [&](int index, const std::string& text) {
+        if (text.empty()) return;
+        if (index >= currentInputStart) {
+            currentInput += text;
+        } else {
+            messages.push_back(Message::user(text));
+        }
+    };
+
+    for (int i = 0; i < static_cast<int>(input.size()); ++i) {
         const auto& item = input[i];
-        
+
         if (item.isString()) {
-            // 简单字符串，作为当前请求的一部分
             std::string text = item.asString();
             if (isZeroWidthMode) {
                 text = ZeroWidthEncoder::stripZeroWidth(text);
             }
-            currentInput += text + "\n";
+            appendTextByPosition(i, text + "\n");
             continue;
         }
-        
+
         if (!item.isObject()) {
             continue;
         }
-        
-        std::string type = item.get("type", "").asString();
-        std::string role = item.get("role", "").asString();
+
+        const std::string type = item.get("type", "").asString();
+        const std::string role = item.get("role", "").asString();
 
         if (type == "additional_tools") {
             continue;
         }
+
         if (isCodexToolOutputType(type)) {
-            appendCodexToolOutput(item, currentInput);
+            const std::string toolResult = codexToolOutputText(item);
+            if (i >= currentInputStart) {
+                currentInput += toolResult;
+                ++currentToolOutputCount;
+                currentToolOutputBytes += toolResult.size();
+            } else {
+                messages.push_back(makeCodexToolOutputHistory(item));
+                ++historicalToolOutputCount;
+                historicalToolOutputBytes += toolResult.size();
+            }
             continue;
         }
+
         if (isCodexToolCallType(type)) {
+            // 工具调用项是上一次 XML bridge 模型输出的客户端表示。
+            // 对已有 chayns 线程它已存在于上游上下文；对新线程重放
+            // 则必须留在历史中。它本身不应再发成本轮用户文本。
             messages.push_back(makeCodexToolCallHistory(item));
             continue;
         }
-        
-        // 处理带 的消息（历史对话格式）
+
         if (!role.empty()) {
             // Responses API 的 developer/system 消息是本轮指令，不应混入用户输入。
-            // 顶层 instructions 已先写入 systemPrompt，因此这里只做追加。
             if (role == "system" || role == "developer") {
                 if (item.isMember("content")) {
                     std::string instruction = extractContentText(
@@ -752,50 +807,53 @@ void RequestAdapters::parseResponseInput(
                 continue;
             }
 
-            if (i <= splitIndex) {
-                // 历史消息：添加到 列表
+            if (i < currentInputStart) {
                 Message message;
                 if (role == "user") {
                     message.role = MessageRole::User;
                 } else if (role == "assistant") {
                     message.role = MessageRole::Assistant;
+                } else if (role == "tool") {
+                    message.role = MessageRole::Tool;
+                    message.toolCallId = item.get("tool_call_id", "").asString();
                 } else {
                     continue;
                 }
-                
-                std::string msgContent;
+
+                std::string text;
                 if (item.isMember("content")) {
-                    msgContent = extractContentText(item["content"], historyImages, isZeroWidthMode);
+                    text = extractContentText(
+                        item["content"], historyImages, isZeroWidthMode);
                 }
-                
                 ContentPart part;
                 part.type = ContentPartType::Text;
-                part.text = msgContent;
-                message.content.push_back(part);
-                messages.push_back(message);
-            } else {
-                // 当前请求：只处理 消息
-                if (role == "user") {
-                    if (item.isMember("content")) {
-                        currentInput += extractContentText(item["content"], images, isZeroWidthMode);
-                    }
+                part.text = text;
+                message.content.push_back(std::move(part));
+                messages.push_back(std::move(message));
+            } else if (role == "user" || role == "tool") {
+                // chayns 上游只能看到纯文本，所以将本轮标准 tool 角色内容
+                // 与 Codex *_call_output 一样作为后续消息。
+                if (item.isMember("content")) {
+                    currentInput += extractContentText(
+                        item["content"], images, isZeroWidthMode);
                 }
             }
             continue;
         }
-        
-        // 处理简单的 input_text 类型（没有 ）
+
         if (type == "input_text" || type == "text") {
-            std::string textContent = item.get("text", "").asString();
+            std::string text = item.get("text", "").asString();
             if (isZeroWidthMode) {
-                textContent = ZeroWidthEncoder::stripZeroWidth(textContent);
+                text = ZeroWidthEncoder::stripZeroWidth(text);
             }
-            currentInput += textContent;
+            appendTextByPosition(i, text);
             continue;
         }
-        
-        // 处理图片输入 (input_image 类型)
+
         if (type == "input_image") {
+            // 历史图片不重复上传。
+            if (i < currentInputStart) continue;
+
             std::string url;
             if (item.isMember("image_url")) {
                 url = item["image_url"].asString();
@@ -807,30 +865,58 @@ void RequestAdapters::parseResponseInput(
                     url = fileObj["url"].asString();
                 }
             }
-            
+
             if (!url.empty()) {
                 ImageInfo imgInfo = parseImageUrl(url);
                 if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
                     images.push_back(imgInfo);
-                    LOG_INFO << "[请求适配器] 提取到图片(input_image)，mediaType：" << imgInfo.mediaType;
+                    LOG_INFO << "[请求适配器] 提取到图片(input_image)，mediaType："
+                             << imgInfo.mediaType;
                 }
             }
             continue;
         }
-        
-        // 处理 image_url 类型（兼容 API 格式）
+
         if (type == "image_url") {
-            if (item.isMember("image_url") && item["image_url"].isObject()) {
+            if (i >= currentInputStart &&
+                item.isMember("image_url") && item["image_url"].isObject()) {
                 const auto& imageUrl = item["image_url"];
                 if (imageUrl.isMember("url")) {
                     ImageInfo imgInfo = parseImageUrl(imageUrl["url"].asString());
                     if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
                         images.push_back(imgInfo);
-                        LOG_INFO << "[请求适配器] 提取到图片(image_url)，mediaType：" << imgInfo.mediaType;
                     }
                 }
             }
+            continue;
         }
+
+        // 兼容无 role 的 message/content 项。
+        if (type == "message" && item.isMember("content")) {
+            std::vector<ImageInfo>& targetImages =
+                i >= currentInputStart ? images : historyImages;
+            const std::string text = extractContentText(
+                item["content"], targetImages, isZeroWidthMode);
+            appendTextByPosition(i, text);
+            continue;
+        }
+
+        if (item.isMember("text") && item["text"].isString()) {
+            std::string text = item["text"].asString();
+            if (isZeroWidthMode) {
+                text = ZeroWidthEncoder::stripZeroWidth(text);
+            }
+            appendTextByPosition(i, text);
+        }
+    }
+
+    if (currentToolOutputCount > 0 || historicalToolOutputCount > 0) {
+        LOG_INFO << "[请求适配器] Responses 工具结果分轮: currentCount="
+                 << currentToolOutputCount
+                 << ", currentBytes=" << currentToolOutputBytes
+                 << ", historicalCount=" << historicalToolOutputCount
+                 << ", historicalBytes=" << historicalToolOutputBytes
+                 << ", lastModelOutputIndex=" << lastModelOutputIndex;
     }
 }
 
@@ -843,8 +929,21 @@ void RequestAdapters::parseResponseInputItems(
 
     const bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
 
-    for (const auto& item : inputItems) {
+    // input_items 也可能是完整转录的退化形式。它没有 messages 输出参数可供
+    // 重放历史，因此只保留最后一次模型输出后的增量。
+    int lastModelOutputIndex = -1;
+    for (int i = static_cast<int>(inputItems.size()) - 1; i >= 0; --i) {
+        if (isResponsesModelOutputBoundary(inputItems[i])) {
+            lastModelOutputIndex = i;
+            break;
+        }
+    }
+    const int currentInputStart = lastModelOutputIndex + 1;
+
+    for (int index = 0; index < static_cast<int>(inputItems.size()); ++index) {
+        const auto& item = inputItems[index];
         if (item.isString()) {
+            if (index < currentInputStart) continue;
             std::string text = item.asString();
             if (isZeroWidthMode) {
                 text = ZeroWidthEncoder::stripZeroWidth(text);
@@ -862,16 +961,21 @@ void RequestAdapters::parseResponseInputItems(
 
         if (type == "additional_tools") continue;
         if (isCodexToolOutputType(type)) {
+            if (index < currentInputStart) continue;
             appendCodexToolOutput(item, currentInput);
             continue;
         }
         if (isCodexToolCallType(type)) {
-            currentInput += "\n" + makeCodexToolCallHistory(item).getTextContent() + "\n";
+            // 模型输出本身已在 chayns 线程中，不应再次作为当前用户输入。
+            if (index >= currentInputStart) {
+                currentInput += "\n" + makeCodexToolCallHistory(item).getTextContent() + "\n";
+            }
             continue;
         }
 
         if ((type == "input_text" || type == "text") &&
             item.isMember("text") && item["text"].isString()) {
+            if (index < currentInputStart) continue;
             std::string text = item["text"].asString();
             if (isZeroWidthMode) {
                 text = ZeroWidthEncoder::stripZeroWidth(text);
@@ -885,12 +989,14 @@ void RequestAdapters::parseResponseInputItems(
 
 
         if (type == "message" && item.isMember("content")) {
+            if (index < currentInputStart) continue;
             currentInput += extractContentText(item["content"], images, isZeroWidthMode);
             continue;
         }
 
         // 图片输入
         if (type == "input_image") {
+            if (index < currentInputStart) continue;
             std::string url;
             if (item.isMember("image_url")) {
                 url = item["image_url"].asString();
@@ -914,6 +1020,7 @@ void RequestAdapters::parseResponseInputItems(
 
 
         if (type == "image_url") {
+            if (index < currentInputStart) continue;
             if (item.isMember("image_url") && item["image_url"].isObject()) {
                 const auto& imageUrl = item["image_url"];
                 if (imageUrl.isMember("url")) {
@@ -928,6 +1035,7 @@ void RequestAdapters::parseResponseInputItems(
 
 
         if (item.isMember("text") && item["text"].isString()) {
+            if (index < currentInputStart) continue;
             std::string text = item["text"].asString();
             if (isZeroWidthMode) {
                 text = ZeroWidthEncoder::stripZeroWidth(text);

@@ -91,7 +91,7 @@ private:
      * @param input JSON input 字段
      * @param[out] messages 解析后的历史消息
      * @param[in,out] systemPrompt 提取的系统/开发者指令
-     * @param[out] currentInput 当前用户输入
+     * @param[out] currentInput 当前轮用户输入及工具结果（供 XML bridge 使用）
      * @param[out] images 提取的图片信息
      */
     static void parseResponseInput(
