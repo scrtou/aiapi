@@ -18,6 +18,7 @@
 #include <metrics/ErrorEvent.h>
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
+#include <cctype>
 #include <iomanip>
 #include <random>
 #include <sstream>
@@ -172,7 +173,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
                   << "，tools 是否为空=" << session.request.tools.isNull()
                   << "，tools 是否数组=" << session.request.tools.isArray()
                   << "，tools 数量=" << session.request.tools.size();
-	        const Json::Value& toolsForBridge =
+	        const Json::Value toolsForBridge =
 	            (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0)
 	                ? session.request.tools
 	                : session.request.toolsRaw;
@@ -239,6 +240,58 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             // 记录请求完成（失败分支）
             recordRequestCompletedStat(session, httpStatus);
             return std::nullopt;  // 上游 错误已通过 发送
+        }
+
+        // CodexRooCompat: the upstream must return one sentinel-bound action-v2
+        // envelope. Legacy function_calls are accepted for existing sessions.
+        // Retry exactly once on plain text or malformed transport output.
+        const std::string clientType = safeJsonAsString(
+            session.provider.clientInfo.get("client_type", ""), "");
+        const bool codexRooCompatActive =
+            clientType == "Codex" && !supportsToolCalls && !toolChoiceNone &&
+            !session.provider.toolBridgeTrigger.empty() &&
+            toolsForBridge.isArray() && toolsForBridge.size() > 0;
+        if (codexRooCompatActive) {
+            const std::string firstResponseText = safeJsonAsString(
+                session.response.message.get("message", ""), "");
+            const bool hasNativeToolCalls =
+                session.response.message.isMember("tool_calls") &&
+                session.response.message["tool_calls"].isArray() &&
+                session.response.message["tool_calls"].size() > 0;
+            const bool hasActionProtocol =
+                firstResponseText.find(session.provider.toolBridgeTrigger) != std::string::npos &&
+                firstResponseText.find("<action_protocol") != std::string::npos;
+            const bool hasLegacyBridgeXml =
+                firstResponseText.find(session.provider.toolBridgeTrigger) != std::string::npos &&
+                firstResponseText.find("<function_calls>") != std::string::npos &&
+                firstResponseText.find("<function_call>") != std::string::npos;
+            const bool hasBridgeXml = hasActionProtocol || hasLegacyBridgeXml;
+
+            if (!hasNativeToolCalls && !hasBridgeXml) {
+                LOG_WARN << "[生成服务][CodexRooCompat] 首次响应"
+                         << "缺少有效 action protocol"
+                         << "，正在严格重试一次";
+
+                const std::string bridgeMessage = session.request.message;
+                const Json::Value firstResponse = session.response.message;
+                session.request.message +=
+                    "\n\n[CodexRooCompat retry]\n"
+                    "Your previous response was invalid for this transport.\n"
+                    "Reply again with exactly one action_protocol envelope using the exact trigger marker and API Definitions already provided.\n"
+                    "Use a real tool_call when external state is required; otherwise use final_response.\n"
+                    "Output no prose, explanation, markdown, or refusal.\n"
+                    "Exact trigger: " + session.provider.toolBridgeTrigger + "\n";
+                session.response.message = Json::Value(Json::objectValue);
+
+                const bool retryOk = executeProvider(session);
+                session.request.message = bridgeMessage;
+                if (!retryOk) {
+                    session.response.message = firstResponse;
+                    LOG_WARN << "[生成服务][CodexRooCompat] 严格重试失败，已恢复首次响应";
+                } else {
+                    LOG_INFO << "[生成服务][CodexRooCompat] 严格重试完成";
+                }
+            }
         }
         
         // 4. 检查取消状态

@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <random>
 #include <algorithm>
+#include <cctype>
 #include <drogon/utils/Utilities.h>
 #include<drogon/drogon.h>
 namespace toolcall {
@@ -26,6 +27,116 @@ static const std::string TAG_TOOL_RESULT = "tool_result";
 static const std::string SENTINEL_EXAMPLE = "<Function_XXXX_Start/>";
 static const std::string SENTINEL_PREFIX = "<Function_";
 static const std::string SENTINEL_SUFFIX = "_Start/>";
+
+namespace {
+
+bool isAsciiWhitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+std::string trimAsciiWhitespace(const std::string& value) {
+    size_t begin = 0;
+    while (begin < value.size() && isAsciiWhitespace(value[begin])) {
+        ++begin;
+    }
+
+    size_t end = value.size();
+    while (end > begin && isAsciiWhitespace(value[end - 1])) {
+        --end;
+    }
+    return value.substr(begin, end - begin);
+}
+
+std::string decodeJsonStringBestEffort(const std::string& value) {
+    std::string decoded;
+    decoded.reserve(value.size());
+
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] != '\\' || i + 1 >= value.size()) {
+            decoded.push_back(value[i]);
+            continue;
+        }
+
+        const char escaped = value[++i];
+        switch (escaped) {
+            case '"': decoded.push_back('"'); break;
+            case '\\': decoded.push_back('\\'); break;
+            case '/': decoded.push_back('/'); break;
+            case 'b': decoded.push_back('\b'); break;
+            case 'f': decoded.push_back('\f'); break;
+            case 'n': decoded.push_back('\n'); break;
+            case 'r': decoded.push_back('\r'); break;
+            case 't': decoded.push_back('\t'); break;
+            default:
+                // Preserve unknown and unicode escapes verbatim. JsonCpp will
+                // quote them safely when the recovered result is serialized.
+                decoded.push_back('\\');
+                decoded.push_back(escaped);
+                break;
+        }
+    }
+    return decoded;
+}
+
+std::string recoverAttemptCompletionResult(const std::string& rawArguments) {
+    const std::string value = trimAsciiWhitespace(rawArguments);
+    if (value.empty() || value.front() != '{') {
+        return rawArguments;
+    }
+
+    const size_t keyPos = value.find("\"result\"");
+    if (keyPos == std::string::npos) {
+        return rawArguments;
+    }
+
+    const size_t colonPos = value.find(':', keyPos + 8);
+    if (colonPos == std::string::npos) {
+        return rawArguments;
+    }
+
+    size_t contentBegin = colonPos + 1;
+    while (contentBegin < value.size() && isAsciiWhitespace(value[contentBegin])) {
+        ++contentBegin;
+    }
+    if (contentBegin >= value.size() || value[contentBegin] != '"') {
+        return rawArguments;
+    }
+    ++contentBegin;
+
+    size_t contentEnd = value.size();
+    while (contentEnd > contentBegin && isAsciiWhitespace(value[contentEnd - 1])) {
+        --contentEnd;
+    }
+    if (contentEnd <= contentBegin || value[contentEnd - 1] != '}') {
+        return rawArguments;
+    }
+    --contentEnd;
+    while (contentEnd > contentBegin && isAsciiWhitespace(value[contentEnd - 1])) {
+        --contentEnd;
+    }
+    if (contentEnd <= contentBegin || value[contentEnd - 1] != '"') {
+        return rawArguments;
+    }
+    --contentEnd;
+
+    return decodeJsonStringBestEffort(value.substr(contentBegin, contentEnd - contentBegin));
+}
+
+bool startsWithTag(const std::string& value, const std::string& prefix) {
+    if (value.size() < prefix.size() || value.compare(0, prefix.size(), prefix) != 0) {
+        return false;
+    }
+    if (value.size() == prefix.size()) return true;
+    const char next = value[prefix.size()];
+    return next == '>' || next == '/' ||
+           std::isspace(static_cast<unsigned char>(next));
+}
+
+bool startsWithClosingTag(const std::string& value, const std::string& tag) {
+    return value.rfind("</" + tag + ">", 0) == 0;
+}
+
+} // namespace
 XmlTagToolCallCodec::XmlTagToolCallCodec()
     : state_(XmlParserState::Text)
     , currentParamEndTag_()
@@ -318,7 +429,8 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 }
                 
                 // 查找 或结束标签
-                if (buffer_.substr(0, 2) == "</") {
+                if (startsWithClosingTag(buffer_, TAG_FUNCTION_CALLS_PLAIN) ||
+                    startsWithClosingTag(buffer_, TAG_FUNCTION_CALLS)) {
                     size_t endTag = buffer_.find('>');
                     if (endTag == std::string::npos) return;
                     buffer_ = buffer_.substr(endTag + 1);
@@ -676,7 +788,7 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 const std::string functionCallPrefix = "<" + TAG_FUNCTION_CALL;
 
                 auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
-                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                    return startsWithTag(s, prefix);
                 };
 
 
@@ -728,7 +840,8 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 }
                 
 
-                if (buffer_.substr(0, 2) == "</") {
+                if (startsWithClosingTag(buffer_, TAG_INVOKE_PLAIN) ||
+                    startsWithClosingTag(buffer_, TAG_INVOKE)) {
                     size_t endTag = buffer_.find('>');
                     if (endTag == std::string::npos) return;
                     
@@ -744,7 +857,7 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 const std::string paramPrefixPlain = "<" + TAG_PARAMETER_PLAIN;
 
                 auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
-                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                    return startsWithTag(s, prefix);
                 };
 
                 std::string paramTagName;
@@ -820,7 +933,7 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 }
 
 
-                if (buffer_.substr(0, 2) == "</") {
+                if (startsWithClosingTag(buffer_, TAG_FUNCTION_CALL)) {
                     size_t endTag = buffer_.find('>');
                     if (endTag == std::string::npos) return;
 
@@ -834,7 +947,7 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
                 const std::string argsPrefix = "<" + TAG_ARGS_JSON;
 
                 auto startsWith = [](const std::string& s, const std::string& prefix) -> bool {
-                    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+                    return startsWithTag(s, prefix);
                 };
 
 
@@ -882,6 +995,20 @@ void XmlTagToolCallCodec::processBuffer(std::vector<ToolCallEvent>& events) {
             case XmlParserState::InArgsJson: {
                 const std::string endTag = "</" + TAG_ARGS_JSON + ">";
                 size_t endPos = buffer_.find(endTag);
+
+                // attempt_completion can legitimately contain documentation or
+                // code samples with complete XML bridge blocks. Models also
+                // frequently put raw newlines/quotes in its JSON string, so the
+                // CDATA payload may itself contain `</args_json>`. Treat the
+                // final closing tag as authoritative for this virtual, sole
+                // completion call; otherwise an embedded sample truncates the
+                // answer and can be re-parsed as phantom tool calls.
+                if (currentContext_.toolName == "attempt_completion") {
+                    const size_t lastEndPos = buffer_.rfind(endTag);
+                    if (lastEndPos != std::string::npos) {
+                        endPos = lastEndPos;
+                    }
+                }
 
                 if (endPos == std::string::npos) {
                     currentContext_.currentParamValue += buffer_;
@@ -950,6 +1077,8 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
     if (!currentContext_.rawArgumentsJson.empty()) {
         std::string jsonStr = currentContext_.rawArgumentsJson;
 
+        bool recoveredAttemptCompletion = false;
+
 
         Json::Value parsed;
         Json::CharReaderBuilder builder;
@@ -974,8 +1103,9 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
                 if (ok && parsed.isString()) {
                     args["result"] = parsed.asString();
                 } else {
-
-                    args["result"] = jsonStr;
+                    const std::string recovered = recoverAttemptCompletionResult(jsonStr);
+                    recoveredAttemptCompletion = recovered != jsonStr;
+                    args["result"] = recovered;
                 }
                 evt.argumentsDelta = Json::writeString(writer, args);
             } else {
@@ -985,10 +1115,15 @@ void XmlTagToolCallCodec::emitToolCallEnd(std::vector<ToolCallEvent>& events) {
             }
 
             if (!ok) {
-                LOG_WARN << "[XML工具调用编解码器] args_json 解析失败: tool="
-                         << currentContext_.toolName
-                         << ", parseErrorPresent=" << !errors.empty()
-                         << ", parseErrorSize=" << errors.size();
+                if (recoveredAttemptCompletion) {
+                    LOG_INFO << "[XML工具调用编解码器] attempt_completion 的非标准 JSON 已恢复"
+                             << ", payloadSize=" << jsonStr.size();
+                } else {
+                    LOG_WARN << "[XML工具调用编解码器] args_json 解析失败: tool="
+                             << currentContext_.toolName
+                             << ", parseErrorPresent=" << !errors.empty()
+                             << ", parseErrorSize=" << errors.size();
+                }
             } else if (!parsed.isObject()) {
                 LOG_WARN << "[XML工具调用编解码器] args_json 已解析 ="
                          << currentContext_.toolName;

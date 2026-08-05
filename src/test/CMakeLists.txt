@@ -11,6 +11,7 @@ set(TEST_SOURCES
     test_history_replay_budget.cpp
     test_request_adapters.cpp
     test_xml_tool_call_codec.cpp
+    test_action_protocol.cpp
     test_tool_call_validator.cpp
     test_strict_client_rules.cpp
     test_forced_tool_call.cpp
@@ -36,6 +37,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ContinuityResolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/Session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RequestAdapters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolCompiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolAdapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallBridge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/XmlTagToolCallCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallValidator.cpp

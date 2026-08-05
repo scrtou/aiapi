@@ -10,6 +10,8 @@
 #include "sessionManager/tooling/ForcedToolCallGenerator.h"
 #include "sessionManager/tooling/ToolCallNormalizer.h"
 #include "sessionManager/tooling/ToolDefinitionEncoder.h"
+#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
+#include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
 #include <apiManager/ApiManager.h>
 #include <apipoint/ProviderResult.h>
 #include <tools/ZeroWidthEncoder.h>
@@ -338,37 +340,48 @@ void appendRetoolProviderPolicy(std::ostringstream& policy,
     policy << "</function_calls>\n";
 }
 
+bool codexRequestLikelyNeedsExternalState(const std::string& message) {
+    if (message.empty() || message.find("[tool_result") != std::string::npos) {
+        return false;
+    }
+
+    std::string lower = message;
+    for (auto& ch : lower) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+
+    static const char* kKeywords[] = {
+        "file", "directory", "folder", "repository", "repo", "git ",
+        "commit", "branch", "log", "workspace", "codebase", "source code",
+        "run ", "execute ", "command", "build", "compile", "test",
+        "inspect", "check ", "read ", "open ", "list ", "find ", "search ",
+        "文件", "目录", "仓库", "代码", "日志", "提交", "分支", "工作区",
+        "运行", "执行", "命令", "构建", "编译", "测试", "检查", "查看",
+        "读取", "打开", "列出", "查找", "搜索"
+    };
+    for (const char* keyword : kKeywords) {
+        if (lower.find(keyword) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void appendCodexXmlBridgePolicy(std::ostringstream& policy,
                                 const std::string& forcedToolName,
                                 const std::string& toolChoice,
                                 const std::string& triggerSignal,
-                                bool parallelToolCalls) {
-    //policy << "Context: Codex software-engineering agent. Tools are executed by the Codex client.\n";
-    policy << "Context: Software engineering collaboration\n";
-    policy << "Use the listed tools directly when files, commands, patches, MCP resources, or other external state are needed.\n";
-    policy << "Do not claim that filesystem or command tools are unavailable when a matching tool is listed.\n";
-    policy << "A normal final answer is allowed when no tool is needed; do not invent or call attempt_completion.\n";
-
+                                bool parallelToolCalls,
+                                bool requireToolForCurrentRequest) {
+    const auto capabilities = actionproto::capabilitiesForClient("Codex", parallelToolCalls);
+    policy << actionproto::ActionProtocolCompiler::buildRouterPolicy(triggerSignal, capabilities);
     if (!forcedToolName.empty()) {
         policy << "Required tool for this response: " << forcedToolName << ".\n";
-    } else if (toolChoice == "required") {
-        policy << "At least one listed tool must be called in this response.\n";
+    } else if (toolChoice == "required" || requireToolForCurrentRequest) {
+        policy << "This request requires external inspection; use a real tool_call, not final_response.\n";
     } else {
-        policy << "Call tools only when needed; otherwise return the final answer as normal text.\n";
+        policy << "Use final_response only after all required tool work is complete.\n";
     }
-
-    policy << "\nWhen calling a tool:\n";
-    policy << "- Output only the XML tool-call block, with no prose or markdown before or after it.\n";
-    policy << "- The first line must be the exact trigger marker below.\n";
-    policy << "- Tool names and parameter names must exactly match the API definitions.\n";
-    policy << "- args_json must be a valid JSON object containing all required arguments.\n";
-    policy << "- For a custom/free-form tool, place its free-form payload in the JSON field named input.\n";
-    if (parallelToolCalls) {
-        policy << "- One or more function_call elements are allowed when independent calls can run in parallel.\n";
-    } else {
-        policy << "- Exactly one function_call element is allowed in a tool-call response.\n";
-    }
-    appendXmlFunctionCallTemplate(policy, triggerSignal);
 }
 
 std::string inferToolCallType(const session_st& session, const std::string& toolName) {
@@ -483,13 +496,15 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // 检查当前通道是否原生支持工具调用
     // 如果支持，上游会直接返回结构化的 tool_calls，无需再从文本中二次解析
     const bool supportsToolCalls = getChannelSupportsToolCalls(session.request.api);
+    const bool codexRooCompat = clientType == "Codex" && !supportsToolCalls;
     
     const ToolChoiceSpec toolChoiceSpec = parseToolChoiceSpec(session.request.toolChoice);
     const bool toolChoiceNone = toolChoiceSpec.none;
     const bool toolChoiceRequired = toolChoiceSpec.required;
+    // Roo/Kilo and CodexRooCompat require the exact per-request sentinel.
     const bool strictSentinelEnabled = isStrictSentinelEnabled(
         session,
-        strictToolClient || clientType == "Codex",
+        strictToolClient || codexRooCompat,
         toolChoiceRequired
     );
     const bool allowFunctionCallsFallback = !strictSentinelEnabled;
@@ -542,20 +557,39 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         std::string xmlInput = extractXmlInputForToolCalls(session, text, allowFunctionCallsFallback);
 
         if (xmlInput.empty()) {
-            // 没有找到工具调用 XML，全部当作普通文本
-            textContent = std::move(text);
-            // 记录 TOOL_BRIDGE 警告：未找到 XML 工具调用
-            if (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0) {
-                // 只有在有工具定义时才记录警告
+            // Bridge 转换后 tools 已被清空，因此诊断必须优先读取 toolsRaw。
+            const Json::Value& bridgeToolDefs =
+                (!session.request.toolsRaw.isNull() &&
+                 session.request.toolsRaw.isArray() &&
+                 session.request.toolsRaw.size() > 0)
+                    ? session.request.toolsRaw
+                    : session.request.tools;
+            if (bridgeToolDefs.isArray() && bridgeToolDefs.size() > 0) {
+                Json::Value detail;
+                detail["client_type"] = clientType;
+                detail["tool_choice"] = session.request.toolChoice.empty()
+                    ? "auto(default)" : session.request.toolChoice;
+                detail["strict_sentinel"] = requireBridgeSentinel;
+                detail["sentinel_present"] =
+                    !session.provider.toolBridgeTrigger.empty() &&
+                    text.find(session.provider.toolBridgeTrigger) != std::string::npos;
+                detail["function_calls_present"] =
+                    text.find("<function_calls>") != std::string::npos;
+                detail["function_call_present"] =
+                    text.find("<function_call>") != std::string::npos;
+                detail["tool_definition_count"] =
+                    static_cast<Json::UInt64>(bridgeToolDefs.size());
                 recordWarnStat(
                     session,
                     metrics::Domain::TOOL_BRIDGE,
                     metrics::EventType::TOOLBRIDGE_XML_NOT_FOUND,
                     "响应中未找到可解析的 XML 工具调用",
-                    Json::Value(),
-                    text.substr(0, std::min(text.size(), size_t(1024)))  // 截取前 1KB 作为原始诊断片段
+                    detail,
+                    text.substr(0, std::min(text.size(), size_t(1024)))
                 );
             }
+            // 没有找到工具调用 XML，全部当作普通文本。
+            textContent = std::move(text);
         } else {
             // 步骤 2.2： 规范化 XML（处理特殊空格、换行符等）
             xmlInput = normalizeBridgeXml(std::move(xmlInput));
@@ -565,13 +599,44 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
             // 只有包含该标记的 XML 块才会被解析，避免误解析历史消息或示例中的 XML。
             std::string expectedSentinel = session.provider.toolBridgeTrigger;
             
-            // 步骤 2.4： 解析 XML 工具调用
-            // 解析XmlToolCalls() 的处理内容：
-            // - 使用 XmlTagToolCallCodec 解析 <function_calls>/<function_call> 结构
-
-            // - 将解析结果填充到 toolCalls 向量
-            // - 非工具调用的文本会填充到 textContent
-            parseXmlToolCalls(xmlInput, textContent, toolCalls, expectedSentinel);
+            // 步骤 2.4：优先编译通用 action-v2 协议。
+            // v2 将“工具调用”和“最终正文”分成两种动作，避免把长 Markdown
+            // 正文塞进 attempt_completion 的 JSON 字符串。legacy XML codec 仅
+            // 作为 Roo/历史会话的兼容路径。
+            const bool hasActionProtocol =
+                xmlInput.find("<action_protocol") != std::string::npos;
+            if (hasActionProtocol) {
+                actionproto::CompileOptions compileOptions;
+                compileOptions.expectedSentinel = expectedSentinel;
+                compileOptions.capabilities = actionproto::capabilitiesForClient(
+                    clientType, session.request.parallelToolCalls);
+                const auto compiled = actionproto::ActionProtocolCompiler::compileResponse(
+                    xmlInput, compileOptions);
+                if (!compiled.valid) {
+                    Json::Value detail;
+                    detail["protocol"] = "action-v2";
+                    detail["error_code"] = static_cast<int>(compiled.diagnostic.code);
+                    detail["offset"] = static_cast<Json::UInt64>(compiled.diagnostic.offset);
+                    recordWarnStat(
+                        session,
+                        metrics::Domain::TOOL_BRIDGE,
+                        metrics::EventType::TOOLBRIDGE_XML_PARSE_ERROR,
+                        "action-v2 动作协议编译失败: " + compiled.diagnostic.message,
+                        detail,
+                        text.substr(0, std::min(text.size(), size_t(2048)))
+                    );
+                    // 严格协议失败时不得把半成品转换成工具调用；保留原文，
+                    // 由上层重试/客户端展示，避免再次触发 missing nativeArgs。
+                    textContent = text;
+                } else {
+                    auto adapted = actionproto::adaptForClient(compiled.envelope, clientType);
+                    toolCalls = std::move(adapted.toolCalls);
+                    textContent = std::move(adapted.text);
+                }
+            } else {
+                // legacy XML codec：支持 Roo/Kilo 既有 antml/function_calls 格式。
+                parseXmlToolCalls(xmlInput, textContent, toolCalls, expectedSentinel);
+            }
 
             if (requireBridgeSentinel && xmlInput.find(session.provider.toolBridgeTrigger) == std::string::npos) {
                 toolCalls.clear();
@@ -622,6 +687,43 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         }
 
         toolCalls = std::move(filteredCalls);
+    }
+
+    if (codexRooCompat && !toolCalls.empty()) {
+        std::vector<generation::ToolCallDone> executableCalls;
+        executableCalls.reserve(toolCalls.size());
+        std::string completionText;
+
+        for (const auto& tc : toolCalls) {
+            if (tc.name != "attempt_completion") {
+                executableCalls.push_back(tc);
+                continue;
+            }
+
+            Json::Value args;
+            Json::CharReaderBuilder builder;
+            std::string errors;
+            std::istringstream iss(tc.arguments);
+            if (Json::parseFromStream(builder, iss, &args, &errors) &&
+                args.isObject() && args.isMember("result") &&
+                args["result"].isString() && !args["result"].asString().empty() &&
+                completionText.empty()) {
+                completionText = args["result"].asString();
+            } else {
+                LOG_WARN << "[生成服务][CodexRooCompat] attempt_completion 参数无效";
+            }
+        }
+
+        if (!executableCalls.empty()) {
+            toolCalls = std::move(executableCalls);
+            textContent.clear();
+        } else if (!completionText.empty()) {
+            toolCalls.clear();
+            textContent = completionText;
+            LOG_INFO << "[生成服务][CodexRooCompat] 已将虚拟 attempt_completion 转换为最终文本";
+        } else {
+            toolCalls.clear();
+        }
     }
 
     if (toolCalls.empty() && toolChoiceRequired) {
@@ -1506,6 +1608,18 @@ void GenerationService::applyStrictClientRules(
 void GenerationService::transformRequestForToolBridge(session_st& session) {
     const std::string clientType = safeJsonAsString(session.provider.clientInfo.get("client_type", ""), "");
     const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
+    const bool codexRooCompat = clientType == "Codex";
+
+    // Codex 的上游 system prompt 通常包含“使用 provider-native tool calling”
+    // 以及“不要输出 XML”的硬约束。对文本 bridge 来说，这与 action-v2
+    // 协议不可调和；保留它会直接诱发 “I can't comply with these instructions”。
+    // Roo/Kilo 不走此分支，因此不影响其原有 system instructions。
+    if (codexRooCompat) {
+        const size_t strippedInstructionChars = session.request.systemPrompt.size();
+        session.request.systemPrompt.clear();
+        LOG_INFO << "[生成服务][CodexRooCompat] 已移除上游可见 Codex instructions: chars="
+                 << strippedInstructionChars;
+    }
 
     // 工具定义详细度开关（可配置）
     // 默认规则：compact 表示简化类型，full 表示详细类型。
@@ -1891,7 +2005,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     session.provider.toolBridgeTrigger = generateRandomTriggerSignal(static_cast<size_t>(triggerRandomLength));
     const std::string& triggerSignal = session.provider.toolBridgeTrigger;
 
-    const bool hasStrictApplyDiffTool = strictToolClient &&
+    const bool hasStrictApplyDiffTool = (strictToolClient || codexRooCompat) &&
         (toolcall::hasToolNamed(session.request.tools, "apply_diff") ||
          toolcall::hasToolNamed(session.request.toolsRaw, "apply_diff"));
     const bool recoveringApplyDiffFailure = hasStrictApplyDiffTool &&
@@ -1923,12 +2037,18 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         } else if (isRetoolProvider) {
             appendRetoolProviderPolicy(policy, triggerSignal, forcedToolName);
         } else if (clientType == "Codex") {
+            const bool requireToolForCurrentRequest =
+                codexRequestLikelyNeedsExternalState(session.request.message);
+            LOG_INFO << "[生成服务][Codex] XML bridge 策略: tool_choice=" << toolChoice
+                     << ", require_tool_for_current_request="
+                     << requireToolForCurrentRequest;
             appendCodexXmlBridgePolicy(
                 policy,
                 forcedToolName,
                 toolChoice,
                 triggerSignal,
-                session.request.parallelToolCalls
+                session.request.parallelToolCalls,
+                requireToolForCurrentRequest
             );
         } else {
             appendGenericXmlBridgePolicy(policy,

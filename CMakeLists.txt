@@ -29,6 +29,7 @@ add_executable(${PROJECT_NAME}
     src/apiManager/ApiFactory.cpp
     src/apiManager/ApiManager.cpp
     src/apipoint/chaynsapi/chaynsapi.cpp
+    src/apipoint/chaynsapi/ChaynsModelCatalog.cpp
     src/apipoint/nexosapi/nexosapi.cpp
     src/apipoint/openai/OpenAiProvider.cpp
     src/apipoint/retoolapi/retoolapi.cpp
@@ -72,6 +73,8 @@ add_executable(${PROJECT_NAME}
     src/sessionManager/continuity/TextExtractor.cpp
     src/sessionManager/continuity/ContinuityResolver.cpp
     src/sessionManager/core/RequestAdapters.cpp
+    src/sessionManager/actionProtocol/ActionProtocolCompiler.cpp
+    src/sessionManager/actionProtocol/ActionProtocolAdapter.cpp
     src/sessionManager/tooling/ToolCallBridge.cpp
     src/sessionManager/tooling/ToolCallValidator.cpp
     src/sessionManager/tooling/XmlTagToolCallCodec.cpp

@@ -187,7 +187,16 @@ void appendToolDefinitions(const Json::Value& tools,
         if (!name.empty() && !seen.insert(key).second) continue;
         rawTools.append(tool);
         Json::Value normalized = normalizeToolDefinition(tool);
-        if (!normalized.isNull()) normalizedTools.append(std::move(normalized));
+        if (!normalized.isNull()) {
+            normalizedTools.append(std::move(normalized));
+        } else if (type == "namespace") {
+            LOG_DEBUG << "[请求适配器] namespace 是工具分组元数据，不直接注入 XML bridge: name="
+                      << (name.empty() ? "<empty>" : name);
+        } else {
+            LOG_WARN << "[请求适配器] 工具定义无法桥接，已保留原始定义但不会注入 XML bridge: type="
+                     << (type.empty() ? "<empty>" : type)
+                     << ", name=" << (name.empty() ? "<empty>" : name);
+        }
     }
 }
 
@@ -406,6 +415,9 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
             genReq.toolChoice = Json::writeString(compactJsonWriter(), choice);
         }
     }
+    LOG_INFO << "[请求适配器] Responses API 工具策略: tool_choice="
+             << (genReq.toolChoice.empty() ? "auto(default)" : genReq.toolChoice)
+             << ", parallel_tool_calls=" << genReq.parallelToolCalls;
     
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(req);

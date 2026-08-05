@@ -73,6 +73,8 @@ add_executable(${PROJECT_NAME}
     sessionManager/continuity/TextExtractor.cpp
     sessionManager/continuity/ContinuityResolver.cpp
     sessionManager/core/RequestAdapters.cpp
+    sessionManager/actionProtocol/ActionProtocolCompiler.cpp
+    sessionManager/actionProtocol/ActionProtocolAdapter.cpp
     sessionManager/tooling/ToolCallBridge.cpp
     sessionManager/tooling/ToolCallValidator.cpp
     sessionManager/tooling/XmlTagToolCallCodec.cpp

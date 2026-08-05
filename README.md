@@ -2,7 +2,7 @@
 
 基于 Drogon 框架的 AI API 网关服务，提供 OpenAI 兼容的 Chat Completions 和 Responses API 接口。
 
-> 最后更新：2026-08-04
+> 最后更新：2026-08-05 12:36:00 CST（中国标准时间）
 
 ## 目录
 
@@ -21,6 +21,7 @@
   - [Tool Bridge 机制](#tool-bridge-机制tooling-模块)
   - [会话连续性](#会话连续性continuity-模块)
   - [客户端适配](#客户端适配)
+  - [Codex XML 工具桥接](#codex-xml-工具桥接)
   - [会话追踪](#会话追踪)
   - [并发门控](#并发门控)
   - [错误统计系统](#错误统计系统)
@@ -46,7 +47,9 @@
 - ✅ 参数形状规范化（ToolCallNormalizer）— 自动修复常见参数格式问题
 - ✅ 工具定义编码（ToolDefinitionEncoder）— compact/full 两种模式
 - ✅ 强制工具调用兜底（ForcedToolCallGenerator）— tool_choice=required 场景
-- ✅ 严格客户端规则（StrictClientRules）— Kilo-Code / RooCode 适配
+- ✅ 严格客户端规则（StrictClientRules）— Kilo-Code / RooCode / Codex 客户端适配
+- ✅ Codex XML 工具桥接 — 在上游不支持原生函数调用时，通过 XML 格式转发工具请求
+- ✅ 外部状态需求识别 — 自动识别文件、仓库、命令、构建和测试等请求并要求执行工具
 - ✅ 会话追踪（Hash / ZeroWidth 两种模式）
 - ✅ 会话连续性决策（ContinuityResolver + TextExtractor）
 - ✅ 历史回放预算（HistoryReplayBudget）— 按完整 turn 截取近期历史，超限整段省略并写入提示，不截断单条内容
@@ -66,7 +69,8 @@
 - ✅ 配置校验（ConfigValidator）
 - ✅ 后台任务队列（BackgroundTaskQueue）
 - ✅ 健康检查端点（/health + /ready）
-- ✅ 完善的单元测试（18 个功能测试 + `test_main.cc` 测试入口）
+- ✅ 完善的单元测试（当前包含 18 个测试源文件 + `test_main.cc` 测试入口）
+- ✅ Chat/Responses JSON 与 SSE Sink 分离，统一处理流式和非流式输出
 
 ## 架构概览
 
@@ -150,6 +154,29 @@
 │        ├── CollectorSink     (事件收集，内部用)                   │
 │        └── NullSink          (丢弃输出，测试用)                   │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+## 当前源码结构
+
+项目当前采用按职责拆分的模块化结构：
+
+```text
+src/
+├── controllers/             HTTP 控制器、过滤器及 Chat/Responses Sink
+├── apiManager/              Provider 工厂与 API 管理
+├── accountManager/          传统账号池管理
+├── managedAccount/          统一 ManagedAccount 抽象及后端实现
+├── channelManager/          渠道状态、并发和路由管理
+├── dbManager/               账号、渠道、配置、指标和 Workspace 持久化
+├── sessionManager/          会话、生成编排、连续性和工具调用
+│   ├── continuity/          连续性、历史预算、响应索引和文本提取
+│   ├── core/                GenerationService、请求适配和会话门控
+│   └── tooling/             工具桥接、验证、规范化、编码和 XML 编解码
+├── retoolWorkspace/         Retool Workspace 管理与服务
+├── metrics/                 错误事件、错误统计与状态指标
+├── tools/                   ZeroWidth 编码及账号登录客户端
+├── utils/                   配置校验、后台任务、响应流等公共工具
+└── test/                    功能测试与测试入口
 ```
 
 ## 项目结构
@@ -541,7 +568,20 @@ runGuarded(req, sink, policy)
 | Claude Code | `claudecode` | 零宽会话 ID 在 tool_calls 前单独发送 |
 | 其他 | — | 宽松模式，不强制 Roo/Kilo 专用规则 |
 
-### 会话追踪
+### Codex XML 工具桥接
+
+当客户端或上游通道不支持原生 Provider/Recipient/Namespace/JSON 函数调用时，网关可以使用 XML Bridge 传递工具请求。桥接策略包含：
+
+- 使用 `<function_calls>` / `<function_call>` XML 结构描述工具调用；
+- 保留工具名称与 JSON 参数；
+- 对 `tool_choice=required` 或当前请求明确依赖外部状态的场景强制要求执行工具；
+- 识别文件、目录、仓库、Git、命令、构建、测试等关键词，避免在未检查外部状态时凭空回答；
+- 收到带有 `[tool_result ...]` 的结果后继续生成最终响应；
+- 支持并行工具调用配置。
+
+该逻辑主要位于 `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp`，请求适配位于 `RequestAdapters.cpp`。
+
+## 会话追踪
 
 | 模式 | 实现 | 说明 |
 |------|------|------|
@@ -939,8 +979,11 @@ Docker 入口脚本支持：
 - [x] 控制器拆分（6 个独立控制器）
 - [x] sessionManager 分层重构（contracts / core / continuity / tooling）
 - [x] HistoryReplayBudget（多 Provider 历史回放预算与完整 turn 截取）
-- [x] 核心单元测试（18 个功能测试 + `test_main.cc` 测试入口）
+- [x] 核心单元测试（18 个功能测试源文件 + `test_main.cc` 测试入口）
 
 ## License
 
 MIT
+
+
+> 最后更新：2026-08-05 12:36:00 CST（中国标准时间）
