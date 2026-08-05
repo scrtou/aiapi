@@ -11,6 +11,7 @@ set(TEST_SOURCES
     test_history_replay_budget.cpp
     test_request_adapters.cpp
     test_xml_tool_call_codec.cpp
+    test_bridge_protocol_codec.cpp
     test_action_protocol.cpp
     test_tool_call_validator.cpp
     test_strict_client_rules.cpp
@@ -48,6 +49,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ForcedToolCallGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallNormalizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeHelpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatJsonSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatSseSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesJsonSink.cpp

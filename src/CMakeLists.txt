@@ -65,6 +65,7 @@ add_executable(${PROJECT_NAME}
     sessionManager/core/GenerationService.cpp
     sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
     sessionManager/tooling/BridgeHelpers.cpp
+    sessionManager/tooling/BridgeProtocolCodec.cpp
     sessionManager/tooling/StrictClientRules.cpp
     sessionManager/tooling/ToolDefinitionEncoder.cpp
     sessionManager/tooling/ForcedToolCallGenerator.cpp

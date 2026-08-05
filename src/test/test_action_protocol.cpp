@@ -1,8 +1,87 @@
 #include <drogon/drogon_test.h>
 #include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
+#include <sstream>
 
 using namespace actionproto;
+
+DROGON_TEST(ActionProtocol_CompilesJsonToolCall)
+{
+    const std::string sentinel = "<Function_Json123_Start/>";
+    const std::string input = sentinel + R"(
+{"protocol":"action-v3","tool_calls":[{"name":"exec_command","arguments":{"cmd":"printf '%s\\n' ']]>'","workdir":"/tmp"}}]})";
+
+    CompileOptions options;
+    options.expectedSentinel = sentinel;
+    options.capabilities.maxToolCalls = 1;
+    const auto result = ActionProtocolCompiler::compileResponse(input, options);
+    REQUIRE(result.matched);
+    REQUIRE(result.valid);
+    CHECK(result.envelope.protocolVersion == 3);
+    REQUIRE(result.envelope.toolCalls.size() == 1);
+    CHECK(result.envelope.toolCalls[0].name == "exec_command");
+
+    Json::Value arguments;
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream stream(result.envelope.toolCalls[0].argumentsJson);
+    REQUIRE(Json::parseFromStream(builder, stream, &arguments, &errors));
+    CHECK(arguments["cmd"].asString().find("]]>" ) != std::string::npos);
+    CHECK(arguments["workdir"].asString() == "/tmp");
+}
+
+DROGON_TEST(ActionProtocol_CompilesJsonFinalResponse)
+{
+    const std::string sentinel = "<Function_Json456_Start/>";
+    const std::string input = sentinel + R"(
+{"protocol":"action-v3","final_response":"first line\nsecond line with <xml> and ]]>"})";
+
+    CompileOptions options;
+    options.expectedSentinel = sentinel;
+    const auto result = ActionProtocolCompiler::compileResponse(input, options);
+    REQUIRE(result.valid);
+    CHECK(result.envelope.protocolVersion == 3);
+    CHECK(result.envelope.toolCalls.empty());
+    CHECK(result.envelope.finalResponse == "first line\nsecond line with <xml> and ]]>");
+}
+
+DROGON_TEST(ActionProtocol_RejectsJsonEncodedArgumentsString)
+{
+    const std::string sentinel = "<Function_JsonBad_Start/>";
+    const std::string input = sentinel + R"(
+{"protocol":"action-v3","tool_calls":[{"name":"read_file","arguments":"{\"path\":\"x\"}"}]})";
+
+    CompileOptions options;
+    options.expectedSentinel = sentinel;
+    const auto result = ActionProtocolCompiler::compileResponse(input, options);
+    CHECK(result.matched);
+    CHECK(!result.valid);
+    CHECK(result.diagnostic.code == CompileError::InvalidArgumentsJson);
+}
+
+DROGON_TEST(ActionProtocol_RejectsAmbiguousJsonAction)
+{
+    const std::string sentinel = "<Function_JsonBoth_Start/>";
+    const std::string input = sentinel + R"(
+{"protocol":"action-v3","tool_calls":[],"final_response":"done"})";
+
+    CompileOptions options;
+    options.expectedSentinel = sentinel;
+    const auto result = ActionProtocolCompiler::compileResponse(input, options);
+    CHECK(result.matched);
+    CHECK(!result.valid);
+    CHECK(result.diagnostic.code == CompileError::MissingAction);
+}
+
+DROGON_TEST(ActionProtocol_RouterPolicyUsesJsonOnly)
+{
+    const std::string policy = ActionProtocolCompiler::buildRouterPolicy(
+        "<Function_Policy_Start/>", capabilitiesForClient("Codex", false));
+    CHECK(policy.find("action-v3") != std::string::npos);
+    CHECK(policy.find("\"arguments\":{") != std::string::npos);
+    CHECK(policy.find("<![CDATA[") == std::string::npos);
+    CHECK(policy.find("<action_protocol") == std::string::npos);
+}
 
 DROGON_TEST(ActionProtocol_CompilesToolCall)
 {

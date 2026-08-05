@@ -10,6 +10,8 @@
 #include "sessionManager/tooling/ForcedToolCallGenerator.h"
 #include "sessionManager/tooling/ToolCallNormalizer.h"
 #include "sessionManager/tooling/ToolDefinitionEncoder.h"
+#include "sessionManager/tooling/BridgeProtocolCodec.h"
+#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include <apiManager/ApiManager.h>
 #include <apipoint/ProviderResult.h>
 #include <tools/ZeroWidthEncoder.h>
@@ -109,6 +111,15 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
                 break;
         }
         jsonMsg["content"] = msg.getTextContent();
+        if (!msg.toolCalls.empty()) {
+            jsonMsg["tool_calls"] = Json::Value(Json::arrayValue);
+            for (const auto& toolCall : msg.toolCalls) {
+                jsonMsg["tool_calls"].append(toolCall);
+            }
+        }
+        if (!msg.toolCallId.empty()) {
+            jsonMsg["tool_call_id"] = msg.toolCallId;
+        }
         session.addMessageToContext(jsonMsg);
     }
     
@@ -166,6 +177,8 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	        auto& sessionManager = *chatSession::getInstance();
 	        // 每次请求独立字段：仅对当前上游调用有效，进入新请求前必须清空。
 	        session.provider.toolBridgeTrigger.clear();
+	        session.provider.toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
+	        session.provider.toolBridgeAllowFormatFallback = false;
 	        
 	        // 0. 检查通道是否支持工具调用；若不支持则进入工具桥接模式并注入工具定义
 	        bool supportsToolCalls = getChannelSupportsToolCalls(session.request.api);
@@ -242,8 +255,8 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             return std::nullopt;  // 上游 错误已通过 发送
         }
 
-        // CodexRooCompat: the upstream must return one sentinel-bound action-v2
-        // envelope. Legacy function_calls are accepted for existing sessions.
+        // CodexRooCompat: validate and retry with the request-scoped codec.
+        // The response phase must not guess JSON/XML independently.
         // Retry exactly once on plain text or malformed transport output.
         const std::string clientType = safeJsonAsString(
             session.provider.clientInfo.get("client_type", ""), "");
@@ -258,29 +271,58 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
                 session.response.message.isMember("tool_calls") &&
                 session.response.message["tool_calls"].isArray() &&
                 session.response.message["tool_calls"].size() > 0;
-            const bool hasActionProtocol =
-                firstResponseText.find(session.provider.toolBridgeTrigger) != std::string::npos &&
-                firstResponseText.find("<action_protocol") != std::string::npos;
-            const bool hasLegacyBridgeXml =
-                firstResponseText.find(session.provider.toolBridgeTrigger) != std::string::npos &&
-                firstResponseText.find("<function_calls>") != std::string::npos &&
-                firstResponseText.find("<function_call>") != std::string::npos;
-            const bool hasBridgeXml = hasActionProtocol || hasLegacyBridgeXml;
+            bool hasActionProtocol = false;
+            const size_t sentinelPos = firstResponseText.find(
+                session.provider.toolBridgeTrigger);
+            if (sentinelPos != std::string::npos) {
+                const std::string candidate = firstResponseText.substr(sentinelPos);
+                toolcall::BridgePolicyOptions decodeOptions;
+                decodeOptions.clientType = clientType;
+                decodeOptions.channel = session.request.api;
+                decodeOptions.model = session.request.model;
+                decodeOptions.sentinel = session.provider.toolBridgeTrigger;
+                decodeOptions.parallelToolCalls = session.request.parallelToolCalls;
+                auto codec = toolcall::createBridgeProtocolCodec(
+                    session.provider.toolBridgeFormat);
+                auto decoded = codec->decodeResponse(candidate, decodeOptions);
+                if ((!decoded.matched || !decoded.valid) &&
+                    session.provider.toolBridgeAllowFormatFallback) {
+                    const auto fallbackFormat = session.provider.toolBridgeFormat ==
+                        toolcall::BridgeWireFormat::Json
+                            ? toolcall::BridgeWireFormat::Xml
+                            : toolcall::BridgeWireFormat::Json;
+                    decoded = toolcall::createBridgeProtocolCodec(fallbackFormat)
+                        ->decodeResponse(candidate, decodeOptions);
+                }
+                hasActionProtocol = decoded.valid;
+                if (decoded.matched && !decoded.valid) {
+                    LOG_WARN << "[生成服务][CodexRooCompat] 首次动作协议无效: format="
+                             << toolcall::bridgeWireFormatName(
+                                    session.provider.toolBridgeFormat)
+                             << ", error=" << decoded.diagnostic.message;
+                }
+            }
+            const bool hasBridgeOutput = hasActionProtocol;
 
-            if (!hasNativeToolCalls && !hasBridgeXml) {
+            if (!hasNativeToolCalls && !hasBridgeOutput) {
                 LOG_WARN << "[生成服务][CodexRooCompat] 首次响应"
                          << "缺少有效 action protocol"
                          << "，正在严格重试一次";
 
                 const std::string bridgeMessage = session.request.message;
                 const Json::Value firstResponse = session.response.message;
+                toolcall::BridgePolicyOptions retryOptions;
+                retryOptions.clientType = clientType;
+                retryOptions.channel = session.request.api;
+                retryOptions.model = session.request.model;
+                retryOptions.sentinel = session.provider.toolBridgeTrigger;
+                retryOptions.parallelToolCalls = session.request.parallelToolCalls;
+                auto retryCodec = toolcall::createBridgeProtocolCodec(
+                    session.provider.toolBridgeFormat);
                 session.request.message +=
                     "\n\n[CodexRooCompat retry]\n"
-                    "Your previous response was invalid for this transport.\n"
-                    "Reply again with exactly one action_protocol envelope using the exact trigger marker and API Definitions already provided.\n"
-                    "Use a real tool_call when external state is required; otherwise use final_response.\n"
-                    "Output no prose, explanation, markdown, or refusal.\n"
-                    "Exact trigger: " + session.provider.toolBridgeTrigger + "\n";
+                    "Your previous response was invalid for this transport.\n" +
+                    retryCodec->buildRetryPrompt(retryOptions);
                 session.response.message = Json::Value(Json::objectValue);
 
                 const bool retryOk = executeProvider(session);

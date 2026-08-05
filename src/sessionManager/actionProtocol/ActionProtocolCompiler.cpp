@@ -49,9 +49,89 @@ CompileResult failure(CompileError code, const std::string& message, size_t offs
 
 bool parseObject(const std::string& json, Json::Value& value) {
     Json::CharReaderBuilder builder;
+    builder["allowComments"] = false;
+    builder["failIfExtra"] = true;
+    builder["rejectDupKeys"] = true;
     std::string errors;
     std::istringstream stream(json);
     return Json::parseFromStream(builder, stream, &value, &errors) && value.isObject();
+}
+
+std::string compactJson(const Json::Value& value) {
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    return Json::writeString(writer, value);
+}
+
+CompileResult compileJsonAction(
+    const std::string& json,
+    const CompileOptions& options) {
+    Json::Value root;
+    if (!parseObject(json, root)) {
+        return failure(CompileError::InvalidEnvelope,
+                       "action-v3 response must be one valid JSON object");
+    }
+    if (!root.isMember("protocol") || !root["protocol"].isString() ||
+        root["protocol"].asString() != "action-v3") {
+        return failure(CompileError::InvalidEnvelope,
+                       "action-v3 JSON must declare protocol=action-v3");
+    }
+
+    const bool hasToolCalls = root.isMember("tool_calls");
+    const bool hasFinalResponse = root.isMember("final_response");
+    if (hasToolCalls == hasFinalResponse) {
+        return failure(CompileError::MissingAction,
+                       "action-v3 JSON must contain exactly one of tool_calls or final_response");
+    }
+
+    ActionEnvelope envelope;
+    envelope.protocolVersion = 3;
+    envelope.nonce = options.expectedSentinel;
+
+    if (hasFinalResponse) {
+        if (!root["final_response"].isString()) {
+            return failure(CompileError::InvalidActionShape,
+                           "action-v3 final_response must be a string");
+        }
+        envelope.finalResponse = root["final_response"].asString();
+    } else {
+        const auto& calls = root["tool_calls"];
+        if (!calls.isArray() || calls.empty()) {
+            return failure(CompileError::MissingAction,
+                           "action-v3 tool_calls must be a non-empty array");
+        }
+        for (const auto& call : calls) {
+            if (!call.isObject()) {
+                return failure(CompileError::InvalidActionShape,
+                               "action-v3 tool_call must be an object");
+            }
+            if (!call.isMember("name") || !call["name"].isString() ||
+                trim(call["name"].asString()).empty()) {
+                return failure(CompileError::InvalidActionShape,
+                               "action-v3 tool_call name must be a non-empty string");
+            }
+            if (!call.isMember("arguments") || !call["arguments"].isObject()) {
+                return failure(CompileError::InvalidArgumentsJson,
+                               "action-v3 tool_call arguments must be a JSON object");
+            }
+
+            ToolAction action;
+            action.id = "action_" + std::to_string(envelope.toolCalls.size());
+            action.name = trim(call["name"].asString());
+            action.argumentsJson = compactJson(call["arguments"]);
+            envelope.toolCalls.push_back(std::move(action));
+            if (envelope.toolCalls.size() > options.capabilities.maxToolCalls) {
+                return failure(CompileError::MultipleActions,
+                               "tool_calls exceeds the client capability limit");
+            }
+        }
+    }
+
+    CompileResult result;
+    result.matched = true;
+    result.valid = true;
+    result.envelope = std::move(envelope);
+    return result;
 }
 
 } // namespace
@@ -93,6 +173,22 @@ CompileResult ActionProtocolCompiler::compileResponse(
     std::string_view rest(source);
     rest.remove_prefix(std::min(start, rest.size()));
     consumeWhitespace(rest);
+
+    // action-v3 uses one JSON object after the per-request sentinel. XML
+    // action-v2 remains accepted below for existing sessions and providers.
+    if (options.wireFormat == WireFormat::JsonV3 &&
+        (rest.empty() || rest.front() != '{')) {
+        return failure(CompileError::InvalidEnvelope,
+                       "expected action-v3 JSON for the configured bridge format");
+    }
+    if (options.wireFormat == WireFormat::XmlV2 &&
+        !rest.empty() && rest.front() == '{') {
+        return failure(CompileError::InvalidEnvelope,
+                       "expected action-v2 XML for the configured bridge format");
+    }
+    if (!rest.empty() && rest.front() == '{') {
+        return compileJsonAction(std::string(rest), options);
+    }
 
     constexpr std::string_view kOpen = "<action_protocol version=\"1\">";
     constexpr std::string_view kClose = "</action_protocol>";
@@ -236,21 +332,20 @@ std::string ActionProtocolCompiler::buildRouterPolicy(
     policy << "Each response MUST output exactly 1 action protocol action.\n";
     policy << "If no other tool is needed, use final_response (the Codex equivalent of attempt_completion) to output the final result.\n\n";
     policy << "Transport contract:\n";
-    policy << "Your entire response MUST be exactly one action protocol envelope.\n";
+    policy << "Your entire response MUST be the exact sentinel followed by one JSON object.\n";
     policy << "Output no prose, markdown, analysis, prefix, or suffix outside the envelope.\n";
     policy << "Use a listed tool whenever external state is needed.\n";
     policy << "Never invent tool names or argument names.\n";
     policy << "The first line must be the exact sentinel: " << sentinel << "\n";
-    policy << "If a tool is needed, use this exact shape:\n";
-    policy << sentinel << "\n<action_protocol version=\"1\">\n<tool_calls>\n"
-           << "  <tool_call>\n    <name>TOOL_NAME</name>\n"
-           << "    <arguments_json><![CDATA[{\"PARAM\":\"VALUE\"}]]></arguments_json>\n"
-           << "  </tool_call>\n</tool_calls>\n</action_protocol>\n<end_action/>\n";
-    policy << "If no tool is needed, use final_response; put the complete answer inside CDATA.\n";
-    policy << "Never put final prose in arguments_json.\n";
-    policy << "Do not put the sequence ]]> inside final_response; split it if necessary.\n";
-    policy << sentinel << "\n<action_protocol version=\"1\">\n<final_response><![CDATA[FINAL_ANSWER]]></final_response>\n"
-           << "</action_protocol>\n<end_action/>\n";
+    policy << "If a tool is needed, use this exact JSON shape:\n";
+    policy << sentinel
+           << "\n{\"protocol\":\"action-v3\",\"tool_calls\":[{\"name\":\"TOOL_NAME\",\"arguments\":{\"PARAM\":\"VALUE\"}}]}\n";
+    policy << "arguments MUST be a JSON object, never a JSON-encoded string.\n";
+    policy << "If no tool is needed, put the complete answer in final_response using this exact JSON shape:\n";
+    policy << sentinel
+           << "\n{\"protocol\":\"action-v3\",\"final_response\":\"FINAL_ANSWER\"}\n";
+    policy << "Escape quotes, backslashes, control characters, and newlines according to JSON.\n";
+    policy << "Never put final prose in tool_calls or arguments.\n";
     if (capabilities.maxToolCalls == 1) {
         policy << "Exactly one tool_call is allowed.\n";
     } else {

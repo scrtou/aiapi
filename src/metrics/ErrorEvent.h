@@ -54,6 +54,7 @@ namespace EventType {
     constexpr const char* TOOLBRIDGE_TRIGGER_MISMATCH_FALLBACK = "toolbridge.trigger_mismatch_fallback";
     constexpr const char* TOOLBRIDGE_XML_NOT_FOUND = "toolbridge.xml_not_found";
     constexpr const char* TOOLBRIDGE_XML_PARSE_ERROR = "toolbridge.xml_parse_error";
+    constexpr const char* TOOLBRIDGE_PARSE_ERROR = "toolbridge.parse_error";
     constexpr const char* TOOLBRIDGE_SENTINEL_MISMATCH = "toolbridge.sentinel_mismatch";
     constexpr const char* TOOLBRIDGE_ARGS_JSON_PARSE_ERROR = "toolbridge.args_json_parse_error";
     constexpr const char* TOOLBRIDGE_NORMALIZE_APPLIED = "toolbridge.normalize_applied";

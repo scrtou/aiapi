@@ -50,6 +50,7 @@ static const int SESSION_EXPIRE_TIME = 86400; // 24小时，单位秒数，会�
 // 会话_MAX_MESSAGES = 4; //上下文会话最大消息条数,一轮两条
 // Image信息 定义在 Generation请求. 中
 #include "sessionManager/contracts/GenerationRequest.h"
+#include "sessionManager/tooling/BridgeProtocolCodec.h"
 struct session_st
 {
   struct RequestData {
@@ -116,6 +117,10 @@ struct session_st
     std::string prevProviderKey = "";
     /// 工具桥接触发信号（随机哨兵串），用于识别与清洗桥接注入内容。
     std::string toolBridgeTrigger = "";
+    /// 本次请求已解析并固定的文本桥格式；不得在响应阶段重新猜测配置。
+    toolcall::BridgeWireFormat toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
+    /// 迁移期开关；默认禁止响应解析跨格式回退。
+    bool toolBridgeAllowFormatFallback = false;
     /// 当前 provider 是否支持原生工具调用；影响工具输出格式与桥接策略。
     bool supportsToolCalls = true;
     /// 客户端元信息（client_type、client_version 等），用于规则分流与兼容策略。

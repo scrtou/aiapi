@@ -367,6 +367,8 @@ void chatSession::commitSessionTransfer(session_st& session)
     session.request.rawMessage.clear();
     session.response.message.clear();
     session.provider.toolBridgeTrigger.clear();
+    session.provider.toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
+    session.provider.toolBridgeAllowFormatFallback = false;
     
     // 3. 执行会话转移
     std::string oldSessionId = session.state.conversationId;
@@ -931,6 +933,8 @@ void chatSession::updateResponseSession(session_st& session)
     session.request.rawMessage.clear();
     session.response.message.clear();
     session.provider.toolBridgeTrigger.clear();
+    session.provider.toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
+    session.provider.toolBridgeAllowFormatFallback = false;
 
     // Provider 线程上下文转移（在发送响应给客户端后进行）
     // 只有当 isContinuation 为 true 且 prevProviderKey 与 conversationId 不同时才需要转移

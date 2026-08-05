@@ -263,11 +263,16 @@ Message makeCodexToolCallHistory(const Json::Value& item)
     const std::string name = item.get("name", "").asString();
     const Json::Value payload = item.isMember("arguments")
         ? item["arguments"] : item.get("input", Json::Value(""));
-    std::string text = "[tool_call type=" + type;
-    if (!callId.empty()) text += " call_id=" + callId;
-    if (!name.empty()) text += " name=" + name;
-    text += "]\n" + compactJson(payload) + "\n[/tool_call]";
-    return Message::assistant(text);
+    Message message = Message::assistant("");
+    Json::Value toolCall(Json::objectValue);
+    toolCall["id"] = callId;
+    toolCall["type"] = type == "custom_tool_call" ? "custom" : "function";
+    Json::Value function(Json::objectValue);
+    function["name"] = name;
+    function["arguments"] = payload.isString() ? payload.asString() : compactJson(payload);
+    toolCall["function"] = std::move(function);
+    message.toolCalls.push_back(std::move(toolCall));
+    return message;
 }
 
 bool isResponsesModelOutputBoundary(const Json::Value& item)

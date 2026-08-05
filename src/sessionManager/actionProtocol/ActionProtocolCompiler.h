@@ -8,6 +8,12 @@
 
 namespace actionproto {
 
+enum class WireFormat {
+    Auto,
+    JsonV3,
+    XmlV2
+};
+
 enum class ActionKind {
     ToolCall,
     FinalResponse
@@ -44,6 +50,7 @@ ClientCapabilities capabilitiesForClient(const std::string& clientType,
 struct CompileOptions {
     std::string expectedSentinel;
     ClientCapabilities capabilities;
+    WireFormat wireFormat = WireFormat::Auto;
 };
 
 enum class CompileError {
@@ -74,7 +81,8 @@ public:
     static CompileResult compileResponse(const std::string& input,
                                          const CompileOptions& options);
 
-    // 生成供不支持原生 tool calls 的上游模型使用的通用动作协议规则。
+    // 生成供不支持原生 tool calls 的上游模型使用的 JSON-only action-v3
+    // 规则。compileResponse 仍兼容历史 action-v2 XML。
     static std::string buildRouterPolicy(
         const std::string& sentinel,
         const ClientCapabilities& capabilities);

@@ -20,8 +20,17 @@
 - `ForcedToolCallGenerator.*`：强制工具调用生成
 - `ToolDefinitionEncoder.*`：工具定义编码
 - `BridgeHelpers.*`：桥接公共辅助能力
+- `BridgeProtocolCodec.*`：请求级 JSON/XML 协议选择；统一工具定义、提示、历史、重试与响应解析
+
+## Bridge 格式配置
+
+- `format`：全局默认值，支持 `json` / `xml`
+- `format_by_channel`、`format_by_client`、`format_by_model`：请求级覆盖
+- 覆盖顺序：全局 → channel → client → model
+- `allow_format_fallback=false`：默认严格使用请求阶段固定的格式
 
 ## 维护建议
 
 - 新增工具调用策略时，优先评估是否应扩展现有模块而不是新建平行逻辑。
 - “解析 → 规范化 → 校验 → 降级”流程保持清晰顺序，避免跨模块交叉回调。
+Last updated: August 5, 2026 06:47 AM ET
