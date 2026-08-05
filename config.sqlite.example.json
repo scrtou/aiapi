@@ -197,11 +197,82 @@
                 "url": "http://orchestrator-service:8000/api/v1/workflows/register-and-login"
             }
         ],
+        "downstream_service_api_keys": [
+            {
+                "name": "chaynsapi",
+                "api_key": "tool_web_demo_key"
+            },
+            {
+                "name": "nexosapi",
+                "api_key": "tool_web_demo_key"
+            }
+        ],
         "providers": {
             "openai": {
                 "api_key": "",
                 "base_url": "https://api.openai.com",
                 "default_model": "gpt-4o-mini"
+            },
+            "nexos": {
+                "base_url": "https://workspace.nexos.ai"
+            },
+            "chaynsapi": {
+                "browser_impersonation": {
+                    "enabled": true,
+                    "per_account_profile": true,
+                    "default_profile": "sidekick_edge_mac",
+                    "origin": "https://sidekick.ki",
+                    "referer": "https://sidekick.ki/",
+                    "accept": "*/*",
+                    "accept_language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+                    "accept_encoding": "gzip, deflate",
+                    "sec_fetch_dest": "empty",
+                    "sec_fetch_mode": "cors",
+                    "sec_fetch_site": "cross-site",
+                    "profiles": [
+                        {
+                            "id": "sidekick_edge_mac",
+                            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
+                            "sec_ch_ua": "\"Not=A?Brand\";v=\"99\", \"Microsoft Edge\";v=\"151\", \"Chromium\";v=\"151\"",
+                            "sec_ch_ua_mobile": "?0",
+                            "sec_ch_ua_platform": "\"macOS\"",
+                            "accept_language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"
+                        },
+                        {
+                            "id": "chrome_windows",
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+                            "sec_ch_ua": "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"",
+                            "sec_ch_ua_mobile": "?0",
+                            "sec_ch_ua_platform": "\"Windows\"",
+                            "accept_language": "en-US,en;q=0.9"
+                        },
+                        {
+                            "id": "chrome_mac",
+                            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+                            "sec_ch_ua": "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"",
+                            "sec_ch_ua_mobile": "?0",
+                            "sec_ch_ua_platform": "\"macOS\"",
+                            "accept_language": "zh-CN,zh;q=0.9,en;q=0.8"
+                        },
+                        {
+                            "id": "edge_windows",
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
+                            "sec_ch_ua": "\"Not=A?Brand\";v=\"99\", \"Microsoft Edge\";v=\"151\", \"Chromium\";v=\"151\"",
+                            "sec_ch_ua_mobile": "?0",
+                            "sec_ch_ua_platform": "\"Windows\"",
+                            "accept_language": "en-US,en;q=0.9,de;q=0.8"
+                        },
+                        {
+                            "id": "chrome_linux",
+                            "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+                            "sec_ch_ua": "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"",
+                            "sec_ch_ua_mobile": "?0",
+                            "sec_ch_ua_platform": "\"Linux\"",
+                            "accept_language": "en-US,en;q=0.9"
+                        }
+                    ],
+                    "_comment": "P0/P1 browser impersonation for chayns upstream. per_account_profile=true binds a stable profile via hash(account). Keep UA and sec-ch-ua* coherent. accept_encoding should only list encodings the HTTP client can decode."
+                }
             }
         },
         "upstream_error_texts": [
@@ -239,6 +310,7 @@
             ],
             "max_age": 3600,
             "allow_credentials": false
-        }
+        },
+        "account_background_threads_enabled": false
     }
 }
