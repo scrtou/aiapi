@@ -142,4 +142,8 @@ target_include_directories(${PROJECT_NAME}
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)
 # ##############################################################################
 
-# add_subdirectory(test)
+option(AIAPI_BUILD_TESTS "build unit test target aiapi_test" ON)
+if (AIAPI_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(src/test)
+endif()

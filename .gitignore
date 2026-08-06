@@ -5,6 +5,7 @@ src/build/data/
 /data
 /logs
 /cores
+*.har
 ### C ###
 # Prerequisites
 *.d

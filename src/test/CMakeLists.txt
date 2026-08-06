@@ -1,6 +1,28 @@
 cmake_minimum_required(VERSION 3.5)
 project(aiapi_test CXX)
 
+# ------------------------------------------------------------------
+# Support two usages:
+#   1) standalone:  cmake -S src/test -B build/test_build
+#   2) from root:   add_subdirectory(src/test)
+# In standalone mode Drogon targets are not yet available, so resolve them here.
+# ------------------------------------------------------------------
+if (NOT TARGET Drogon::Drogon)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../.deps/drogon-install")
+        list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../.deps/drogon-install")
+    endif()
+    find_package(Drogon CONFIG REQUIRED)
+endif()
+
+if (NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+endif()
+
+enable_testing()
+
+
 # 测试源文件
 set(TEST_SOURCES
     test_main.cc
@@ -86,4 +108,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
-ParseAndAddDrogonTests(${PROJECT_NAME})
+if (COMMAND ParseAndAddDrogonTests)
+    ParseAndAddDrogonTests(${PROJECT_NAME})
+else()
+    add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
+endif()
