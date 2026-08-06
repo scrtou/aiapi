@@ -71,7 +71,7 @@ std::string ClientOutputSanitizer::sanitize(const Json::Value& clientInfo, const
     std::string message = text;
     std::string clientType = clientInfo.get("client_type", "").asString();
     
-    LOG_DEBUG << "[客户端OutputSanitizer] 正在对" << clientType << " 客户端的响应进行文本清洗...";
+    LOG_INFO << "[客户端OutputSanitizer] 正在对" << clientType << " 客户端的响应进行文本清洗...";
     
     // 1. 基础标签纠错
     fixCommonTagErrors(message);

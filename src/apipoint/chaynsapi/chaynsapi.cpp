@@ -583,7 +583,7 @@ void chaynsapi::postChatMessage(session_st& session)
             string messageText = session.request.message;
             
             messageBody["text"] = messageText;
-            LOG_DEBUG << "[chaynsAPI] 发送后续消息: textLength=" << messageText.size();
+            LOG_INFO << "[chaynsAPI] 发送后续消息: textLength=" << messageText.size();
             messageBody["cursorPosition"] = messageText.size();
             
             if (!uploadedImageUrls.empty()) {
@@ -706,7 +706,7 @@ void chaynsapi::postChatMessage(session_st& session)
             
             Json::Value message;
             message["text"] = full_message;
-            LOG_DEBUG << "[chaynsAPI] 发送新线程消息: textLength=" << full_message.size()
+            LOG_INFO << "[chaynsAPI] 发送新线程消息: textLength=" << full_message.size()
                       << ", historyPresent=" << historyIncluded;
             
             if (!uploadedImageUrls.empty()) {
@@ -841,6 +841,7 @@ void chaynsapi::postChatMessage(session_st& session)
                  << std::chrono::duration_cast<std::chrono::seconds>(
                         chayns::kRequestPollingDeadline).count()
                  << " 秒";
+        LOG_INFO << "[chaynsAPI] 轮询路径: " << pollPath+"&take=1000&viewMode=user&afterDate="+lastMessageTime;
 
         while (std::chrono::steady_clock::now() < requestDeadline) {
             pollCount++;
@@ -1129,7 +1130,7 @@ bool chaynsapi::loadModels(bool forceRefresh)
     if (m_lastModelRefreshAttempt.time_since_epoch().count() != 0 &&
         refreshStartedAt - m_lastModelRefreshAttempt < MODEL_REFRESH_MIN_INTERVAL) {
         std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
-        LOG_DEBUG << "[chaynsAPI] 模型目录刷新请求过于频繁，使用当前缓存";
+        LOG_INFO << "[chaynsAPI] 模型目录刷新请求过于频繁，使用当前缓存";
         return !m_modelCatalog.byName.empty();
     }
     m_lastModelRefreshAttempt = refreshStartedAt;

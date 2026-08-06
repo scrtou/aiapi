@@ -134,7 +134,7 @@ void rewriteBridgeConflictingDirectives(session_st& session, bool rewriteUserInp
     }
 
     rewriteBridgeConflictsInMessageContext(session.provider.messageContext, rewriteUserInput);
-    LOG_DEBUG << "[生成服务] bridge 冲突指令改写已执行: system_len "
+    LOG_INFO << "[生成服务] bridge 冲突指令改写已执行: system_len "
               << beforeSystem << "->" << session.request.systemPrompt.size()
               << ", message_len(" << (rewriteUserInput ? "rewritten" : "unchanged_user_input")
               << ") " << beforeMessage << "->" << session.request.message.size();
@@ -680,7 +680,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
                 );
                 textContent = text;
             } else {
-                LOG_DEBUG << "[生成服务][ToolBridge] 响应解析成功: configured="
+                LOG_INFO << "[生成服务][ToolBridge] 响应解析成功: configured="
                           << toolcall::bridgeWireFormatName(
                                  session.provider.toolBridgeFormat)
                           << ", detected=" << decoded.protocol;
@@ -948,13 +948,13 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
                 zwDone.text = zwOnly;
                 zwDone.index = 0;
                 sink.onEvent(zwDone);
-                LOG_DEBUG << "[生成服务] 已在 tool_calls 事件前发送零宽会话ID：" << sessionIdToEmbed
+                LOG_INFO << "[生成服务] 已在 tool_calls 事件前发送零宽会话ID：" << sessionIdToEmbed
                          << "（当前会话: " << session.state.conversationId << ")";
             }
         } else {
             // 普通文本回复在正文末尾嵌入会话 ID。
             textContent = chatSession::embedSessionIdInText(textContent, sessionIdToEmbed);
-            LOG_DEBUG << "[生成服务] 已在响应中嵌入会话ID: " << sessionIdToEmbed
+            LOG_INFO << "[生成服务] 已在响应中嵌入会话ID: " << sessionIdToEmbed
                      << "（当前会话: " << session.state.conversationId << ")";
         }
     }
@@ -1010,7 +1010,7 @@ bool GenerationService::getChannelSupportsToolCalls(const std::string& channelNa
     // ： 从 渠道Manager 内存缓存获取，避免每次请求查数据库
     auto result = ChannelManager::getInstance().getSupportsToolCalls(channelName);
     if (result.has_value()) {
-        LOG_DEBUG << "[生成服务] 通道 " << channelName
+        LOG_INFO << "[生成服务] 通道 " << channelName
                   << " supportsToolCalls: " << result.value();
         return result.value();
     }
@@ -1053,8 +1053,8 @@ void GenerationService::parseXmlToolCalls(
     std::vector<generation::ToolCallDone>& outToolCalls,
     const std::string& sentinel
 ) {
-    LOG_DEBUG << "[生成服务] 解析 XML 格式工具调用，触发标记：" << (sentinel.empty() ? "无" : sentinel);
-    LOG_DEBUG << "[生成服务] 输入长度=" << xmlInput.size()
+    LOG_INFO << "[生成服务] 解析 XML 格式工具调用，触发标记：" << (sentinel.empty() ? "无" : sentinel);
+    LOG_INFO << "[生成服务] 输入长度=" << xmlInput.size()
               << "，包含 </args_json>=" << (xmlInput.find("</args_json>") != std::string::npos)
               << "，包含 </function_call>=" << (xmlInput.find("</function_call>") != std::string::npos)
               << "，包含 </function_calls>=" << (xmlInput.find("</function_calls>") != std::string::npos);
@@ -1087,7 +1087,7 @@ void GenerationService::parseXmlToolCalls(
                 
             case toolcall::EventType::ToolCallEnd: {
                 // 工具调用结束事件：创建 ToolCallDone 结构
-                LOG_DEBUG << "[生成服务] 工具调用结束: " << event.toolName;
+                LOG_INFO << "[生成服务] 工具调用结束: " << event.toolName;
                 generation::ToolCallDone tc;
                 tc.id = event.toolCallId;
                 tc.name = event.toolName;
@@ -2097,7 +2097,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
         toolDefinitions += "\n</tool_instructions>\n\n";
     }
 
-    LOG_DEBUG << "[生成服务] 已注入工具定义到请求消息，长度: " << toolDefinitions.length();
+    LOG_INFO << "[生成服务] 已注入工具定义到请求消息，长度: " << toolDefinitions.length();
 
     LOG_DEBUG << "[生成服务] 工具定义: " << toolDefinitions;
     static const std::string bridgeNotice =

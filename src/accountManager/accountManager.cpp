@@ -2249,7 +2249,7 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
             string body = string(response->getBody());
             
 
-            LOG_DEBUG << "[账户管理] 查询 Pro 权限响应"
+            LOG_INFO << "[账户管理] 查询 Pro 权限响应"
             << ", status=" << response->getStatusCode()
             << ", personId=" << personId
             << ", path=" << path

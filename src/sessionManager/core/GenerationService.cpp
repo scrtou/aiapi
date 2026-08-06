@@ -62,7 +62,7 @@ std::string GenerationService::computeExecutionKey(const session_st& session) {
  * - messageContext: 将强类型消息历史统一转为 Json 结构，保持旧链路兼容。
  */
 session_st GenerationService::materializeSession(const GenerationRequest& req) {
-    LOG_DEBUG << "[生成服务] 开始将生成请求物化为会话结构";
+    LOG_INFO << "[生成服务] 开始将生成请求物化为会话结构";
     
     session_st session;
     
@@ -123,7 +123,7 @@ session_st GenerationService::materializeSession(const GenerationRequest& req) {
         session.addMessageToContext(jsonMsg);
     }
     
-    LOG_DEBUG << "[生成服务] 物化完成，模型: " << session.request.model
+    LOG_INFO << "[生成服务] 物化完成，模型: " << session.request.model
              << ", 协议类型: " << (session.isResponseApi() ? "Responses" : "ChatCompletions")
              << ", 上下文消息数: " << session.provider.messageContext.size();
     
@@ -147,7 +147,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 ) {
     // 计算执行门控键
     std::string sessionKey = computeExecutionKey(session);
-    LOG_DEBUG << "[生成服务] 执行门控, 会话密钥: " << sessionKey
+    LOG_INFO << "[生成服务] 执行门控, 会话密钥: " << sessionKey
              << ", 策略: " << (policy == ConcurrencyPolicy::RejectConcurrent ? "拒绝并发" : "取消前一个");
     
     // 使用 RAII 执行守卫，确保异常或提前返回时自动释放门控
@@ -171,7 +171,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         return AppError::internal("获取执行门控失败");
     }
     
-    LOG_DEBUG << "[生成服务] 已获取执行门控, 会话: " << sessionKey;
+    LOG_INFO << "[生成服务] 已获取执行门控, 会话: " << sessionKey;
     
 	    try {
 	        auto& sessionManager = *chatSession::getInstance();
@@ -182,7 +182,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	        
 	        // 0. 检查通道是否支持工具调用；若不支持则进入工具桥接模式并注入工具定义
 	        bool supportsToolCalls = getChannelSupportsToolCalls(session.request.api);
-	        LOG_DEBUG << "[生成服务] 工具能力检查: 是否支持原生工具调用=" << supportsToolCalls
+	        LOG_INFO << "[生成服务] 工具能力检查: 是否支持原生工具调用=" << supportsToolCalls
                   << "，tools 是否为空=" << session.request.tools.isNull()
                   << "，tools 是否数组=" << session.request.tools.isArray()
                   << "，tools 数量=" << session.request.tools.size();
@@ -196,7 +196,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	        };
 	        const bool toolChoiceNone = (normalizeLower(session.request.toolChoice) == "none");
 	        if (!supportsToolCalls && !toolChoiceNone && !toolsForBridge.isNull() && toolsForBridge.isArray() && toolsForBridge.size() > 0) {
-	            LOG_DEBUG << "[生成服务] 通道不支持原生工具调用，已注入工具桥接提示到请求内容";
+	            LOG_INFO << "[生成服务] 通道不支持原生工具调用，已注入工具桥接提示到请求内容";
 	            if (session.request.tools.isNull() || !session.request.tools.isArray() || session.request.tools.size() == 0) {
 	                session.request.tools = toolsForBridge;
 	            }
@@ -219,7 +219,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         
         // 2. 检查取消状态
         if (guard.isCancelled()) {
-            LOG_DEBUG << "[生成服务] 调用提供者前请求被取消";
+            LOG_INFO << "[生成服务] 调用提供者前请求被取消";
             // 记录 会话_GATE 取消统计
             recordWarnStat(
                 session,
@@ -338,7 +338,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         
         // 4. 检查取消状态
         if (guard.isCancelled()) {
-            LOG_DEBUG << "[生成服务] 调用提供者后请求被取消";
+            LOG_INFO << "[生成服务] 调用提供者后请求被取消";
             // 记录 会话_GATE 取消统计
             recordWarnStat(
                 session,
@@ -433,7 +433,7 @@ std::optional<AppError> GenerationService::runGuarded(
     ContinuityResolver resolver;
     const ContinuityDecision decision = resolver.resolve(req);
 
-    LOG_DEBUG << "[生成服务] 连续性决策"
+    LOG_INFO << "[生成服务] 连续性决策"
              << " 来源=" << static_cast<int>(decision.source)
              << " 模式=" << (decision.mode == SessionTrackingMode::ZeroWidth ? "ZeroWidth" : "Hash")
              << " 会话ID=" << decision.sessionId
@@ -454,7 +454,7 @@ std::optional<AppError> GenerationService::runGuarded(
 }
 
 bool GenerationService::executeProvider(session_st& session) {
-    LOG_DEBUG << "[生成服务] 执行提供者: " << session.request.api;
+    LOG_INFO << "[生成服务] 执行提供者: " << session.request.api;
     
     auto api = ApiManager::getInstance().getApiByApiName(session.request.api);
     if (!api) {

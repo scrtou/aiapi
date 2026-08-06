@@ -228,7 +228,7 @@ void appendNormalizedToolDefinition(const Json::Value& tool,
             return;
         }
 
-        LOG_DEBUG << "[请求适配器] 展开 namespace 工具组: namespace="
+        LOG_INFO << "[请求适配器] 展开 namespace 工具组: namespace="
                   << childNamespace << ", nested=" << tool["tools"].size();
         for (const auto& child : tool["tools"]) {
             appendNormalizedToolDefinition(
@@ -504,8 +504,8 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     if (!genReq.toolsRaw.empty()) {
         LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.size()
                  << ", 可桥接=" << genReq.tools.size();
-        LOG_DEBUG << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.toStyledString();
-        LOG_DEBUG << "[请求适配器] Responses API 工具定义：桥接后=" << genReq.tools.toStyledString();
+        //LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.toStyledString();
+        //LOG_INFO << "[请求适配器] Responses API 工具定义：桥接后=" << genReq.tools.toStyledString();
     }
     if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
         genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();

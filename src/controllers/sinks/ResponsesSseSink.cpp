@@ -21,7 +21,7 @@ ResponsesSseSink::ResponsesSseSink(
             std::chrono::system_clock::now().time_since_epoch()
         ).count()
     );
-    LOG_DEBUG << "[响应SSE] 已创建，模型：" << model_;
+    LOG_INFO << "[响应SSE] 已创建，模型：" << model_;
 }
 
 void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
@@ -46,7 +46,7 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
             handleToolCallDone(arg);
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[响应SSE] 令牌用量： 输入=" << arg.inputTokens
+            LOG_INFO << "[响应SSE] 令牌用量： 输入=" << arg.inputTokens
                      << ", 输出=" << arg.outputTokens;
             // 信息会在 已完成 事件中包含
         }
@@ -62,7 +62,7 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
 void ResponsesSseSink::onClose() {
     if (!closed_) {
         closed_ = true;
-        LOG_DEBUG << "[响应SSE] 正在关闭";
+        LOG_INFO << "[响应SSE] 正在关闭";
         if (closeCallback_) {
             closeCallback_();
         }
@@ -200,7 +200,7 @@ void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event)
 }
 
 void ResponsesSseSink::handleStarted(const generation::Started& event) {
-    LOG_DEBUG << "[响应SSE] 开始事件，响应ID：" << event.responseId;
+    LOG_INFO << "[响应SSE] 开始事件，响应ID：" << event.responseId;
 
     if (responseId_.empty()) {
         responseId_ = event.responseId;

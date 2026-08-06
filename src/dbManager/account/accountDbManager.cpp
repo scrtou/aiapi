@@ -499,7 +499,7 @@ int AccountDbManager::countAccountsByChannel(string apiName, bool includeWaiting
             }
         }
         
-        LOG_DEBUG << "[账户数据库] 渠道 " << apiName << " 账号数量: " << count
+        LOG_INFO << "[账户数据库] 渠道 " << apiName << " 账号数量: " << count
                   << "（includeWaiting=" << includeWaiting << "）";
         return count;
     } catch(const std::exception& e) {

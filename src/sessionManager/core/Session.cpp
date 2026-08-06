@@ -263,11 +263,11 @@ session_st& chatSession::createOrUpdateSessionHash(session_st& session)
     
     // Hash 模式：基于消息内容计算会话ID
     std::string tempConversationId = generateConversationKey(generateJsonbySession(session, false));
-    LOG_DEBUG << "[Hash模式] 从请求生成会话ID: " << tempConversationId;
+    LOG_INFO << "[Hash模式] 从请求生成会话ID: " << tempConversationId;
 
     if (sessionIsExist(tempConversationId))
     {
-        LOG_DEBUG << "[Hash模式] 会话已存在, 正在更新";
+        LOG_INFO << "[Hash模式] 会话已存在, 正在更新";
         // 标记为继续会话，保存旧的 ID 用于线程上下文转移
         session.state.isContinuation = true;
         session.provider.prevProviderKey = tempConversationId;
@@ -277,7 +277,7 @@ session_st& chatSession::createOrUpdateSessionHash(session_st& session)
     {
         if (context_map.find(tempConversationId) != context_map.end())
         {
-            LOG_DEBUG << "[Hash模式] 在上下文映射中找到会话";
+            LOG_INFO << "[Hash模式] 在上下文映射中找到会话";
             std::string mappedSessionId = context_map[tempConversationId];
             session_map[mappedSessionId].state.contextIsFull = true;
             // 标记为继续会话，保存旧的 ID 用于线程上下文转移
@@ -411,7 +411,7 @@ void chatSession::commitSessionTransfer(session_st& session)
     // 否则可能出现 ResponseIndex 仍指向 oldSessionId，但 oldSessionId 已被删除，导致 previous_response_id 续接断链。
     if (session.state.apiType == ApiType::Responses && !session.response.responseId.empty()) {
         ResponseIndex::instance().bind(session.response.responseId, newSessionId);
-        LOG_DEBUG << "[会话迁移][响应模式] 提前重绑响应 ID 到会话 ID: "
+        LOG_INFO << "[会话迁移][响应模式] 提前重绑响应 ID 到会话 ID: "
                   << session.response.responseId << " -> " << newSessionId;
     }
 
@@ -577,7 +577,7 @@ void chatSession::clearExpiredSession()
         }
         
         if (isRespApi) {
-            LOG_DEBUG << "[响应接口] 清理过期会话: " << sessionId;
+            LOG_INFO << "[响应接口] 清理过期会话: " << sessionId;
         }
     }
 }
@@ -744,8 +744,8 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
                         
                         if (!imgInfo.base64Data.empty() || !imgInfo.uploadedUrl.empty()) {
                             images.push_back(imgInfo);
-                            LOG_DEBUG << "[getContentAsString] 提取到图片(input_image), mediaType: " << imgInfo.mediaType
-                                     << ", hasBase64: " << (!imgInfo.base64Data.empty())
+                            LOG_INFO << "[getContentAsString] 提取到图片(input_image), mediaType: " << imgInfo.mediaType;
+                            LOG_INFO  << ", hasBase64: " << (!imgInfo.base64Data.empty())
                                      << ", hasUrl: " << (!imgInfo.uploadedUrl.empty());
                         }
                     }

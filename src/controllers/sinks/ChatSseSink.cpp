@@ -14,7 +14,7 @@ ChatSseSink::ChatSseSink(
     model_(model),
     completionId_(generateCompletionId())
 {
-    LOG_DEBUG << "[聊天SSE] 已创建，模型：" << model_ << ", ID: " << completionId_;
+    LOG_INFO << "[聊天SSE] 已创建，模型：" << model_ << ", ID: " << completionId_;
 }
 
 void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
@@ -27,7 +27,7 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
         using T = std::decay_t<decltype(arg)>;
         
         if constexpr (std::is_same_v<T, generation::Started>) {
-            LOG_DEBUG << "[聊天SSE] 开始事件，响应ID：" << arg.responseId;
+            LOG_INFO << "[聊天SSE] 开始事件，响应ID：" << arg.responseId;
             // SSE 不需要在 已开始 时发送任何内容
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDelta>) {
@@ -56,7 +56,7 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             firstChunk_ = false;
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
-            LOG_DEBUG << "[聊天SSE] 令牌用量： 输入=" << arg.inputTokens
+            LOG_INFO << "[聊天SSE] 令牌用量： 输入=" << arg.inputTokens
                       << ", 输出=" << arg.outputTokens;
             usage_ = arg;
             if (usage_->totalTokens == 0) {
@@ -115,7 +115,7 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
 void ChatSseSink::onClose() {
     if (!closed_) {
         closed_ = true;
-        LOG_DEBUG << "[聊天SSE] 正在关闭";
+        LOG_INFO << "[聊天SSE] 正在关闭";
         if (closeCallback_) {
             closeCallback_();
         }

@@ -47,7 +47,7 @@ std::string inferProviderFromPath(const HttpRequestPtr& req)
 void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
 {
     if (!req) {
-        LOG_DEBUG << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+        LOG_INFO << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
                   << ", requestPresent=false";
         return;
     }
@@ -58,7 +58,7 @@ void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
     const auto cookie = req->getHeader("cookie");
     const char* contentTypeKind = contentType.empty() ? "absent" :
         (contentType.find("application/json") != std::string::npos ? "json" : "other");
-    LOG_DEBUG << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+    LOG_INFO << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
               << ", method=" << req->methodString()
               << ", path=" << req->path()
               << ", bodyPresent=" << (!body.empty())
@@ -156,7 +156,7 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
     LOG_INFO << "[AI接口控制器] 聊天补全 stream=" << stream;
     
     // 通过 RequestAdapters 构建 GenerationRequest
-    LOG_DEBUG << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
+    LOG_INFO << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromChat(req);
     
 
@@ -203,7 +203,7 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
     
 
     LOG_INFO << "[AI接口控制器] 进入流式响应模式";
-    LOG_DEBUG << "[AI接口控制器] previousResponseId："
+    LOG_INFO << "[AI接口控制器] previousResponseId："
               << (genReq.previousResponseId.has_value() ? *genReq.previousResponseId : "");
 
     auto resp = HttpResponse::newAsyncStreamResponse(
@@ -301,7 +301,7 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
     auto& reqBody = *jsonPtr;
     const bool stream = reqBody.get("stream", false).asBool();
 
-    LOG_DEBUG << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
+    LOG_INFO << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
     GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
     genReq.provider = inferProviderFromPath(req);
     const bool nativeResponsesToolItems =

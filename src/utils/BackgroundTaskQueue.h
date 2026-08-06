@@ -68,7 +68,7 @@ public:
             tasks_.push({name, std::move(task)});
         }
         cv_.notify_one();
-        LOG_DEBUG << "[后台任务队列] 任务入队：" << name;
+        LOG_INFO << "[后台任务队列] 任务入队：" << name;
     }
 
     // / 优雅停机：等待队列排空，然后 所有线程
@@ -116,7 +116,7 @@ private:
 
     void workerLoop(size_t id)
     {
-        LOG_DEBUG << "[后台任务队列] 工作线程 #" << id << " 已启动";
+        LOG_INFO << "[后台任务队列] 工作线程 #" << id << " 已启动";
         while (true) {
             NamedTask task;
             {
@@ -129,7 +129,7 @@ private:
                 tasks_.pop();
             }
             try {
-                LOG_DEBUG << "[后台任务队列] 线程 #" << id
+                LOG_INFO << "[后台任务队列] 线程 #" << id
                           << " 执行任务: " << task.name;
                 task.fn();
             } catch (const std::exception& e) {
@@ -140,7 +140,7 @@ private:
                           << "' 未知异常";
             }
         }
-        LOG_DEBUG << "[后台任务队列] 工作线程 #" << id << " 已退出";
+        LOG_INFO << "[后台任务队列] 工作线程 #" << id << " 已退出";
     }
 
     mutable std::mutex mu_;

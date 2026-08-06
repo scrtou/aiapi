@@ -44,7 +44,7 @@ void LogController::logsList(const HttpRequestPtr &req, std::function<void(const
 
 void LogController::logsTail(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    LOG_DEBUG << "[LogCtrl] 读取日志尾部内容";
+    LOG_INFO << "[LogCtrl] 读取日志尾部内容";
 
     std::string fileName = req->getParameter("file");
     if (fileName.empty()) fileName = "aiapi.log";
