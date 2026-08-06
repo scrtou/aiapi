@@ -566,3 +566,7 @@ tools/accountlogin/google-chrome-stable_current_amd64.deb
 # End of https://www.toptal.com/developers/gitignore/api/intellij+all,visualstudio,visualstudiocode,cmake,c,c++
 # Sensitive configuration
 config.json
+
+# build outputs (added 2026-08-06)
+build/
+src/build/
