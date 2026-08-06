@@ -184,8 +184,10 @@ DROGON_TEST(Sinks_ResponsesJson_CodexNativeFunctionCall)
 
     generation::ToolCallDone call;
     call.id = "call_123";
-    call.name = "exec_command";
-    call.arguments = R"({"cmd":"ls -la"})";
+    call.name = "filesystem__read_file";
+    call.originalName = "read_file";
+    call.namespacePath = "filesystem";
+    call.arguments = R"({"path":"README.md"})";
     call.type = "function";
     sink.onEvent(call);
 
@@ -201,8 +203,9 @@ DROGON_TEST(Sinks_ResponsesJson_CodexNativeFunctionCall)
     const auto& item = cap.body["output"][0];
     CHECK(item["type"].asString() == "function_call");
     CHECK(item["call_id"].asString() == "call_123");
-    CHECK(item["name"].asString() == "exec_command");
-    CHECK(item["arguments"].asString() == R"({"cmd":"ls -la"})");
+    CHECK(item["name"].asString() == "read_file");
+    CHECK(item["namespace"].asString() == "filesystem");
+    CHECK(item["arguments"].asString() == R"({"path":"README.md"})");
     CHECK(!item.isMember("tool_calls"));
 }
 
@@ -229,8 +232,10 @@ DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
 
     generation::ToolCallDone call;
     call.id = "call_123";
-    call.name = "exec_command";
-    call.arguments = R"({"cmd":"ls -la"})";
+    call.name = "filesystem__read_file";
+    call.originalName = "read_file";
+    call.namespacePath = "filesystem";
+    call.arguments = R"({"path":"README.md"})";
     call.type = "function";
     sink.onEvent(call);
 
@@ -248,7 +253,9 @@ DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
     CHECK(stream.find("event: response.completed") != std::string::npos);
     CHECK(stream.find("\"type\":\"function_call\"") != std::string::npos);
     CHECK(stream.find("\"call_id\":\"call_123\"") != std::string::npos);
-    CHECK(stream.find("\"name\":\"exec_command\"") != std::string::npos);
+    CHECK(stream.find("\"name\":\"read_file\"") != std::string::npos);
+    CHECK(stream.find("\"namespace\":\"filesystem\"") != std::string::npos);
+    CHECK(stream.find("filesystem__read_file") == std::string::npos);
     CHECK(stream.find("\"tool_calls\"") == std::string::npos);
     CHECK(stream.find("\"type\":\"message\"") == std::string::npos);
 }

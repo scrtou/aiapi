@@ -1,5 +1,6 @@
 #include "sessionManager/tooling/ForcedToolCallGenerator.h"
 #include "sessionManager/tooling/BridgeHelpers.h"
+#include "sessionManager/tooling/ToolDefinitionResolver.h"
 #include <json/json.h>
 
 namespace toolcall {
@@ -13,25 +14,24 @@ void generateForcedToolCall(
         return;
     }
 
-    std::string toolName;
-    if (session.request.tools.isArray() && !session.request.tools.empty()) {
-        const auto& first = session.request.tools[0U];
-        if (first.isObject() && first.isMember("function") && first["function"].isObject()) {
-            toolName = first["function"].get("name", "").asString();
-        }
-        if (toolName.empty() && first.isMember("name")) {
-            toolName = first["name"].asString();
-        }
+    auto selected = firstToolDefinition(session.request.tools);
+    if (!selected.has_value()) {
+        selected = firstToolDefinition(session.request.toolsRaw);
     }
 
-    if (toolName.empty()) {
-        toolName = "attempt_completion";
-    }
+    const std::string toolName = selected.has_value()
+        ? selected->bridgeName
+        : "attempt_completion";
 
     generation::ToolCallDone fallback;
     fallback.id = bridge::generateFallbackToolCallId();
     fallback.name = toolName;
     fallback.index = 0;
+    if (selected.has_value()) {
+        fallback.originalName = selected->originalName;
+        fallback.namespacePath = selected->namespacePath;
+        fallback.type = selected->type;
+    }
 
     Json::Value args(Json::objectValue);
     if (toolName == "attempt_completion") {

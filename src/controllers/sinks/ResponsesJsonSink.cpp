@@ -22,7 +22,8 @@ Json::Value nativeToolItem(const generation::ToolCallDone& call)
     Json::Value item(Json::objectValue);
     item["id"] = (call.type == "custom" ? "ctc_" : "fc_") + callId;
     item["call_id"] = callId;
-    item["name"] = call.name;
+    item["name"] = call.originalName.empty() ? call.name : call.originalName;
+    if (!call.namespacePath.empty()) item["namespace"] = call.namespacePath;
     item["status"] = "completed";
     if (call.type == "custom") {
         item["type"] = "custom_tool_call";

@@ -18,6 +18,7 @@ std::string createTablePgSql = R"(
         usertobitid INTEGER,
         personid VARCHAR(255),
         accounttype VARCHAR(50) DEFAULT 'free',
+        workspaceuacid BIGINT NOT NULL DEFAULT 0,
         status VARCHAR(20) DEFAULT 'active'
     );
 )";
@@ -36,6 +37,7 @@ std::string createTableSqlMysql=R"(
     usertobitid INT,
     personid VARCHAR(255),
     accounttype VARCHAR(50) DEFAULT 'free',
+    workspaceuacid BIGINT NOT NULL DEFAULT 0,
     status VARCHAR(20) DEFAULT 'active'
 ) ENGINE=InnoDB;)";
 
@@ -54,6 +56,7 @@ std::string createTableSqlite3 = R"(
         usertobitid INTEGER,
         personid TEXT,
         accounttype TEXT DEFAULT 'free',
+        workspaceuacid INTEGER NOT NULL DEFAULT 0,
         status TEXT DEFAULT 'active'
     );
 )";
@@ -96,64 +99,65 @@ void AccountDbManager::checkAndUpgradeTable()
 {
     bool hasAccountType = false;
     bool hasStatus = false;
-    
+    bool hasWorkspaceUacId = false;
+
     if (dbType == DbType::SQLite3)
     {
-
-        std::string checkSql = "PRAGMA table_info(account)";
-        auto result = dbClient->execSqlSync(checkSql);
+        auto result = dbClient->execSqlSync("PRAGMA table_info(account)");
         for (const auto& row : result)
         {
-            std::string colName = row["name"].as<std::string>();
-            if (colName == "accounttype")
-            {
-                hasAccountType = true;
-            }
-            if (colName == "status")
-            {
-                hasStatus = true;
-            }
+            const std::string colName = row["name"].as<std::string>();
+            hasAccountType = hasAccountType || colName == "accounttype";
+            hasStatus = hasStatus || colName == "status";
+            hasWorkspaceUacId = hasWorkspaceUacId || colName == "workspaceuacid";
         }
     }
     else
     {
-
-        std::string checkSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='accounttype'";
-        auto result = dbClient->execSqlSync(checkSql);
-        hasAccountType = (result.size() > 0);
-        
-        std::string checkStatusSql = "SELECT column_name FROM information_schema.columns WHERE table_name='account' AND column_name='status'";
-        auto resultStatus = dbClient->execSqlSync(checkStatusSql);
-        hasStatus = (resultStatus.size() > 0);
+        auto hasColumn = [this](const std::string& columnName) {
+            const std::string sql =
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='account' AND column_name=$1";
+            return !dbClient->execSqlSync(sql, columnName).empty();
+        };
+        hasAccountType = hasColumn("accounttype");
+        hasStatus = hasColumn("status");
+        hasWorkspaceUacId = hasColumn("workspaceuacid");
     }
-    
+
     if (!hasAccountType)
     {
-        LOG_INFO << "[账户数据库] 表'账号'中缺少列'账号type'，正在添加...";
         try {
-            if (dbType == DbType::SQLite3) {
-                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype TEXT DEFAULT 'free'");
-            } else {
-                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
-            }
-            LOG_INFO << "[账户数据库] 列'账号type'添加成功";
+            dbClient->execSqlSync(dbType == DbType::SQLite3
+                ? "ALTER TABLE account ADD COLUMN accounttype TEXT DEFAULT 'free'"
+                : "ALTER TABLE account ADD COLUMN accounttype VARCHAR(50) DEFAULT 'free'");
+            LOG_INFO << "[账户数据库] 已添加 accounttype 列";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[账户数据库] 添加列'账号type'失败：" << e.what();
+            LOG_ERROR << "[账户数据库] 添加 accounttype 列失败: " << e.what();
         }
     }
-    
+
+    if (!hasWorkspaceUacId)
+    {
+        try {
+            dbClient->execSqlSync(dbType == DbType::SQLite3
+                ? "ALTER TABLE account ADD COLUMN workspaceuacid INTEGER NOT NULL DEFAULT 0"
+                : "ALTER TABLE account ADD COLUMN workspaceuacid BIGINT NOT NULL DEFAULT 0");
+            LOG_INFO << "[账户数据库] 已添加 workspaceuacid 列，旧账号默认值为 0";
+        } catch(const std::exception& e) {
+            LOG_ERROR << "[账户数据库] 添加 workspaceuacid 列失败: " << e.what();
+        }
+    }
+
     if (!hasStatus)
     {
-        LOG_INFO << "[账户数据库] 表'账号'中缺少列''，正在添加...";
         try {
-            if (dbType == DbType::SQLite3) {
-                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status TEXT DEFAULT 'active'");
-            } else {
-                dbClient->execSqlSync("ALTER TABLE account ADD COLUMN status VARCHAR(20) DEFAULT 'active'");
-            }
-            LOG_INFO << "[账户数据库] 列''添加成功";
+            dbClient->execSqlSync(dbType == DbType::SQLite3
+                ? "ALTER TABLE account ADD COLUMN status TEXT DEFAULT 'active'"
+                : "ALTER TABLE account ADD COLUMN status VARCHAR(20) DEFAULT 'active'");
+            LOG_INFO << "[账户数据库] 已添加 status 列";
         } catch(const std::exception& e) {
-            LOG_ERROR << "[账户数据库] 添加列''失败：" << e.what();
+            LOG_ERROR << "[账户数据库] 添加 status 列失败: " << e.what();
         }
     }
 }
@@ -164,10 +168,8 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 
     // 注意：PostgreSQL 的 TIMESTAMP 不接受空字符串 ''。
     // 当 创建Time 为空时，让数据库使用列默认值（CURRENT_TIMESTAMP），以兼容 SQLite/PG/MySQL。
-    std::string insertsqlWithCreateTime = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
-    std::string insertsqlNoCreateTime   = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
-
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,status=$9 where apiname=$10 and username=$11";
+    std::string insertsqlWithCreateTime = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,accounttype,workspaceuacid,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)";
+    std::string insertsqlNoCreateTime   = "insert into account (apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,accounttype,workspaceuacid,status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)";
 
     // 如果status为空，默认设置为active
     if (accountinfo.status.empty()) {
@@ -197,6 +199,7 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
                     accountinfo.userTobitId,
                     accountinfo.personId,
                     accountinfo.accountType,
+                    accountinfo.workspaceUacId,
                     accountinfo.status);
             }
             return dbClient->execSqlSync(
@@ -212,6 +215,7 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
                 accountinfo.personId,
                 accountinfo.createTime,
                 accountinfo.accountType,
+                accountinfo.workspaceUacId,
                 accountinfo.status);
         }();
 
@@ -229,8 +233,12 @@ bool AccountDbManager::addAccount(struct Accountinfo_st accountinfo)
 }
 bool AccountDbManager::updateAccount(struct Accountinfo_st accountinfo)
 {
-    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,status=$9 where apiname=$10 and username=$11";
-    auto result = dbClient->execSqlSync(updatesql,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.accountType,accountinfo.status,accountinfo.apiName,accountinfo.userName);
+    std::string updatesql = "update account set password=$1,authtoken=$2,usecount=$3,tokenstatus=$4,accountstatus=$5,usertobitid=$6,personid=$7,accounttype=$8,workspaceuacid=$9,status=$10 where apiname=$11 and username=$12";
+    auto result = dbClient->execSqlSync(updatesql,
+        accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,
+        accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,
+        accountinfo.personId,accountinfo.accountType,accountinfo.workspaceUacId,
+        accountinfo.status,accountinfo.apiName,accountinfo.userName);
     if(result.affectedRows()!=0)
     {
         LOG_INFO << "账号 " << accountinfo.userName << " 更新成功";
@@ -260,7 +268,7 @@ bool AccountDbManager::deleteAccount(string apiName,string userName)
 }
 list<Accountinfo_st> AccountDbManager::getAccountDBList()
 {
-    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,COALESCE(accounttype,'free') as accounttype,COALESCE(status,'active') as status from account";
+    std::string selectsql = "select apiname,username,password,authtoken,usecount,tokenstatus,accountstatus,usertobitid,personid,createtime,COALESCE(accounttype,'free') as accounttype,COALESCE(workspaceuacid,0) as workspaceuacid,COALESCE(status,'active') as status from account";
     auto result = dbClient->execSqlSync(selectsql);
     list<Accountinfo_st> accountDBList;
     for(auto& item:result)
@@ -277,7 +285,10 @@ list<Accountinfo_st> AccountDbManager::getAccountDBList()
         if (!item["status"].isNull()) {
             statusStr = item["status"].as<std::string>();
         }
-        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr,accountTypeStr,statusStr);
+        const auto workspaceUacId = item["workspaceuacid"].isNull()
+            ? 0
+            : item["workspaceuacid"].as<std::int64_t>();
+        Accountinfo_st accountinfo(item["apiname"].as<std::string>(),item["username"].as<std::string>(),item["password"].as<std::string>(),item["authtoken"].as<std::string>(),item["usecount"].as<int>(),item["tokenstatus"].as<bool>(),item["accountstatus"].as<bool>(),item["usertobitid"].as<int>(),item["personid"].as<std::string>(),createTimeStr,accountTypeStr,statusStr,workspaceUacId);
         accountDBList.push_back(accountinfo);
     }
     return accountDBList;
@@ -376,8 +387,8 @@ bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st acco
     // 支持从 或 状态激活
     // 创建time 可能为空；PG 不接受 '' -> TIMESTAMP。
     // 为空则不更新 创建time（保留默认/原值），否则写入指定值。
-    std::string updatesqlWithCreateTime = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10,createtime=$11 where id=$12 and (status=$13 or status=$14)";
-    std::string updatesqlNoCreateTime   = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,status=$10 where id=$11 and (status=$12 or status=$13)";
+    std::string updatesqlWithCreateTime = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,workspaceuacid=$10,status=$11,createtime=$12 where id=$13 and (status=$14 or status=$15)";
+    std::string updatesqlNoCreateTime   = "update account set username=$1,password=$2,authtoken=$3,usecount=$4,tokenstatus=$5,accountstatus=$6,usertobitid=$7,personid=$8,accounttype=$9,workspaceuacid=$10,status=$11 where id=$12 and (status=$13 or status=$14)";
 
     try {
         auto result = [&]() {
@@ -394,6 +405,7 @@ bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st acco
                     accountinfo.userTobitId,
                     accountinfo.personId,
                     accountinfo.accountType,
+                    accountinfo.workspaceUacId,
                     AccountStatus::ACTIVE,  // 激活为active状态
                     waitingId,
                     AccountStatus::WAITING,     // 从待注册状态激活
@@ -412,6 +424,7 @@ bool AccountDbManager::activateAccount(int waitingId, struct Accountinfo_st acco
                 accountinfo.userTobitId,
                 accountinfo.personId,
                 accountinfo.accountType,
+                accountinfo.workspaceUacId,
                 AccountStatus::ACTIVE,  // 激活为active状态
                 accountinfo.createTime,
                 waitingId,

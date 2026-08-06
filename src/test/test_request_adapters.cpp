@@ -121,6 +121,95 @@ DROGON_TEST(RequestAdapters_Chat_ToolsAndToolChoice)
     CHECK(genReq.toolChoice.find("read_file") != std::string::npos);
 }
 
+DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeaves)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "use the namespaced tool";
+
+    Json::Value namespaceTool;
+    namespaceTool["type"] = "namespace";
+    namespaceTool["name"] = "filesystem";
+
+    Json::Value nested(Json::arrayValue);
+    Json::Value function;
+    function["type"] = "function";
+    function["name"] = "read_file";
+    function["description"] = "Read a file";
+    function["parameters"]["type"] = "object";
+    function["parameters"]["properties"]["path"]["type"] = "string";
+    nested.append(function);
+    namespaceTool["tools"] = nested;
+
+    Json::Value tools(Json::arrayValue);
+    tools.append(namespaceTool);
+    body["tools"] = tools;
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body));
+
+    REQUIRE(genReq.toolsRaw.isArray());
+    REQUIRE(genReq.toolsRaw.size() == 1);
+    CHECK(genReq.toolsRaw[0]["type"].asString() == "namespace");
+    CHECK(genReq.toolsRaw[0]["name"].asString() == "filesystem");
+    REQUIRE(genReq.toolsRaw[0]["tools"].isArray());
+    CHECK(genReq.toolsRaw[0]["tools"][0]["name"].asString() == "read_file");
+
+    REQUIRE(genReq.tools.isArray());
+    REQUIRE(genReq.tools.size() == 1);
+    const auto& bridged = genReq.tools[0]["function"];
+    CHECK(bridged["name"].asString() == "filesystem__read_file");
+    CHECK(bridged["_aiapi_original_name"].asString() == "read_file");
+    CHECK(bridged["_aiapi_namespace"].asString() == "filesystem");
+}
+
+DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayDistinct)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "use nested tools";
+
+    auto makeFunction = [](const std::string& name) {
+        Json::Value function;
+        function["type"] = "function";
+        function["name"] = name;
+        function["parameters"]["type"] = "object";
+        function["parameters"]["properties"]["path"]["type"] = "string";
+        return function;
+    };
+
+    Json::Value workspace;
+    workspace["type"] = "namespace";
+    workspace["name"] = "workspace";
+    Json::Value filesystem;
+    filesystem["type"] = "namespace";
+    filesystem["name"] = "filesystem";
+    filesystem["tools"].append(makeFunction("read_file"));
+    workspace["tools"].append(filesystem);
+
+    Json::Value archive;
+    archive["type"] = "namespace";
+    archive["name"] = "archive";
+    archive["tools"].append(makeFunction("read_file"));
+
+    body["tools"].append(workspace);
+    body["tools"].append(archive);
+
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body));
+
+    REQUIRE(genReq.toolsRaw.size() == 2);
+    REQUIRE(genReq.tools.size() == 2);
+    CHECK(genReq.tools[0]["function"]["name"].asString() ==
+          "workspace__filesystem__read_file");
+    CHECK(genReq.tools[0]["function"]["_aiapi_namespace"].asString() ==
+          "workspace__filesystem");
+    CHECK(genReq.tools[1]["function"]["name"].asString() ==
+          "archive__read_file");
+    CHECK(genReq.tools[1]["function"]["_aiapi_namespace"].asString() ==
+          "archive");
+}
+
 DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
 {
     Json::Value body;

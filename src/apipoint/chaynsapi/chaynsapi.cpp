@@ -19,6 +19,45 @@ namespace {
 constexpr auto MODEL_CACHE_TTL = std::chrono::minutes(15);
 constexpr auto MODEL_REFRESH_MIN_INTERVAL = std::chrono::seconds(30);
 
+constexpr const char* CHAYNS_FREE_ORIGIN = "https://sidekick.ki";
+constexpr const char* CHAYNS_FREE_REFERER = "https://sidekick.ki/";
+constexpr const char* CHAYNS_PRO_ORIGIN = "https://mein.sidekick.ki";
+constexpr const char* CHAYNS_PRO_REFERER = "https://mein.sidekick.ki/";
+
+struct ChaynsRequestRoute
+{
+    bool isPro = false;
+    int threadTypeId = 8;
+    std::int64_t workspaceUacId = 0;
+    std::string origin = CHAYNS_FREE_ORIGIN;
+    std::string referer = CHAYNS_FREE_REFERER;
+};
+
+ChaynsRequestRoute requestRouteForAccount(const Accountinfo_st& account)
+{
+    ChaynsRequestRoute route;
+    route.isPro = account.accountType == "pro";
+    if (route.isPro) {
+        route.threadTypeId = 9;
+        route.workspaceUacId = account.workspaceUacId;
+        route.origin = CHAYNS_PRO_ORIGIN;
+        route.referer = CHAYNS_PRO_REFERER;
+    }
+    return route;
+}
+
+void applyChaynsRouteHeaders(const HttpRequestPtr& request,
+                             const Accountinfo_st& account,
+                             const ChaynsRequestRoute& route)
+{
+    chayns_browser::applyBrowserHeadersForAccount(
+        request,
+        account.userName,
+        account.personId,
+        route.origin,
+        route.referer);
+}
+
 std::mutex g_chaynsAccountGateMapMutex;
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> g_chaynsAccountGates;
 
@@ -34,9 +73,14 @@ std::shared_ptr<std::mutex> accountExecutionGate(const std::string& accountUserN
 
 bool isUsableChaynsAccount(const std::shared_ptr<Accountinfo_st>& account, bool requiresPro)
 {
-    return account && account->tokenStatus && account->accountStatus &&
-           account->status == AccountStatus::ACTIVE && !account->authToken.empty() &&
-           (!requiresPro || account->accountType == "pro");
+    if (!account || !account->tokenStatus || !account->accountStatus ||
+        account->status != AccountStatus::ACTIVE || account->authToken.empty()) {
+        return false;
+    }
+    if (requiresPro) {
+        return account->accountType == "pro" && account->workspaceUacId > 0;
+    }
+    return account->accountType == "free";
 }
 
 bool postFailureMayHaveBeenAccepted(HttpStatusCode status)
@@ -100,7 +144,12 @@ void chaynsapi::init()
 }
 
 
-std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken)
+std::string chaynsapi::uploadImageToService(const ImageInfo& image,
+                                            const std::string& personId,
+                                            const std::string& authToken,
+                                            const std::string& accountUserName,
+                                            const std::string& origin,
+                                            const std::string& referer)
 {
     LOG_INFO << "[chaynsAPI] 正在上传图片到图片服务，personIdPresent=" << !personId.empty();
     
@@ -140,7 +189,11 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image, const std::s
     request->setMethod(HttpMethod::Post);
     request->setPath(uploadPath);
     request->addHeader("Authorization", "Bearer " + authToken);
-    chayns_browser::applyBrowserHeaders(request, chayns_browser::accountKeyFor("", personId));
+    chayns_browser::applyBrowserHeaders(
+        request,
+        chayns_browser::accountKeyFor(accountUserName, personId),
+        origin,
+        referer);
     
 
     std::string boundary = "----WebKitFormBoundary" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
@@ -285,6 +338,11 @@ void chaynsapi::postChatMessage(session_st& session)
     string final_userAuthorId;
     string final_agentAuthorId;
     string final_accountUserName;
+    string final_accountType;
+    int final_threadTypeId = 8;
+    std::int64_t final_workspaceUacId = 0;
+    string final_origin;
+    string final_referer;
     string final_requestMessageId;
     string final_requestCreationTime;
     string final_assistantMessageId;
@@ -296,7 +354,7 @@ void chaynsapi::postChatMessage(session_st& session)
 
     const AccountRequirement accountRequirement = selectedModel.requiresPro
         ? AccountRequirement::ProOnly
-        : AccountRequirement::AnyValid;
+        : AccountRequirement::FreeOnly;
     std::set<std::string> attemptedAccounts;
     shared_ptr<Accountinfo_st> selectedAccount;
 
@@ -319,6 +377,11 @@ void chaynsapi::postChatMessage(session_st& session)
         final_userAuthorId.clear();
         final_agentAuthorId.clear();
         final_accountUserName.clear();
+        final_accountType.clear();
+        final_threadTypeId = 8;
+        final_workspaceUacId = 0;
+        final_origin.clear();
+        final_referer.clear();
         final_requestMessageId.clear();
         final_requestCreationTime.clear();
         final_assistantMessageId.clear();
@@ -369,14 +432,29 @@ void chaynsapi::postChatMessage(session_st& session)
                     setChaynsSessionError(
                         session, 503, "account_unavailable",
                         selectedModel.requiresPro
-                            ? "No valid Pro account available for the requested model"
-                            : "No valid account available for the requested model");
+                            ? "No valid Pro account with workspaceUacId available for the requested model"
+                            : "No valid Free account available for the requested model");
                     return;
                 }
             }
         }
 
         shared_ptr<Accountinfo_st> accountinfo = selectedAccount;
+        const ChaynsRequestRoute requestRoute = requestRouteForAccount(*accountinfo);
+        LOG_INFO << "[chaynsAPI] 已选择请求路由: accountType="
+                 << accountinfo->accountType
+                 << ", threadTypeId=" << requestRoute.threadTypeId
+                 << ", workspaceUacIdConfigured="
+                 << (requestRoute.workspaceUacId > 0);
+        if (requestRoute.isPro && requestRoute.workspaceUacId <= 0) {
+            LOG_ERROR << "[chaynsAPI] Pro 账号请求缺少 workspaceUacId 配置";
+            setChaynsSessionError(
+                session,
+                503,
+                "chayns_pro_workspace_not_configured",
+                "Chayns Pro workspaceUacId is not configured");
+            return;
+        }
 
         if (accountExecutionLock.owns_lock()) {
             accountExecutionLock.unlock();
@@ -401,7 +479,7 @@ void chaynsapi::postChatMessage(session_st& session)
             request->setMethod(HttpMethod::Get);
             request->setPath("/v2/userSettings");
             request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            chayns_browser::applyBrowserHeadersForAccount(request, accountinfo->userName, accountinfo->personId);
+            applyChaynsRouteHeaders(request, *accountinfo, requestRoute);
             auto [result, response] = authClient->sendRequest(request);
             if (result == ReqResult::Ok && response && response->statusCode() == k200OK) {
                 auto jsonResp = response->getJsonObject();
@@ -439,7 +517,13 @@ void chaynsapi::postChatMessage(session_st& session)
         if (!imagesUploaded && !session.request.images.empty()) {
             LOG_INFO << "[chaynsAPI] 正在处理" << session.request.images.size() << " 张图片上传";
             for (auto& img : session.request.images) {
-                std::string imageUrl = uploadImageToService(img, accountinfo->personId, accountinfo->authToken);
+                std::string imageUrl = uploadImageToService(
+                    img,
+                    accountinfo->personId,
+                    accountinfo->authToken,
+                    accountinfo->userName,
+                    requestRoute.origin,
+                    requestRoute.referer);
                 if (!imageUrl.empty()) {
                     uploadedImageUrls.push_back(imageUrl);
                     img.uploadedUrl = imageUrl;
@@ -457,17 +541,32 @@ void chaynsapi::postChatMessage(session_st& session)
         string lastMessageTime;
         string requestMessageId;
         
-        // 只在首次尝试且未要求换账号时，尝试使用已有线程
+        // 只在首次尝试且未要求换账号时，尝试使用已有线程。
+        // 路由上下文必须完整一致，旧版上下文也会安全地创建新线程。
         bool isFollowUp = false;
+        const bool continuationRouteMatches =
+            continuationContext.accountType == accountinfo->accountType &&
+            continuationContext.threadTypeId == requestRoute.threadTypeId &&
+            continuationContext.origin == requestRoute.origin &&
+            continuationContext.referer == requestRoute.referer &&
+            (!requestRoute.isPro ||
+             continuationContext.workspaceUacId == requestRoute.workspaceUacId);
         if (totalAttempts == 1 && !needSwitchAccount && hasContinuationContext &&
             accountinfo->userName == continuationContext.accountUserName &&
-            (continuationContext.modelId.empty() || continuationContext.modelId == modelname)) {
+            (continuationContext.modelId.empty() || continuationContext.modelId == modelname) &&
+            continuationRouteMatches) {
             threadId = continuationContext.threadId;
             userAuthorId = continuationContext.userAuthorId;
             agentAuthorId = continuationContext.agentAuthorId;
             isFollowUp = true;
             LOG_INFO << "[chaynsAPI] 找到现有线程: threadIdPresent=" << !threadId.empty()
                      << ", previousProviderPresent=" << !session.provider.prevProviderKey.empty();
+        } else if (hasContinuationContext && !continuationRouteMatches) {
+            LOG_INFO << "[chaynsAPI] 续聊请求路由发生变化，将创建新线程: oldAccountType="
+                     << continuationContext.accountType
+                     << ", newAccountType=" << accountinfo->accountType
+                     << ", oldThreadTypeId=" << continuationContext.threadTypeId
+                     << ", newThreadTypeId=" << requestRoute.threadTypeId;
         } else if (hasContinuationContext && continuationContext.modelId != modelname) {
             LOG_INFO << "[chaynsAPI] 续聊请求模型发生变化，将创建新线程: old="
                      << continuationContext.modelId << ", new=" << modelname;
@@ -503,7 +602,7 @@ void chaynsapi::postChatMessage(session_st& session)
             string path = "/intercom-backend/v2/thread/" + threadId + "/message";
             reqSend->setPath(path);
             reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            chayns_browser::applyBrowserHeadersForAccount(reqSend, accountinfo->userName, accountinfo->personId);
+            applyChaynsRouteHeaders(reqSend, *accountinfo, requestRoute);
             
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
             
@@ -599,7 +698,11 @@ void chaynsapi::postChatMessage(session_st& session)
             sendMessageRequest["members"].append(member2);
             sendMessageRequest["nerMode"] = "None";
             sendMessageRequest["priority"] = 0;
-            sendMessageRequest["typeId"] = 8;
+            sendMessageRequest["typeId"] = requestRoute.threadTypeId;
+            if (requestRoute.isPro) {
+                sendMessageRequest["workspaceUacId"] =
+                    Json::Int64(requestRoute.workspaceUacId);
+            }
             
             Json::Value message;
             message["text"] = full_message;
@@ -623,9 +726,11 @@ void chaynsapi::postChatMessage(session_st& session)
             reqSend->setMethod(HttpMethod::Post);
             reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
             reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            chayns_browser::applyBrowserHeadersForAccount(reqSend, accountinfo->userName, accountinfo->personId);
+            applyChaynsRouteHeaders(reqSend, *accountinfo, requestRoute);
             
-            LOG_INFO << "[chaynsAPI] 正在创建新线程";
+            LOG_INFO << "[chaynsAPI] 正在创建新线程: threadTypeId="
+                     << requestRoute.threadTypeId
+                     << ", workspaceUacIdIncluded=" << requestRoute.isPro;
             
             auto sendResult = client->sendRequest(reqSend);
             if (sendResult.first == ReqResult::Ok && sendResult.second &&
@@ -641,7 +746,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 retryReq->setMethod(HttpMethod::Post);
                 retryReq->setPath("/intercom-backend/v2/thread?forceCreate=true");
                 retryReq->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-                chayns_browser::applyBrowserHeadersForAccount(retryReq, accountinfo->userName, accountinfo->personId);
+                applyChaynsRouteHeaders(retryReq, *accountinfo, requestRoute);
                 sendResult = client->sendRequest(retryReq);
             }
 
@@ -746,8 +851,7 @@ void chaynsapi::postChatMessage(session_st& session)
             reqGet->setParameter("viewMode", "user");
             reqGet->setParameter("afterDate", lastMessageTime);
             reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            chayns_browser::applyBrowserHeadersForAccount(
-                reqGet, accountinfo->userName, accountinfo->personId);
+            applyChaynsRouteHeaders(reqGet, *accountinfo, requestRoute);
 
             auto getResult = client->sendRequest(reqGet);
             if (getResult.first == ReqResult::Ok && getResult.second) {
@@ -811,6 +915,11 @@ void chaynsapi::postChatMessage(session_st& session)
         final_userAuthorId = userAuthorId;
         final_agentAuthorId = messageAnchor.agentAuthorId;
         final_accountUserName = accountinfo->userName;
+        final_accountType = accountinfo->accountType;
+        final_threadTypeId = requestRoute.threadTypeId;
+        final_workspaceUacId = requestRoute.workspaceUacId;
+        final_origin = requestRoute.origin;
+        final_referer = requestRoute.referer;
         final_requestMessageId = requestMessageId;
         final_requestCreationTime = lastMessageTime;
         final_reasoningMessages = reasoningMessages;
@@ -885,6 +994,11 @@ void chaynsapi::postChatMessage(session_st& session)
             ctx.agentAuthorId = final_agentAuthorId;
             ctx.accountUserName = final_accountUserName;
             ctx.modelId = modelname;
+            ctx.accountType = final_accountType;
+            ctx.threadTypeId = final_threadTypeId;
+            ctx.workspaceUacId = final_workspaceUacId;
+            ctx.origin = final_origin;
+            ctx.referer = final_referer;
             ctx.lastRequestMessageId = final_requestMessageId;
             ctx.lastRequestCreationTime = final_requestCreationTime;
             ctx.lastAssistantMessageId = final_assistantMessageId;
@@ -899,6 +1013,11 @@ void chaynsapi::postChatMessage(session_st& session)
         chaynsMeta["request_creation_time"] = final_requestCreationTime;
         chaynsMeta["assistant_message_id"] = final_assistantMessageId;
         chaynsMeta["reasoning_messages"] = final_reasoningMessages;
+        chaynsMeta["account_type"] = final_accountType;
+        chaynsMeta["thread_type_id"] = final_threadTypeId;
+        if (final_accountType == "pro") {
+            chaynsMeta["workspace_uac_id"] = Json::Int64(final_workspaceUacId);
+        }
     } else {
         LOG_ERROR << "[chaynsAPI] 所有上游重试均失败 (总尝试次数：" << totalAttempts 
                  << "/" << MAX_UPSTREAM_RETRIES << ")";
@@ -917,6 +1036,11 @@ void chaynsapi::postChatMessage(session_st& session)
             chaynsMeta["request_message_id"] = final_requestMessageId;
             chaynsMeta["request_creation_time"] = final_requestCreationTime;
             chaynsMeta["reasoning_messages"] = final_reasoningMessages;
+            chaynsMeta["account_type"] = final_accountType;
+            chaynsMeta["thread_type_id"] = final_threadTypeId;
+            if (final_accountType == "pro") {
+                chaynsMeta["workspace_uac_id"] = Json::Int64(final_workspaceUacId);
+            }
         }
         if (fatalCorrelationConflict) {
             session.response.message["error"] =

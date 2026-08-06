@@ -60,6 +60,8 @@ struct ToolCallDone {
     std::string arguments;      // function 参数 JSON；custom 工具为 {"input":"..."}
     int index = 0;              // 工具调用在当前响应中的顺序索引
     std::string type = "function"; // function 或 custom
+    std::string originalName;
+    std::string namespacePath;
 };
 
 /**

@@ -7,6 +7,7 @@
 #include <map>
 #include <list>
 #include <set>
+#include <cstdint>
 #include <APIinterface.h>
 #include <../dbManager/account/accountDbManager.h>
 using namespace std;
@@ -34,9 +35,10 @@ struct Accountinfo_st
     string createTime;
     string accountType;  // 账号类型: "pro" 或 "free"
     string status;       // 账号状态: "pending", "active", "disabled"
+    std::int64_t workspaceUacId = 0; // Chayns Pro 账号所属 workspace
 
     Accountinfo_st(){}
-    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active")
+    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active",std::int64_t workspaceUacId=0)
     {
         this->apiName = apiName;
         this->userName = userName;
@@ -50,6 +52,7 @@ struct Accountinfo_st
         this->createTime = createTime;
         this->accountType = accountType;
         this->status = status;
+        this->workspaceUacId = workspaceUacId;
     }
 
     // 将请求/数据库中的 JSON 字段解析为统一账号结构（仅保留 camelCase 新命名）。
@@ -68,6 +71,10 @@ struct Accountinfo_st
         result.createTime = value.get("createTime", "").asString();
         result.accountType = value.get("accountType", "free").asString();
         result.status = value.get("status", "active").asString();
+        result.workspaceUacId = value.get("workspaceUacId", Json::Int64(0)).asInt64();
+        if (result.workspaceUacId < 0) {
+            result.workspaceUacId = 0;
+        }
         return result;
     }
 
@@ -87,6 +94,7 @@ struct Accountinfo_st
         value["createTime"] = createTime;
         value["accountType"] = accountType;
         value["status"] = status;
+        value["workspaceUacId"] = Json::Int64(workspaceUacId);
         return value;
     }
 };
@@ -105,11 +113,15 @@ struct AccountAutomationSettings
     bool autoDeleteEnabled = true;
     int deleteAfterDays = 6;
     bool autoRegisterEnabled = true;
+    // Responses API namespace definitions are recursively flattened into Tool Bridge leaves.
+    // Enabled by default for backward compatibility.
+    bool namespaceToolBridgeEnabled = true;
 };
 
 enum class AccountRequirement
 {
     AnyValid,
+    FreeOnly,
     ProOnly
 };
 //定义函数指针
@@ -156,7 +168,7 @@ class AccountManager
     void loadAccount();
     void saveAccount();
 
-    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active");
+    void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active",std::int64_t workspaceUacId=0);
     bool addAccountbyPost(Accountinfo_st accountinfo);
     bool updateAccount(Accountinfo_st accountinfo);
     bool deleteAccountbyPost(string apiName,string userName);
@@ -192,7 +204,6 @@ class AccountManager
     bool updateAccountAutomationSettings(const AccountAutomationSettings& settings,
                                          bool persistToConfig = true,
                                          std::string* errorMessage = nullptr);
-
     void waitUpdateAccountToken();
     void waitUpdateAccountTokenThread();
 

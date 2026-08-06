@@ -1,4 +1,5 @@
 #include "sessionManager/tooling/StrictClientRules.h"
+#include "sessionManager/tooling/ToolDefinitionResolver.h"
 #include <drogon/drogon.h>
 #include <array>
 #include <iomanip>
@@ -92,16 +93,17 @@ void updateApplyDiffRecoveryState(const std::string& text, bool& pendingRecovery
 namespace toolcall {
 
 bool hasToolNamed(const Json::Value& tools, const std::string& toolName) {
-    if (!tools.isArray() || toolName.empty()) return false;
+    if (toolName.empty()) return false;
 
-    for (const auto& tool : tools) {
-        if (!tool.isObject() || tool.get("type", "").asString() != "function") continue;
-        const auto& function = tool["function"];
-        if (function.isObject() && function.get("name", "").asString() == toolName) {
+    bool found = false;
+    visitToolDefinitions(tools, [&](const ToolDefinitionMatch& match) {
+        if (match.bridgeName != toolName && match.originalName != toolName) {
             return true;
         }
-    }
-    return false;
+        found = true;
+        return false;
+    });
+    return found;
 }
 
 bool hasApplyDiffFailureContext(

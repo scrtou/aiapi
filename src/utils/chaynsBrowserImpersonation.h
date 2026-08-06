@@ -291,7 +291,9 @@ inline std::string accountKeyFor(const std::string& userName, const std::string&
 }
 
 inline void applyBrowserHeaders(const drogon::HttpRequestPtr& req,
-                                const std::string& accountKey = "") {
+                                const std::string& accountKey = "",
+                                const std::string& originOverride = "",
+                                const std::string& refererOverride = "") {
     if (!req) {
         return;
     }
@@ -303,6 +305,8 @@ inline void applyBrowserHeaders(const drogon::HttpRequestPtr& req,
     const BrowserProfile& profile = selectProfile(accountKey);
     const std::string& lang =
         !profile.acceptLanguage.empty() ? profile.acceptLanguage : cfg.acceptLanguageFallback;
+    const std::string& origin = originOverride.empty() ? cfg.origin : originOverride;
+    const std::string& referer = refererOverride.empty() ? cfg.referer : refererOverride;
 
     auto setIf = [&](const char* name, const std::string& value) {
         if (!value.empty() && isSafeHeaderValue(value)) {
@@ -311,8 +315,8 @@ inline void applyBrowserHeaders(const drogon::HttpRequestPtr& req,
     };
 
     setIf("User-Agent", profile.userAgent);
-    setIf("Origin", cfg.origin);
-    setIf("Referer", cfg.referer);
+    setIf("Origin", origin);
+    setIf("Referer", referer);
     setIf("Accept", cfg.accept);
     setIf("Accept-Language", lang);
     setIf("Accept-Encoding", cfg.acceptEncoding);
@@ -326,8 +330,11 @@ inline void applyBrowserHeaders(const drogon::HttpRequestPtr& req,
 
 inline void applyBrowserHeadersForAccount(const drogon::HttpRequestPtr& req,
                                           const std::string& userName,
-                                          const std::string& personId = "") {
-    applyBrowserHeaders(req, accountKeyFor(userName, personId));
+                                          const std::string& personId = "",
+                                          const std::string& originOverride = "",
+                                          const std::string& refererOverride = "") {
+    applyBrowserHeaders(
+        req, accountKeyFor(userName, personId), originOverride, refererOverride);
 }
 
 }  // namespace chayns_browser

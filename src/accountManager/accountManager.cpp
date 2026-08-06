@@ -26,6 +26,7 @@ namespace {
 constexpr const char* kAutoDeleteEnabledKey = "account_automation.auto_delete_enabled";
 constexpr const char* kDeleteAfterDaysKey = "account_automation.delete_after_days";
 constexpr const char* kAutoRegisterEnabledKey = "account_automation.auto_register_enabled";
+constexpr const char* kNamespaceToolBridgeEnabledKey = "tool_bridge.namespace_enabled";
 constexpr int kDefaultDeleteAfterDays = 6;
 constexpr const char* kRetoolFailureCountKey = "retoolapi.provision.consecutive_failures";
 constexpr const char* kRetoolLastFailureAtKey = "retoolapi.provision.last_failure_at";
@@ -48,6 +49,11 @@ AccountAutomationSettings loadAccountAutomationSettingsFromCustomConfig(const Js
         settings.autoDeleteEnabled = automation.get("auto_delete_enabled", settings.autoDeleteEnabled).asBool();
         settings.deleteAfterDays = automation.get("delete_after_days", settings.deleteAfterDays).asInt();
         settings.autoRegisterEnabled = automation.get("auto_register_enabled", settings.autoRegisterEnabled).asBool();
+    }
+    if (customConfig.isMember("tool_bridge") && customConfig["tool_bridge"].isObject()) {
+        const auto& toolBridge = customConfig["tool_bridge"];
+        settings.namespaceToolBridgeEnabled = toolBridge.get(
+            "namespace_enabled", settings.namespaceToolBridgeEnabled).asBool();
     }
     if (settings.deleteAfterDays <= 0) {
         settings.deleteAfterDays = kDefaultDeleteAfterDays;
@@ -178,6 +184,7 @@ bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& c
         {kAutoDeleteEnabledKey, boolToConfigValue(settings.autoDeleteEnabled)},
         {kDeleteAfterDaysKey, std::to_string(settings.deleteAfterDays)},
         {kAutoRegisterEnabledKey, boolToConfigValue(settings.autoRegisterEnabled)},
+        {kNamespaceToolBridgeEnabledKey, boolToConfigValue(settings.namespaceToolBridgeEnabled)},
     }, errorMessage);
 }
 
@@ -691,14 +698,21 @@ void AccountManager::loadAccountFromConfig()
         auto personId = account["personId"].empty()?"":account["personId"].asString();
         auto createTime = account["createTime"].empty()?"":account["createTime"].asString();
         auto accountType = account["accountType"].empty()?"free":account["accountType"].asString();
-        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType);
+        auto workspaceUacId = account["workspaceUacId"].empty()
+            ? 0
+            : account["workspaceUacId"].asInt64();
+        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,
+                   userTobitId,personId,createTime,accountType,
+                   AccountStatus::ACTIVE,workspaceUacId);
     }
     LOG_INFO << "[账户管理] 从配置文件加载账户完成";
 }
-void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType,string status)
+void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType,string status,std::int64_t workspaceUacId)
 {
     std::lock_guard<std::mutex> lock(accountListMutex);
-    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,userTobitId,personId,createTime,accountType,status);
+    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,
+        tokenStatus,accountStatus,userTobitId,personId,createTime,accountType,status,
+        workspaceUacId);
     accountList[apiName][userName] = account;
     
     if (shouldExcludeFromPoolOnLoad(account)) {
@@ -729,7 +743,11 @@ bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
         return false;
     }
     // 注意：这里不能调用 addAccount，因为它也会获取锁，会导致死锁
-    auto account = make_shared<Accountinfo_st>(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
+    auto account = make_shared<Accountinfo_st>(accountinfo.apiName,accountinfo.userName,
+        accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,
+        accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,
+        accountinfo.personId,accountinfo.createTime,accountinfo.accountType,
+        accountinfo.status,accountinfo.workspaceUacId);
     accountList[accountinfo.apiName][accountinfo.userName] = account;
     
     // 只有 active 状态的账号才加入账号池
@@ -762,6 +780,7 @@ bool AccountManager::updateAccount(Accountinfo_st accountinfo)
     account->personId = accountinfo.personId;
     account->accountType = accountinfo.accountType;
     account->status = accountinfo.status;
+    account->workspaceUacId = accountinfo.workspaceUacId;
     return true;
 }
 bool AccountManager::deleteAccountbyPost(string apiName,string userName)
@@ -857,6 +876,18 @@ bool AccountManager::getEligibleAccount(const string& apiName,
         return false;
     }
 
+    const auto requirementName = [&]() -> const char* {
+        switch (requirement) {
+            case AccountRequirement::FreeOnly:
+                return "FreeOnly";
+            case AccountRequirement::ProOnly:
+                return "ProOnly";
+            case AccountRequirement::AnyValid:
+            default:
+                return "AnyValid";
+        }
+    };
+
     auto isValid = [&](const shared_ptr<Accountinfo_st>& candidate) {
         if (!candidate || excludedUsers.count(candidate->userName) > 0) {
             return false;
@@ -865,7 +896,17 @@ bool AccountManager::getEligibleAccount(const string& apiName,
             candidate->status != AccountStatus::ACTIVE || candidate->authToken.empty()) {
             return false;
         }
-        return requirement != AccountRequirement::ProOnly || candidate->accountType == "pro";
+        if (apiName == "chaynsapi" && candidate->accountType == "pro" &&
+            candidate->workspaceUacId <= 0) {
+            return false;
+        }
+        if (requirement == AccountRequirement::FreeOnly) {
+            return candidate->accountType == "free";
+        }
+        if (requirement == AccountRequirement::ProOnly) {
+            return candidate->accountType == "pro";
+        }
+        return true;
     };
 
     vector<shared_ptr<Accountinfo_st>> accounts;
@@ -881,10 +922,14 @@ bool AccountManager::getEligibleAccount(const string& apiName,
         if (!isValid(candidate)) {
             continue;
         }
+        if (requirement != AccountRequirement::AnyValid) {
+            preferred = candidate;
+            break;
+        }
         if (!fallback) {
             fallback = candidate;
         }
-        if (requirement == AccountRequirement::ProOnly || candidate->accountType == "free") {
+        if (candidate->accountType == "free") {
             preferred = candidate;
             break;
         }
@@ -902,19 +947,18 @@ bool AccountManager::getEligibleAccount(const string& apiName,
     if (!account) {
         if (excludedUsers.empty()) {
             LOG_ERROR << "[账户管理] 未找到满足要求的有效账户, API: " << apiName
-                      << ", 要求: "
-                      << (requirement == AccountRequirement::ProOnly ? "ProOnly" : "AnyValid");
+                      << ", 要求: " << requirementName();
         } else {
             LOG_WARN << "[账户管理] 未找到可切换的其它有效账户, API: " << apiName
-                     << ", 要求: "
-                     << (requirement == AccountRequirement::ProOnly ? "ProOnly" : "AnyValid")
+                     << ", 要求: " << requirementName()
                      << ", 已排除: " << excludedUsers.size();
         }
         return false;
     }
 
     LOG_INFO << "[账户管理] 已选择有效账户: " << account->userName
-             << " (" << account->accountType << "), 新使用次数: " << account->useCount;
+             << " (" << account->accountType << "), 要求: " << requirementName()
+             << ", 新使用次数: " << account->useCount;
     return true;
 }
 
@@ -1443,7 +1487,11 @@ void AccountManager::loadAccountFromDatebase()
                       << accountinfo.userName;
             continue;
         }
-        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,accountinfo.personId,accountinfo.createTime,accountinfo.accountType,accountinfo.status);
+        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,
+                   accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,
+                   accountinfo.accountStatus,accountinfo.userTobitId,
+                   accountinfo.personId,accountinfo.createTime,accountinfo.accountType,
+                   accountinfo.status,accountinfo.workspaceUacId);
     }
     LOG_INFO << "[账户管理] 数据库加载完成，账号总数: "<<accountDBList.size()
              << "，归档删除数量: " << archivedCount;
@@ -2199,6 +2247,22 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
             Json::Value jsonResponse;
             string errs;
             string body = string(response->getBody());
+            
+
+            LOG_DEBUG << "[账户管理] 查询 Pro 权限响应"
+            << ", status=" << response->getStatusCode()
+            << ", personId=" << personId
+            << ", path=" << path
+            << ", tokenLength=" << token.size()
+            << ", tokenHasBearerPrefix="
+            << (token.rfind("Bearer ", 0) == 0)
+            << ", content-type="
+            << response->getHeader("content-type")
+            << ", request-id="
+            << response->getHeader("x-request-id")
+            << ", body="
+            << body.substr(0, 512);
+            
             istringstream s(body);
             
             if (Json::parseFromStream(reader, s, &jsonResponse, &errs)) {
@@ -2232,6 +2296,9 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
 // 更新单个账号的 accountType
 void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
 {
+    LOG_INFO << "[账户管理] 不需要更新账号类型: " << account->userName;
+    return;
+
     if (!account || account->apiName != "chaynsapi") {
         LOG_INFO << "[账户管理] 跳过账号类型刷新，渠道不需要 accountType 探测: "
                  << (account ? account->apiName : "null");
@@ -2245,6 +2312,7 @@ void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
     
     LOG_INFO << "[账户管理] 开始更新账号类型，用户: " << account->userName;
     
+
     bool hasProAccess = getUserProAccess(account->authToken, account->personId);
     string newAccountType = hasProAccess ? "pro" : "free";
     
@@ -2410,6 +2478,7 @@ void AccountManager::cleanExpiredAccounts()
                 expiredAccount.createTime = account->createTime;
                 expiredAccount.accountType = account->accountType;
                 expiredAccount.status = account->status;
+                expiredAccount.workspaceUacId = account->workspaceUacId;
                 
                 expiredAccounts.push_back(expiredAccount);
             }

@@ -24,6 +24,7 @@ const char* kBackupTableSql = R"(
         personid TEXT,
         createtime TEXT,
         accounttype TEXT,
+        workspaceuacid INTEGER NOT NULL DEFAULT 0,
         status TEXT
     );
 )";
@@ -49,6 +50,15 @@ bool AccountBackupDbManager::ensureTable()
 
     try {
         dbClient_->execSqlSync(kBackupTableSql);
+        bool hasWorkspaceUacId = false;
+        for (const auto& row : dbClient_->execSqlSync("PRAGMA table_info(account_backup)")) {
+            hasWorkspaceUacId = hasWorkspaceUacId ||
+                row["name"].as<std::string>() == "workspaceuacid";
+        }
+        if (!hasWorkspaceUacId) {
+            dbClient_->execSqlSync(
+                "ALTER TABLE account_backup ADD COLUMN workspaceuacid INTEGER NOT NULL DEFAULT 0");
+        }
         return true;
     } catch (const std::exception& e) {
         LOG_ERROR << "[备份数据库] 创建备份表失败: " << e.what();
@@ -67,8 +77,8 @@ bool AccountBackupDbManager::backupAccount(const Accountinfo_st& accountinfo,
         "insert into account_backup "
         "(backup_reason, apiname, username, password, authtoken, usecount, "
         "tokenstatus, accountstatus, usertobitid, personid, createtime, "
-        "accounttype, status) "
-        "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)";
+        "accounttype, workspaceuacid, status) "
+        "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)";
 
     try {
         auto result = dbClient_->execSqlSync(insertSql,
@@ -84,6 +94,7 @@ bool AccountBackupDbManager::backupAccount(const Accountinfo_st& accountinfo,
                                              accountinfo.personId,
                                              accountinfo.createTime,
                                              accountinfo.accountType,
+                                             accountinfo.workspaceUacId,
                                              accountinfo.status);
         if (result.affectedRows() != 0) {
             LOG_WARN << "[备份数据库] 账号已备份: userName=" << accountinfo.userName
@@ -108,7 +119,7 @@ std::list<Accountinfo_st> AccountBackupDbManager::getBackupAccountList()
 
     static const std::string selectSql =
         "select apiname, username, password, authtoken, usecount, tokenstatus, "
-        "accountstatus, usertobitid, personid, createtime, accounttype, status "
+        "accountstatus, usertobitid, personid, createtime, accounttype, workspaceuacid, status "
         "from account_backup order by backup_time desc, id desc";
 
     try {
@@ -137,7 +148,10 @@ std::list<Accountinfo_st> AccountBackupDbManager::getBackupAccountList()
                                      item["personid"].as<std::string>(),
                                      createTimeStr,
                                      accountTypeStr,
-                                     statusStr);
+                                     statusStr,
+                                     item["workspaceuacid"].isNull()
+                                         ? 0
+                                         : item["workspaceuacid"].as<std::int64_t>());
         }
     } catch (const std::exception& e) {
         LOG_ERROR << "[备份数据库] 读取备份账号列表失败: " << e.what();

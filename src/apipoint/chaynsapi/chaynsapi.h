@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <vector>
 #include <chrono>
+#include <cstdint>
 #include <shared_mutex>
 #include "ChaynsModelCatalog.h"
 #include "ChaynsMessageCorrelation.h"
@@ -53,7 +54,12 @@ class chaynsapi:public APIinterface
         bool findModel(const std::string& modelName, chayns::ModelDescriptor& model) const;
         bool checkAlivableToken(string token);
         // 上传图片到图片服务，返回上传后的 URL
-        std::string uploadImageToService(const ImageInfo& image, const std::string& personId, const std::string& authToken);
+        std::string uploadImageToService(const ImageInfo& image,
+                                         const std::string& personId,
+                                         const std::string& authToken,
+                                         const std::string& accountUserName,
+                                         const std::string& origin,
+                                         const std::string& referer);
 
         chaynsapi();
     
@@ -64,6 +70,11 @@ class chaynsapi:public APIinterface
         std::string agentAuthorId; // 上游模型在该线程中的AuthorID
         std::string accountUserName; // 创建该线程时使用的账户userName，用于后续请求使用相同账户
         std::string modelId; // 创建线程时所选模型，防止续聊时错误复用其它模型的线程
+        std::string accountType;
+        int threadTypeId = 8;
+        std::int64_t workspaceUacId = 0;
+        std::string origin;
+        std::string referer;
         std::string lastRequestMessageId;
         std::string lastRequestCreationTime;
         std::string lastAssistantMessageId;

@@ -1,4 +1,5 @@
 #include "sessionManager/tooling/ToolCallValidator.h"
+#include "sessionManager/tooling/ToolDefinitionResolver.h"
 #include <drogon/drogon.h>
 #include <sstream>
 #include <random>
@@ -58,21 +59,10 @@ ToolCallValidator::ToolCallValidator(const Json::Value& toolDefs, const std::str
     , clientType_(clientType)
 {
     // 同时支持 Chat Completions 嵌套格式和 Responses 扁平 function/custom 格式。
-    if (toolDefs_.isArray()) {
-        for (const auto& tool : toolDefs_) {
-            if (!tool.isObject()) continue;
-            const std::string type = tool.get("type", "").asString();
-            if (type != "function" && type != "custom") continue;
-
-            std::string name;
-            if (tool.isMember("function") && tool["function"].isObject()) {
-                name = tool["function"].get("name", "").asString();
-            } else {
-                name = tool.get("name", "").asString();
-            }
-            if (!name.empty()) validToolNames_.insert(name);
-        }
-    }
+    visitToolDefinitions(toolDefs_, [&](const ToolDefinitionMatch& match) {
+        validToolNames_.insert(match.bridgeName);
+        return true;
+    });
     
     // 根据客户端类型初始化关键字段集合
     initCriticalFieldsForClient();
@@ -103,23 +93,8 @@ const std::unordered_set<std::string>& ToolCallValidator::getValidToolNames() co
 }
 
 const Json::Value* ToolCallValidator::findToolDefinition(const std::string& toolName) const {
-    if (!toolDefs_.isArray()) return nullptr;
-
-    for (const auto& tool : toolDefs_) {
-        if (!tool.isObject()) continue;
-        const std::string type = tool.get("type", "").asString();
-        if (type != "function" && type != "custom") continue;
-
-        std::string name;
-        if (tool.isMember("function") && tool["function"].isObject()) {
-            name = tool["function"].get("name", "").asString();
-        } else {
-            name = tool.get("name", "").asString();
-        }
-        if (name == toolName) return &tool;
-    }
-
-    return nullptr;
+    const auto match = toolcall::findToolDefinition(toolDefs_, toolName);
+    return match.has_value() ? match->tool : nullptr;
 }
 
 ValidationResult ToolCallValidator::validateArgumentsParseable(

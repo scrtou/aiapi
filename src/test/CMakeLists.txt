@@ -26,6 +26,7 @@ set(TEST_SOURCES
     test_chayns_browser_impersonation.cpp
     test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
+    stub_account_manager.cpp
 )
 
 # 需要链接的项目源文件（用于测试）

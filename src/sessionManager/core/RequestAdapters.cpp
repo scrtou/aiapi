@@ -1,4 +1,5 @@
 #include "sessionManager/core/RequestAdapters.h"
+#include <accountManager/accountManager.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
@@ -130,85 +131,155 @@ std::string toolNameFromDefinition(const Json::Value& tool)
     return tool.get("name", "").asString();
 }
 
-Json::Value normalizeToolDefinition(const Json::Value& tool)
+std::string appendNamespaceSegment(const std::string& parent,
+                                   const std::string& child)
+{
+    if (parent.empty()) return child;
+    if (child.empty()) return parent;
+    return parent + "__" + child;
+}
+
+std::string bridgeToolName(const std::string& namespacePath,
+                           const std::string& originalName)
+{
+    return appendNamespaceSegment(namespacePath, originalName);
+}
+
+Json::Value normalizeToolDefinition(const Json::Value& tool,
+                                    const std::string& namespacePath = "")
 {
     if (!tool.isObject()) return Json::Value();
     const std::string type = tool.get("type", "").asString();
 
     if (type == "function") {
-        if (tool.isMember("function") && tool["function"].isObject()) return tool;
-        const std::string name = tool.get("name", "").asString();
-        if (name.empty()) return Json::Value();
-
         Json::Value normalized(Json::objectValue);
         normalized["type"] = "function";
-        normalized["function"]["name"] = name;
-        normalized["function"]["description"] = tool.get("description", "").asString();
-        if (tool.isMember("parameters") && tool["parameters"].isObject()) {
-            normalized["function"]["parameters"] = tool["parameters"];
+
+        Json::Value function(Json::objectValue);
+        if (tool.isMember("function") && tool["function"].isObject()) {
+            function = tool["function"];
         } else {
-            normalized["function"]["parameters"]["type"] = "object";
-            normalized["function"]["parameters"]["properties"] = Json::Value(Json::objectValue);
+            function["name"] = tool.get("name", "").asString();
+            function["description"] = tool.get("description", "").asString();
+            if (tool.isMember("parameters") && tool["parameters"].isObject()) {
+                function["parameters"] = tool["parameters"];
+            } else {
+                function["parameters"]["type"] = "object";
+                function["parameters"]["properties"] = Json::Value(Json::objectValue);
+            }
+            if (tool.isMember("strict")) function["strict"] = tool["strict"];
         }
-        if (tool.isMember("strict")) normalized["function"]["strict"] = tool["strict"];
+
+        const std::string originalName = function.get("name", "").asString();
+        if (originalName.empty()) return Json::Value();
+
+        function["name"] = bridgeToolName(namespacePath, originalName);
+        function["_aiapi_original_name"] = originalName;
+        if (!namespacePath.empty()) {
+            function["_aiapi_namespace"] = namespacePath;
+            function["_aiapi_original_type"] = "namespace_function";
+        }
+        normalized["function"] = std::move(function);
         return normalized;
     }
 
     if (type == "custom") {
-        const std::string name = tool.get("name", "").asString();
-        if (name.empty()) return Json::Value();
+        const std::string originalName = tool.get("name", "").asString();
+        if (originalName.empty()) return Json::Value();
 
         Json::Value normalized(Json::objectValue);
         normalized["type"] = "function";
         auto& function = normalized["function"];
-        function["name"] = name;
+        function["name"] = bridgeToolName(namespacePath, originalName);
         function["description"] = tool.get("description", "").asString();
         function["parameters"]["type"] = "object";
         function["parameters"]["properties"]["input"]["type"] = "string";
         function["parameters"]["required"].append("input");
         function["_aiapi_original_type"] = "custom";
+        function["_aiapi_original_name"] = originalName;
+        if (!namespacePath.empty()) function["_aiapi_namespace"] = namespacePath;
         return normalized;
     }
 
     return Json::Value();
 }
 
+void appendNormalizedToolDefinition(const Json::Value& tool,
+                                    Json::Value& normalizedTools,
+                                    std::unordered_set<std::string>& seen,
+                                    const std::string& namespacePath,
+                                    bool namespaceBridgeEnabled)
+{
+    if (!tool.isObject()) return;
+
+    const std::string type = tool.get("type", "").asString();
+    const std::string name = toolNameFromDefinition(tool);
+
+    if (type == "namespace") {
+        if (!namespaceBridgeEnabled) {
+            LOG_INFO << "[请求适配器] namespace Tool Bridge 已关闭，跳过工具组: name="
+                     << (name.empty() ? "<empty>" : name);
+            return;
+        }
+        const std::string childNamespace = appendNamespaceSegment(namespacePath, name);
+        if (name.empty() || !tool.isMember("tools") || !tool["tools"].isArray()) {
+            LOG_WARN << "[请求适配器] namespace 工具组无有效名称或 tools 数组: name="
+                     << (name.empty() ? "<empty>" : name);
+            return;
+        }
+
+        LOG_DEBUG << "[请求适配器] 展开 namespace 工具组: namespace="
+                  << childNamespace << ", nested=" << tool["tools"].size();
+        for (const auto& child : tool["tools"]) {
+            appendNormalizedToolDefinition(
+                child, normalizedTools, seen, childNamespace, namespaceBridgeEnabled);
+        }
+        return;
+    }
+
+    Json::Value normalized = normalizeToolDefinition(tool, namespacePath);
+    if (normalized.isNull()) {
+        LOG_WARN << "[请求适配器] 工具定义无法桥接，已保留原始定义但不会注入 XML bridge: type="
+                 << (type.empty() ? "<empty>" : type)
+                 << ", name=" << (name.empty() ? "<empty>" : name)
+                 << ", namespace=" << (namespacePath.empty() ? "<none>" : namespacePath);
+        return;
+    }
+
+    const std::string normalizedName = toolNameFromDefinition(normalized);
+    const std::string key = "function:" + normalizedName;
+    if (!normalizedName.empty() && !seen.insert(key).second) return;
+    normalizedTools.append(std::move(normalized));
+}
+
 void appendToolDefinitions(const Json::Value& tools,
                            Json::Value& rawTools,
                            Json::Value& normalizedTools,
-                           std::unordered_set<std::string>& seen)
+                           std::unordered_set<std::string>& seen,
+                           bool namespaceBridgeEnabled)
 {
     if (!tools.isArray()) return;
     for (const auto& tool : tools) {
         if (!tool.isObject()) continue;
-        const std::string type = tool.get("type", "").asString();
-        const std::string name = toolNameFromDefinition(tool);
-        const std::string key = type + ":" + name;
-        if (!name.empty() && !seen.insert(key).second) continue;
+
+        // toolsRaw 保留客户端发送的顶层结构；namespace 子项不再重复追加。
         rawTools.append(tool);
-        Json::Value normalized = normalizeToolDefinition(tool);
-        if (!normalized.isNull()) {
-            normalizedTools.append(std::move(normalized));
-        } else if (type == "namespace") {
-            LOG_DEBUG << "[请求适配器] namespace 是工具分组元数据，不直接注入 XML bridge: name="
-                      << (name.empty() ? "<empty>" : name);
-        } else {
-            LOG_WARN << "[请求适配器] 工具定义无法桥接，已保留原始定义但不会注入 XML bridge: type="
-                     << (type.empty() ? "<empty>" : type)
-                     << ", name=" << (name.empty() ? "<empty>" : name);
-        }
+        appendNormalizedToolDefinition(
+            tool, normalizedTools, seen, "", namespaceBridgeEnabled);
     }
 }
 
 void collectAdditionalTools(const Json::Value& items,
                             Json::Value& rawTools,
                             Json::Value& normalizedTools,
-                            std::unordered_set<std::string>& seen)
+                            std::unordered_set<std::string>& seen,
+                            bool namespaceBridgeEnabled)
 {
     if (!items.isArray()) return;
     for (const auto& item : items) {
         if (item.isObject() && item.get("type", "").asString() == "additional_tools") {
-            appendToolDefinitions(item["tools"], rawTools, normalizedTools, seen);
+            appendToolDefinitions(
+                item["tools"], rawTools, normalizedTools, seen, namespaceBridgeEnabled);
         }
     }
 }
@@ -261,6 +332,7 @@ Message makeCodexToolCallHistory(const Json::Value& item)
     const std::string type = item.get("type", "tool_call").asString();
     const std::string callId = item.get("call_id", item.get("id", "")).asString();
     const std::string name = item.get("name", "").asString();
+    const std::string namespacePath = item.get("namespace", "").asString();
     const Json::Value payload = item.isMember("arguments")
         ? item["arguments"] : item.get("input", Json::Value(""));
     Message message = Message::assistant("");
@@ -268,7 +340,11 @@ Message makeCodexToolCallHistory(const Json::Value& item)
     toolCall["id"] = callId;
     toolCall["type"] = type == "custom_tool_call" ? "custom" : "function";
     Json::Value function(Json::objectValue);
-    function["name"] = name;
+    function["name"] = bridgeToolName(namespacePath, name);
+    if (!namespacePath.empty()) {
+        function["_aiapi_namespace"] = namespacePath;
+        function["_aiapi_original_name"] = name;
+    }
     function["arguments"] = payload.isString() ? payload.asString() : compactJson(payload);
     toolCall["function"] = std::move(function);
     message.toolCalls.push_back(std::move(toolCall));
@@ -415,14 +491,21 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     Json::Value rawTools(Json::arrayValue);
     Json::Value normalizedTools(Json::arrayValue);
     std::unordered_set<std::string> seenTools;
-    appendToolDefinitions(reqBody["tools"], rawTools, normalizedTools, seenTools);
-    collectAdditionalTools(reqBody["input"], rawTools, normalizedTools, seenTools);
-    collectAdditionalTools(reqBody["input_items"], rawTools, normalizedTools, seenTools);
+    const bool namespaceBridgeEnabled =
+        AccountManager::getInstance().getAccountAutomationSettings().namespaceToolBridgeEnabled;
+    appendToolDefinitions(
+        reqBody["tools"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
+    collectAdditionalTools(
+        reqBody["input"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
+    collectAdditionalTools(
+        reqBody["input_items"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
     genReq.toolsRaw = std::move(rawTools);
     genReq.tools = std::move(normalizedTools);
     if (!genReq.toolsRaw.empty()) {
         LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.size()
                  << ", 可桥接=" << genReq.tools.size();
+        LOG_DEBUG << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.toStyledString();
+        LOG_DEBUG << "[请求适配器] Responses API 工具定义：桥接后=" << genReq.tools.toStyledString();
     }
     if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
         genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();

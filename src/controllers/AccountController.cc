@@ -31,8 +31,40 @@ Json::Value buildAccountPublicJson(const Accountinfo_st& account)
     item["personId"] = account.personId;
     item["createTime"] = account.createTime;
     item["accountType"] = account.accountType;
+    item["workspaceUacId"] = Json::Int64(account.workspaceUacId);
     item["status"] = account.status;
     return item;
+}
+
+bool parseAccountPayload(const Json::Value& value,
+                         Accountinfo_st& account,
+                         std::string& errorMessage)
+{
+    if (!value.isObject()) {
+        errorMessage = "Account item must be a JSON object.";
+        return false;
+    }
+    if (value.isMember("workspaceUacId") && !value["workspaceUacId"].isIntegral()) {
+        errorMessage = "workspaceUacId must be an integer.";
+        return false;
+    }
+
+    account = Accountinfo_st::fromJson(value);
+    if (account.workspaceUacId < 0) {
+        errorMessage = "workspaceUacId must be greater than or equal to 0.";
+        return false;
+    }
+
+    const bool isChaynsPro =
+        account.apiName == "chaynsapi" && account.accountType == "pro";
+    if (isChaynsPro && account.workspaceUacId <= 0) {
+        errorMessage = "Chayns Pro accounts require a positive workspaceUacId.";
+        return false;
+    }
+    if (!isChaynsPro) {
+        account.workspaceUacId = 0;
+    }
+    return true;
 }
 
 Json::Value buildAccountAutomationSettingsJson(const AccountAutomationSettings& settings)
@@ -41,6 +73,7 @@ Json::Value buildAccountAutomationSettingsJson(const AccountAutomationSettings& 
     item["autoDeleteEnabled"] = settings.autoDeleteEnabled;
     item["deleteAfterDays"] = settings.deleteAfterDays;
     item["autoRegisterEnabled"] = settings.autoRegisterEnabled;
+    item["namespaceToolBridgeEnabled"] = settings.namespaceToolBridgeEnabled;
     return item;
 }
 
@@ -78,6 +111,14 @@ bool mergeAccountAutomationSettingsFromJson(const Json::Value& body,
             return false;
         }
         updated.autoRegisterEnabled = body["autoRegisterEnabled"].asBool();
+    }
+
+    if (body.isMember("namespaceToolBridgeEnabled")) {
+        if (!body["namespaceToolBridgeEnabled"].isBool()) {
+            errorMessage = "namespaceToolBridgeEnabled must be a boolean.";
+            return false;
+        }
+        updated.namespaceToolBridgeEnabled = body["namespaceToolBridgeEnabled"].asBool();
     }
 
     if (updated.deleteAfterDays <= 0) {
@@ -119,9 +160,18 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
 
     for (auto &item : reqItems)
     {
-        Accountinfo_st accountinfo = Accountinfo_st::fromJson(item);
-        accountinfo.createTime = currentTime;
+        Accountinfo_st accountinfo;
+        std::string errorMessage;
         Json::Value responseitem;
+        if (!parseAccountPayload(item, accountinfo, errorMessage)) {
+            responseitem["apiName"] = item.get("apiName", "").asString();
+            responseitem["userName"] = item.get("userName", "").asString();
+            responseitem["status"] = "failed";
+            responseitem["message"] = errorMessage;
+            response.append(responseitem);
+            continue;
+        }
+        accountinfo.createTime = currentTime;
         responseitem["apiName"] = accountinfo.apiName;
         responseitem["userName"] = accountinfo.userName;
         // 先添加到 账号Manager
@@ -307,9 +357,18 @@ void AccountController::accountUpdate(const HttpRequestPtr &req, std::function<v
 
     for (auto &item : reqItems)
     {
-        Accountinfo_st accountinfo = Accountinfo_st::fromJson(item);
-
+        Accountinfo_st accountinfo;
+        std::string errorMessage;
         Json::Value responseitem;
+        if (!parseAccountPayload(item, accountinfo, errorMessage)) {
+            responseitem["apiName"] = item.get("apiName", "").asString();
+            responseitem["userName"] = item.get("userName", "").asString();
+            responseitem["status"] = "failed";
+            responseitem["message"] = errorMessage;
+            response.append(responseitem);
+            continue;
+        }
+
         responseitem["apiName"] = accountinfo.apiName;
         responseitem["userName"] = accountinfo.userName;
 
@@ -458,3 +517,4 @@ void AccountController::accountSettingsUpdate(const HttpRequestPtr &req, std::fu
     response["settings"] = buildAccountAutomationSettingsJson(updatedSettings);
     ctl::sendJson(callback, response);
 }
+

@@ -11,6 +11,7 @@
 #include "sessionManager/tooling/ForcedToolCallGenerator.h"
 #include "sessionManager/tooling/ToolCallNormalizer.h"
 #include "sessionManager/tooling/ToolDefinitionEncoder.h"
+#include "sessionManager/tooling/ToolDefinitionResolver.h"
 #include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
 #include <apiManager/ApiManager.h>
@@ -25,6 +26,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <string_view>
 #include <vector>
 #include <unordered_set>
 
@@ -172,7 +174,10 @@ ToolChoiceSpec parseToolChoiceSpec(const std::string& toolChoiceRaw) {
         std::istringstream iss(toolChoiceRaw);
         if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
             if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
-                spec.forcedToolName = tc["function"].get("name", "").asString();
+                const auto& function = tc["function"];
+                spec.forcedToolName = toolcall::makeBridgeToolName(
+                    function.get("namespace", tc.get("namespace", "")).asString(),
+                    function.get("name", "").asString());
                 if (!spec.forcedToolName.empty()) {
                     spec.required = true;
                 }
@@ -397,30 +402,44 @@ void appendCodexJsonBridgePolicy(std::ostringstream& policy,
     }
 }
 
-std::string inferToolCallType(const session_st& session, const std::string& toolName) {
-    auto findType = [&](const Json::Value& tools) -> std::string {
-        if (!tools.isArray()) return "";
-        for (const auto& tool : tools) {
-            if (!tool.isObject()) continue;
-            const std::string type = tool.get("type", "").asString();
-            if (tool.isMember("function") && tool["function"].isObject()) {
-                const auto& function = tool["function"];
-                if (function.get("name", "").asString() != toolName) continue;
-                if (function.get("_aiapi_original_type", "").asString() == "custom") {
-                    return "custom";
-                }
-                return "function";
-            }
-            if (tool.get("name", "").asString() != toolName) continue;
-            if (type == "custom") return "custom";
-            if (type == "function") return "function";
+std::optional<toolcall::ToolDefinitionMatch> resolveToolDefinition(
+    const session_st& session,
+    const generation::ToolCallDone& call)
+{
+    auto findIn = [&](const Json::Value& tools)
+        -> std::optional<toolcall::ToolDefinitionMatch> {
+        if (!call.namespacePath.empty() && !call.originalName.empty()) {
+            auto match = toolcall::findToolDefinition(
+                tools, call.namespacePath, call.originalName);
+            if (match.has_value()) return match;
         }
-        return "";
+        if (!call.name.empty()) {
+            auto match = toolcall::findToolDefinition(tools, call.name);
+            if (match.has_value()) return match;
+        }
+        return std::nullopt;
     };
 
-    std::string type = findType(session.request.toolsRaw);
-    if (type.empty()) type = findType(session.request.tools);
-    return type.empty() ? "function" : type;
+    auto match = findIn(session.request.toolsRaw);
+    if (!match.has_value()) match = findIn(session.request.tools);
+    return match;
+}
+
+void annotateToolCallIdentities(
+    const session_st& session,
+    std::vector<generation::ToolCallDone>& toolCalls)
+{
+    for (auto& call : toolCalls) {
+        const auto match = resolveToolDefinition(session, call);
+        if (!match.has_value()) {
+            if (call.type.empty()) call.type = "function";
+            continue;
+        }
+        call.name = match->bridgeName;
+        call.originalName = match->originalName;
+        call.namespacePath = match->namespacePath;
+        call.type = match->type;
+    }
 }
 
 void appendRetoolChannelSpecialRules(std::ostringstream& policy);
@@ -535,7 +554,10 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
             if (!tc.isObject()) continue;
             generation::ToolCallDone out;
             out.id = tc.get("id", "").asString();
-            out.name = tc.get("name", "").asString();
+            out.originalName = tc.get("name", "").asString();
+            out.namespacePath = tc.get("namespace", "").asString();
+            out.name = toolcall::makeBridgeToolName(
+                out.namespacePath, out.originalName);
             out.arguments = tc.get("arguments", "{}").asString();
             out.index = index++;
             if (!out.name.empty()) {
@@ -682,6 +704,8 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     }
 
     // ==================== 步骤 3: tool_choice 强制工具名约束 ====================
+    annotateToolCallIdentities(session, toolCalls);
+
     if (!forcedToolName.empty() && !toolCalls.empty()) {
         std::vector<generation::ToolCallDone> filteredCalls;
         filteredCalls.reserve(toolCalls.size());
@@ -765,10 +789,8 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // - 处理参数别名（如 → ）
     // - 填充缺失的可选字段默认值
     // - 规范化 ask_followup_question 的 字段
+    annotateToolCallIdentities(session, toolCalls);
     normalizeToolCallArguments(session, toolCalls);
-    for (auto& toolCall : toolCalls) {
-        toolCall.type = inferToolCallType(session, toolCall.name);
-    }
 
     // ==================== 步骤 4： 校验与无效调用过滤 ====================
     // 【这是防止“缺少 nativeArgs”错误的关键步骤】
@@ -1115,7 +1137,10 @@ void GenerationService::generateForcedToolCall(
             std::istringstream iss(session.request.toolChoice);
             if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
                 if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
-                    forcedToolName = tc["function"].get("name", "").asString();
+                    const auto& function = tc["function"];
+                    forcedToolName = toolcall::makeBridgeToolName(
+                        function.get("namespace", tc.get("namespace", "")).asString(),
+                        function.get("name", "").asString());
                     if (!forcedToolName.empty()) {
                         toolChoice = "required";
                     }
@@ -1225,57 +1250,34 @@ void GenerationService::generateForcedToolCall(
         return stripTrailingPunct(trimWhitespace(std::move(s)));
     };
 
-    // 选择目标工具
-    std::string toolName = forcedToolName;
-    Json::Value toolObj;
-    if (toolName.empty() && toolDefs.size() == 1) {
-        toolObj = toolDefs[0];
-        if (toolObj.isObject() && toolObj.get("type", "").asString() == "function") {
-            toolName = toolObj["function"].get("name", "").asString();
-        }
+    std::optional<toolcall::ToolDefinitionMatch> selected;
+    if (!forcedToolName.empty()) {
+        selected = toolcall::findToolDefinition(toolDefs, forcedToolName);
     }
-    if (toolName.empty()) {
-        // 兜底策略：选择第一个 函数工具
-        for (const auto& t : toolDefs) {
-            if (!t.isObject()) continue;
-            if (t.get("type", "").asString() != "function") continue;
-            toolName = t["function"].get("name", "").asString();
-            toolObj = t;
-            if (!toolName.empty()) break;
-        }
-    } else {
-        // 定位强制指定的工具对象
-        for (const auto& t : toolDefs) {
-            if (!t.isObject()) continue;
-            if (t.get("type", "").asString() != "function") continue;
-            if (t["function"].get("name", "").asString() == toolName) {
-                toolObj = t;
-                break;
-            }
-        }
+    if (!selected.has_value()) {
+        selected = toolcall::firstToolDefinition(toolDefs);
     }
-
-    if (toolName.empty()) {
+    if (!selected.has_value()) {
         return;
     }
+    const std::string toolName = selected->bridgeName;
 
     Json::Value args(Json::objectValue);
     const std::string srcText = session.request.rawMessage.empty() ? session.request.message : session.request.rawMessage;
 
     std::vector<std::string> requiredParams;
-    if (toolObj.isObject() && toolObj.isMember("function") && toolObj["function"].isObject()) {
-        const auto& schema = toolObj["function"]["parameters"];
-        if (schema.isObject()) {
-            const auto& required = schema["required"];
-            if (required.isArray()) {
-                for (const auto& r : required) {
-                    if (r.isString()) requiredParams.push_back(r.asString());
-                }
+    if (const Json::Value* schema = toolcall::toolParametersSchema(*selected)) {
+        const auto& required = (*schema)["required"];
+        if (required.isArray()) {
+            for (const auto& r : required) {
+                if (r.isString()) requiredParams.push_back(r.asString());
             }
-            if (requiredParams.empty() && schema.isMember("properties") && schema["properties"].isObject()) {
-                for (const auto& p : schema["properties"].getMemberNames()) {
-                    requiredParams.push_back(p);
-                }
+        }
+        if (requiredParams.empty() &&
+            schema->isMember("properties") &&
+            (*schema)["properties"].isObject()) {
+            for (const auto& p : (*schema)["properties"].getMemberNames()) {
+                requiredParams.push_back(p);
             }
         }
     }
@@ -1303,6 +1305,9 @@ void GenerationService::generateForcedToolCall(
     generation::ToolCallDone tc;
     tc.id = generateFallbackToolCallId();
     tc.name = toolName;
+    tc.originalName = selected->originalName;
+    tc.namespacePath = selected->namespacePath;
+    tc.type = selected->type;
     tc.index = 0;
     tc.arguments = toCompactJson(args);
 
@@ -1378,20 +1383,8 @@ void GenerationService::normalizeToolCallArguments(
             : session.request.tools;
 
     auto findToolObj = [&](const std::string& toolName) -> const Json::Value* {
-        if (!toolDefs.isArray()) return nullptr;
-        for (const auto& t : toolDefs) {
-            if (!t.isObject()) continue;
-            const std::string type = t.get("type", "").asString();
-            if (type != "function" && type != "custom") continue;
-            std::string name;
-            if (t.isMember("function") && t["function"].isObject()) {
-                name = t["function"].get("name", "").asString();
-            } else {
-                name = t.get("name", "").asString();
-            }
-            if (name == toolName) return &t;
-        }
-        return nullptr;
+        const auto match = toolcall::findToolDefinition(toolDefs, toolName);
+        return match.has_value() ? match->tool : nullptr;
     };
 
     auto normalizeArrayOfObjectParam = [&](Json::Value& args, const std::string& paramName, const Json::Value& paramSchema) {
@@ -1546,8 +1539,11 @@ void GenerationService::normalizeToolCallArguments(
             continue;
         }
 
+        const std::string logicalName =
+            tc.originalName.empty() ? tc.name : tc.originalName;
+
         // 常见别名处理：部分模型返回 ``，而 期望 ``（read_file）。
-        if (tc.name == "read_file" && !args.isMember("files") && args.isMember("paths") && args["paths"].isArray()) {
+        if (logicalName == "read_file" && !args.isMember("files") && args.isMember("paths") && args["paths"].isArray()) {
             Json::Value files(Json::arrayValue);
             for (const auto& p : args["paths"]) {
                 if (!p.isString()) continue;
@@ -1573,7 +1569,7 @@ void GenerationService::normalizeToolCallArguments(
 
         // RooCode 有时会输出不存在的 值（如 ""）用于 ask_followup_question。
         // 将未知 统一归一为空字符串（表示“不切换模式”），确保客户端稳定。
-        if (tc.name == "ask_followup_question" && args.isMember("follow_up") && args["follow_up"].isArray()) {
+        if (logicalName == "ask_followup_question" && args.isMember("follow_up") && args["follow_up"].isArray()) {
             for (Json::ArrayIndex i = 0; i < args["follow_up"].size(); ++i) {
                 auto& item = args["follow_up"][i];
                 if (!item.isObject()) continue;
@@ -2028,7 +2024,10 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             std::istringstream iss(session.request.toolChoice);
             if (Json::parseFromStream(builder, iss, &tc, &errors) && tc.isObject()) {
                 if (tc.get("type", "").asString() == "function" && tc.isMember("function") && tc["function"].isObject()) {
-                    forcedToolName = tc["function"].get("name", "").asString();
+                    const auto& function = tc["function"];
+                    forcedToolName = toolcall::makeBridgeToolName(
+                        function.get("namespace", tc.get("namespace", "")).asString(),
+                        function.get("name", "").asString());
                     if (!forcedToolName.empty()) {
                         toolChoice = "required";
                     }
@@ -2103,9 +2102,40 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     LOG_DEBUG << "[生成服务] 工具定义: " << toolDefinitions;
     static const std::string bridgeNotice =
         "\n\n【注意：回复时必须要满足下面<tool_instructions></tool_instructions>定义中的要求！！！】";
+
+    // Keep a leading environment block separate and explicitly delimit the actual
+    // user request. This gives the upstream model stable semantic boundaries:
+    // environment context -> user request -> gateway tool instructions.
+    const std::string originalMessage = std::move(session.request.message);
+    static const std::string environmentCloseTag = "</environment_context>";
+    size_t userRequestOffset = 0;
+    if (originalMessage.rfind("<environment_context", 0) == 0) {
+        const size_t closePos = originalMessage.find(environmentCloseTag);
+        if (closePos != std::string::npos) {
+            userRequestOffset = closePos + environmentCloseTag.size();
+            while (userRequestOffset < originalMessage.size() &&
+                   (originalMessage[userRequestOffset] == '\r' ||
+                    originalMessage[userRequestOffset] == '\n')) {
+                ++userRequestOffset;
+            }
+        }
+    }
+
+    const std::string_view environmentPart(originalMessage.data(), userRequestOffset);
+    const std::string_view userRequestPart(
+        originalMessage.data() + userRequestOffset,
+        originalMessage.size() - userRequestOffset);
+
     session.request.message.reserve(
-        session.request.message.size() + bridgeNotice.size() + toolDefinitions.size() + 3
+        originalMessage.size() + bridgeNotice.size() + toolDefinitions.size() + 40
     );
+    session.request.message.append(environmentPart.data(), environmentPart.size());
+    if (!environmentPart.empty()) {
+        session.request.message.append("\n\n");
+    }
+    session.request.message.append("<user_request>\n");
+    session.request.message.append(userRequestPart.data(), userRequestPart.size());
+    session.request.message.append("\n</user_request>");
     session.request.message.append(bridgeNotice);
     session.request.message.append(toolDefinitions);
     session.request.message.append("；");

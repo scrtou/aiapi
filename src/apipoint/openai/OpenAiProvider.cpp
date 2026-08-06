@@ -7,7 +7,7 @@
 
 using namespace drogon;
 
-IMPLEMENT_RUNTIME(OpenAiProvider, OpenAiProvider);
+IMPLEMENT_RUNTIME(openai, OpenAiProvider);
 
 OpenAiProvider::OpenAiProvider() = default;
 OpenAiProvider::~OpenAiProvider() = default;

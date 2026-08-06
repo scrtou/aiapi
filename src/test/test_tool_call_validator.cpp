@@ -191,3 +191,49 @@ DROGON_TEST(ToolCallValidator_Relaxed_EnumErrorIncludesActualAndAllowed)
     CHECK(result.errorMessage.find("actual=\"read\"") != std::string::npos);
     CHECK(result.errorMessage.find("allowed=[\"slice\",\"indentation\"]") != std::string::npos);
 }
+
+DROGON_TEST(ToolCallValidator_NamespaceLeafUsesBridgeNameAndNestedSchema)
+{
+    Json::Value function;
+    function["type"] = "function";
+    function["name"] = "read_file";
+    auto& parameters = function["parameters"];
+    parameters["type"] = "object";
+    parameters["required"].append("path");
+    parameters["properties"]["path"]["type"] = "string";
+
+    Json::Value namespaceTool;
+    namespaceTool["type"] = "namespace";
+    namespaceTool["name"] = "filesystem";
+    namespaceTool["tools"].append(function);
+
+    Json::Value tools(Json::arrayValue);
+    tools.append(namespaceTool);
+
+    ToolCallValidator validator(tools, "Kilo-Code");
+    CHECK(validator.hasToolDefinition("filesystem__read_file"));
+    CHECK(validator.getValidToolNames().count("filesystem__read_file") == 1);
+
+    const auto valid = validator.validate(
+        makeToolCall("filesystem__read_file", R"({"path":"README.md"})"),
+        ValidationMode::Strict);
+    CHECK(valid.valid);
+
+    const auto missingPath = validator.validate(
+        makeToolCall("filesystem__read_file", R"({})"),
+        ValidationMode::Strict);
+    CHECK(!missingPath.valid);
+
+    std::vector<generation::ToolCallDone> calls;
+    calls.push_back(makeToolCall(
+        "filesystem__read_file", R"({"path":"README.md"})"));
+    calls.push_back(makeToolCall("filesystem__read_file", R"({})"));
+    calls.push_back(makeToolCall("read_file", R"({"path":"README.md"})"));
+
+    std::string discarded;
+    const size_t removed = validator.filterInvalidToolCalls(
+        calls, discarded, ValidationMode::Strict);
+    CHECK(removed == 2);
+    REQUIRE(calls.size() == 1);
+    CHECK(calls[0].name == "filesystem__read_file");
+}

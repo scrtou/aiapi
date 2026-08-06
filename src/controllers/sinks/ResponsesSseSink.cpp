@@ -152,7 +152,8 @@ void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event)
     addedItem["type"] = custom ? "custom_tool_call" : "function_call";
     addedItem["id"] = itemId;
     addedItem["call_id"] = callId;
-    addedItem["name"] = event.name;
+    addedItem["name"] = event.originalName.empty() ? event.name : event.originalName;
+    if (!event.namespacePath.empty()) addedItem["namespace"] = event.namespacePath;
     addedItem[custom ? "input" : "arguments"] = "";
     addedItem["status"] = "in_progress";
 

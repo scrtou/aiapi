@@ -54,6 +54,29 @@ DROGON_TEST(chaynsBrowser_ApplyHeadersOnRequest)
     CHECK(req->getHeader("Accept-Encoding").find("gzip") != std::string::npos);
 }
 
+DROGON_TEST(chaynsBrowser_PerRequestOriginAndRefererOverride)
+{
+    chayns_browser::ImpersonationConfig cfg;
+    cfg.enabled = true;
+    cfg.perAccountProfile = false;
+    cfg.defaultProfileId = "sidekick_edge_mac";
+    cfg.origin = "https://sidekick.ki";
+    cfg.referer = "https://sidekick.ki/";
+    cfg.profiles = chayns_browser::defaultProfilePool();
+    chayns_browser::setConfigForTest(cfg);
+
+    auto req = HttpRequest::newHttpRequest();
+    chayns_browser::applyBrowserHeadersForAccount(
+        req,
+        "pro@example.com",
+        "PID-PRO",
+        "https://mein.sidekick.ki",
+        "https://mein.sidekick.ki/");
+
+    CHECK(req->getHeader("Origin") == "https://mein.sidekick.ki");
+    CHECK(req->getHeader("Referer") == "https://mein.sidekick.ki/");
+}
+
 DROGON_TEST(chaynsBrowser_DisabledDoesNotSetHeaders)
 {
     chayns_browser::ImpersonationConfig cfg;

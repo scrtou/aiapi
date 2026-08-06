@@ -7,7 +7,7 @@
  * @brief 账号管理 Controller
  *
  * 端点:
- *   POST /aichat/account/add            – 添加账号
+ *   POST /aichat/account/add             – 添加账号
  *   POST /aichat/account/delete          – 删除账号
  *   POST /aichat/account/update          – 更新账号
  *   POST /aichat/account/refresh         – 刷新账号状态
@@ -22,16 +22,16 @@ class AccountController : public drogon::HttpController<AccountController>
 {
   public:
     METHOD_LIST_BEGIN
-    ADD_METHOD_TO(AccountController::accountAdd,          "/aichat/account/add",          drogon::Post, "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountDelete,       "/aichat/account/delete",       drogon::Post, "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountUpdate,       "/aichat/account/update",       drogon::Post, "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountRefresh,      "/aichat/account/refresh",      drogon::Post, "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountAutoRegister, "/aichat/account/autoregister", drogon::Post, "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountInfo,         "/aichat/account/info",         drogon::Get,  "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountBackupInfo,   "/aichat/account/backupinfo",   drogon::Get,  "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountDbInfo,       "/aichat/account/dbinfo",       drogon::Get,  "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountSettingsGet,  "/aichat/account/settings",     drogon::Get,  "AdminAuthFilter");
-    ADD_METHOD_TO(AccountController::accountSettingsUpdate,"/aichat/account/settings",     drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountAdd,           "/aichat/account/add",             drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountDelete,        "/aichat/account/delete",          drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountUpdate,        "/aichat/account/update",          drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountRefresh,       "/aichat/account/refresh",         drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountAutoRegister,  "/aichat/account/autoregister",    drogon::Post, "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountInfo,          "/aichat/account/info",            drogon::Get,  "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountBackupInfo,    "/aichat/account/backupinfo",      drogon::Get,  "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountDbInfo,        "/aichat/account/dbinfo",          drogon::Get,  "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountSettingsGet,   "/aichat/account/settings",        drogon::Get,  "AdminAuthFilter");
+    ADD_METHOD_TO(AccountController::accountSettingsUpdate,"/aichat/account/settings",        drogon::Post, "AdminAuthFilter");
     METHOD_LIST_END
 
     void accountAdd(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);

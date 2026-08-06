@@ -222,6 +222,11 @@
                 "base_url": "https://workspace.nexos.ai"
             },
             "chaynsapi": {
+                "request_routing": {
+                    "pro": {
+                        "workspace_uac_id": 0
+                    }
+                },
                 "browser_impersonation": {
                     "enabled": true,
                     "per_account_profile": true,
