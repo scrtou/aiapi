@@ -15,7 +15,7 @@ if (NOT TARGET Drogon::Drogon)
 endif()
 
 if (NOT CMAKE_CXX_STANDARD)
-    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD 17)   # RFC-001 P9: 必须与主程序一致,原为 20
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     set(CMAKE_CXX_EXTENSIONS OFF)
 endif()

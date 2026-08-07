@@ -7,21 +7,18 @@ if (EXISTS "${AIAPI_REPO_ROOT}/.deps/drogon-install")
     list(PREPEND CMAKE_PREFIX_PATH "${AIAPI_REPO_ROOT}/.deps/drogon-install")
 endif()
 
-include(CheckIncludeFileCXX)
-
-check_include_file_cxx(any HAS_ANY)
-check_include_file_cxx(string_view HAS_STRING_VIEW)
-check_include_file_cxx(coroutine HAS_COROUTINE)
-if (NOT "${CMAKE_CXX_STANDARD}" STREQUAL "")
-    # Do nothing
-elseif (HAS_ANY AND HAS_STRING_VIEW AND HAS_COROUTINE)
-    set(CMAKE_CXX_STANDARD 20)
-elseif (HAS_ANY AND HAS_STRING_VIEW)
-    set(CMAKE_CXX_STANDARD 17)
-else ()
-    set(CMAKE_CXX_STANDARD 14)
-endif ()
-
+# ADR-04 (RFC-001): 语言标准钉死为 C++17,不使用探测式降级。
+#
+# 原实现依据 <any>/<string_view>/<coroutine> 是否存在,在 20/17/14 之间自动选择,
+# 导致同一份源码在不同编译器/标准库上被编译成不同标准(语义可能不同),
+# 且与 test/ 目标的兜底值(曾为 20)不一致。
+#
+# 现状实测:项目已使用约 146 处 C++17 特性(optional/string_view/variant/
+# if constexpr/结构化绑定),Drogon 依赖亦要求 cxx_std_17。故固定为 17。
+#
+# 禁止使用的 C++20 特性:concepts / ranges / std::expected / std::span /
+# coroutine / designated initializers / std::format / 三路比较运算符。
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -101,15 +98,9 @@ message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 target_link_libraries(${PROJECT_NAME} PRIVATE PostgreSQL::PostgreSQL)
+target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 # ##############################################################################
 
-if (CMAKE_CXX_STANDARD LESS 17)
-    message(FATAL_ERROR "c++17 or higher is required")
-elseif (CMAKE_CXX_STANDARD LESS 20)
-    message(STATUS "use c++17")
-else ()
-    message(STATUS "use c++20")
-endif ()
 
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
