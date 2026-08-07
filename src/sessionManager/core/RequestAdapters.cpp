@@ -239,7 +239,7 @@ void appendNormalizedToolDefinition(const Json::Value& tool,
 
     Json::Value normalized = normalizeToolDefinition(tool, namespacePath);
     if (normalized.isNull()) {
-        LOG_WARN << "[请求适配器] 工具定义无法桥接，已保留原始定义但不会注入 XML bridge: type="
+        LOG_DEBUG << "[请求适配器] 工具定义无法桥接，已保留原始定义但不会注入 XML bridge: type="
                  << (type.empty() ? "<empty>" : type)
                  << ", name=" << (name.empty() ? "<empty>" : name)
                  << ", namespace=" << (namespacePath.empty() ? "<none>" : namespacePath);

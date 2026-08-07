@@ -9,6 +9,8 @@
 #include <tools/ZeroWidthEncoder.h>
 #include <random>
 #include <chrono>
+#include "dbManager/session/SessionDbManager.h"
+#include "sessionManager/core/SessionCodec.h"
 using namespace drogon;
 chatSession *chatSession::instance = nullptr;
 
@@ -18,6 +20,89 @@ chatSession::chatSession()
 
 chatSession::~chatSession()
 {
+}
+
+// ========== 会话持久化实现（写穿 + 懒加载回填）==========
+// 锁约束：以下三个方法内部自行加/解 mutex_，调用方不得在持锁状态下进入，否则死锁。
+
+void chatSession::persistSession(const std::string& sessionId)
+{
+    if (!persistenceEnabled_.load() || sessionId.empty()) return;
+    // payload 落库开关：关闭时跳过快照写穿（懒加载随之自然失效，退化为纯内存）。
+    if (!storeSessionPayload_.load()) return;
+
+    SessionDbManager::SessionRow row;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = session_map.find(sessionId);
+        if (it == session_map.end()) return;  // 已被删除：不写穿，避免墓碑复活
+
+        const session_st& s = it->second;
+        row.sessionId    = sessionId;
+        row.apiName      = s.request.api;
+        row.apiType      = s.isResponseApi() ? 1 : 0;
+        row.contextKey   = s.state.contextConversationId;
+        row.payload      = sessioncodec::encodeSession(s);
+        row.createdAt    = static_cast<int64_t>(s.state.createdAt);
+        row.lastActiveAt = static_cast<int64_t>(s.state.lastActiveAt);
+    }
+    // 出锁后再投递异步写入，避免 DB 队列抖动拉长热路径持锁时长。
+    SessionDbManager::getInstance()->asyncUpsertSession(row);
+}
+
+bool chatSession::hydrateSessionFromDb(const std::string& sessionId)
+{
+    if (!persistenceEnabled_.load() || sessionId.empty()) return false;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (session_map.count(sessionId)) return true;  // 已在内存，无需回填
+    }
+
+    auto row = SessionDbManager::getInstance()->loadSession(sessionId);
+    if (!row.has_value()) return false;
+
+    session_st restored = sessioncodec::decodeSession(row->payload);
+    // 以行主键为准修正 conversationId，避免快照与主键不一致导致索引错位。
+    restored.state.conversationId = sessionId;
+    if (restored.state.createdAt == 0)    restored.state.createdAt = static_cast<time_t>(row->createdAt);
+    if (restored.state.lastActiveAt == 0) restored.state.lastActiveAt = static_cast<time_t>(row->lastActiveAt);
+
+    // 过期行不回填：DB 清理线程可能尚未跑到，此处按 TTL 再判一次。
+    if (time(nullptr) - restored.state.lastActiveAt > sessionExpireSeconds_.load()) {
+        LOG_INFO << "[会话持久化] 命中已过期快照，按新会话处理: " << sessionId;
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // 双重检查：回填期间可能已有并发请求建好同名会话，内存优先。
+        if (session_map.count(sessionId)) return true;
+        session_map[sessionId] = restored;
+        if (!restored.state.contextConversationId.empty()) {
+            context_map[restored.state.contextConversationId] = sessionId;
+        }
+    }
+    LOG_INFO << "[会话持久化] 已从数据库恢复会话: " << sessionId;
+    return true;
+}
+
+bool chatSession::hydrateSessionByContextKey(const std::string& contextKey, std::string& outSessionId)
+{
+    if (!persistenceEnabled_.load() || contextKey.empty()) return false;
+
+    auto row = SessionDbManager::getInstance()->loadSessionByContextKey(contextKey);
+    if (!row.has_value() || row->sessionId.empty()) return false;
+
+    if (!hydrateSessionFromDb(row->sessionId)) return false;
+
+    outSessionId = row->sessionId;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        context_map[contextKey] = outSessionId;
+    }
+    LOG_INFO << "[会话持久化] 已按上下文键恢复会话映射: " << outSessionId;
+    return true;
 }
 
 void chatSession::addSession(const std::string &ConversationId,session_st &session)
@@ -208,6 +293,25 @@ session_st& chatSession::getOrCreateSession(const std::string& sessionId, sessio
         sid = mapped;
     }
 
+    // [持久化] 懒加载回填：内存与 context_map 均未命中时，尝试从数据库恢复。
+    // 顺序至关重要——必须在 sessionIsExist 决定“新建/续聊”之前完成，
+    // 否则重启后的首个续聊请求会被误判为新会话，丢失全部 messageContext。
+    // 持久化关闭或 DB 未命中时全部静默返回 false，退化为原有纯内存行为。
+    if (persistenceEnabled_.load() && !sessionIsExist(sid)) {
+        if (!hydrateSessionFromDb(sid)) {
+            std::string dbMapped;
+            if (hydrateSessionByContextKey(sid, dbMapped) && !dbMapped.empty()) {
+                sid = dbMapped;
+                // 与内存路径语义对齐：命中上下文键说明已处于上下文裁剪边界。
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto sit = session_map.find(sid);
+                if (sit != session_map.end()) {
+                    sit->second.state.contextIsFull = true;
+                }
+            }
+        }
+    }
+
     session.state.conversationId = sid;  // sessionId：会话主键（session_map 的 key）
     session.provider.prevProviderKey = sid;  // provider thread map 查找 key
 
@@ -222,6 +326,10 @@ session_st& chatSession::getOrCreateSession(const std::string& sessionId, sessio
         session.state.isContinuation = false;
         initializeNewSession(sid, session);
     }
+
+    // [持久化] 写穿：新建与续聊两条分支收敛于此，统一落库一次快照。
+    // 此处未持有 mutex_，满足 persistSession 的锁约束；异步投递不阻塞请求链路。
+    persistSession(sid);
 
     return session;
 }
@@ -384,6 +492,9 @@ void chatSession::commitSessionTransfer(session_st& session)
         session.provider.prevProviderKey = oldSessionId;
         session.state.nextSessionId.clear();
         updateSession(oldSessionId, session);
+        // [持久化] 原位提交路径：此刻快照才含本轮 user+assistant 消息，必须落库；
+        // 否则重启后恢复的上下文永远缺最后一轮对话。
+        persistSession(oldSessionId);
         LOG_INFO << "[SessionTransfer] 已原位提交稳定会话: " << oldSessionId;
         return;
     }
@@ -416,6 +527,14 @@ void chatSession::commitSessionTransfer(session_st& session)
     }
 
     delSession(oldSessionId);
+
+    // [持久化] 会话 ID 轮转：先写新键、再删旧行。
+    // 顺序不可颠倒——若先删旧行再写新行，中间崩溃会导致该会话在 DB 中彻底消失；
+    // 反之最坏只是短暂多出一行旧快照，会被 TTL 清理回收。
+    persistSession(newSessionId);
+    if (persistenceEnabled_.load() && !oldSessionId.empty() && oldSessionId != newSessionId) {
+        SessionDbManager::getInstance()->asyncDeleteSessions({oldSessionId});
+    }
     
     // 7. Hash 模式特有：更新 context_map
     if (!isZeroWidthMode() && !session.state.contextIsFull) {
@@ -426,6 +545,9 @@ void chatSession::commitSessionTransfer(session_st& session)
         session.state.contextConversationId = tempConversationId;
         context_map[tempConversationId] = session.state.conversationId;
         updateSession(session.state.conversationId, session);
+        // [持久化] contextConversationId 已变更，必须重写该行的 context_key，
+        // 否则 DB 中仍是上一轮的旧键，下次按上下文键懒加载将永远落空。
+        persistSession(session.state.conversationId);
     }
     
     LOG_INFO << "[SessionTransfer] 会话转移完成, 新 sessionId: " << newSessionId;
@@ -524,7 +646,7 @@ void chatSession::clearExpiredSession()
 
         for (auto it = session_map.begin(); it != session_map.end();)
         {
-            if (now - it->second.state.lastActiveAt > SESSION_EXPIRE_TIME)
+            if (now - it->second.state.lastActiveAt > sessionExpireSeconds_.load())
             {
                 const std::string sessionId = it->first;
                 const std::string apiName = it->second.request.api;
@@ -560,6 +682,17 @@ void chatSession::clearExpiredSession()
                  << " （聊天会话数: " << chatCount << "，响应会话数: " << responseCount << "）";
     } // 解锁后再清 provider，避免锁顺序/死锁风险
 
+    // [持久化] 会话已从内存过期淘汰，必须同步删除 DB 行。
+    // 否则下次请求会通过懒加载把已过期会话“复活”，TTL 形同虚设、表也会无界增长。
+    // 放在解锁之后：DB 投递不在 mutex_ 临界区内，避免拉长持锁时长。
+    if (persistenceEnabled_.load() && !expired.empty()) {
+        std::vector<std::string> expiredIds;
+        expiredIds.reserve(expired.size());
+        for (const auto& item : expired) expiredIds.push_back(std::get<0>(item));
+        SessionDbManager::getInstance()->asyncDeleteSessions(expiredIds);
+        LOG_INFO << "[会话持久化] 已投递过期会话删除，数量: " << expiredIds.size();
+    }
+
     // 清理上游 API Provider 资源，防止会话删除后仍占用上下文映射
     for (const auto& item : expired)
     {
@@ -583,10 +716,25 @@ void chatSession::clearExpiredSession()
 }
 void chatSession::startClearExpiredSession()
 {
+    // 轮询间隔必须显著小于过期阈值：若两者相同（原实现均为 SESSION_EXPIRE_TIME），
+    // 一个刚过期的会话最坏要等满一个完整周期才被回收，实际生命周期漂移到 24~48h。
+    // 此处按 SESSION_CLEANUP_INTERVAL（默认 1 小时）轮询，使过期判定精度收敛到 1 小时内。
     std::thread([this]() {
         while (true) {
-            std::this_thread::sleep_for(std::chrono::seconds(SESSION_EXPIRE_TIME));
+            std::this_thread::sleep_for(std::chrono::seconds(cleanupIntervalSeconds_.load()));
             clearExpiredSession();
+
+            // B5: 同步清理数据库中早于 TTL 的会话快照，防止 chat_session_state 无限增长。
+            // 任何 DB 异常在 SessionDbManager 内部已降级忽略，不影响内存清理。
+            auto sessionDb = SessionDbManager::getInstance();
+            if (sessionDb && sessionDb->isEnabled()) {
+                const int64_t cutoff =
+                    static_cast<int64_t>(time(nullptr)) - dbRetentionSeconds_.load();
+                const int removed = sessionDb->deleteSessionsOlderThan(cutoff);
+                if (removed > 0) {
+                    LOG_INFO << "[会话持久化] 已清理过期会话快照 " << removed << " 条";
+                }
+            }
         }
     }).detach();
 }   
@@ -856,16 +1004,29 @@ std::string chatSession::createResponseSession(session_st& session)
 
 bool chatSession::getResponseSession(const std::string& sessionId, session_st& session)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    // 现在 conversationId 就是 session_map 的键，直接查找
-    auto it = session_map.find(sessionId);
-    if (it != session_map.end()) {
-        session = it->second;
-        return true;
+    // 第一跳：内存热层。conversationId 就是 session_map 的键，直接查找。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = session_map.find(sessionId);
+        if (it != session_map.end()) {
+            session = it->second;
+            return true;
+        }
     }
-    
-    
+
+    // 第二跳：内存未命中时回查数据库并回填，支撑
+    // "内存已淘汰(6h) 但会话快照仍在(24h)" 窗口内的 previous_response_id 续接。
+    // 注意：hydrateSessionFromDb 内部自行加锁，调用前必须已释放 mutex_，否则死锁。
+    if (hydrateSessionFromDb(sessionId)) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = session_map.find(sessionId);
+        if (it != session_map.end()) {
+            session = it->second;
+            LOG_INFO << "[响应接口] 会话已从数据库回填: " << sessionId;
+            return true;
+        }
+    }
+
     LOG_WARN << "[响应接口] 获取响应会话失败：未找到会话 ID: " << sessionId;
     return false;
 }

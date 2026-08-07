@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <sessionManager/continuity/HistoryReplayBudget.h>
+#include <sessionManager/continuity/OutboundBudget.h>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -649,8 +650,11 @@ void chaynsapi::postChatMessage(session_st& session)
             const std::string currentHeader = "\n用户现在的问题是:\n";
             const size_t fixedBytes = session.request.systemPrompt.size() +
                 historyHeader.size() + currentHeader.size() + session.request.message.size();
+            // chayns 的出站上限与其他 Provider 相互独立，走 outbound_limits.chaynsapi。
+            const size_t chaynsRequestLimit =
+                continuity::outboundMaxRequestBytes("chaynsapi");
             const size_t historyBudget = continuity::remainingHistoryBudget(
-                continuity::historyReplayMaxRequestBytes(),
+                chaynsRequestLimit,
                 fixedBytes
             );
             const std::string currentHistoryMessage = session.request.rawMessage.empty()
@@ -659,7 +663,7 @@ void chaynsapi::postChatMessage(session_st& session)
             const auto historySelection = continuity::selectRecentHistory(
                 session.provider.messageContext,
                 historyBudget,
-                continuity::historyReplayMaxMessageBytes(),
+                continuity::outboundMaxMessageBytes("chaynsapi"),
                 false,
                 currentHistoryMessage
             );
@@ -722,32 +726,78 @@ void chaynsapi::postChatMessage(session_st& session)
             
             sendMessageRequest["messages"].append(message);
             
-            auto reqSend = HttpRequest::newHttpJsonRequest(sendMessageRequest);
-            reqSend->setMethod(HttpMethod::Post);
-            reqSend->setPath("/intercom-backend/v2/thread?forceCreate=true");
-            reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            applyChaynsRouteHeaders(reqSend, *accountinfo, requestRoute);
             
             LOG_INFO << "[chaynsAPI] 正在创建新线程: threadTypeId="
                      << requestRoute.threadTypeId
                      << ", workspaceUacIdIncluded=" << requestRoute.isPro;
             
-            auto sendResult = client->sendRequest(reqSend);
-            if (sendResult.first == ReqResult::Ok && sendResult.second &&
-                static_cast<int>(sendResult.second->statusCode()) == 413 && historyIncluded) {
-                const std::string fallbackMessage =
-                    session.request.systemPrompt + "\n" + session.request.message;
-                LOG_WARN << "[chaynsAPI] 新线程请求因历史负载返回 413，去除历史后重试: originalBytes="
-                         << full_message.size() << ", retryBytes=" << fallbackMessage.size();
+            // progressive degradation: full -> 1/2 -> 1/4 -> ... -> zero history
+            const auto rebuildNewThreadText = [&](size_t budget) -> std::string {
+                if (budget == 0) {
+                    return session.request.systemPrompt + "\n" + session.request.message;
+                }
+                const auto trimmed = continuity::selectRecentHistory(
+                    session.provider.messageContext,
+                    budget,
+                    continuity::outboundMaxMessageBytes("chaynsapi"),
+                    false,
+                    currentHistoryMessage
+                );
+                if (trimmed.messages.empty()) {
+                    return session.request.systemPrompt + "\n" + session.request.message;
+                }
+                Json::StreamWriterBuilder trimWriter;
+                trimWriter["indentation"] = "";
+                return session.request.systemPrompt + historyHeader +
+                    Json::writeString(trimWriter, trimmed.messages) +
+                    currentHeader + session.request.message;
+            };
 
-                message["text"] = fallbackMessage;
+            const auto applyNewThreadText = [&](const std::string& text) {
+                message["text"] = text;
                 sendMessageRequest["messages"][0] = message;
-                auto retryReq = HttpRequest::newHttpJsonRequest(sendMessageRequest);
-                retryReq->setMethod(HttpMethod::Post);
-                retryReq->setPath("/intercom-backend/v2/thread?forceCreate=true");
-                retryReq->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-                applyChaynsRouteHeaders(retryReq, *accountinfo, requestRoute);
-                sendResult = client->sendRequest(retryReq);
+            };
+
+            const auto buildNewThreadRequest = [&]() {
+                auto req = HttpRequest::newHttpJsonRequest(sendMessageRequest);
+                req->setMethod(HttpMethod::Post);
+                req->setPath("/intercom-backend/v2/thread?forceCreate=true");
+                req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
+                applyChaynsRouteHeaders(req, *accountinfo, requestRoute);
+                return req;
+            };
+
+            const auto ladder = continuity::degradationLadder(historyBudget);
+            size_t ladderIndex = 0;
+
+            // pre-send gate: shrink first instead of wasting a 413 round trip
+            while (ladderIndex + 1 < ladder.size()) {
+                const auto gate = continuity::checkOutboundSize("chaynsapi", sendMessageRequest);
+                if (gate.withinLimit) break;
+                ++ladderIndex;
+                const std::string reduced = rebuildNewThreadText(ladder[ladderIndex]);
+                LOG_WARN << "[chaynsAPI] new thread body exceeds outbound limit, pre-shrink: bodyBytes="
+                         << gate.actualBytes << ", limit=" << gate.limitBytes
+                         << ", nextHistoryBudget=" << ladder[ladderIndex]
+                         << ", retryTextBytes=" << reduced.size();
+                applyNewThreadText(reduced);
+            }
+
+            auto sendResult = client->sendRequest(buildNewThreadRequest());
+
+            // 413 fallback: upstream hard limit may be lower than configured value
+            while (sendResult.first == ReqResult::Ok && sendResult.second &&
+                   static_cast<int>(sendResult.second->statusCode()) == 413 &&
+                   ladderIndex + 1 < ladder.size()) {
+                ++ladderIndex;
+                const std::string reduced = rebuildNewThreadText(ladder[ladderIndex]);
+                LOG_WARN << "[chaynsAPI] new thread got 413, degrade and retry: step="
+                         << ladderIndex << "/" << (ladder.size() - 1)
+                         << ", historyBudget=" << ladder[ladderIndex]
+                         << ", originalBytes=" << full_message.size()
+                         << ", retryBytes=" << reduced.size();
+                applyNewThreadText(reduced);
+                sendResult = client->sendRequest(buildNewThreadRequest());
             }
 
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {

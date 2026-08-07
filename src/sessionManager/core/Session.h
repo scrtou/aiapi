@@ -47,6 +47,7 @@ enum class ApiType {
 };
 
 static const int SESSION_EXPIRE_TIME = 86400; // 24小时，单位秒数，会话过期时间
+static const int SESSION_CLEANUP_INTERVAL = 3600; // 1小时，单位秒数，过期会话轮询清理间隔（须远小于 SESSION_EXPIRE_TIME）
 // 会话_MAX_MESSAGES = 4; //上下文会话最大消息条数,一轮两条
 // Image信息 定义在 Generation请求. 中
 #include "sessionManager/contracts/GenerationRequest.h"
@@ -157,6 +158,14 @@ class chatSession
     std::unordered_map<std::string, session_st> session_map;
     std::unordered_map<std::string, std::string> context_map;//上下文会话id与会话id的映射
     SessionTrackingMode trackingMode_ = SessionTrackingMode::Hash;  // 默认使用Hash模式
+    /// 会话持久化开关：由 main.cc 在 ensureTables 成功后开启。
+    /// 关闭时所有写穿/懒加载静默跳过，行为与纯内存模式完全一致。
+    std::atomic<bool> persistenceEnabled_{false};
+    /// 以下四项均可由 config 的 session_persistence 段覆盖（配置以小时为单位，main.cc 换算为秒）；非法值(<=0)保留默认。
+    std::atomic<int>  sessionExpireSeconds_{SESSION_EXPIRE_TIME};
+    std::atomic<int>  cleanupIntervalSeconds_{SESSION_CLEANUP_INTERVAL};
+    std::atomic<int>  dbRetentionSeconds_{SESSION_EXPIRE_TIME};
+    std::atomic<bool> storeSessionPayload_{true};
     std::atomic<bool> stopClearExpiredLoop_{false};
     std::thread clearExpiredThread_;
 public:
@@ -171,6 +180,32 @@ public:
      * @brief 设置会话追踪模式
      * @param mode 追踪模式
      */
+    // ========== 会话持久化（写穿 + 懒加载回填）==========
+    /// 开启/关闭持久化。DB 不可用时保持 false，绝不影响请求链路。
+    void setPersistenceEnabled(bool enabled) { persistenceEnabled_.store(enabled); }
+    bool isPersistenceEnabled() const { return persistenceEnabled_.load(); }
+
+    // ---- 可配置项：内存 TTL / 内存清理间隔 / DB 保留期 / payload 落库开关 ----
+    void setSessionExpireSeconds(int v)   { if (v > 0) sessionExpireSeconds_.store(v); }
+    int  getSessionExpireSeconds() const  { return sessionExpireSeconds_.load(); }
+    void setCleanupIntervalSeconds(int v) { if (v > 0) cleanupIntervalSeconds_.store(v); }
+    int  getCleanupIntervalSeconds() const{ return cleanupIntervalSeconds_.load(); }
+    void setDbRetentionSeconds(int v)     { if (v > 0) dbRetentionSeconds_.store(v); }
+    int  getDbRetentionSeconds() const    { return dbRetentionSeconds_.load(); }
+    /// 关闭后不再写 chat_session_state 快照；response_index 映射不受影响。
+    void setStoreSessionPayload(bool e)   { storeSessionPayload_.store(e); }
+    bool isStoreSessionPayloadEnabled() const { return storeSessionPayload_.load(); }
+
+    /// 将指定会话异步写穿到 chat_session_state（调用方不得持有 mutex_）。
+    void persistSession(const std::string& sessionId);
+
+    /// 懒加载：内存未命中时尝试从 DB 回填 session_map。命中返回 true。
+    /// 注意：调用方不得持有 mutex_（内部自行加锁写回）。
+    bool hydrateSessionFromDb(const std::string& sessionId);
+
+    /// 懒加载：Hash 模式下按 context_key 从 DB 反查并回填 session_map + context_map。
+    bool hydrateSessionByContextKey(const std::string& contextKey, std::string& outSessionId);
+
     void setTrackingMode(SessionTrackingMode mode) { trackingMode_ = mode; }
     
     /**

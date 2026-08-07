@@ -497,6 +497,17 @@ void AccountManager::loadAccountAutomationSettings()
             }
         }
 
+        if (auto storedNamespaceBridge = configDbManager->getValue(kNamespaceToolBridgeEnabledKey, &errorMessage)) {
+            bool parsedValue = defaultSettings.namespaceToolBridgeEnabled;
+            if (parseBoolConfigValue(*storedNamespaceBridge, parsedValue)) {
+                settings.namespaceToolBridgeEnabled = parsedValue;
+                hasAnyStoredValue = true;
+            } else {
+                shouldSeedDefaults = true;
+                LOG_WARN << "[账户管理] 配置项 " << kNamespaceToolBridgeEnabledKey << " 非法，使用默认值覆盖";
+            }
+        }
+
         if (!errorMessage.empty()) {
             LOG_WARN << "[账户管理] " << errorMessage << "，账号自动化策略部分回退为配置文件默认值";
             errorMessage.clear();
@@ -524,7 +535,8 @@ void AccountManager::loadAccountAutomationSettings()
     LOG_INFO << "[账户管理] 自动化策略已加载(" << (loadedFromDb ? "db" : "config")
              << "): autoDeleteEnabled=" << settings.autoDeleteEnabled
              << ", deleteAfterDays=" << settings.deleteAfterDays
-             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled;
+             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled
+             << ", namespaceToolBridgeEnabled=" << settings.namespaceToolBridgeEnabled;
 }
 
 AccountAutomationSettings AccountManager::getAccountAutomationSettings() const

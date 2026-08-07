@@ -867,6 +867,11 @@ Docker 入口脚本支持：
 | `custom_config.rate_limit.enabled` | AI 接口限流开关 | `true` / `false` |
 | `custom_config.rate_limit.requests_per_second` | 每秒令牌补充速率 | 正整数 |
 | `custom_config.rate_limit.burst` | 瞬时突发上限 | 正整数 |
+| `custom_config.session_persistence.memory_expire_hours` | 内存会话 TTL（小时，可为小数） | 正数，默认 `24` |
+| `custom_config.session_persistence.memory_cleanup_interval_hours` | 过期会话轮询清理间隔（小时，可为小数） | 正数且不大于 TTL，默认 `1` |
+| `custom_config.session_persistence.db_retention_hours` | 数据库会话快照保留期（小时，可为小数） | 正数，建议 ≥ TTL，默认 `24` |
+| `custom_config.session_persistence.store_session_payload` | 是否将会话 payload 写入 `chat_session_state` | `true` / `false` |
+| `custom_config.session_persistence.store_response_body` | 是否将响应体随 `response_index` 落库 | `true` / `false` |
 | `custom_config.response_index.max_entries` | Responses 索引最大内存条目数 | 正整数 |
 | `custom_config.response_index.max_age_hours` | Responses 索引过期时间（小时） | 正整数 |
 | `custom_config.response_index.cleanup_interval_minutes` | 索引清理周期（分钟） | 正整数 |
@@ -876,6 +881,34 @@ Docker 入口脚本支持：
 | `custom_config.cors.allowed_origins` | CORS 白名单 | 字符串数组 |
 
 - `history_replay`：历史回放预算（`max_request_bytes` / `max_message_bytes` / `max_tool_message_bytes`，默认 256KiB / 128KiB / 48KiB）
+
+#### 会话持久化（`custom_config.session_persistence`）
+
+三个时间参数**统一以小时为单位**，支持小数（`0.5` = 30 分钟、`0.25` = 15 分钟）。程序启动时读取并换算为秒（四舍五入，最小 1 秒）后应用到会话清理线程，日志会打印实际生效值：
+
+```
+[会话持久化] 参数生效: 内存TTL=24h, 内存清理间隔=1h, DB保留=24h, payload落库=on, response_body落库=off
+```
+
+```json
+"session_persistence": {
+  "memory_expire_hours": 24,
+  "memory_cleanup_interval_hours": 1,
+  "db_retention_hours": 24,
+  "store_session_payload": true,
+  "store_response_body": false
+}
+```
+
+| 参数 | 作用 |
+|------|------|
+| `memory_expire_hours` | `session_map` 中会话的空闲存活时长；超时后被清理线程淘汰，并同步删除对应 DB 行（避免懒加载“复活”过期会话） |
+| `memory_cleanup_interval_hours` | 清理线程轮询周期，决定过期判定的时间精度。**必须不大于** `memory_expire_hours`，否则启动校验失败 |
+| `db_retention_hours` | `chat_session_state` 快照保留期，防止表无限增长。若小于 `memory_expire_hours` 会输出告警——活跃会话的快照将被提前清理，进程重启后无法懒加载恢复 |
+| `store_session_payload` | 关闭后不再写入会话快照，`response_index` 映射不受影响 |
+| `store_response_body` | 关闭后仅落库响应索引映射而不存响应正文，可显著降低存储占用 |
+
+> **迁移提示**：旧版的 `memory_expire_seconds` / `memory_cleanup_interval_seconds` / `db_retention_seconds`（单位：秒）已废弃且不再生效。为避免老配置直接启动失败，配置校验器对这些键仅输出告警而非报错，请尽快改用对应的 `*_hours` 键。
 
 ## 错误码
 

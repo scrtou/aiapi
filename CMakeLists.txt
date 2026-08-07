@@ -56,11 +56,13 @@ add_executable(${PROJECT_NAME}
     src/dbManager/metrics/ErrorStatsDbManager.cpp
     src/dbManager/metrics/StatusDbManager.cpp
     src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
+    src/dbManager/session/SessionDbManager.cpp
     src/metrics/ErrorStatsConfig.cpp
     src/metrics/ErrorStatsService.cpp
     src/retoolWorkspace/RetoolWorkspaceManager.cpp
     src/retoolWorkspace/RetoolWorkspaceService.cpp
     src/sessionManager/core/Session.cpp
+    src/sessionManager/core/SessionCodec.cpp
     src/sessionManager/core/ClientOutputSanitizer.cpp
     src/sessionManager/core/GenerationService.cpp
     src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
@@ -72,6 +74,7 @@ add_executable(${PROJECT_NAME}
     src/sessionManager/tooling/ToolCallNormalizer.cpp
     src/sessionManager/continuity/ResponseIndex.cpp
     src/sessionManager/continuity/HistoryReplayBudget.cpp
+    src/sessionManager/continuity/OutboundBudget.cpp
     src/sessionManager/continuity/TextExtractor.cpp
     src/sessionManager/continuity/ContinuityResolver.cpp
     src/sessionManager/core/RequestAdapters.cpp
@@ -130,6 +133,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/config
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/retoolWorkspace
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/dbManager/session
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/models
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/retoolWorkspace

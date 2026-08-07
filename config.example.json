@@ -9,16 +9,11 @@
     "db_clients": [
         {
             "name": "aichatpg",
-            "rdbms": "postgresql",
-            "host": "YOUR_DB_HOST",
-            "port": 14539,
-            "dbname": "aichat",
-            "user": "YOUR_DB_USER",
-            "passwd": "YOUR_DB_PASSWORD",
+            "rdbms": "sqlite3",
+            "filename": "./data/aiapi.db",
             "is_fast": false,
             "number_of_connections": 1,
-            "timeout": -1.0,
-            "auto_batch": false
+            "timeout": -1.0
         }
     ],
     "app": {
@@ -97,8 +92,8 @@
         "pipelining_requests": 0,
         "gzip_static": true,
         "br_static": true,
-        "client_max_body_size": "1M",
-        "client_max_memory_body_size": "64K",
+        "client_max_body_size": "32M",
+        "client_max_memory_body_size": "1M",
         "client_max_websocket_message_size": "128K",
         "reuse_port": false,
         "enabled_compressed_request": false,
@@ -143,6 +138,34 @@
         }
     ],
     "custom_config": {
+        "history_replay": {
+            "max_request_bytes": 786432,
+            "max_message_bytes": 393216,
+            "max_tool_message_bytes": 131072
+        },
+        "outbound_limits": {
+            "_comment": "Per-provider outbound request size gates. Each upstream has its own hard limit; do NOT share one value. 0 = unlimited.",
+            "default": {
+                "max_request_bytes": 1048576,
+                "max_message_bytes": 1048576
+            },
+            "chaynsapi": {
+                "max_request_bytes": 1048576,
+                "max_message_bytes": 1048576
+            },
+            "nexosapi": {
+                "max_request_bytes": 1048576,
+                "max_message_bytes": 1048576
+            },
+            "retoolapi": {
+                "max_request_bytes": 1048576,
+                "max_message_bytes": 1048576
+            },
+            "openai": {
+                "max_request_bytes": 4194304,
+                "max_message_bytes": 1048576
+            }
+        },
         "dbtype": "sqlite3",
         "dbtype_comment": "可选值: postgresql, mysql, sqlite3, 默认为 postgresql",
         "admin_api_key": "",
@@ -157,14 +180,19 @@
             "_comment": "可选值: 'hash' (基于消息内容哈希，默认) 或 'zerowidth' (基于零宽字符嵌入)"
         },
         "tool_bridge": {
-            "format": "xml",
-            "format_by_client": { "Codex": "json", "RooCode": "xml", "Kilo-Code": "xml" },
+            "namespace_enabled": true,
+            "format": "json",
+            "format_by_client": {
+                "Codex": "json",
+                "RooCode": "json",
+                "Kilo-Code": "json"
+            },
             "format_by_channel": {},
             "format_by_model": {},
             "allow_format_fallback": false,
             "definition_mode": "compact",
-            "include_descriptions": false,
-            "max_description_chars": 5000,
+            "include_descriptions": true,
+            "max_description_chars": 1200,
             "trigger_random_length": 8,
             "rewrite_user_input_conflicts": false,
             "strict_sentinel": true,
@@ -222,11 +250,6 @@
                 "base_url": "https://workspace.nexos.ai"
             },
             "chaynsapi": {
-                "request_routing": {
-                    "pro": {
-                        "workspace_uac_id": 0
-                    }
-                },
                 "browser_impersonation": {
                     "enabled": true,
                     "per_account_profile": true,
@@ -320,6 +343,14 @@
             ],
             "max_age": 3600,
             "allow_credentials": false
+        },
+        "account_background_threads_enabled": true,
+        "session_persistence": {
+            "memory_expire_hours": 24,
+            "memory_cleanup_interval_hours": 12,
+            "db_retention_hours": 720,
+            "store_session_payload": true,
+            "store_response_body": true
         }
     }
 }

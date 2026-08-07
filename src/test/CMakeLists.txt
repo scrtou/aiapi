@@ -31,6 +31,7 @@ set(TEST_SOURCES
     test_response_index.cpp
     test_continuity_resolver.cpp
     test_history_replay_budget.cpp
+    test_outbound_budget.cpp
     test_request_adapters.cpp
     test_xml_tool_call_codec.cpp
     test_bridge_protocol_codec.cpp
@@ -57,11 +58,14 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ConfigValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/metrics/ErrorStatsDbManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/session/SessionDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ResponseIndex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/HistoryReplayBudget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/OutboundBudget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/TextExtractor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ContinuityResolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/Session.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/SessionCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RequestAdapters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolCompiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolAdapter.cpp

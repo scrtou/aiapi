@@ -53,6 +53,7 @@ add_executable(${PROJECT_NAME}
     dbManager/account/accountBackupDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     dbManager/config/ConfigDbManager.cpp
+    dbManager/session/SessionDbManager.cpp
     dbManager/metrics/ErrorStatsDbManager.cpp
     dbManager/metrics/StatusDbManager.cpp
     dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
@@ -61,6 +62,7 @@ add_executable(${PROJECT_NAME}
     retoolWorkspace/RetoolWorkspaceManager.cpp
     retoolWorkspace/RetoolWorkspaceService.cpp
     sessionManager/core/Session.cpp
+    sessionManager/core/SessionCodec.cpp
     sessionManager/core/ClientOutputSanitizer.cpp
     sessionManager/core/GenerationService.cpp
     sessionManager/core/GenerationServiceEmitAndToolBridge.cpp

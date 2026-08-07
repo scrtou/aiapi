@@ -12,6 +12,11 @@ bool isNonNegativeInt(const Json::Value& value) {
     return value.isInt() && value.asInt() >= 0;
 }
 
+/// 小时类配置：允许小数（0.5 = 30 分钟），必须为正数。
+bool isPositiveHours(const Json::Value& value) {
+    return value.isNumeric() && value.asDouble() > 0.0;
+}
+
 bool isValidSessionTrackingMode(const std::string& mode) {
     return mode == "hash" || mode == "zerowidth" || mode == "zero_width";
 }
@@ -106,6 +111,56 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
         if (automation.isMember("auto_register_enabled") && !automation["auto_register_enabled"].isBool()) {
             result.valid = false;
             result.errors.emplace_back("account_automation.auto_register_enabled 必须为布尔值");
+        }
+    }
+
+    if (custom.isMember("session_persistence") && custom["session_persistence"].isObject()) {
+        const auto& sp = custom["session_persistence"];
+        const char* hourKeys[] = {"memory_expire_hours",
+                                  "memory_cleanup_interval_hours",
+                                  "db_retention_hours"};
+        for (const char* k : hourKeys) {
+            if (!sp.isMember(k)) continue;
+            if (!isPositiveHours(sp[k])) {
+                result.valid = false;
+                result.errors.emplace_back(std::string("session_persistence.") + k + " 必须为正数(小时，可为小数)");
+            }
+        }
+        // 旧版秒级键已废弃：保留告警而非报错，避免老配置直接起不来，但明确提示其不再生效。
+        const char* legacyKeys[] = {"memory_expire_seconds",
+                                    "memory_cleanup_interval_seconds",
+                                    "db_retention_seconds"};
+        for (const char* k : legacyKeys) {
+            if (sp.isMember(k)) {
+                result.warnings.emplace_back(std::string("session_persistence.") + k +
+                    " 已废弃且不再生效，请改用对应的 *_hours（单位：小时）");
+            }
+        }
+        const char* boolKeys[] = {"store_session_payload", "store_response_body"};
+        for (const char* k : boolKeys) {
+            if (sp.isMember(k) && !sp[k].isBool()) {
+                result.valid = false;
+                result.errors.emplace_back(std::string("session_persistence.") + k + " 必须为布尔值");
+            }
+        }
+        if (isPositiveHours(sp["memory_expire_hours"]) &&
+            isPositiveHours(sp["memory_cleanup_interval_hours"]) &&
+            sp["memory_cleanup_interval_hours"].asDouble() > sp["memory_expire_hours"].asDouble()) {
+            result.valid = false;
+            result.errors.emplace_back("session_persistence.memory_cleanup_interval_hours 不得大于 memory_expire_hours");
+        }
+        if (isPositiveHours(sp["db_retention_hours"]) && isPositiveHours(sp["memory_expire_hours"]) &&
+            sp["db_retention_hours"].asDouble() < sp["memory_expire_hours"].asDouble()) {
+            result.warnings.emplace_back("session_persistence.db_retention_hours 小于 memory_expire_hours，"
+                "活跃会话的 DB 快照会被提前清理，重启后无法懒加载恢复");
+        }
+    }
+
+    if (custom.isMember("tool_bridge") && custom["tool_bridge"].isObject()) {
+        const auto& toolBridge = custom["tool_bridge"];
+        if (toolBridge.isMember("namespace_enabled") && !toolBridge["namespace_enabled"].isBool()) {
+            result.valid = false;
+            result.errors.emplace_back("tool_bridge.namespace_enabled 必须为布尔值");
         }
     }
 

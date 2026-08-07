@@ -8,6 +8,7 @@
 #include <utils/BackgroundTaskQueue.h>
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
+#include <dbManager/session/SessionDbManager.h>
 #include <controllers/HealthController.h>
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
@@ -236,6 +237,73 @@ int main() {
 
             metrics::ErrorStatsConfig statsConfig;
             metrics::ErrorStatsService::getInstance().init(statsConfig);
+
+            // ---- 会话持久化接线：建表成功后才开启写穿/懒加载 ----
+            // 说明：ResponseIndex 与后续 session_map 的写穿逻辑均以 persistenceEnabled 为总开关，
+            //       建表失败时静默降级为纯内存，绝不阻塞请求链路。
+            {
+                auto sessionDb = SessionDbManager::getInstance();
+                std::string dbErr;
+                if (sessionDb->ensureTables(&dbErr)) {
+                    sessionDb->setEnabled(true);
+                    ResponseIndex::instance().setPersistenceEnabled(true);
+                    // 会话状态写穿/懒加载与 ResponseIndex 同生命周期开启，
+                    // 保证 responseId->sessionId 索引与会话快照要么都持久化、要么都不持久化。
+                    chatSession::getInstance()->setPersistenceEnabled(true);
+                    LOG_INFO << "[会话持久化] 已启用：chat_session_state / response_index 写穿与懒加载生效";
+                } else {
+                    sessionDb->setEnabled(false);
+                    ResponseIndex::instance().setPersistenceEnabled(false);
+                    chatSession::getInstance()->setPersistenceEnabled(false);
+                    LOG_WARN << "[会话持久化] 未启用，降级为纯内存会话：" << dbErr;
+                }
+            }
+
+            // ---- 会话持久化可调参数（配置单位：小时）：内存TTL / 内存清理间隔 / DB保留期 / 两个落库开关 ----
+            // 必须在 startClearExpiredSession() 之前应用，否则清理线程会先按默认值起跑。
+            {
+                // 配置单位为“小时”，内部统一换算为秒；允许小数（0.5 = 30 分钟），换算结果最小 1 秒。
+                const auto hoursToSeconds = [](double hours) {
+                    const double seconds = hours * 3600.0;
+                    return seconds < 1.0 ? 1 : static_cast<int>(seconds + 0.5);
+                };
+                int  memExpire   = SESSION_EXPIRE_TIME;
+                int  memInterval = SESSION_CLEANUP_INTERVAL;
+                int  dbRetention = SESSION_EXPIRE_TIME;
+                bool storePayload = true;
+                bool storeBody    = false;
+                if (customConfig.isMember("session_persistence") &&
+                    customConfig["session_persistence"].isObject()) {
+                    const auto& sp = customConfig["session_persistence"];
+                    if (sp["memory_expire_hours"].isNumeric()) {
+                        memExpire = hoursToSeconds(sp["memory_expire_hours"].asDouble());
+                    }
+                    if (sp["memory_cleanup_interval_hours"].isNumeric()) {
+                        memInterval = hoursToSeconds(sp["memory_cleanup_interval_hours"].asDouble());
+                    }
+                    if (sp["db_retention_hours"].isNumeric()) {
+                        dbRetention = hoursToSeconds(sp["db_retention_hours"].asDouble());
+                    }
+                    storePayload = sp.get("store_session_payload", storePayload).asBool();
+                    storeBody    = sp.get("store_response_body", storeBody).asBool();
+                }
+                auto* cs = chatSession::getInstance();
+                cs->setSessionExpireSeconds(memExpire);
+                cs->setCleanupIntervalSeconds(memInterval);
+                cs->setDbRetentionSeconds(dbRetention);
+                cs->setStoreSessionPayload(storePayload);
+                ResponseIndex::instance().setStoreResponseBody(storeBody);
+                LOG_INFO << "[会话持久化] 参数生效: 内存TTL=" << cs->getSessionExpireSeconds() / 3600.0
+                         << "h, 内存清理间隔=" << cs->getCleanupIntervalSeconds() / 3600.0
+                         << "h, DB保留=" << cs->getDbRetentionSeconds() / 3600.0
+                         << "h, payload落库=" << (cs->isStoreSessionPayloadEnabled() ? "on" : "off")
+                         << ", response_body落库="
+                         << (ResponseIndex::instance().isStoreResponseBodyEnabled() ? "on" : "off");
+            }
+
+            // ---- 内存会话清理线程：此前从未启动，导致 session_map 无限增长 ----
+            chatSession::getInstance()->startClearExpiredSession();
+            LOG_INFO << "[会话清理] 内存会话过期清理线程已启动";
 
             int maxEntries = 200000;
             int maxAgeHours = 6;
