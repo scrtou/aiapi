@@ -460,3 +460,76 @@ continue;
 
 **0.5 天**（8 处机械替换 + 例外 A 的接口决策）。目标原语已存在，无新抽象、无新依赖。
 登记为 migration-plan 附录 A 的 **N7**。
+
+---
+
+## 决策 4（收紧版）：`BackgroundTaskQueue` 必须有显式状态机
+
+### 问题：注释说排空，代码是 fail-fast
+
+`BackgroundTaskQueue.h` 两处注释写「支持优雅停机（drain + join）」（:17）与「等待队列排空后」（:23），
+但 `enqueue` 实际实现是拒绝（:60-63）：停机后直接 `return false`。**文档与代码互相矛盾**，
+而 N2 的修复方向（fail-fast）是对的 —— 该改的是注释和**状态模型**。
+
+### 根因：用三个 bool 拼状态
+
+当前状态由 `started_` / `stopping_` / `shutdownCalled_` 三个独立 bool 表达。
+`shutdownCalled_` 是 N2 补上的一次性标志，其注释（:56-59）自陈了原因：
+`shutdown()` 结尾会置 `started_=false`，于是迟到的 `enqueue` 会重新 spawn 8 条线程并复位 `stopping_`。
+
+这是**没有显式状态机的典型症状**：用补丁标志堵一个具体 bug，而不是让非法状态转移**不可表达**。
+三个 bool 有 8 种组合，其中只有 4 种合法。
+
+### 决策：四态状态机 + 可区分的入队结果
+
+```
+NotStarted ──start()/首次 enqueue──> Running ──shutdown()──> Draining ──worker 排空完毕──> Stopped
+     │                                                                                        ▲
+     └──────────────────────── shutdown()（从未启动）────────────────────────────────────────┘
+```
+
+**状态唯一，用单个 `std::atomic<State>` 表达；不再有独立的 `started_` / `stopping_` / `shutdownCalled_`。**
+`Stopped` 与 `Draining` 均**不可逆**回 `Running` —— 这正是 `shutdownCalled_` 想表达而没表达好的性质。
+
+### `enqueue()` 的返回值：从 `bool` 改为可区分结果
+
+```cpp
+enum class EnqueueResult { Accepted, QueueFull, ShuttingDown, Stopped };
+[[nodiscard]] EnqueueResult enqueue(std::string name, std::function<void()> task);
+```
+
+| 状态 | `enqueue()` 结果 | 说明 |
+|---|---|---|
+| `NotStarted` | `Accepted` | 懒启动，保持现有行为 |
+| `Running` | `Accepted` / `QueueFull` | `QueueFull` 需先定义容量上限（当前**无上限**，见待定项） |
+| `Draining` | `ShuttingDown` | 拒绝新任务，但已入队任务仍会执行 |
+| `Stopped` | `Stopped` | 拒绝；调用方应视为永久失败，不重试 |
+
+调用方据此区分「稍后重试」（`QueueFull`）与「别再试了」（`ShuttingDown` / `Stopped`），
+当前的 `bool` 把这两类混为一谈。
+
+### 六条必须钉死的语义
+
+| 问题 | 决策 |
+|---|---|
+| `shutdown()` 是否幂等 | **是**。非 `Running` 状态调用直接返回，可被 `AppContext::shutdown()` 与析构兜底重复调用 |
+| `Draining` 期间任务内部递归提交任务 | **拒绝**（返回 `ShuttingDown`）。允许递归提交会让排空无法终止 |
+| 未执行任务的处置 | **排空执行完**，不丢弃。丢弃语义留给超时兜底 |
+| 谁拥有超时策略 | **调用方（`main.cc` 停机序列）**，非队列自身。队列只提供 `shutdown(timeout)` 参数 |
+| 超时后行为 | 记录未完成任务数并**放弃等待**（不 detach、不强杀）；进程随后退出 |
+| worker 内异常 | **捕获并记录任务名 + `what()`，不终止 worker**。异常不得穿越 worker 边界 |
+
+### 与 ADR-08 §8.4 停机时序的对接
+
+`Draining` 对应时序表的 S2；`Stopped` 是 S3 `join` 完成后的终态。
+`main.cc:410` 的 `BackgroundTaskQueue::shutdown()` 即 `Running → Draining` 的触发点。
+
+### 待定项（不在本次决策内）
+
+**队列容量上限**：`QueueFull` 需要一个上限值，而当前 `tasks_` **无上限**。
+定容量需要先测稳态队列深度 —— 未测之前不写死数字，`QueueFull` 暂为预留返回值。
+
+### 工期
+
+**1 天**，登记为 migration-plan 附录 A 的 **N9**（状态机重写 + 返回值改型 + 12 个 `enqueue` 调用点适配）。
+注：调用点数见 §8.3。本项**改变公开接口**，不属热修，建议随阶段 1。
