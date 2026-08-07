@@ -9,6 +9,8 @@
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <dbManager/session/SessionDbManager.h>
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <apipoint/chaynsapi/chaynsThreadReaper.h>
 #include <controllers/HealthController.h>
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
@@ -256,6 +258,48 @@ int main() {
                     ResponseIndex::instance().setPersistenceEnabled(false);
                     chatSession::getInstance()->setPersistenceEnabled(false);
                     LOG_WARN << "[会话持久化] 未启用，降级为纯内存会话：" << dbErr;
+                }
+            }
+
+            // ---- chayns 上游线程台账接线：与会话持久化独立开关 ----
+            // 台账解决的是"上游 thread 泄漏"：内存 m_threadMap 随进程消失，
+            // 而上游 thread 是远端资源，只能靠这张表 + reaper 回收。
+            // 建表失败时整套机制静默关闭，chayns 正常聊天不受影响。
+            {
+                auto threadDb = chaynsThreadDbManager::getInstance();
+                std::string threadDbErr;
+                bool threadLedgerEnabled = false;
+                if (customConfig.isMember("chayns_thread_reaper") &&
+                    customConfig["chayns_thread_reaper"].isObject()) {
+                    threadLedgerEnabled =
+                        customConfig["chayns_thread_reaper"].get("enabled", true).asBool();
+                } else {
+                    threadLedgerEnabled = true;  // 未配置时默认开启，避免静默泄漏
+                }
+                if (!threadLedgerEnabled) {
+                    threadDb->setEnabled(false);
+                    LOG_WARN << "[chayns线程台账] 已按配置关闭，上游 thread 将不再被回收";
+                } else if (threadDb->ensureTable(&threadDbErr)) {
+                    threadDb->setEnabled(true);
+                    LOG_INFO << "[chayns线程台账] 已启用：chaynsa_thread 写穿生效";
+
+                    // 台账可用才启动回收器：表都建不出来时启动它只会空转刷日志。
+                    // 配置单位对齐运维直觉——间隔用分钟、空闲用小时，内部换算成秒。
+                    chaynsThreadReaper::Options reaperOpt;
+                    if (customConfig["chayns_thread_reaper"].isObject()) {
+                        const Json::Value& rc = customConfig["chayns_thread_reaper"];
+                        reaperOpt.scanIntervalSeconds = static_cast<int>(
+                            rc.get("scan_interval_minutes", 15).asDouble() * 60);
+                        reaperOpt.idleSeconds = static_cast<int>(
+                            rc.get("idle_hours", 24).asDouble() * 3600);
+                        reaperOpt.batchLimit      = rc.get("batch_limit", 50).asInt();
+                        reaperOpt.maxAttempts     = rc.get("max_attempts", 5).asInt();
+                        reaperOpt.deleteSpacingMs = rc.get("delete_spacing_ms", 200).asInt();
+                    }
+                    chaynsThreadReaper::getInstance().start(reaperOpt);
+                } else {
+                    threadDb->setEnabled(false);
+                    LOG_WARN << "[chayns线程台账] 未启用，上游 thread 不会被回收：" << threadDbErr;
                 }
             }
 

@@ -1,5 +1,6 @@
 #include <drogon/drogon.h>
 #include <chaynsapi.h>
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <../../apiManager/Apicomn.h>
 #include <unistd.h>
 #include <algorithm>
@@ -1057,6 +1058,24 @@ void chaynsapi::postChatMessage(session_st& session)
             ctx.lastReasoningMessages = final_reasoningMessages;
             m_threadMap[session.state.conversationId] = ctx;
         }
+
+        // 上游线程台账：内存 m_threadMap 会随进程退出/会话过期消失，
+        // 但上游 thread 是真实存在的远端资源，必须单独留痕，否则重启即泄漏。
+        {
+            auto threadDb = chaynsThreadDbManager::getInstance();
+            if (threadDb && threadDb->isEnabled() && !final_threadId.empty()) {
+                chaynsThreadDbManager::ThreadRow row;
+                row.threadId        = final_threadId;
+                row.sessionId       = session.state.conversationId;
+                row.accountUserName = final_accountUserName;
+                row.origin          = final_origin;
+                row.referer         = final_referer;
+                row.createdAt       = static_cast<int64_t>(time(nullptr));
+                row.lastActiveAt    = row.createdAt;
+                // 异步落库：请求链路不等 DB，失败在 DbManager 内部降级忽略。
+                threadDb->asyncUpsertThread(row);
+            }
+        }
         
         session.response.message["message"] = final_response_message;
         session.response.message["statusCode"] = final_response_statusCode;
@@ -1082,6 +1101,17 @@ void chaynsapi::postChatMessage(session_st& session)
                 m_threadMap.erase(session.provider.prevProviderKey);
             }
             m_threadMap.erase(session.state.conversationId);
+        }
+        // 台账只做 detach 不删行：该 thread 已不可续聊，但远端仍在，
+        // 需要留给 ThreadReaper 异步删上游；此处绝不发 HTTP，避免拖慢错误返回。
+        if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
+            auto threadDb = chaynsThreadDbManager::getInstance();
+            if (threadDb && threadDb->isEnabled()) {
+                if (!session.provider.prevProviderKey.empty()) {
+                    threadDb->asyncDetachThreadBySessionId(session.provider.prevProviderKey);
+                }
+                threadDb->asyncDetachThreadBySessionId(session.state.conversationId);
+            }
         }
         if (!final_requestMessageId.empty()) {
             auto& chaynsMeta = session.response.message["_meta"]["chayns"];
@@ -1309,6 +1339,11 @@ void chaynsapi::transferThreadContext(const std::string& oldId, const std::strin
         m_threadMap[newId] = it->second;
         m_threadMap.erase(it);
         LOG_INFO << "[chaynsAPI] 成功转移线程上下文，从" << oldId << " 到 " << newId;
+        // 台账跟随轮转：否则旧 sessionId 的行会立刻显得"已过期"而被 reaper 误删活跃线程。
+        auto threadDb = chaynsThreadDbManager::getInstance();
+        if (threadDb && threadDb->isEnabled()) {
+            threadDb->asyncUpdateThreadSessionId(oldId, newId);
+        }
     }
     else
     {
@@ -1321,9 +1356,67 @@ void chaynsapi::afterResponseProcess(session_st& session)
 }
 void chaynsapi::eraseChatinfoMap(string ConversationId)
 {
-    std::lock_guard<std::mutex> lock(m_threadMapMutex);
-    const auto erased = m_threadMap.erase(ConversationId);
-    LOG_INFO << "[chaynsAPI] 删除会话映射： convId 删除数量=" << erased;
+    ThreadContext context;
+    bool hasContext = false;
+    {
+        std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        auto it = m_threadMap.find(ConversationId);
+        if (it != m_threadMap.end()) {
+            context = it->second;
+            hasContext = true;
+            m_threadMap.erase(it);
+        }
+    }
+    LOG_INFO << "[chaynsAPI] 删除会话映射： convId 删除数量=" << (hasContext ? 1 : 0);
+
+    // 这里被调用时正持有 chatSession 的清理路径（clearExpiredSession），
+    // 原实现曾想同步调用 deleteUpstreamThread，但那会让清理线程被一串上游 HTTP 阻塞，
+    // 一轮清理几百个会话就可能卡住数分钟，因此改为：只 detach 台账，删上游交给 ThreadReaper。
+    auto threadDb = chaynsThreadDbManager::getInstance();
+    if (threadDb && threadDb->isEnabled()) {
+        threadDb->asyncDetachThreadBySessionId(ConversationId);
+    }
+}
+
+bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
+                                     const std::string& threadId,
+                                     const std::string& origin,
+                                     const std::string& referer)
+{
+    std::shared_ptr<Accountinfo_st> account;
+    AccountManager::getInstance().getAccountByUserName("chaynsapi", accountUserName, account);
+    if (!account || account->authToken.empty() || account->personId.empty()) {
+        LOG_WARN << "[chaynsAPI] 无法删除上游线程：账户不可用或缺少 personId";
+        return false;
+    }
+
+    Json::Value body;
+    Json::Value threadIds(Json::arrayValue);
+    threadIds.append(threadId);
+    body["threadIds"] = threadIds;
+    body["personId"] = account->personId;
+
+    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
+    auto request = HttpRequest::newHttpJsonRequest(body);
+    request->setMethod(HttpMethod::Delete);
+    request->setPath("/intercom-backend/v2/thread/member/delete");
+    request->addHeader("Authorization", "Bearer " + account->authToken);
+    chayns_browser::applyBrowserHeadersForAccount(
+        request,
+        account->userName,
+        account->personId,
+        origin.empty() ? CHAYNS_FREE_ORIGIN : origin,
+        referer.empty() ? CHAYNS_FREE_REFERER : referer);
+
+    auto [result, response] = client->sendRequest(request);
+    if (result != ReqResult::Ok || !response ||
+        (response->statusCode() != k200OK && response->statusCode() != k204NoContent)) {
+        LOG_WARN << "[chaynsAPI] 删除上游线程失败, result=" << static_cast<int>(result)
+                 << ", " << summarizeUpstreamResponse(response);
+        return false;
+    }
+    LOG_INFO << "[chaynsAPI] 已删除上游线程";
+    return true;
 }
 Json::Value chaynsapi::getModels()
 {

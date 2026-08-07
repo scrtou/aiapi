@@ -42,6 +42,14 @@ class chaynsapi:public APIinterface
         void eraseChatinfoMap(string ConversationId);
         void transferThreadContext(const std::string& oldId, const std::string& newId) override;
 
+        // ThreadReaper 需要按台账行还原“同账号 + 同 Origin”再发删除请求，
+        // 因此该入口必须公开：回收线程不持有 m_threadMap，只能靠 DB 行重建删除上下文。
+        // 返回值即回收闭环的判据：false 表示上游仍可能残留，调用方应重试而非删台账行。
+        bool deleteUpstreamThread(const std::string& accountUserName,
+                                  const std::string& threadId,
+                                  const std::string& origin,
+                                  const std::string& referer);
+
     private:
         DEClARE_RUNTIME(chaynsapi);
         chayns::ModelCatalog m_modelCatalog;

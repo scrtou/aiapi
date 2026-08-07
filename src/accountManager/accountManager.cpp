@@ -2414,6 +2414,13 @@ bool AccountManager::isAccountRegisteringByUsername(const string& userName)
 void AccountManager::cleanExpiredAccounts()
 {
     const auto automationSettings = getAccountAutomationSettings();
+    if (!automationSettings.autoDeleteEnabled) {
+        // auto_delete_enabled 是自动清理的总闸：关闭时不仅停用全局保留天数规则，
+        // 也必须停用渠道级 accountRetentionDays 规则与 Retool workspace 回收，
+        // 否则运维关掉总开关后账号仍会被渠道配置悄悄删除。
+        LOG_INFO << "[自动清理] auto_delete_enabled=false，跳过本轮全部自动清理";
+        return;
+    }
     LOG_INFO << "[自动清理] 开始检查过期账号...";
     
     // 获取当前时间
@@ -2459,10 +2466,13 @@ void AccountManager::cleanExpiredAccounts()
             const int retentionDaysByChannel = channelRetentionDays.count(account->apiName)
                 ? channelRetentionDays[account->apiName]
                 : 0;
-            const bool hitGlobalRule = automationSettings.autoDeleteEnabled &&
-                                       account->accountType == "free" &&
+            // 付费账号一律不参与自动删除：无论命中的是全局规则还是渠道规则。
+            // 渠道 accountRetentionDays 只应收紧 free 账号的保留窗口，不得越权删 pro。
+            const bool deletableType = (account->accountType == "free");
+            const bool hitGlobalRule = deletableType &&
                                        ageSec >= expireDurationSeconds;
-            const bool hitChannelRule = retentionDaysByChannel > 0 &&
+            const bool hitChannelRule = deletableType &&
+                                        retentionDaysByChannel > 0 &&
                                         ageSec >= static_cast<double>(retentionDaysByChannel) * 24.0 * 3600.0;
 
             if (hitGlobalRule || hitChannelRule)

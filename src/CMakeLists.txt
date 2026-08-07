@@ -33,6 +33,7 @@ add_executable(${PROJECT_NAME}
     apipoint/chaynsapi/chaynsapi.cpp
     apipoint/chaynsapi/ChaynsModelCatalog.cpp
     apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
+    apipoint/chaynsapi/chaynsThreadReaper.cpp
     apipoint/nexosapi/nexosapi.cpp
     apipoint/openai/OpenAiProvider.cpp
     apipoint/retoolapi/retoolapi.cpp
@@ -55,6 +56,7 @@ add_executable(${PROJECT_NAME}
     dbManager/account/accountBackupDbManager.cpp
     dbManager/channel/channelDbManager.cpp
     dbManager/config/ConfigDbManager.cpp
+    dbManager/chaynsThread/chaynsThreadDbManager.cpp
     dbManager/session/SessionDbManager.cpp
     dbManager/metrics/ErrorStatsDbManager.cpp
     dbManager/metrics/StatusDbManager.cpp
@@ -132,6 +134,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/channel
+                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/chaynsThread
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/config
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/metrics
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/retoolWorkspace
