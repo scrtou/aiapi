@@ -620,63 +620,81 @@ add_subdirectory(test)
 
 每阶段独立可发布；完成标志一律为「旧代码已删除」，而非「新代码已可用」。
 
-### 阶段 0 · 安全网（1.5 周，已上调）
+### 阶段 0 · 安全网（1.5 周）
 
-> **重要修订（v1.3）**：原计划「用 `har/` 现有抓包构造回归 fixture」**不可行**，
-> 该假设已作废。核查结果见下。
+> **修订说明（v1.4，纠正 v1.3）**：v1.3 判定 `har/` 不可用是**错误结论**——
+> 当时按「找 `/v1/chat/completions` 与 SSE」的思路检索，而本服务上游 chayns **不用 SSE，走轮询**，
+> 因而误判。重新核查后，`har/` **可用且是当前唯一活跃上游的真实录制**。v1.3 的废止决定作废。
 
-#### 0-A `har/` 可用性核查结论：不可用
+#### 0-A `har/` 可用性复核：可用（覆盖唯一活跃上游）
 
-| 文件 | 条目 | 实际内容 | 含本服务流量 |
-|------|-----:|----------|:------------:|
-| `login-mein.sidekick.ki.har` | 145 | chayns 前端静态资源 + `cube.tobit.cloud` 管理接口 | 否 |
-| `sidekick.ki.har` | 59 | `intercom-backend` 消息拉取（GET/OPTIONS） | 否 |
-| `mein.sidekick.ki.har` | 37 | 同上 | 否 |
-| `delete.sidekick.ki.har` | 3 | 3 条删除请求 | 否 |
-| `www.genspark.ai.har` | 53 | 第三方站点 + GA/Clarity 埋点 | 否 |
+**前提**：目前实际使用的上游只有 **chayns**；`retool` / `nexos` / `genspark` 等为历史遗留或未启用。
+因此安全网只需覆盖 chayns 一家即可守住真实流量，其余 Provider 降级处理。
 
-**全部 5 个文件、297 个条目中，SSE 响应仅 2 条，且属于 genspark 第三方站点。**
-没有任何一条是本服务 `/v1/chat/completions` 的真实请求或响应。
-这些抓包是**前端侧**的浏览器录制，抓不到本服务与上游 Provider 之间的服务端流量。
+`har/` 与 `chaynsapi.cpp` 端点比对：
 
-> 结论：**没有现成的黄金响应可比对**。安全网必须自己造，工期因此从 1 周上调至 1.5 周。
+| `chaynsapi.cpp` 端点 | har 中有对应录制 | 请求体 | 响应体 |
+|----------------------|:----------------:|:------:|:------:|
+| `POST /intercom-backend/v2/thread?forceCreate=true` | ✅ | ✅ 170 B | ✅ 1,083 B (201) |
+| `POST /intercom-backend/v2/thread/{id}/message` | ✅ | ✅ 35 B | ✅ 236 B (201) |
+| `GET  /intercom-backend/v2/thread/{id}/message`（轮询取回复） | ✅ | — | ✅ 815 B (200) |
+| `DELETE /intercom-backend/v2/thread/member/delete` | ✅ | ✅ 61 B | ✅ 200 |
+| `GET  /chayns-ai-chatbot/nativeModelChatbot`（模型清单） | ✅ | — | ✅ 52,260 B |
+| `PATCH /intercom-backend/v2/thread/read` | ✅ | ✅ 52 B | ✅ 200 |
 
-#### 0-B 替代方案：分层安全网
+**代码使用的 6 类端点，har 全部命中，且带完整请求体与响应体。**
+合计 20 个有 body 的 chayns 上游端点可直接落为 fixture。
 
-以「不依赖外部录制、可离线重复执行」为原则，分三层建立：
+**为何 v1.3 误判**：
 
-| 层 | 手段 | 覆盖对象 | 断言强度 |
-|----|------|----------|:--------:|
-| L1 契约快照 | 手写 fixture JSON/SSE 片段 → 喂入 Provider 解析器 → 快照比对输出 | 5 个零覆盖 Provider 的**解析与序列化** | 强（逐字节） |
-| L2 特性化测试 | 对现有行为**照原样**写断言（不修正 bug，只锁定现状） | `accountManager`、`EmitAndToolBridge` | 中（行为等价） |
-| L3 端到端冒烟 | 本地起服务 + 假上游（httpbin 风格 stub）跑完整链路 | 路由、鉴权、SSE 分帧、错误码 | 弱（不崩 + 状态码） |
+1. chayns 上游**不是 SSE**。`chaynsPollingPolicy.h` 明确是轮询式：
+   `kRequestPollingDeadline = 5min`，`pollingDelayForElapsed()` 做退避。
+   流式效果由「POST 发消息 → 循环 GET `/message` 拉增量」实现，全程 `application/json`。
+   按 `text/event-stream` 检索自然一条都找不到。
+2. har 的 WebSocket 帧被 `_webSocketMessages` 字段承载，首轮统计未读取该字段。
+   实际含 3 条 WS 连接、77 帧（`register` / `registered` / `ping` / `pong` 等），
+   但代码侧 `src/` 内**无任何 websocket 引用**——WS 是前端推送通道，本服务不使用，与安全网无关。
+
+#### 0-B 安全网方案（基于真实 har）
+
+| 层 | 手段 | 覆盖对象 | 数据来源 |
+|----|------|----------|----------|
+| L1 **chayns 契约回放** | 从 har 抽真实请求/响应对 → 脱敏 → 喂解析器 → 逐字节快照 | `chaynsapi.cpp` (1,440 行) | **har，真实录制** |
+| L2 轮询时序测试 | 假时钟驱动 `pollingDelayForElapsed` 与 5 min 截止 | `chaynsPollingPolicy` + 轮询主循环 | har 中多轮 GET 的真实时间戳 |
+| L3 特性化测试 | 照原样锁定现状（不修 bug） | `accountManager`、`EmitAndToolBridge` | 手写 |
+| L4 冒烟兜底 | 起服务 + 假上游 stub 跑完整链路 | 路由、鉴权、错误码 | 手写 |
+
+> **retool / nexos / genspark 三个 Provider**：既非活跃上游，又无录制。
+> 不为其编写契约测试，仅保证**编译通过 + 构造析构不崩**。
+> 阶段 3 归一时若行为漂移，风险由「该上游本就未启用」吸收。
+> 若日后重新启用，须先补 fixture 再上线——此约束写入 §8 工程纪律。
 
 #### 0-C 任务清单
 
 | 任务 | 产出 | 工期 |
 |------|------|-----:|
-| 建 `src/test/fixtures/` 与快照框架 | `loadFixture()` / `assertSnapshot()` 两个辅助函数 | 1 天 |
-| L1：为 5 个 Provider 各写 4 组 fixture | Provider × {流式, 非流式} × {有, 无工具调用} = 20 组 | 3 天 |
-| L2：`accountManager` 特性化测试 | 覆盖配额、轮换、失效标记等关键路径 | 2 天 |
-| L2：`EmitAndToolBridge` 特性化测试 | 覆盖 emit 时序、工具调用装配、中断恢复 | 2 天 |
-| 记录基线指标 | 全量/增量构建时长、二进制体积、P99 延迟 | 0.5 天 |
-| 修复 `chatSession` 双实例隐患 | 消除 `static chatSession* instance` 裸指针 | 1 天 |
-| ~~修复标准漂移（P9）~~ | **已完成，commit `efb4003`**，见 §0.4b | — |
+| har 抽取与脱敏脚本 | `tools/har2fixture.py`：剥离 token / personId / siteId，保留结构 | 1 天 |
+| 快照框架 | `loadFixture()` / `assertSnapshot()` | 0.5 天 |
+| L1：chayns 6 类端点契约回放 | 6 组请求构造 + 6 组响应解析快照 | 2 天 |
+| L2：轮询时序测试 | 退避曲线、截止、空响应、乱序到达 | 1.5 天 |
+| L3：`accountManager` 特性化 | 配额、轮换、失效标记 | 2 天 |
+| L3：`EmitAndToolBridge` 特性化 | emit 时序、工具调用装配、中断恢复 | 2 天 |
+| 记录基线指标 | 构建时长、二进制体积、P99 延迟 | 0.5 天 |
+| 修复 `chatSession` 双实例隐患 | 消除 `static chatSession* instance` | 1 天 |
+| ~~修复标准漂移（P9）~~ | **已完成**，commit `efb4003`，见 §0.4b | — |
 
 #### 0-D 门禁
 
-- 20 组 Provider 契约快照全绿，且 `ctest` 可重复执行（无网络依赖、无时间依赖）
+- chayns 6 类端点契约回放全绿，`ctest` 可离线重复执行（无网络、无真实时间依赖）
 - `accountManager` 与 `EmitAndToolBridge` 特性化测试全绿
-- 模块覆盖率（按 §0.5 口径）由 **41.0% → ≥ 65%**
-- 五个零覆盖大文件全部脱离「零覆盖」状态
+- 模块覆盖率（§0.5 口径）41.0% → **≥ 60%**
+- `chaynsapi.cpp`、`accountManager.cpp`、`EmitAndToolBridge.cpp` 三个文件脱离零覆盖
+  （retool / nexos 允许维持零覆盖，理由见 0-B）
 - `-std=` 在主程序与测试中一致（**已满足**）
 
-> **fixture 从哪来？** 三个来源，按优先级：
-> 1. 从上游 Provider 官方文档的响应示例摘取（最稳，无隐私风险）
-> 2. 在本地起服务、接真实上游跑一次，落盘响应后**脱敏**入库
-> 3. 依据现有解析代码反推构造（兜底，只能验证自洽性，不能验证正确性）
->
-> 优先 1 与 2；用 3 构造的 fixture 必须在文件头注明来源，避免日后误当权威基线。
+> **脱敏红线**：har 内含真实 JWT、`personId`、`siteId`、私钥字段。
+> 入库 fixture 前必须经 `har2fixture.py` 替换为固定假值，并在 CI 加
+> 「fixture 目录不得出现 `eyJ` 开头字符串」的检查，防止凭据入库。
 
 ---
 
@@ -760,7 +778,7 @@ IClock → IMetricsSink → 7 个 DbManager → ChannelManager
 
 | 风险 | 等级 | 对策 |
 |------|:----:|------|
-| 重构期间行为漂移 | 高 | 阶段 0 三层安全网（契约快照 + 特性化 + 冒烟）；重构 commit 禁止夹带功能变更 |
+| 重构期间行为漂移 | 高 | 阶段 0 四层安全网（chayns 真实回放 + 轮询时序 + 特性化 + 冒烟）；重构 commit 禁止夹带功能变更 |
 | 又一次「只加不删」半途而废 | 高 | 每阶段门禁均为**删除类断言**（grep 计数、行数上限） |
 | chayns 上游线程语义复杂，迁移易错 | 高 | 放在 Provider 迁移最后；先用前三个验证 ProviderBase 设计 |
 | 标准漂移（换编译器后变 C++20 / 测试用 20） | 中 | ADR-04 钉死 17 + `target_compile_features` + CI 校验 `-std=` |
@@ -789,7 +807,7 @@ IClock → IMetricsSink → 7 个 DbManager → ChannelManager
 
 | 阶段 | 周期 | 累计 | 核心交付 |
 |------|-----:|-----:|----------|
-| 0 安全网 | **1.5 周** | 1.5 | 三层安全网 + 基线指标 + 覆盖率 ≥65%（标准固定已提前完成） |
+| 0 安全网 | **1.5 周** | 1.5 | chayns 契约回放（真实 har）+ 特性化 + 基线指标 + 覆盖率 ≥60% |
 | 1 骨架地基 | 1.0 周 | 2.5 | 五层 target + include 收敛 + Result |
 | 2 消灭单例 | 1.5 周 | 4.0 | AppContext，`getInstance` 归零 |
 | 3 Provider 归一 | 1.5 周 | 5.5 | ProviderBase，单 Provider < 400 行 |
@@ -798,7 +816,7 @@ IClock → IMetricsSink → 7 个 DbManager → ChannelManager
 
 **合计约 7.5 周，全程主干可发布。**
 
-> 阶段 0 因 `har/` 不可用（见 §6 阶段 0-A）由 1.0 周上调至 1.5 周，后续阶段整体顺延 0.5 周。
+> 阶段 0 由 1.0 周上调至 1.5 周（原计划未含 har 脱敏工具链与特性化测试工作量），后续阶段整体顺延 0.5 周。
 
 > **最小可行子集**：若资源受限，阶段 0 + 1 + 2（4.0 周）即可获得约 80% 收益
 > —— 依赖可见、领域可测、单例清零。阶段 3~5 可按需延后。
@@ -813,3 +831,4 @@ IClock → IMetricsSink → 7 个 DbManager → ChannelManager
 | v1.1 | 2026-08-07 | 按初步决策改为 C++14；补充 C++14 替代方案与自建垫片设计 |
 | v1.2 | 2026-08-07 | **实测确认项目现状为 C++17，标准定为 C++17**。回退 v1.1 的降级设计：删除 Optional/StringView 垫片，`Result<T>` 改用 `std::variant` + `[[nodiscard]]`，Pipeline 恢复模板 `emplace`。新增问题项 **P9（标准探测漂移 + 主程序 17 与测试 20 不一致）**及其对策；阶段 1 恢复为 1 周，总工期回到 7 周 |
 | v1.3 | 2026-08-07 | **P9 已修复并落地**（commit `efb4003`：硬编码 C++17、移除探测降级、测试目标 20→17、120+57 编译单元实测一致、160 用例全绿），新增 §0.4b。新增 **§0.5 测试覆盖基线实测**：模块覆盖 41.0%，五个改动最大的文件（accountManager / EmitAndToolBridge / chayns·retool·nexos api，合计 8,939 行）**零覆盖**，确认为当前最大单点风险。**核查 `har/` 后判定其不可用**（5 文件 297 条目均为前端浏览器抓包，无本服务 SSE 流量），废止「用 har 构造黄金响应」方案，改为三层安全网（契约快照 / 特性化 / 端到端冒烟），阶段 0 由 1.0 周上调至 1.5 周，总工期 7 → 7.5 周 |
+| v1.4 | 2026-08-07 | **纠正 v1.3 对 `har/` 的误判**。确认当前唯一活跃上游为 chayns（retool / nexos / genspark 为历史遗留），且 chayns 上游**走轮询而非 SSE**（`chaynsPollingPolicy.h`：5 min 截止 + 退避），v1.3 按 `text/event-stream` 检索故全部落空；har 的 WS 帧存于 `_webSocketMessages` 字段亦被漏读（77 帧，但代码侧不使用 WS）。复核后 `chaynsapi.cpp` 的 6 类端点在 har 中**全部命中且含完整请求/响应体**，20 个端点可直接落 fixture。阶段 0 改为四层安全网并以真实 har 为 L1 数据源；retool/nexos/genspark 降级为「仅保证编译与不崩」；新增脱敏红线与 CI 凭据检查。覆盖率门槛由 ≥65% 调整为 ≥60%（不再要求覆盖非活跃 Provider）。工期维持 7.5 周 |
