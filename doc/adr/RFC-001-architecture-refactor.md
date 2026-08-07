@@ -4,7 +4,7 @@
 |------|------|
 | 编号 | RFC-001 |
 | 状态 | 草案 (Draft) |
-| 版本 | v2.3 |
+| 版本 | v2.4 |
 | 日期 | 2026-08-07 |
 | 范围 | `src/` 全量约 39,000 行 C++（阶段 0.5 下线后减少约 4,300 行） |
 | Provider 范围 | **仅保留 chayns + retool**；nexos / openai 下线（v1.5 决策） |
@@ -1421,6 +1421,9 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 | **`Result<T>` 从 0 处用法铺开是大规模签名变更** | **高** | 实测 `Result<` 现有用法为 **0**、`catch` 达 **100**。ADR-05 的 v2.3 补充已定转换边界（infra 出口），但铺开工作量被压在阶段 1 的 1.0 周内不现实，须单独拆分立项 |
 | **模块间存在 3 个双向依赖环，阻断 ADR-02 的 target 拆分** | **高** | CMake 不允许 static library 循环依赖。v2.3 已实测定位到文件:行号，新增**阶段 0.7 解环**（2 天）；其中 2 个为弱环可立即断开，`Session.cpp → chaynsapi.h` 属真 DIP 违规，转阶段 2 |
 | `GenerationServiceEmitAndToolBridge.cpp` 分析篇幅与风险倒挂 | 中 | 2213 行、含 SSE 时序 + XML 增量解析 + 工具桥接状态机，是全项目语义最复杂处，文档仅提及 8 次；而 2600 行的 `accountManager`（CRUD + 轮换，路径清晰）提及 30 次。§4.3 Pipeline 拆解前须补专项分析 |
+| **非流式请求在事件循环线程上同步阻塞** | **极高** | `AiApiController.cc:180/:337` 在 loop 线程同步 `runGuarded`，链路含 5 处同步 `sendRequest` + `sleep_for` 轮询。事件循环仅 **4** 条，4 个并发非流式请求即可使服务（含 `/health`）失去响应。同一 controller 的流式分支（`:216-221`）已正确 enqueue 到后台 —— 属流式改造时漏改非流式，见 N1，**建议热修插队** |
+| **停机后 `enqueue` 会重新拉起线程池** | **高** | `shutdown()` 将 `started_` 复位，而 `enqueue()` 含「未启动则自动启动」分支；停机时 Reaper 与清理线程仍在运行且会 enqueue → 停机流程结束后线程数回升。见 ADR-08 决策 5（N2） |
+| 5 个 detach 常驻线程 + `Reaper::stop()` 未接线 | 中 | `Reaper::stop()` 实现完整但**全项目 0 处调用**；`Session.cpp:739` 与 `accountManager` 4 处为 `detach + while(true) + 长 sleep`（含 `hours(5)`/`hours(3)`），无停止路径，进程退出时 DB 写可能丢。正确先例已存在：`ErrorStatsService.cpp:40` 用 `runEvery`。见 N3/N4 |
 | ~~R2 中 4 条 `impl=0` 纯头组件可能是规则误报~~ **（v2.2 结案，见 §0-E-3）** | 中→低 | 逐条实证：**仅 `Apicomn.h` 1 条为真误报**（13 行，2 个前向声明 + 单值 enum，无可断言行为）；另 3 条是**真实缺口**，其中 2 条零链接成本 |
 
 ---
@@ -1644,6 +1647,116 @@ ADR-02 靠 `target_link_libraries` 在编译期强制分层，而 **CMake 不允
 
 ---
 
+## 0-G. 并发与网络模型实测 + ADR-08（v2.4 新增）
+
+RFC-001 v2.3 之前**完全没有涉及并发模型** —— ADR-01～07 无一条提到线程。本节补上，并记录一个**优先级高于全部重构工作的高危缺陷**。
+
+### 先纠正我自己的两处错误
+
+1. 上一轮我用 `--include=*.cpp` 扫 `src/controllers/`，而 controller 全部是 **`.cc`** 后缀 —— 探测结果全空，我据此说「controller 未直接调用 provider」。**判据无效，结论作废**。
+2. 我说 `BackgroundTaskQueue::shutdown()` 无人调用。**这条我说错了** —— `main.cc:382` 在 `app().run()` 返回后确实调用了。真正的问题在时序，不在缺失（见下）。
+
+### 实测线程清单：四类，共 18 条常驻线程
+
+| 类别 | 数量 | 来源 |
+|---|---:|---|
+| Drogon/Trantor 事件循环 | **4** | `config.json: number_of_threads` |
+| BackgroundTaskQueue 工作线程 | **8** | `kDefaultWorkerThreads`；`main.cc:216` 显式 `start()` |
+| 裸 `detach()` 常驻线程 | **5** | `accountManager.cpp` 4 个 + `Session.cpp:739` 1 个 |
+| `chaynsThreadReaper` worker | **1** | `std::thread worker_` |
+
+### 网络请求：29 处 `sendRequest`，**全部同步阻塞，异步回调 0 处**
+
+`HttpClient::newHttpClient` 25 处，**无一传入 loop 参数** —— 每次请求新建 client，无连接复用。
+
+---
+
+### ⚠️ 高危：非流式路径在事件循环线程上同步阻塞
+
+**这是本次复审发现的最严重问题，严重度高于此前所有条目。**
+
+完整证据链：
+
+| 环节 | 证据 |
+|---|---|
+| handler 运行在 IO 事件循环线程 | `AiApiController.h` 用 `ADD_METHOD_TO` 注册，Drogon 默认在 loop 线程回调 |
+| 非流式分支**同步**执行生成 | `AiApiController.cc:180` / `:337` 就地构造 `GenerationService`，直接 `runGuarded(...)` 并等返回值 |
+| 生成链路含阻塞 IO | `runGuarded` → `provider->generate` → `chaynsapi::postChatMessage`（`:485/:611/:787/:801/:908` 五处同步 `sendRequest`） |
+| 还含显式睡眠 | `chaynsapi.cpp:956` 轮询退避 `sleep_for(pollingDelayForElapsed(...))` |
+
+**后果**：一个非流式请求会独占一条事件循环线程**整个上游耗时**（LLM 场景为秒级至分钟级）。
+事件循环只有 **4** 条 —— **4 个并发非流式请求即可让整个服务失去响应**，包括 `/health` 与 `/metrics`（健康检查会误判为宕机）。
+
+### 而流式路径是**对的**
+
+`AiApiController.cc:216-221` 的做法完全正确：
+
+1. `newAsyncStreamResponse` 回调内先 `IoLoopResponseStream::create(...)` 把流绑定到当前 IO loop
+2. 再 `BackgroundTaskQueue::instance().enqueue("chat_stream_generation", ...)` 把生成推到后台
+3. 事件循环立即 `callback(resp)` 返回
+
+> **同一个 controller 里，流式做对了、非流式做错了。**
+> 这说明它不是设计判断失误，而是**流式改造时漏改了非流式分支** —— 属于遗漏，修复成本很低。
+
+---
+
+### 停机时序：队列关了，但线程没关全，且顺序是错的
+
+`main.cc` 在 `app().run()` 返回后：AccountManager（注释自承「无独立后台线程停机接口，由进程退出统一回收」）→ `BackgroundTaskQueue::shutdown()`。
+
+| 缺口 | 实测 |
+|---|---|
+| `chaynsThreadReaper::stop()` **写了但没接线** | 实现完整（`stopRequested_` + `wakeCv_.notify_all()` + `join()`），全项目**调用点 0 处** |
+| `Session.cpp:739` 清理线程 | `detach()` + `while(true)`，无停止路径 |
+| `accountManager` 4 个 detach 线程 | 同上，含 `sleep_for(hours(5))`、`sleep_for(hours(3))` |
+| **顺序错误** | Reaper 与清理线程仍在运行时，`BackgroundTaskQueue` 已 `shutdown()` |
+
+最后一条会引发一个**具体的、可推演的缺陷**：`enqueue()` 内含「若未启动则自动启动」分支，
+而 `shutdown()` 会把 `started_` 复位为 `false`。于是**停机后**任何仍存活的线程调用 `enqueue`，
+都会**重新拉起 8 条工作线程** —— 停机流程执行完，线程数反而回升。
+
+这是「懒启动」与「shutdown 复位状态」两个各自合理的设计**组合**出来的缺陷。
+
+---
+
+### ADR-08 并发模型与停机时序
+
+**决策**：
+
+1. **阻塞位置**：事件循环线程内**禁止**同步 `sendRequest`、`sleep_for`、同步 DB 调用。
+   所有含上游 IO 的执行**一律 enqueue 到 BackgroundTaskQueue**。流式路径已符合，非流式路径须改造。
+2. **Pipeline 语义明文化**：§4.3 的 `Result<void> run(GenCtx&)` 是**同步阻塞签名**，整条 Pipeline 运行在后台线程；
+   事件循环只负责接收 `IoLoopResponseStream` 推来的分片。把现在的隐式约定写成明文。
+3. **定时任务统一用 loop 定时器**：禁止 `detach + while(true) + 长 sleep`。
+   项目内已有正确先例 —— `ErrorStatsService.cpp:40` 的 `getLoop()->runEvery(hours(1), ...)`。
+4. **停机时序**定为：停止接收新请求 → 停定时器与 Reaper → 各清理线程 `stop()+join()` → `BackgroundTaskQueue::shutdown()` 排空 → 关 DB 连接池。
+5. **`enqueue` 改 fail-fast**：`shutdown()` 之后调用 `enqueue` 必须返回失败，**不得重启线程池**。
+6. **与 ADR-06 合并**：上述时序由组合根 `AppContext::shutdown()` 承载 —— 这与「消灭单例」是同一件事，不单独设阶段。
+
+### 处置项（按性质归类，不改重构阶段划分）
+
+| 编号 | 任务 | 估时 | 归属 |
+|---|---|---:|---|
+| **N1** | **非流式路径改为 enqueue 到后台队列** | 0.5 天 | ⚠️ **建议作为热修先行，插队到重构之前** |
+| N2 | `enqueue` 在 shutdown 后 fail-fast | 0.5 天 | 热修，随 N1 |
+| N3 | `Reaper::stop()` 接线到停机路径 | 0.5 天 | 热修，随 N1 |
+| N4 | 5 个 detach 线程 → `runEvery` / 可停 worker | — | 并入阶段 2（单例治理） |
+| N5 | `HttpClient` 复用 + loop 绑定 | — | 并入阶段 3（`ProviderBase` 落地） |
+
+> **N1 是本文档中唯一建议插队到重构之前的项**。理由：它与架构重构无关（改 20 行以内），
+> 但当前状态下 4 个并发非流式请求即可打死服务 —— 不应该等 9 周重构完才修。
+> N3 更是**只需接一行调用**，实现早已写好。
+
+### 工期
+
+| | 周 |
+|---|---:|
+| v2.3 口径 | 9.5 |
+| N1+N2+N3（1.5 天） | +0.3 |
+| **合计** | **≈ 9.8 周** |
+
+---
+
 ## 10. 变更记录
 
 | 版本 | 日期 | 变更 |
@@ -1662,3 +1775,4 @@ ADR-02 靠 `target_link_libraries` 在编译期强制分层，而 **CMake 不允
 | v2.1 | 2026-08-07 | **消歧义版：把「不明确」全部落成可复算的确定值或显式标注**。（1）**修正三个版本的工期矛盾**：§9 长期显示 7.5 周、§10 的 v1.8 写 7.9 周，新增「工期对账」表锁定 **7.9 周为唯一口径**，并说明 7.5 是阶段基线故予保留。（2）**§0-E-2 首次获得工期归属**：P0 2 天 / P1 0.5 天 / P2 1.5 天 / P3 0.5 天 = **4.5 天 ≈ 0.9 周**，计入后 **≈ 8.8 周**；P4 明确**暂不排期**；P2 估时标注为**唯一带前置条件项**（`ProviderResult` 可否默认构造，不成立则作废转入不可估算区）。（3）**§7 风险表补 3 行**：P13 的 UB（高，标注为当前唯一已定位的生产期 UB）、R2 B 类 18 条链接闭包不可预测（高，对策为**禁止打包报工期**）、4 条纯头组件疑似规则误报（中，若成立应修规则而非硬补测试）。（4）**两处数字补出处**：`ImageInfo` 5 字段实为 `contracts/GenerationRequest.h:110` 定义而非 `Session.h`；`SessionCodec.cpp` 四段变量名 `req`/`resp`/`st`/`pv` 与 10+4+11+7=32 已可复算。（5）**阶段 1/3/5 显式标注「有意暂缓细化」**并给出细化触发条件，消除「粗纲 = 遗漏」的歧义。本版**只消歧义，不改任何技术决策** |
 | v2.2 | 2026-08-07 | **三项待定全部实证结案，并推翻自己的 A/B 二分法**。（1）**议题 1 结案**：`provider::ProviderResult` 经四条 `static_assert` + `g++ -fsyntax-only` 实证为**可默认构造/拷贝/移动/赋值（rc=0）**，系纯聚合体、7 个成员全带默认初值。P2 的 1.5 天**解除前置条件**，至此 §9 估时表**不含任何待定条件**。（2）**议题 3 结案**：4 条 `impl=0` 组件逐条实证 —— 仅 `Apicomn.h`（13 行，2 前向声明 + 单值 enum）为**真误报**；`ToolDefinitionResolver`（含 namespace 递归遍历逻辑）与 `ProviderResult`（3 判定式 + 5 工厂）是**真实缺口**；`BackgroundTaskQueue`（函数内静态单例 + 线程池）真实但**并入阶段 2 单例治理**，避免做两遍。（3）**议题 2 结案 + 自我推翻**：新增 **§0-E-3**，v2.0 的 A/B 二分法**判据有误** —— 纯头组件无 `.cpp` 可链接、测试零 CMake 成本，却被归入 B 类，凭空多记 4 笔成本。改为 **A(5) / H(3) / B(14) / 排除(1)** 三分法；B 类由 18 收窄至 14 并分 B1(8)/B2(3)/B3(3) 三层，B2 三条 dbManager 与 P4 合并为同一前置（DB 替身策略未定，4 条一律不估时），B3 三条仍禁止估时。（4）**工期**：H 类 2 条 +1.5 天 ≈ 0.3 周，总计 **≈ 9.1 周**（7.9 基线 + 0.9 A 类 + 0.3 H 类）。（5）**故意未做**：R2 排除规则未写入脚本、`audit-baseline.json` 仍为 23 —— 改规则须同时改基线，混入文档提交会让防回归失效；文档口径(22+1)与脚本口径(23)的差异已在 §0-E-3 记录 |
 | v2.3 | 2026-08-07 | **架构复审：选型基本正确，但发现一处阶段排序缺陷**。（1）**再次纠正自己的测量**：v2.2 前用 include 路径前缀判定模块归属，测出 0 个环；该判据对 basename 式 include 无效（而本仓正是 basename 为主）。改用 basename→模块全量映射（歧义数 0）重测，实得 **13 条边、3 个双向环**。（2）**新增 §0-F + 阶段 0.7「解环」（2 天，排在阶段 1 之前）**：ADR-02 靠 CMake target 强制分层，而 **CMake 不允许 static library 循环依赖**，环不解开阶段 1 无法落地 —— 这是硬约束。（3）**三环逐条定性**：`apiManager↔apipoint` 为弱环，`ApiManager.h` 仅以 `shared_ptr<APIinterface>` 持有、从不解引用，前向声明即可断（`Apicomn.h:9` 已有同样先例）；`dbManager↔metrics` 唯一成因是 `ErrorEvent.h` 放错层，移入 `domain/model/` 即消失；`apipoint↔sessionManager` **三条边中只有一条是真违规** —— `APIinterface.h→Session.h` 是 Layer1→Layer2，**符合 ADR-01 的期望方向**，`GenerationService.cpp→ProviderResult.h` 属文件放错层（`ProviderResult` 已实证为纯聚合体，本属 `domain/model/`），唯独 **`Session.cpp:6→chaynsapi.h`**（domain 直接依赖具体 Provider）是真 DIP 违规，须靠 `IChatProvider` + 组合根注入，**与阶段 2 是同一件事，不排期、转阶段 2**。（4）**新增 R4 环检测门禁**：前三项是一次性清理，无门禁则环会长回来 —— 正是 ADR-02 那句话所指的情形。（5）**ADR-05 补充转换边界**：实测 10 个 `throw` 对应 **100 个 `catch`**，九成接的是 Drogon/jsoncpp/DB 驱动的异常，禁不掉；明确转换边界设在 **infrastructure 出口**，domain/application 内部不写 `try`。同时指出 `Result<` 现有用法为 **0**，铺开是大规模签名变更，压在阶段 1 的 1.0 周内不现实，须单独立项（已入 §7）。（6）**术语统一**：ADR-01 的「四层」与 §3/§9 的「五层 target」并存易误读 —— `platform/` 是横切设施非分层，口径定为 **架构分层 4 / CMake target 5**。（7）**§7 补 3 行**（Result 铺开、依赖环、EmitAndToolBridge 篇幅与风险倒挂：2213 行仅提及 8 次，而 2600 行的 accountManager 提及 30 次）。（8）**工期**：9.1 + 0.4 = **≈ 9.5 周** |
+| v2.4 | 2026-08-07 | **并发与网络模型实测，新增 §0-G + ADR-08**。（1）**又纠正自己两处错误**：上一轮用 `--include=*.cpp` 扫 `src/controllers/`，而 controller 全为 **`.cc`**，探测全空却据此下了结论 —— 判据无效已作废；另外我曾断言 `BackgroundTaskQueue::shutdown()` 无人调用，**实测 `main.cc:382` 确有调用**，此条为我说错，真正问题在时序。（2）**实测线程构成**：4 条事件循环（`number_of_threads`）+ 8 条后台队列线程 + 5 个裸 `detach` + 1 条 Reaper worker。**29 处 `sendRequest` 全部同步阻塞，异步回调 0 处**；25 处 `newHttpClient` 无一绑定 loop。（3）**发现全文档最高危项**：非流式路径 `AiApiController.cc:180/:337` 在**事件循环线程上同步** `runGuarded`，链路含 5 处同步 `sendRequest` 与 `chaynsapi.cpp:956` 的 `sleep_for` 轮询退避 —— 事件循环仅 4 条，**4 个并发非流式请求即可让服务连 `/health` 都不响应**。而同一 controller 的**流式分支做法完全正确**（`:216` 先 `IoLoopResponseStream::create` 绑定 loop，`:221` 再 enqueue 到后台，loop 立即返回）—— 说明这不是设计失误而是流式改造时**漏改了非流式分支**，修复成本极低。（4）**停机时序缺陷**：`Reaper::stop()` 实现完整却**全项目 0 处调用**；`Session.cpp:739` 与 accountManager 4 处 detach 线程无停止路径；且顺序错误 —— Reaper/清理线程仍在跑时队列已 `shutdown()`，而 `enqueue()` 的懒启动分支会**把 8 条工作线程重新拉起**，停机后线程数反而回升（懒启动与 shutdown 复位状态组合出的缺陷）。（5）**ADR-08 六条决策**：loop 线程禁止阻塞 IO；§4.3 Pipeline 明文定为同步签名 + 后台线程执行；定时任务统一 `runEvery`（先例 `ErrorStatsService.cpp:40`）；定义四步停机时序；`enqueue` 改 fail-fast；停机时序由 `AppContext::shutdown()` 承载、**与 ADR-06 消灭单例合并不另设阶段**。（6）**N1～N5 处置项**，其中 **N1（非流式改 enqueue）+ N2 + N3 建议作为热修插队到重构之前**（共 1.5 天，与架构改动无关，N3 仅需接一行调用）。（7）**§7 补 3 行**。（8）**工期 9.5 + 0.3 = ≈ 9.8 周** |
