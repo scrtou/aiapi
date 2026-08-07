@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
 project(aiapi CXX)
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.deps/drogon-install")
-    list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../.deps/drogon-install")
+# 仓库根目录(本文件的上一级)下的本地 Drogon 安装,两种构建入口均适用。
+get_filename_component(AIAPI_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+if (EXISTS "${AIAPI_REPO_ROOT}/.deps/drogon-install")
+    list(PREPEND CMAKE_PREFIX_PATH "${AIAPI_REPO_ROOT}/.deps/drogon-install")
 endif()
 
 include(CheckIncludeFileCXX)
@@ -74,6 +76,7 @@ add_executable(${PROJECT_NAME}
     sessionManager/tooling/ToolCallNormalizer.cpp
     sessionManager/continuity/ResponseIndex.cpp
     sessionManager/continuity/HistoryReplayBudget.cpp
+    sessionManager/continuity/OutboundBudget.cpp
     sessionManager/continuity/TextExtractor.cpp
     sessionManager/continuity/ContinuityResolver.cpp
     sessionManager/core/RequestAdapters.cpp
@@ -144,4 +147,8 @@ target_include_directories(${PROJECT_NAME}
 # set_property(TARGET ${PROJECT_NAME} PROPERTY ENABLE_EXPORTS ON)
 # ##############################################################################
 
-add_subdirectory(test)
+option(AIAPI_BUILD_TESTS "build unit test target aiapi_test" ON)
+if (AIAPI_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
+endif()
