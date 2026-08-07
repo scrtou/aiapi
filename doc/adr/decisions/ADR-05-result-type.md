@@ -133,3 +133,45 @@
 - 依赖 [ADR-01](./ADR-01-layered-architecture.md)：转换边界的「infrastructure 出口」只有在分层成立后才有意义。
 - 被 [ADR-07](./ADR-07-provider-template-method.md) 使用：`ProviderBase` 各钩子的返回类型即 `Result<T, Error>`。
 - 与 [ADR-08](./ADR-08-concurrency-and-shutdown.md) 无冲突：`Result` 是同步返回值，ADR-08 的「Pipeline 同步签名 + 后台线程执行」正好与之相容。
+
+
+---
+
+## 数字订正与新增前置条件（2026-08-07，评审第 8 条取证）
+
+取证报告：[`../reports/review-08-result-model.md`](../reports/review-08-result-model.md)
+
+### 订正：v2.3 补充表中两个数字有误
+
+| 项 | 原记录 | 复测 | 说明 |
+|---|---:|---:|---|
+| `catch` | 100 | **121** | 原值疑似漏统计 `.h` |
+| `std::optional` | 59 | **35** | 原值疑似把实现内局部变量计入 |
+| `throw` | 10 | 10 | 一致 |
+| `Result<` | 0 | 0 | 一致 |
+
+**结论方向不变** —— 10 : 121 比 10 : 100 更强地支持 §5.3「第三方异常只能在 Layer 1 出口拦截」。
+
+复测口径（今后以此为准）：`throw` / `catch` 统计 `*.cpp *.cc *.h`；`optional` **仅统计 `*.h`**
+（只关心接口签名）；`Result<` 须排除 `ProviderResult` / `GateResult` 同名噪声；均排除 `src/test/`。
+
+### 新增：B2 批次前置条件
+
+**B2（infrastructure 出口 `ProviderError` → `Error` 转换层）必须在 chaynsapi 结构化返回真实化之后进行。**
+
+理由：`chaynsapi::generate()` 当前是伪适配器 —— 从自己用副作用写入的
+`session.response.message` 回读数据再包装成 `ProviderResult`，其 `error` 字段是
+**由 HTTP 状态码反推**而非来自上游响应体。在这样的 `ProviderResult` 之上建转换层，
+等于把已失真的错误信息再稀释一次。
+
+### 两套 ErrorCode 合并方向（B1）
+
+`core/Errors.h` 与 `contracts/GenerationEvent.h` 的 `ErrorCode` **唯一差异是 `None` 项**，
+其余 10 项名称与语义完全一致。**以 `core::error::ErrorCode` 为准**（已带
+`errorCodeToString` / `errorCodeToHttpStatus`，B5 收敛 140 处状态码映射点需要后者）。
+`None` 在 `Result<T, Error>` 落地后自然失效，**B1 不做该清理**，避免一个批次同时改类型和改语义。
+
+### 有利事实
+
+`AppError` 目前只被 **4 个非测试文件**引用（`Errors.h` / `GenerationService.{h,cpp}` /
+`AiApiController.cc`），尚未扩散。**现在演进成 `Error` 的成本处于最低点**，B1 应尽早启动。

@@ -1067,3 +1067,24 @@ N8 普查已完成，报告见 `doc/adr/reports/N8-cancellation-audit.md`。要�
 
 **工期**：N8 实耗 0.1 天，N6 −0.5，N10 +0.5，N11 +0.5，净 +0.5 天。
 **总工期 10.3 → 10.4 周。**
+
+
+---
+
+## 评审第 8 条结论回写（2026-08-07）
+
+报告：`doc/adr/reports/review-08-result-model.md`
+
+1. **裁决：采纳，但大部分已在 ADR-05 v2.6 落地**，本次取证验证其成立，不推翻。
+2. **阶段 3 验收标准收紧（不加工期）**：`chaynsapi::generate()` 是伪适配器 ——
+   从自己副作用写入的 `session.response.message` 回读再包装成 `ProviderResult`，
+   错误码由 HTTP 状态码反推。**24 处 `session.response` 引用清零**列为阶段 3 验收条件。
+   原「接口收窄」表述允许 chaynsapi 维持现状过关，属验收漏洞。
+3. **阶段 0.5 的连带影响**：三家 Provider 中 nexos / retool 真正返回结构化结果、chayns 是伪的；
+   阶段 0.5 删除 nexos 后，**存活的主力路径恰好是假的那个**。
+4. **B2 前置条件**：必须在第 2 项完成之后，否则是在失真数据上再建转换层。
+5. **B1 合并方向**：两套 `ErrorCode` 唯一差异是 `None`，以 `core::error::ErrorCode` 为准。
+6. **ADR-05 数字订正**：catch 100 → **121**，optional 59 → **35**；throw 10 与 Result 0 无误。
+   结论方向不变（10:121 比 10:100 更支持 §5.3）。复测口径已写入 ADR-05。
+
+**工期不变，维持 10.4 周。**
