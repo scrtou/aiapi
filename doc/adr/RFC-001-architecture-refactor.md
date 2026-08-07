@@ -4,7 +4,7 @@
 |------|------|
 | 编号 | RFC-001 |
 | 状态 | 草案 (Draft) |
-| 版本 | v2.1 |
+| 版本 | v2.2 |
 | 日期 | 2026-08-07 |
 | 范围 | `src/` 全量约 39,000 行 C++（阶段 0.5 下线后减少约 4,300 行） |
 | Provider 范围 | **仅保留 chayns + retool**；nexos / openai 下线（v1.5 决策） |
@@ -1389,8 +1389,8 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 | 长命分支导致合并地狱 | 中 | Strangler Fig，每日合主干，单阶段不超过 1.5 周 |
 | 提交历史不可追溯 | 中 | 立即改用规范 commit message（现状多为 `08070939` 类时间戳） |
 | **P13：`ApiManager::getApiInfoByModelName` 对空队列调 `top()` 属未定义行为** | **高** | **当前唯一已定位的生产期 UB**，非重构引入。按 §0-E-2 的 P2 处置：先写替身测试记录现状，再修。修复前不得扩大 `ApiManager` 调用面 |
-| **R2 中 18 条 B 类须先改 CMake，链接闭包不可预测** | **高** | 全文最大的工期不确定源。对策是**不估算**：A 类 5 条走固定成本，B 类逐条评估后单独立项，禁止打包报工期 |
-| R2 中 4 条 `impl=0` 纯头组件可能是规则误报 | 中 | `ToolDefinitionResolver` / `BackgroundTaskQueue` / `ProviderResult` / `Apicomn` 无 `.cpp`，需先判定「是否存在可断言行为」。若判定为误报，应修 R2 规则而非硬补测试 |
+| **R2 中 B 类须先改 CMake，链接闭包不可预测** | **高→中** | 仍是最大工期不确定源，但 v2.2 已由 18 条收窄至 **14 条**（剥离 3 条纯头 + 排除 1 条误报），并按 impl 行数分 B1/B2/B3 三层（见 §0-E-3）。B3 三条（2601/1441/532 行）仍**禁止打包报工期** |
+| ~~R2 中 4 条 `impl=0` 纯头组件可能是规则误报~~ **（v2.2 结案，见 §0-E-3）** | 中→低 | 逐条实证：**仅 `Apicomn.h` 1 条为真误报**（13 行，2 个前向声明 + 单值 enum，无可断言行为）；另 3 条是**真实缺口**，其中 2 条零链接成本 |
 
 ---
 
@@ -1443,15 +1443,28 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 |---|---|---:|---|
 | P0 `SessionCodec` | 阶段 0 内 | **2 天** | 10 用例 + 3 处生产改动 + 4 条变异验真 |
 | P1 `TextExtractor` | 阶段 0 内 | **0.5 天** | 22 行 impl、零依赖 |
-| P2 `ApiManager` + 修 P13 | 阶段 0 内 | **1.5 天** | 8 个纯虚函数替身 + 修 4 项缺陷 |
+| P2 `ApiManager` + 修 P13 | 阶段 0 内 | **1.5 天**（v2.2 已解除条件） | 8 个纯虚函数替身 + 修 4 项缺陷 |
 | P3 `ApiFactory` | 阶段 0 内 | **0.5 天** | 复用 P2 替身 |
 | P4 `SessionDbManager` | **暂不排期** | — | 涉真实 DB 与异步队列，非纯函数，需先定替身策略 |
 | **A 类小计（P0–P3）** | | **4.5 天 ≈ 0.9 周** | |
 
-> **P2 的 1.5 天带前置条件**：须先探明 `provider::ProviderResult` 能否默认构造。
-> 若不能，P2 从 A 类退化为 B 类，该估时**作废并转入不可估算区**。这是全部估时中唯一带条件的一项。
+> ~~**P2 的 1.5 天带前置条件**：须先探明 `provider::ProviderResult` 能否默认构造。~~
+>
+> **v2.2 结案 —— 条件已解除，P2 的 1.5 天转为无条件估时。**
+>
+> 判定方式不是读代码推测，而是**编译期实证**：四条 `static_assert` 分别检查
+> `is_default_constructible` / `is_copy_constructible` / `is_move_constructible` / `is_copy_assignable`，
+> 经 `g++ -std=c++17 -fsyntax-only` **全部通过（rc=0）**。
+>
+> 原因：`ProviderResult`（`src/apipoint/ProviderResult.h:100`）是纯聚合体 —— 7 个数据成员全部带默认初值
+> （`statusCode = 200`、`meta{Json::objectValue}` 等），无用户声明构造函数、无 `const`/引用成员、无 `= delete`。
+> 因此 `ApiManager` 替身可零成本返回 `ProviderResult{}`。
+>
+> **这是全文估时中唯一的带条件项，现已归零 —— §9 估时表目前不含任何待定前置条件。**
 
-**含 §0-E-2 A 类后：≈ 8.8 周**（7.9 + 0.9），不含 P4 与 B 类 18 条。
+**含 §0-E-2 A 类（P0–P3）后：≈ 8.8 周**（7.9 + 0.9）。
+
+**再含 §0-E-3 的 H 类 2 条后：≈ 9.1 周**（8.8 + 0.3）。仍不含 P4、`BackgroundTaskQueue`、以及 B 类 14 条。
 
 > 阶段 0.5 新增的 0.5 周由阶段 3 的缩短（1.5 → 1.0 周）完全抵消，**总工期不变**。
 > 换言之，Provider 下线是**自付费**的 —— 它省下的工作量不少于它本身的成本。
@@ -1460,6 +1473,55 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 
 > **最小可行子集**：若资源受限，阶段 0 + 0.5 + 1 + 2（4.5 周）即可获得约 80% 收益
 > —— 依赖可见、领域可测、单例清零。阶段 3~5 可按需延后。
+
+---
+
+## 0-E-3. R2 分类法修正：A / H / B 三分（v2.2）
+
+### 推翻 v2.0 自己定的 A/B 二分法
+
+v2.0 把 23 条分为「A 已链接(5)」与「B 未链接(18)」，判据是 `.cpp` 是否在 `PROJECT_SOURCES`。
+**该判据对纯头组件是错的** —— header-only 组件根本没有 `.cpp` 可链接，测试它只需 `#include`，**CMake 一行都不用改**。
+把它们归入「须先改 CMake」的 B 类，等于凭空记了 4 笔不存在的成本。
+
+### 修正后的三分法
+
+| 类别 | 数量 | 判据 | CMake 成本 |
+|---|---:|---|---|
+| **A 已链接** | **5** | `.cpp` 已在 `PROJECT_SOURCES` | `TEST_SOURCES` 加一行 |
+| **H 纯头（新增）** | **3** | `impl=0` 且头内有 inline 函数体 | **零** |
+| **B 未链接** | **14** | 有 `.cpp` 但不在 `PROJECT_SOURCES` | 须改 CMake + 评估链接闭包 |
+| **排除** | **1** | 无可断言行为 | 不适用 |
+| 合计 | **23** | | |
+
+### H 类 3 条逐条结论
+
+| 组件 | 头行数 | inline 函数体 | 结论 | 排期 |
+|---|---:|---:|---|---|
+| `tooling/ToolDefinitionResolver.h` | 176 | 11 | **真实缺口，价值最高**。`namespace toolcall` 下的自由函数，含 `visitToolDefinitionsImpl` 对嵌套 namespace 工具定义的**递归下降遍历**（`declaredType == "namespace"` 分支、`_aiapi_namespace` 元数据回读）。纯函数、无全局状态 | **H1 · 1 天** |
+| `apipoint/ProviderResult.h` | 152 | 12 | **真实缺口，成本极低**。`isSuccess()` / `hasError()` / `isValid()` 三个判定式 + 5 个静态工厂。`fail()` 内 `err.httpStatusCode > 0 ? … : 500` 是唯一有真实分支的工厂 | **H2 · 0.5 天** |
+| `utils/BackgroundTaskQueue.h` | 152 | 14 | **真实但不属本阶段**。函数内静态单例 `static BackgroundTaskQueue& instance()` + `std::vector<std::thread> workers_` 线程池。测它需控制线程调度与 `shutdown()` 时序，**与阶段 2「消灭单例」是同一件事**，此处单独补测会做两遍 | **不排期，转阶段 2** |
+
+### 排除项：`Apicomn.h`（真误报）
+
+全文 13 行：`struct session_st;` / `class APIinterface;` 两个前向声明，加一个只有单个枚举值的 `enum class ApiChannel`。
+**无函数、无数据成员、无任何可断言行为** —— 为它写测试只能断言「枚举值等于自己」，正属 §0-E 定义的空转用例。
+
+> **规则修正建议（尚未执行）**：R2 应增加排除条件「`impl=0` 且 inline 函数体数 = 0」。
+> **本版故意未改脚本、未改 `audit-baseline.json`（仍为 23）** —— 改规则会同时改动基线，
+> 必须单独一个 commit 并重跑 `--selftest`，混在文档提交里会让防回归失去意义。
+> 当前状态：**文档口径 22 条真实缺口 + 1 条待排除；脚本口径 23 条**，差异原因即此。
+
+### B 类 14 条分层（替代 v2.0 的扁平列表）
+
+| 层 | 条数 | impl 行数 | 处置原则 |
+|---|---:|---|---|
+| **B1 小** | **8** | 30–181 | 可逐条立项，单条 0.5–1 天。扇入最高的 `channelManager.h`(5/175)、`RetoolWorkspaceManager.h`(5/73) 优先 |
+| **B2 中** | **3** | 383–452 | 三条全是 `dbManager`（chaynsThread / retoolWorkspace / channel）。**须先定 DB 替身策略**，与 §0-E-2 的 P4 同一前置 |
+| **B3 大** | **3** | 532–2601 | `accountManager.h`(2601) / `chaynsapi.h`(1441) / `GenerationService.h`(532)。**禁止估时**；前两条已在 §7 风险表单列，须先函数内拆分 |
+
+> **B2 与 P4 合并前置**：`SessionDbManager`（P4，490 行）与 B2 三条面对同一个问题 —— 真实 DB + 异步队列。
+> 一次性定出 DB 替身策略可同时解锁 4 条，比逐条摸索更省。**但该策略尚未设计，故这 4 条一律不估时。**
 
 ---
 
@@ -1479,3 +1541,4 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 | v1.9 | 2026-08-07 | **先固化尺子，再谈拆分（B 先于 A）**。**新增 §0-E-1「三条审计规则」**作为全阶段唯一判定依据：**R1 同名竞争**（实测 4 个，与 v1.8 一致，已收敛）、**R2 高扇入零测试**（*实测 2 个 —— 该数字已由 v2.0 纠正为 **23**，原因见 §0-E-1*，**新发现 `BridgeHelpers` 188 行 / 扇入 5 为全库最高 / 测试 0**，因无同名成员竞争而被 R1 漏扫）、**R3 函数级 >200 行**（实测 **12 个函数 / 8 个文件 / 4,725 行**）。配套硬规则：行数必须来自 `wc -l`，禁止目测。**两处数据校正**：`ToolDefinitionEncoder` 26 → **29** 行（v1.8 目测错误）；`transformRequestForToolBridge` ~550 → **554** 行（精确边界 1660–2213），god 文件 9 函数完整切分表入库。**两处前提推翻**：（1）「god 文件是最大单点」不成立 —— `accountManager.cpp` **2,600 行**，大 387 行且同样零覆盖、日志量居首；（2）全库最大单函数不在 god 文件，而是 `chaynsapi.cpp` 的 **865 行**（283–1147，零覆盖）。**补齐漏列范围**：`RequestAdapters.cpp`（1,255 行，日志第 4，36 条）与 `Session.cpp`（1,221 行）合计 2,476 行活跃主路径代码。**拆分语义拆为两个动作**：A 函数内拆分（必须先做）/ B 文件拆分（依赖 A）；god 文件 4 个超标函数共 1,549 行占 70%，先做 B 属假性完成。审计脚本重命名为 `tools/architecture_audit.py`。风险表新增三项。**本版不调总工期** —— 阶段边界重划需待 A 阶段（`RequestAdapters` / `Session` / `accountManager` 摸底）完成后统一重估 |
 | v2.0 | 2026-08-07 | **R2 口径纠错 + 首批处置单落地**。（1）**R2 由 2 → 23，是口径错误不是漏扫**：v1.9 用头文件 basename 子串匹配判断是否被测，既误判也漏扫；`tools/architecture_audit.py` 改用 **`g++ -MM` 编译期依赖闭包**，并以 `src/test/CMakeLists.txt` 的 `TEST_SOURCES` / `PROJECT_SOURCES` 为真值来源，同时修正测试信号识别（`DROGON_TEST` / `CHECK` / `REQUIRE`，此前误按 gtest 假定）。基线落盘 `doc/adr/audit-baseline.json`，错误版本留档 `audit-baseline.INVALID-r2-bug.json.bak`。（2）**`BridgeHelpers` 已补测出榜**（`src/test/test_bridge_helpers.cpp`）。（3）**新增 §0-E-2「R2 首批处置方案」**：23 条按「是否已链接进测试二进制」分 **A 类 5 条 / B 类 18 条**，A 类优先（零构建风险），排序 P0 `SessionCodec` → P1 `TextExtractor` → P2 `ApiManager` → P3 `ApiFactory` → P4 `SessionDbManager`。（4）**新增 P13**：`ApiManager` 四项真实缺陷 —— `getApiInfoByModelName` 空队列 `top()` 为 **UB**、查询接口用 `operator[]` 致 nullptr 条目膨胀、`updateApiInfo` 空实现、`flushModelnameApiQueueMap` 疑似空操作。（5）**三处自我推翻**：`app()` 在测试中**可用**（`test_main.cc` 于后台线程跑事件循环），故排除 `init()` 的理由改为「无信息量 + 单例污染」而非「会崩」；`session_st` 为 **32** 字段而非 31；`apiType` 映射为 **3 份**而非 2 份。（6）**三项探查结论**：`ApiType` 枚举确认仅 2 值（三元映射完备）；`Session.h` 中 OpenSSL 仅见于注释与声明、无内联实现，**P0 无链接风险**；`v` 字段全仓仅 1 处写入、**零处读取**，为死字段。（7）**变异验真由 1 条增至 4 条** —— 用例间覆盖重叠，单条不足以证明断言独立有效。（8）**新增待核实项**：R2 中 4 条 `impl=0` 的纯头文件组件可能是**规则误报**，需逐条判定是否存在可断言行为。**本版不调总工期**；R2 降幅、用例数与断言数均须实跑后回填，不做估算 |
 | v2.1 | 2026-08-07 | **消歧义版：把「不明确」全部落成可复算的确定值或显式标注**。（1）**修正三个版本的工期矛盾**：§9 长期显示 7.5 周、§10 的 v1.8 写 7.9 周，新增「工期对账」表锁定 **7.9 周为唯一口径**，并说明 7.5 是阶段基线故予保留。（2）**§0-E-2 首次获得工期归属**：P0 2 天 / P1 0.5 天 / P2 1.5 天 / P3 0.5 天 = **4.5 天 ≈ 0.9 周**，计入后 **≈ 8.8 周**；P4 明确**暂不排期**；P2 估时标注为**唯一带前置条件项**（`ProviderResult` 可否默认构造，不成立则作废转入不可估算区）。（3）**§7 风险表补 3 行**：P13 的 UB（高，标注为当前唯一已定位的生产期 UB）、R2 B 类 18 条链接闭包不可预测（高，对策为**禁止打包报工期**）、4 条纯头组件疑似规则误报（中，若成立应修规则而非硬补测试）。（4）**两处数字补出处**：`ImageInfo` 5 字段实为 `contracts/GenerationRequest.h:110` 定义而非 `Session.h`；`SessionCodec.cpp` 四段变量名 `req`/`resp`/`st`/`pv` 与 10+4+11+7=32 已可复算。（5）**阶段 1/3/5 显式标注「有意暂缓细化」**并给出细化触发条件，消除「粗纲 = 遗漏」的歧义。本版**只消歧义，不改任何技术决策** |
+| v2.2 | 2026-08-07 | **三项待定全部实证结案，并推翻自己的 A/B 二分法**。（1）**议题 1 结案**：`provider::ProviderResult` 经四条 `static_assert` + `g++ -fsyntax-only` 实证为**可默认构造/拷贝/移动/赋值（rc=0）**，系纯聚合体、7 个成员全带默认初值。P2 的 1.5 天**解除前置条件**，至此 §9 估时表**不含任何待定条件**。（2）**议题 3 结案**：4 条 `impl=0` 组件逐条实证 —— 仅 `Apicomn.h`（13 行，2 前向声明 + 单值 enum）为**真误报**；`ToolDefinitionResolver`（含 namespace 递归遍历逻辑）与 `ProviderResult`（3 判定式 + 5 工厂）是**真实缺口**；`BackgroundTaskQueue`（函数内静态单例 + 线程池）真实但**并入阶段 2 单例治理**，避免做两遍。（3）**议题 2 结案 + 自我推翻**：新增 **§0-E-3**，v2.0 的 A/B 二分法**判据有误** —— 纯头组件无 `.cpp` 可链接、测试零 CMake 成本，却被归入 B 类，凭空多记 4 笔成本。改为 **A(5) / H(3) / B(14) / 排除(1)** 三分法；B 类由 18 收窄至 14 并分 B1(8)/B2(3)/B3(3) 三层，B2 三条 dbManager 与 P4 合并为同一前置（DB 替身策略未定，4 条一律不估时），B3 三条仍禁止估时。（4）**工期**：H 类 2 条 +1.5 天 ≈ 0.3 周，总计 **≈ 9.1 周**（7.9 基线 + 0.9 A 类 + 0.3 H 类）。（5）**故意未做**：R2 排除规则未写入脚本、`audit-baseline.json` 仍为 23 —— 改规则须同时改基线，混入文档提交会让防回归失效；文档口径(22+1)与脚本口径(23)的差异已在 §0-E-3 记录 |
