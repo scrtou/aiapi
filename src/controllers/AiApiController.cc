@@ -164,39 +164,53 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
     
 
     if (!stream) {
-        LOG_INFO << "[AI接口控制器] 执行 GenerationService::runGuarded（非流式）";
-        
-        HttpResponsePtr jsonResp;
-        int httpStatus = 200;
-        
-        ChatJsonSink jsonSink(
-            [&jsonResp, &httpStatus](const Json::Value& response, int status) {
-                jsonResp = HttpResponse::newHttpJsonResponse(response);
-                httpStatus = status;
-            },
-            genReq.model
-        );
-        
-        GenerationService genService;
-        auto err = genService.runGuarded(
-            genReq, jsonSink,
-            session::ConcurrencyPolicy::RejectConcurrent
-        );
-        
-        if (err.has_value()) {
-            Json::Value errorJson;
-            errorJson["error"]["message"] = err->message;
-            errorJson["error"]["type"] = err->type();
-            ctl::sendJson(callback, errorJson, static_cast<HttpStatusCode>(err->httpStatus()));
-            return;
-        }
-        
-        if (jsonResp) {
-            jsonResp->setStatusCode(static_cast<HttpStatusCode>(httpStatus));
-            jsonResp->setContentTypeString("application/json; charset=utf-8");
-            callback(jsonResp);
-        } else {
-            ctl::sendError(callback, k500InternalServerError, "internal_error", "Failed to generate response");
+        LOG_INFO << "[AI接口控制器] 非流式聊天补全入队后台执行";
+
+        auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
+            std::move(callback));
+
+        const bool accepted = BackgroundTaskQueue::instance().enqueue(
+            "chat_nonstream_generation",
+            [genReq, cb]() mutable {
+                auto jsonResp   = std::make_shared<HttpResponsePtr>();
+                auto httpStatus = std::make_shared<int>(200);
+
+                ChatJsonSink jsonSink(
+                    [jsonResp, httpStatus](const Json::Value& response, int status) {
+                        *jsonResp   = HttpResponse::newHttpJsonResponse(response);
+                        *httpStatus = status;
+                    },
+                    genReq.model
+                );
+
+                GenerationService genService;
+                auto err = genService.runGuarded(
+                    genReq, jsonSink,
+                    session::ConcurrencyPolicy::RejectConcurrent
+                );
+
+                if (err.has_value()) {
+                    ctl::respondInLoop(cb, ctl::makeError(
+                        static_cast<HttpStatusCode>(err->httpStatus()),
+                        err->type(), err->message));
+                    return;
+                }
+
+                if (*jsonResp) {
+                    (*jsonResp)->setStatusCode(static_cast<HttpStatusCode>(*httpStatus));
+                    (*jsonResp)->setContentTypeString("application/json; charset=utf-8");
+                    ctl::respondInLoop(cb, *jsonResp);
+                } else {
+                    ctl::respondInLoop(cb, ctl::makeError(
+                        k500InternalServerError, "internal_error",
+                        "Failed to generate response"));
+                }
+            });
+
+        if (!accepted) {
+            ctl::respondInLoop(cb, ctl::makeError(
+                k503ServiceUnavailable, "service_unavailable",
+                "Server is shutting down", "shutting_down"));
         }
         return;
     }
@@ -314,47 +328,62 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
     }
 
     if (!stream) {
-        LOG_INFO << "[AI接口控制器] 执行 GenerationService::runGuarded（非流式 Responses）";
+        LOG_INFO << "[AI接口控制器] 非流式 Responses 入队后台执行";
 
-        HttpResponsePtr jsonResp;
-        int httpStatus = 200;
+        auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
+            std::move(callback));
+        const int inputTokensEstimated = static_cast<int>(genReq.currentInput.length() / 4);
 
-        ResponsesJsonSink jsonSink(
-            [&jsonResp, &httpStatus](const Json::Value& builtResponse, int status) {
-                if (status == 200 && !builtResponse.isMember("error") &&
-                    builtResponse.isMember("id") && builtResponse["id"].isString()) {
-                    ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
+        const bool accepted = BackgroundTaskQueue::instance().enqueue(
+            "responses_nonstream_generation",
+            [genReq, cb, nativeResponsesToolItems, inputTokensEstimated]() mutable {
+                auto jsonResp   = std::make_shared<HttpResponsePtr>();
+                auto httpStatus = std::make_shared<int>(200);
+
+                ResponsesJsonSink jsonSink(
+                    [jsonResp, httpStatus](const Json::Value& builtResponse, int status) {
+                        if (status == 200 && !builtResponse.isMember("error") &&
+                            builtResponse.isMember("id") && builtResponse["id"].isString()) {
+                            ResponseIndex::instance().storeResponse(
+                                builtResponse["id"].asString(), builtResponse);
+                        }
+
+                        *jsonResp   = HttpResponse::newHttpJsonResponse(builtResponse);
+                        *httpStatus = status;
+                    },
+                    genReq.model,
+                    inputTokensEstimated,
+                    nativeResponsesToolItems
+                );
+
+                GenerationService genService;
+                auto gateErr = genService.runGuarded(
+                    genReq, jsonSink,
+                    session::ConcurrencyPolicy::RejectConcurrent
+                );
+
+                if (gateErr.has_value()) {
+                    ctl::respondInLoop(cb, ctl::makeError(
+                        static_cast<HttpStatusCode>(gateErr->httpStatus()),
+                        gateErr->type(), gateErr->message, "concurrent_request"));
+                    return;
                 }
 
-                jsonResp = HttpResponse::newHttpJsonResponse(builtResponse);
-                httpStatus = status;
-            },
-            genReq.model,
-            static_cast<int>(genReq.currentInput.length() / 4),
-            nativeResponsesToolItems
-        );
+                if (*jsonResp) {
+                    (*jsonResp)->setStatusCode(static_cast<HttpStatusCode>(*httpStatus));
+                    (*jsonResp)->setContentTypeString("application/json; charset=utf-8");
+                    ctl::respondInLoop(cb, *jsonResp);
+                } else {
+                    ctl::respondInLoop(cb, ctl::makeError(
+                        k500InternalServerError, "internal_error",
+                        "Failed to generate response"));
+                }
+            });
 
-        GenerationService genService;
-        auto gateErr = genService.runGuarded(
-            genReq, jsonSink,
-            session::ConcurrencyPolicy::RejectConcurrent
-        );
-
-        if (gateErr.has_value()) {
-            Json::Value errorJson;
-            errorJson["error"]["message"] = gateErr->message;
-            errorJson["error"]["type"] = gateErr->type();
-            errorJson["error"]["code"] = "concurrent_request";
-            ctl::sendJson(callback, errorJson, static_cast<HttpStatusCode>(gateErr->httpStatus()));
-            return;
-        }
-
-        if (jsonResp) {
-            jsonResp->setStatusCode(static_cast<HttpStatusCode>(httpStatus));
-            jsonResp->setContentTypeString("application/json; charset=utf-8");
-            callback(jsonResp);
-        } else {
-            ctl::sendError(callback, k500InternalServerError, "internal_error", "Failed to generate response");
+        if (!accepted) {
+            ctl::respondInLoop(cb, ctl::makeError(
+                k503ServiceUnavailable, "service_unavailable",
+                "Server is shutting down", "shutting_down"));
         }
         return;
     }

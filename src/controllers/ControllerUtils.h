@@ -50,6 +50,35 @@ inline void sendError(
 }
 
 // 构建成功 JSON 响应并回调（默认 200 OK）
+inline drogon::HttpResponsePtr makeError(
+    drogon::HttpStatusCode status,
+    const std::string& type,
+    const std::string& message,
+    const std::string& code = std::string())
+{
+    Json::Value error;
+    error["error"]["message"] = message;
+    error["error"]["type"] = type;
+    if (!code.empty()) {
+        error["error"]["code"] = code;
+    }
+    auto resp = drogon::HttpResponse::newHttpJsonResponse(error);
+    resp->setStatusCode(status);
+    return resp;
+}
+
+inline void respondInLoop(
+    const std::shared_ptr<std::function<void(const drogon::HttpResponsePtr&)>>& cb,
+    const drogon::HttpResponsePtr& resp)
+{
+    if (!cb || !(*cb)) {
+        return;
+    }
+    drogon::app().getLoop()->queueInLoop([cb, resp]() {
+        (*cb)(resp);
+    });
+}
+
 inline void sendJson(
     std::function<void(const drogon::HttpResponsePtr&)>& callback,
     const Json::Value& data,

@@ -374,8 +374,19 @@ int main() {
     drogon::app().run();
 
     // 优雅停机
+    //
+    // 顺序约束：Reaper 是 BackgroundTaskQueue 的上游生产者，
+    // 必须先于队列 shutdown() 停止；否则队列已 fail-fast 拒收新任务，
+    // Reaper 仍在投递，只会刷出一堆无意义的拒收日志。
+    LOG_INFO << "[停机] 正在停止 chayns thread reaper...";
+    chaynsThreadReaper::getInstance().stop();
+    LOG_INFO << "[停机] chayns thread reaper 已停止";
+
     LOG_INFO << "[停机] 正在关闭账号管理器后台线程...";
-    // AccountManager 当前版本无独立后台线程停机接口，此处由进程退出统一回收。
+    // TODO(N4): AccountManager 内部有 4 处裸 detach() 线程
+    // (accountManager.cpp:1438/1614/1628/2395)，detached 线程不会被“统一回收”，
+    // 而是在进程退出时被强行截断，持有的锁/连接可能未释放。
+    // 待补充独立停机接口后在此调用。
     LOG_INFO << "[停机] 账号管理器后台线程已关闭";
 
     LOG_INFO << "[停机] 正在关闭后台任务队列...";

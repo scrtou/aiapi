@@ -47,35 +47,44 @@ public:
     }
 
     /// 提交任务到队列
-    void enqueue(const std::string& name, std::function<void()> task)
+    bool enqueue(const std::string& name, std::function<void()> task)
     {
         {
             std::lock_guard<std::mutex> lk(mu_);
+
+            // N2 修复：停机判断必须【前置】于自动启动分支。
+            // 旧实现把 `if (!started_)` 放在前面，而 shutdown() 结尾会置
+            // started_=false，于是一个迟到的 enqueue 会重新 spawn 8 条线程
+            // 并把 stopping_ 复位，导致后面的 `if (stopping_)` 永不生效。
+            // shutdownCalled_ 是不可逆的一次性标志，杜绝线程池复活。
+            if (stopping_ || shutdownCalled_) {
+                LOG_WARN << "[后台任务队列] 已停机，拒绝任务：" << name;
+                return false;
+            }
+
             if (!started_) {
-                // 自动启动
                 started_ = true;
-                stopping_ = false;
                 for (size_t i = 0; i < kDefaultWorkerThreads; ++i) {
                     workers_.emplace_back([this, i]() { workerLoop(i); });
                 }
                 LOG_INFO << "[后台任务队列] 自动启动 "
                          << kDefaultWorkerThreads << " 个工作线程";
             }
-            if (stopping_) {
-                LOG_WARN << "[后台任务队列] 已停机，忽略任务：" << name;
-                return;
-            }
+
             tasks_.push({name, std::move(task)});
         }
         cv_.notify_one();
         LOG_INFO << "[后台任务队列] 任务入队：" << name;
+        return true;
     }
-
     // / 优雅停机：等待队列排空，然后 所有线程
     void shutdown()
     {
         {
             std::lock_guard<std::mutex> lk(mu_);
+            // 先置不可逆标志：即使队列从未启动过，也要封死后续 enqueue，
+            // 否则「启动后未收到任何请求就退出」的场景仍可被复活。
+            shutdownCalled_ = true;
             if (!started_ || stopping_) return;
             stopping_ = true;
         }
@@ -149,4 +158,5 @@ private:
     std::vector<std::thread> workers_;
     bool started_ = false;
     bool stopping_ = false;
+    bool shutdownCalled_ = false;   // N2：不可逆停机标志
 };
