@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <shared_mutex>
+#include <condition_variable>
 #include <json/json.h>
 #include <sstream>
 #include <openssl/evp.h>
@@ -166,8 +167,14 @@ class chatSession
     std::atomic<int>  cleanupIntervalSeconds_{SESSION_CLEANUP_INTERVAL};
     std::atomic<int>  dbRetentionSeconds_{SESSION_EXPIRE_TIME};
     std::atomic<bool> storeSessionPayload_{true};
+    /// N4: 过期清理线程的停机三件套。
+    /// 这两个成员早先就已声明但从未被使用（线程仍走 detach），属于半成品；
+    /// 现在真正接上：stopClearExpiredLoop_ 是唯一退出条件，clearExpiredWakeCv_
+    /// 让停机不必等满一个 cleanupIntervalSeconds_（默认 1 小时）的睡眠周期。
     std::atomic<bool> stopClearExpiredLoop_{false};
     std::thread clearExpiredThread_;
+    std::mutex clearExpiredWakeMutex_;
+    std::condition_variable clearExpiredWakeCv_;
 public:
     static chatSession *getInstance()
     {
@@ -227,6 +234,10 @@ public:
     void updateSession(const std::string &ConversationId,session_st &session);
     void clearExpiredSession();
     void startClearExpiredSession();
+    /// N4: 停止过期清理线程并 join。幂等；未启动时直接返回。
+    /// 必须在进程退出前调用，否则线程会在 static 析构期间被强行截断，
+    /// 可能正持有 mutex_ 或 DB 连接。
+    void stopClearExpiredSession();
     bool sessionIsExist(const std::string &ConversationId);
     bool sessionIsExist(session_st &sessio);
 

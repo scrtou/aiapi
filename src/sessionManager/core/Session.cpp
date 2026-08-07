@@ -719,9 +719,29 @@ void chatSession::startClearExpiredSession()
     // 轮询间隔必须显著小于过期阈值：若两者相同（原实现均为 SESSION_EXPIRE_TIME），
     // 一个刚过期的会话最坏要等满一个完整周期才被回收，实际生命周期漂移到 24~48h。
     // 此处按 SESSION_CLEANUP_INTERVAL（默认 1 小时）轮询，使过期判定精度收敛到 1 小时内。
-    std::thread([this]() {
+    //
+    // N4: 由裸 detach 改为持有 std::thread 成员 + 条件变量可中断睡眠。
+    // 用 wait_for(谓词) 而非 sleep_for 的原因：停机时 notify 立即唤醒，
+    // 停机延迟从「最坏一个完整清理周期（默认 1 小时）」降到毫秒级。
+    if (clearExpiredThread_.joinable()) {
+        LOG_WARN << "[会话清理] 清理线程已在运行，忽略重复启动";
+        return;
+    }
+    stopClearExpiredLoop_.store(false);
+
+    clearExpiredThread_ = std::thread([this]() {
         while (true) {
-            std::this_thread::sleep_for(std::chrono::seconds(cleanupIntervalSeconds_.load()));
+            {
+                std::unique_lock<std::mutex> lock(clearExpiredWakeMutex_);
+                clearExpiredWakeCv_.wait_for(
+                    lock,
+                    std::chrono::seconds(cleanupIntervalSeconds_.load()),
+                    [this] { return stopClearExpiredLoop_.load(); });
+            }
+            if (stopClearExpiredLoop_.load()) {
+                break;
+            }
+
             clearExpiredSession();
 
             // B5: 同步清理数据库中早于 TTL 的会话快照，防止 chat_session_state 无限增长。
@@ -736,8 +756,25 @@ void chatSession::startClearExpiredSession()
                 }
             }
         }
-    }).detach();
-}   
+        LOG_INFO << "[会话清理] 过期清理线程已退出";
+    });
+}
+
+void chatSession::stopClearExpiredSession()
+{
+    // 幂等：未启动或已停机时直接返回，重复调用安全（main.cc 显式调用 + 析构兜底）。
+    if (!clearExpiredThread_.joinable()) {
+        return;
+    }
+    {
+        // 置位必须在持锁状态下完成，否则可能与 wait_for 的谓词检查交错，
+        // 造成 notify 早于 wait 而丢失唤醒，停机退化为等满一个周期。
+        std::lock_guard<std::mutex> lock(clearExpiredWakeMutex_);
+        stopClearExpiredLoop_.store(true);
+    }
+    clearExpiredWakeCv_.notify_all();
+    clearExpiredThread_.join();
+}
 
 bool chatSession::sessionIsExist(const std::string &ConversationId)
 {

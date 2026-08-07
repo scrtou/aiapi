@@ -1,0 +1,61 @@
+# RFC-001 派生文档 · 变更记录（CHANGELOG）
+
+> **本文件是 RFC-001 及其派生文档族的版本演进留痕。**
+> 保留每一版的**自我纠错记录** —— 被推翻的结论与错误判据不删除，只标注作废，
+> 以免后续读者重走一遍错路。RFC-001 正文不再内嵌变更记录表。
+
+---
+
+## P6-4 / P7-6 / P7-7（本轮）
+
+### ADR-08 决策 1（后台阻塞睡眠）：**排查完结，存量违规 0**
+
+- `accountManager.cpp` 最后 8 处走完四步判定：全部位于后台线程（三个巡检线程 + 一个工作线程），
+  6 个外部调用点经作用域深度追踪确认**全在 `enqueue` lambda 内**。
+- 终局基数：grep 命中 18 → 去 1 处注释假阳性 → 真实调用点 17 → **合规 17（100%）／违规 0**。
+- **结论：决策 1 不产生任何改造任务**，其价值仅在约束未来新增代码。
+  此前把它列为「存量清理项」的表述已作废。
+
+### 新发现（副产物，归决策 3 而非决策 1）
+
+- `AccountManager::backgroundSleep`（:448）是已写好的可中断原语，但**仅 4 处调用**，
+  而裸 `std::this_thread::sleep_for` 有 **8 处**。
+- 这 8 处不违反决策 1（都在后台线程），但**阻塞期间无法响应停机信号**，
+  会让 `stopBackgroundThreads` 的 `join` 被迫等睡满 —— `updateAllAccountTypes` 的
+  per-account 500ms 使该延迟**与账号数成正比且无上界**。
+- 建议：决策 3 由「后台线程必须可 join」收紧为「后台线程内任何等待必须经可中断原语」。
+  改造为纯替换，无需新建抽象。
+
+### migration-plan：两个「零覆盖符号」定性反转
+
+- **原判断错误**：曾把 `cancelAll` / `shouldRetry` 当作 migration-plan 漏写的既有符号。
+- **实测（P7-2）**：两者在 `src/` 下命中数均为 **0**，是 ADR-08 §8.5 / ADR-07 §7.3
+  提出的**待新增接口**。文档缺的不是「符号覆盖」，而是「新设计未落到阶段任务」。
+- 处置：
+  - migration-plan 阶段 3 新增 **3.5 项**（`shouldRetry` 收敛，附排除清单）；
+  - 附录 A 处置项新增 **N6**（`cancelAll()`，含实现草案与三条锁约束）；
+  - 工期 9.8 → **9.9 周**。
+- 回写 ADR-07 / ADR-08，就地标注相关签名**状态为未实现**，防止后续读者误认为既有代码。
+
+---
+
+## 10. 变更记录
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v1.0 | 2026-08-07 | 初稿，基于 C++20 假设 |
+| v1.1 | 2026-08-07 | 按初步决策改为 C++14；补充 C++14 替代方案与自建垫片设计 |
+| v1.2 | 2026-08-07 | **实测确认项目现状为 C++17，标准定为 C++17**。回退 v1.1 的降级设计：删除 Optional/StringView 垫片，`Result<T>` 改用 `std::variant` + `[[nodiscard]]`，Pipeline 恢复模板 `emplace`。新增问题项 **P9（标准探测漂移 + 主程序 17 与测试 20 不一致）**及其对策；阶段 1 恢复为 1 周，总工期回到 7 周 |
+| v1.3 | 2026-08-07 | **P9 已修复并落地**（commit `efb4003`：硬编码 C++17、移除探测降级、测试目标 20→17、120+57 编译单元实测一致、160 用例全绿），新增 §0.4b。新增 **§0.5 测试覆盖基线实测**：模块覆盖 41.0%，五个改动最大的文件（accountManager / EmitAndToolBridge / chayns·retool·nexos api，合计 8,939 行）**零覆盖**，确认为当前最大单点风险。**核查 `har/` 后判定其不可用**（5 文件 297 条目均为前端浏览器抓包，无本服务 SSE 流量），废止「用 har 构造黄金响应」方案，改为三层安全网（契约快照 / 特性化 / 端到端冒烟），阶段 0 由 1.0 周上调至 1.5 周，总工期 7 → 7.5 周 |
+| v1.4 | 2026-08-07 | **纠正 v1.3 对 `har/` 的误判**。确认当前唯一活跃上游为 chayns（retool / nexos / genspark 为历史遗留），且 chayns 上游**走轮询而非 SSE**（`chaynsPollingPolicy.h`：5 min 截止 + 退避），v1.3 按 `text/event-stream` 检索故全部落空；har 的 WS 帧存于 `_webSocketMessages` 字段亦被漏读（77 帧，但代码侧不使用 WS）。复核后 `chaynsapi.cpp` 的 6 类端点在 har 中**全部命中且含完整请求/响应体**，20 个端点可直接落 fixture。阶段 0 改为四层安全网并以真实 har 为 L1 数据源；retool/nexos/genspark 降级为「仅保证编译与不崩」；新增 fixture 字段归一约定（为可复现性，非安全兜底）。覆盖率门槛由 ≥65% 调整为 ≥60%（不再要求覆盖非活跃 Provider）。工期维持 7.5 周 |
+| v1.5 | 2026-08-07 | **Provider 范围决策：仅保留 chayns + retool**，新增 **§6 阶段 0.5「Provider 下线」**（0.5 周），前置于所有结构性改造。实测发现 `openai` 为已编译已注册但**无路由不可触达**的死代码（新增 P10），`/nexosapi/*` 路由实际复用 chayns handler 导致命名误导（新增 P11）。nexos 删除清单共 14 处：5 处整体删除 + 9 文件外科手术，其中 `accountManager.cpp` 含 78 处引用 / 9 个专属函数。**P6 结论修正**：实测三家 Provider 私有方法并不同构，「同构约 60%」不成立，阶段 3 目标由「归一到公共基类」改为**「归一到瘦接口」**（复用已存在的 `contracts/GenerationRequest.h`），工期 1.5 → 1.0 周。总工期维持 7.5 周（0.5 周新增成本由阶段 3 缩短完全抵消）。新增不可回滚风险项：nexos 账号数据需在代码删除前清理 |
+| v1.6 | 2026-08-07 | **阶段 2 细化并重排为 5 批次**。实测工作面：21 个单例类 / 约 180 处调用，前 6 类占 60%。**撤销 P2 中「chatSession 双实例」的判断**（新增 P2b 条目说明）：`Session.h:156` 的裸指针成员定义为 `nullptr` 后从无读写，被 `getInstance()` 内同名局部 static 遮蔽，实为死代码而非并发隐患。**ADR-06 两处修正**：(1) `main.cc:235-241` 已是显式有序的组合根雏形，AppContext 构建难度被高估；(2) 单例按状态性质分 A/B/C 三类，原「全部注入」一刀切不成立。**新增高风险项**：`chatSession` 持有 `std::thread` 成员，注入化改变析构时序，需先补 `shutdown()` 再改所有权，并增设 ASan/TSan 门禁。A 类内部顺序强约束 `AccountManager` 排最后（等阶段 0.5 瘦身 31% 后再动）。工期维持 1.5 周，风险集中至 2-e 批次，前四批可独立发布 |
+| v1.7 | 2026-08-07 | **阶段 4 踏点，发现 P12：测试与生产路径脱钩**。`normalizeToolCallArguments` / `generateForcedToolCall` 各有两份独立实现：生产走 `GenerationService::` 静态成员（258 / 234 行，功能完整），测试走 `toolcall::` 自由函数（41 / 51 行，功能残废）；调用点无命名空间限定且位于类作用域内，名字查找永远命中成员版 → **10 个用例全空转**。**阶段 0 新增 0-E 「测试有效性审计」**（1 天），「160 用例全绿」不再单独构成验收条件，必须附带「空转用例数 = 0」。**阶段 4 方向修正**：权威实现是 god 文件那份，应「搬 god 版去覆盖 tooling 残废版」而非反向切换（反向会使 `tool_choice` 定向调用全部失效）。**补体量基线**：god 文件实为 2,213 行且路径在 `core/` 而非 `generation/`；新增发现 `XmlTagToolCallCodec.cpp`（1,314 行）同样超标但原方案漏列。风险表新增两项高危。阶段 0 工期 +1 天，总工期 7.5 → 7.7 周 |
+| v1.8 | 2026-08-07 | **待查清单结案 + 三处对 v1.7 的校正**。（1）**`applyStrictClientRules` 误判纠正**：v1.7 称其为「唯一切换成功案例」有误，实为成员版 6 行**转发壳**委派给 200 行组件版；（2）**脱钩函数 2 → 4**：全库 47 个导出自由函数扫描后新增 `transformRequestForToolBridge`（成员 554 行 vs 组件 29 行，**无任何测试**）；（3）**用例数 160 → 159**（`DROGON_TEST` 实测，24 个文件）。**待查两个组件结果**：`ToolDefinitionEncoder`（29 行）确认为空壳，成员版多承担能力 IR 推导、协议格式决策、Codex systemPrompt 清空、definition_mode 开关；`ActionProtocolAdapter`（75 行）**健康非空壳**，由此得出「不得以行数小判定空壳」规则。**搬迁方案改为转发壳模式**（搬函数体 → 成员缩为转发 → 调用点零改动），优于 v1.7 的四步切换。**新增日志实证小节**（827 行 / 7 小时）：chayns 恒走文本桥、`accountManager` 日志居首 213 条、严格客户端路径零触发、`namespaceToolBridgeEnabled=0` 可降优先级、nexos 仍在校验账号（印证删除前必须清数据）。**工期**：审计 1 → 0.5 天；新增 `transformRequestForToolBridge` 特性化 +1.5 天；阶段 4 因转发壳模式 -0.5 天。总工期 7.7 → **7.9 周** |
+| v1.9 | 2026-08-07 | **先固化尺子，再谈拆分（B 先于 A）**。**新增 §0-E-1「三条审计规则」**作为全阶段唯一判定依据：**R1 同名竞争**（实测 4 个，与 v1.8 一致，已收敛）、**R2 高扇入零测试**（*实测 2 个 —— 该数字已由 v2.0 纠正为 **23**，原因见 §0-E-1*，**新发现 `BridgeHelpers` 188 行 / 扇入 5 为全库最高 / 测试 0**，因无同名成员竞争而被 R1 漏扫）、**R3 函数级 >200 行**（实测 **12 个函数 / 8 个文件 / 4,725 行**）。配套硬规则：行数必须来自 `wc -l`，禁止目测。**两处数据校正**：`ToolDefinitionEncoder` 26 → **29** 行（v1.8 目测错误）；`transformRequestForToolBridge` ~550 → **554** 行（精确边界 1660–2213），god 文件 9 函数完整切分表入库。**两处前提推翻**：（1）「god 文件是最大单点」不成立 —— `accountManager.cpp` **2,600 行**，大 387 行且同样零覆盖、日志量居首；（2）全库最大单函数不在 god 文件，而是 `chaynsapi.cpp` 的 **865 行**（283–1147，零覆盖）。**补齐漏列范围**：`RequestAdapters.cpp`（1,255 行，日志第 4，36 条）与 `Session.cpp`（1,221 行）合计 2,476 行活跃主路径代码。**拆分语义拆为两个动作**：A 函数内拆分（必须先做）/ B 文件拆分（依赖 A）；god 文件 4 个超标函数共 1,549 行占 70%，先做 B 属假性完成。审计脚本重命名为 `tools/architecture_audit.py`。风险表新增三项。**本版不调总工期** —— 阶段边界重划需待 A 阶段（`RequestAdapters` / `Session` / `accountManager` 摸底）完成后统一重估 |
+| v2.0 | 2026-08-07 | **R2 口径纠错 + 首批处置单落地**。（1）**R2 由 2 → 23，是口径错误不是漏扫**：v1.9 用头文件 basename 子串匹配判断是否被测，既误判也漏扫；`tools/architecture_audit.py` 改用 **`g++ -MM` 编译期依赖闭包**，并以 `src/test/CMakeLists.txt` 的 `TEST_SOURCES` / `PROJECT_SOURCES` 为真值来源，同时修正测试信号识别（`DROGON_TEST` / `CHECK` / `REQUIRE`，此前误按 gtest 假定）。基线落盘 `doc/adr/audit-baseline.json`，错误版本留档 `audit-baseline.INVALID-r2-bug.json.bak`。（2）**`BridgeHelpers` 已补测出榜**（`src/test/test_bridge_helpers.cpp`）。（3）**新增 §0-E-2「R2 首批处置方案」**：23 条按「是否已链接进测试二进制」分 **A 类 5 条 / B 类 18 条**，A 类优先（零构建风险），排序 P0 `SessionCodec` → P1 `TextExtractor` → P2 `ApiManager` → P3 `ApiFactory` → P4 `SessionDbManager`。（4）**新增 P13**：`ApiManager` 四项真实缺陷 —— `getApiInfoByModelName` 空队列 `top()` 为 **UB**、查询接口用 `operator[]` 致 nullptr 条目膨胀、`updateApiInfo` 空实现、`flushModelnameApiQueueMap` 疑似空操作。（5）**三处自我推翻**：`app()` 在测试中**可用**（`test_main.cc` 于后台线程跑事件循环），故排除 `init()` 的理由改为「无信息量 + 单例污染」而非「会崩」；`session_st` 为 **32** 字段而非 31；`apiType` 映射为 **3 份**而非 2 份。（6）**三项探查结论**：`ApiType` 枚举确认仅 2 值（三元映射完备）；`Session.h` 中 OpenSSL 仅见于注释与声明、无内联实现，**P0 无链接风险**；`v` 字段全仓仅 1 处写入、**零处读取**，为死字段。（7）**变异验真由 1 条增至 4 条** —— 用例间覆盖重叠，单条不足以证明断言独立有效。（8）**新增待核实项**：R2 中 4 条 `impl=0` 的纯头文件组件可能是**规则误报**，需逐条判定是否存在可断言行为。**本版不调总工期**；R2 降幅、用例数与断言数均须实跑后回填，不做估算 |
+| v2.1 | 2026-08-07 | **消歧义版：把「不明确」全部落成可复算的确定值或显式标注**。（1）**修正三个版本的工期矛盾**：§9 长期显示 7.5 周、§10 的 v1.8 写 7.9 周，新增「工期对账」表锁定 **7.9 周为唯一口径**，并说明 7.5 是阶段基线故予保留。（2）**§0-E-2 首次获得工期归属**：P0 2 天 / P1 0.5 天 / P2 1.5 天 / P3 0.5 天 = **4.5 天 ≈ 0.9 周**，计入后 **≈ 8.8 周**；P4 明确**暂不排期**；P2 估时标注为**唯一带前置条件项**（`ProviderResult` 可否默认构造，不成立则作废转入不可估算区）。（3）**§7 风险表补 3 行**：P13 的 UB（高，标注为当前唯一已定位的生产期 UB）、R2 B 类 18 条链接闭包不可预测（高，对策为**禁止打包报工期**）、4 条纯头组件疑似规则误报（中，若成立应修规则而非硬补测试）。（4）**两处数字补出处**：`ImageInfo` 5 字段实为 `contracts/GenerationRequest.h:110` 定义而非 `Session.h`；`SessionCodec.cpp` 四段变量名 `req`/`resp`/`st`/`pv` 与 10+4+11+7=32 已可复算。（5）**阶段 1/3/5 显式标注「有意暂缓细化」**并给出细化触发条件，消除「粗纲 = 遗漏」的歧义。本版**只消歧义，不改任何技术决策** |
+| v2.2 | 2026-08-07 | **三项待定全部实证结案，并推翻自己的 A/B 二分法**。（1）**议题 1 结案**：`provider::ProviderResult` 经四条 `static_assert` + `g++ -fsyntax-only` 实证为**可默认构造/拷贝/移动/赋值（rc=0）**，系纯聚合体、7 个成员全带默认初值。P2 的 1.5 天**解除前置条件**，至此 §9 估时表**不含任何待定条件**。（2）**议题 3 结案**：4 条 `impl=0` 组件逐条实证 —— 仅 `Apicomn.h`（13 行，2 前向声明 + 单值 enum）为**真误报**；`ToolDefinitionResolver`（含 namespace 递归遍历逻辑）与 `ProviderResult`（3 判定式 + 5 工厂）是**真实缺口**；`BackgroundTaskQueue`（函数内静态单例 + 线程池）真实但**并入阶段 2 单例治理**，避免做两遍。（3）**议题 2 结案 + 自我推翻**：新增 **§0-E-3**，v2.0 的 A/B 二分法**判据有误** —— 纯头组件无 `.cpp` 可链接、测试零 CMake 成本，却被归入 B 类，凭空多记 4 笔成本。改为 **A(5) / H(3) / B(14) / 排除(1)** 三分法；B 类由 18 收窄至 14 并分 B1(8)/B2(3)/B3(3) 三层，B2 三条 dbManager 与 P4 合并为同一前置（DB 替身策略未定，4 条一律不估时），B3 三条仍禁止估时。（4）**工期**：H 类 2 条 +1.5 天 ≈ 0.3 周，总计 **≈ 9.1 周**（7.9 基线 + 0.9 A 类 + 0.3 H 类）。（5）**故意未做**：R2 排除规则未写入脚本、`audit-baseline.json` 仍为 23 —— 改规则须同时改基线，混入文档提交会让防回归失效；文档口径(22+1)与脚本口径(23)的差异已在 §0-E-3 记录 |
+| v2.3 | 2026-08-07 | **架构复审：选型基本正确，但发现一处阶段排序缺陷**。（1）**再次纠正自己的测量**：v2.2 前用 include 路径前缀判定模块归属，测出 0 个环；该判据对 basename 式 include 无效（而本仓正是 basename 为主）。改用 basename→模块全量映射（歧义数 0）重测，实得 **13 条边、3 个双向环**。（2）**新增 §0-F + 阶段 0.7「解环」（2 天，排在阶段 1 之前）**：ADR-02 靠 CMake target 强制分层，而 **CMake 不允许 static library 循环依赖**，环不解开阶段 1 无法落地 —— 这是硬约束。（3）**三环逐条定性**：`apiManager↔apipoint` 为弱环，`ApiManager.h` 仅以 `shared_ptr<APIinterface>` 持有、从不解引用，前向声明即可断（`Apicomn.h:9` 已有同样先例）；`dbManager↔metrics` 唯一成因是 `ErrorEvent.h` 放错层，移入 `domain/model/` 即消失；`apipoint↔sessionManager` **三条边中只有一条是真违规** —— `APIinterface.h→Session.h` 是 Layer1→Layer2，**符合 ADR-01 的期望方向**，`GenerationService.cpp→ProviderResult.h` 属文件放错层（`ProviderResult` 已实证为纯聚合体，本属 `domain/model/`），唯独 **`Session.cpp:6→chaynsapi.h`**（domain 直接依赖具体 Provider）是真 DIP 违规，须靠 `IChatProvider` + 组合根注入，**与阶段 2 是同一件事，不排期、转阶段 2**。（4）**新增 R4 环检测门禁**：前三项是一次性清理，无门禁则环会长回来 —— 正是 ADR-02 那句话所指的情形。（5）**ADR-05 补充转换边界**：实测 10 个 `throw` 对应 **100 个 `catch`**，九成接的是 Drogon/jsoncpp/DB 驱动的异常，禁不掉；明确转换边界设在 **infrastructure 出口**，domain/application 内部不写 `try`。同时指出 `Result<` 现有用法为 **0**，铺开是大规模签名变更，压在阶段 1 的 1.0 周内不现实，须单独立项（已入 §7）。（6）**术语统一**：ADR-01 的「四层」与 §3/§9 的「五层 target」并存易误读 —— `platform/` 是横切设施非分层，口径定为 **架构分层 4 / CMake target 5**。（7）**§7 补 3 行**（Result 铺开、依赖环、EmitAndToolBridge 篇幅与风险倒挂：2213 行仅提及 8 次，而 2600 行的 accountManager 提及 30 次）。（8）**工期**：9.1 + 0.4 = **≈ 9.5 周** |
+| v2.4 | 2026-08-07 | **并发与网络模型实测，新增 §0-G + ADR-08**。（1）**又纠正自己两处错误**：上一轮用 `--include=*.cpp` 扫 `src/controllers/`，而 controller 全为 **`.cc`**，探测全空却据此下了结论 —— 判据无效已作废；另外我曾断言 `BackgroundTaskQueue::shutdown()` 无人调用，**实测 `main.cc:382` 确有调用**，此条为我说错，真正问题在时序。（2）**实测线程构成**：4 条事件循环（`number_of_threads`）+ 8 条后台队列线程 + 5 个裸 `detach` + 1 条 Reaper worker。**29 处 `sendRequest` 全部同步阻塞，异步回调 0 处**；25 处 `newHttpClient` 无一绑定 loop。（3）**发现全文档最高危项**：非流式路径 `AiApiController.cc:180/:337` 在**事件循环线程上同步** `runGuarded`，链路含 5 处同步 `sendRequest` 与 `chaynsapi.cpp:956` 的 `sleep_for` 轮询退避 —— 事件循环仅 4 条，**4 个并发非流式请求即可让服务连 `/health` 都不响应**。而同一 controller 的**流式分支做法完全正确**（`:216` 先 `IoLoopResponseStream::create` 绑定 loop，`:221` 再 enqueue 到后台，loop 立即返回）—— 说明这不是设计失误而是流式改造时**漏改了非流式分支**，修复成本极低。（4）**停机时序缺陷**：`Reaper::stop()` 实现完整却**全项目 0 处调用**；`Session.cpp:739` 与 accountManager 4 处 detach 线程无停止路径；且顺序错误 —— Reaper/清理线程仍在跑时队列已 `shutdown()`，而 `enqueue()` 的懒启动分支会**把 8 条工作线程重新拉起**，停机后线程数反而回升（懒启动与 shutdown 复位状态组合出的缺陷）。（5）**ADR-08 六条决策**：loop 线程禁止阻塞 IO；§4.3 Pipeline 明文定为同步签名 + 后台线程执行；定时任务统一 `runEvery`（先例 `ErrorStatsService.cpp:40`）；定义四步停机时序；`enqueue` 改 fail-fast；停机时序由 `AppContext::shutdown()` 承载、**与 ADR-06 消灭单例合并不另设阶段**。（6）**N1～N5 处置项**，其中 **N1（非流式改 enqueue）+ N2 + N3 建议作为热修插队到重构之前**（共 1.5 天，与架构改动无关，N3 仅需接一行调用）。（7）**§7 补 3 行**。（8）**工期 9.5 + 0.3 = ≈ 9.8 周** |
+| v2.5 | 2026-08-07 | **建立数字真值源，终结硬编码漂移**。新增 `doc/adr/architecture-baseline.md`：以 `BL-*` 编号固化 R1/R2/R3 命中数、测试用例/断言数、测试链接覆盖数，附完整明细表、目录级缺口聚合与门禁契约；本文 16 处硬编码数字改为引用基线编号，冲突时以基线为准。**基线重跑并通过 `--selftest`**（`g++ -MM` 闭包模式，R2 由 23 → BL-R2，差值来自 `BackgroundTaskQueue.h` 新增单测后脱离零断言，非口径再次变动）；旧基线归档为 `audit-baseline.prev-*.json.bak` 留痕。**校正 R3 表两处过期行号**（`transformRequestForToolBridge` 554/1660–2213 → 555/1660–2214；`accountManager.cpp` 1745–2103 → 1807–2165）。**P0-e1 结案**：`BackgroundTaskQueue::enqueue()` 的 `stopping_ \|\| shutdownCalled_` 门禁前置于懒启动分支，`shutdownCalled_` 为不可逆一次性标志，SIGTERM 后无线程池复活、无任务丢失、`shutdown()` 幂等，四阶段单测钉住。 |

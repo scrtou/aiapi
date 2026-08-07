@@ -50,6 +50,7 @@ set(TEST_SOURCES
     test_chayns_browser_impersonation.cpp
     test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
+    test_background_task_queue_shutdown.cpp
     stub_account_manager.cpp
 )
 

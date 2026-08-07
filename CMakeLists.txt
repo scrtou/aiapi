@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.5)
 project(aiapi CXX)
 
+# Register tests at the repository build root so `ctest --test-dir <build>`
+# discovers tests added by src/test. enable_testing() only affects its directory
+# and descendants, so calling it solely from src/ is insufficient here.
+enable_testing()
+
 # ##############################################################################
 # 唯一的源文件清单维护在 src/CMakeLists.txt。
 # 本文件只是一个薄壳,便于在仓库根目录直接 cmake -B build。

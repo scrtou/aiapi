@@ -1,6 +1,11 @@
 #ifndef ACCOUNT_MANAGER_H
 #define ACCOUNT_MANAGER_H
 #include <string>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
+#include <thread>
 #include <memory>
 #include <queue>
 #include <vector>
@@ -225,5 +230,28 @@ class AccountManager
     void updateAllAccountTypes();  // 更新所有账号的 accountType
     void checkAccountTypeThread();  // 启动定时检查 accountType 的线程
     void cleanExpiredAccounts();  // 自动清理创建超过配置天数的过期账号
+
+    // ========== N4: 后台线程统一停机 ==========
+    /// 停止全部账号管理后台线程并 join。幂等；未启动的线程直接跳过。
+    ///
+    /// 背景：原先 4 个线程全部 detach，进程退出时被强行截断。三个定时线程
+    /// （token 巡检 / 账号数量巡检 / accountType 巡检）睡眠期长达 3~5 小时，
+    /// 若只置标志位不唤醒，停机要等满一个周期，因此统一用 cv 可中断睡眠。
+    /// waitUpdateAccountToken 阻塞在 accountListNeedUpdateCondition 上，
+    /// 靠 notify_all + 谓词复查退出。
+    void stopBackgroundThreads();
+
+  private:
+    /// 可中断睡眠：睡满 seconds 返回 true；被停机唤醒立即返回 false。
+    /// 所有定时线程的 sleep 必须走这里，否则停机会被拖到一个完整周期。
+    bool backgroundSleep(std::chrono::seconds seconds);
+
+    std::atomic<bool>       backgroundStopRequested_{false};
+    std::mutex              backgroundWakeMutex_;
+    std::condition_variable backgroundWakeCv_;
+    std::thread             tokenCheckThread_;     ///< checkUpdateTokenthread
+    std::thread             tokenUpdateWorker_;    ///< waitUpdateAccountTokenThread
+    std::thread             accountCountThread_;   ///< checkAccountCountThread
+    std::thread             accountTypeThread_;    ///< checkAccountTypeThread
 };
 #endif

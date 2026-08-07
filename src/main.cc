@@ -375,19 +375,36 @@ int main() {
 
     // 优雅停机
     //
-    // 顺序约束：Reaper 是 BackgroundTaskQueue 的上游生产者，
-    // 必须先于队列 shutdown() 停止；否则队列已 fail-fast 拒收新任务，
-    // Reaper 仍在投递，只会刷出一堆无意义的拒收日志。
+    // 顺序约束：Reaper 必须先于 BackgroundTaskQueue 停止，但理由不是依赖关系——
+    // Reaper 只调用 chaynsThreadDbManager 的同步方法（loadThreadsOlderThan /
+    // deleteThread / purgeExhaustedThreads），全程不碰 BackgroundTaskQueue，
+    // 两者之间不存在生产者-消费者关系。
+    //
+    // 真实理由是停机窗口：Reaper 单轮要对最多 batchLimit 个上游线程逐个发
+    // HTTP DELETE，并按 deleteSpacingMs 限速，一轮可能耗时数分钟。stop() 会
+    // 置位 stopRequested_ 并 join，必须最先发起，让这段网络 IO 与后续各项
+    // 停机步骤重叠收敛；若放到队列 shutdown() 之后，总停机时间会线性叠加，
+    // 容器编排的 SIGTERM 宽限期（通常 30s）到点后会直接 SIGKILL。
     LOG_INFO << "[停机] 正在停止 chayns thread reaper...";
     chaynsThreadReaper::getInstance().stop();
     LOG_INFO << "[停机] chayns thread reaper 已停止";
 
+    // N4: 原先 AccountManager 的 4 个后台线程全部 detach，进程退出时被强行
+    // 截断，可能在持有 accountListNeedUpdateMutex 或 DB 连接的状态下消失。
+    // 现已改为持有 std::thread 成员 + 条件变量可中断睡眠，此处统一 join。
+    //
+    // 顺序：必须在 BackgroundTaskQueue::shutdown() 之前——账号线程（尤其是
+    // checkToken/cleanExpiredAccounts）会向该队列投递任务，若队列先关闭并
+    // fail-fast 拒收，这些任务会静默丢失且刷屏拒收日志。
     LOG_INFO << "[停机] 正在关闭账号管理器后台线程...";
-    // TODO(N4): AccountManager 内部有 4 处裸 detach() 线程
-    // (accountManager.cpp:1438/1614/1628/2395)，detached 线程不会被“统一回收”，
-    // 而是在进程退出时被强行截断，持有的锁/连接可能未释放。
-    // 待补充独立停机接口后在此调用。
+    AccountManager::getInstance().stopBackgroundThreads();
     LOG_INFO << "[停机] 账号管理器后台线程已关闭";
+
+    // N4: 会话过期清理线程同样由 detach 改为 join；它在每轮里会同步删除 DB 中
+    // 过期快照，必须在 DB 相关设施拆除前干净退出。
+    LOG_INFO << "[停机] 正在停止会话过期清理线程...";
+    chatSession::getInstance()->stopClearExpiredSession();
+    LOG_INFO << "[停机] 会话过期清理线程已停止";
 
     LOG_INFO << "[停机] 正在关闭后台任务队列...";
     BackgroundTaskQueue::instance().shutdown();

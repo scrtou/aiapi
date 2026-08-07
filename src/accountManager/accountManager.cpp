@@ -445,8 +445,49 @@ AccountManager::AccountManager()
 {
 
 }
+bool AccountManager::backgroundSleep(std::chrono::seconds seconds)
+{
+    std::unique_lock<std::mutex> lock(backgroundWakeMutex_);
+    // wait_for 带谓词：睡满周期返回 false（谓词仍为假），被停机唤醒返回 true。
+    // 这里取反，把返回值语义统一成“是否应继续下一轮”。
+    const bool stopped = backgroundWakeCv_.wait_for(
+        lock, seconds, [this] { return backgroundStopRequested_.load(); });
+    return !stopped;
+}
+
+void AccountManager::stopBackgroundThreads()
+{
+    // 幂等：exchange 保证并发下只有第一次真正执行停机与 join。
+    if (backgroundStopRequested_.exchange(true)) {
+        return;
+    }
+
+    // 两组唤醒缺一不可：
+    //   1) backgroundWakeCv_ —— 唤醒三个定时巡检线程的可中断睡眠（最长 5 小时）；
+    //   2) accountListNeedUpdateCondition —— 唤醒阻塞在待更新队列上的工作线程，
+    //      其等待谓词已从“队列非空”扩展为“队列非空 || 已请求停机”。
+    backgroundWakeCv_.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(accountListNeedUpdateMutex);
+        accountListNeedUpdateCondition.notify_all();
+    }
+
+    auto joinIfRunning = [](std::thread& t, const char* name) {
+        if (t.joinable()) {
+            t.join();
+            LOG_INFO << "[账户管理] 后台线程已回收: " << name;
+        }
+    };
+    joinIfRunning(tokenCheckThread_,   "令牌巡检");
+    joinIfRunning(tokenUpdateWorker_,  "令牌更新工作线程");
+    joinIfRunning(accountCountThread_, "账号数量巡检");
+    joinIfRunning(accountTypeThread_,  "账号类型巡检");
+}
+
 AccountManager::~AccountManager()
 {
+    // 兜底：正常路径由 main.cc 在停机阶段显式调用，此处防止漏调。
+    stopBackgroundThreads();
 }
 
 void AccountManager::loadAccountAutomationSettings()
@@ -1426,16 +1467,22 @@ void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
 }
 void AccountManager::checkUpdateTokenthread()
 {
-    thread t1([&]{
-        while(true)
+    if (tokenCheckThread_.joinable()) {
+        LOG_WARN << "[账户管理] 令牌巡检线程已在运行，忽略重复启动";
+        return;
+    }
+    // N4: 原为 [&] 捕获——在成员函数里捕获 this 之外的栈引用本就危险，
+    // 改为显式 this，语义等价但不再依赖已退栈的局部作用域。
+    tokenCheckThread_ = std::thread([this]{
+        while (!backgroundStopRequested_.load())
         {
             checkToken();
             // 清理创建超过配置天数的过期账号
             cleanExpiredAccounts();
-            this_thread::sleep_for(chrono::hours(5));
+            if (!backgroundSleep(std::chrono::hours(5))) break;
         }
+        LOG_INFO << "[账户管理] 令牌巡检线程已退出";
     });
-    t1.detach();
 }
 void AccountManager::checkUpdateAccountToken()  
 {
@@ -1551,14 +1598,21 @@ void AccountManager::setStatusTokenStatus(string apiName,string userName,bool st
 void AccountManager::waitUpdateAccountToken()
 {
     LOG_INFO << "[账户管理] 账号令牌更新线程已启动";
-    while (true) {  // 持续运行的工作循环
+    while (!backgroundStopRequested_.load()) {  // 持续运行的工作循环
         shared_ptr<Accountinfo_st> account;
         
         // 获取待更新账号，仅在访问共享队列时加锁
         {
             std::unique_lock<std::mutex> lock(accountListNeedUpdateMutex);
-            while (accountListNeedUpdate.empty()) {
-                accountListNeedUpdateCondition.wait(lock);
+            // N4: 等待谓词必须同时包含停机条件，否则队列长期为空时该线程
+            // 永远卡在 wait 上，stopBackgroundThreads() 的 join 会死等。
+            accountListNeedUpdateCondition.wait(lock, [this] {
+                return !accountListNeedUpdate.empty() || backgroundStopRequested_.load();
+            });
+
+            // 停机优先：残留待更新账号不再处理，下次启动时由巡检重新入队。
+            if (backgroundStopRequested_.load()) {
+                break;
             }
             
             account = accountListNeedUpdate.front();
@@ -1606,26 +1660,34 @@ void AccountManager::waitUpdateAccountToken()
             LOG_ERROR << "[账户管理] 执行账号更新时发生异常: " << e.what() 
                      << " for user: " << account->userName;
         }
-    };
+    }
+    LOG_INFO << "[账户管理] 账号令牌更新线程已退出";
 }
 void AccountManager::waitUpdateAccountTokenThread()
 {
-    std::thread worker(&AccountManager::waitUpdateAccountToken, this);
-    worker.detach();
+    if (tokenUpdateWorker_.joinable()) {
+        LOG_WARN << "[账户管理] 令牌更新工作线程已在运行，忽略重复启动";
+        return;
+    }
+    tokenUpdateWorker_ = std::thread(&AccountManager::waitUpdateAccountToken, this);
 }
 
 void AccountManager::checkAccountCountThread()
 {
-    std::thread t([this](){
-        while(true)
+    if (accountCountThread_.joinable()) {
+        LOG_WARN << "[账户管理] 账号数量巡检线程已在运行，忽略重复启动";
+        return;
+    }
+    accountCountThread_ = std::thread([this](){
+        while (!backgroundStopRequested_.load())
         {
             LOG_INFO << "[账户管理] 开始检查各渠道账号数量";
             checkChannelAccountCounts();
             // 定时巡检周期：每 10 分钟执行一次账号数量检查
-            std::this_thread::sleep_for(std::chrono::minutes(10));
+            if (!backgroundSleep(std::chrono::minutes(10))) break;
         }
+        LOG_INFO << "[账户管理] 账号数量巡检线程已退出";
     });
-    t.detach();
 }
 
 void AccountManager::checkChannelAccountCounts()
@@ -2380,19 +2442,27 @@ void AccountManager::updateAllAccountTypes()
 // 启动定时检查 accountType 的线程
 void AccountManager::checkAccountTypeThread()
 {
-    std::thread t([this]() {
-        // 启动后等待 5 分钟再执行第一次检查，让系统稳定
-        std::this_thread::sleep_for(std::chrono::minutes(1));
-        
-        while (true) {
+    if (accountTypeThread_.joinable()) {
+        LOG_WARN << "[账户管理] 账号类型巡检线程已在运行，忽略重复启动";
+        return;
+    }
+    accountTypeThread_ = std::thread([this]() {
+        // 启动后先静默一段时间再执行第一次检查，让系统稳定
+        // （注释原写“5 分钟”而代码是 1 分钟，以代码为准并修正描述）
+        if (!backgroundSleep(std::chrono::minutes(1))) {
+            LOG_INFO << "[账户管理] 账号类型巡检线程在预热期收到停机信号，直接退出";
+            return;
+        }
+
+        while (!backgroundStopRequested_.load()) {
             LOG_INFO << "[账户管理] 启动定时账号类型巡检任务";
             updateAllAccountTypes();
-            
+
             // 每 3 小时检查一次
-            std::this_thread::sleep_for(std::chrono::hours(3));
+            if (!backgroundSleep(std::chrono::hours(3))) break;
         }
+        LOG_INFO << "[账户管理] 账号类型巡检线程已退出";
     });
-    t.detach();
     LOG_INFO << "[账户管理] 账号类型巡检线程已启动";
 }
 
