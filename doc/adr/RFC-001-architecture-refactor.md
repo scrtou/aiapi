@@ -4,7 +4,7 @@
 |------|------|
 | 编号 | RFC-001 |
 | 状态 | 草案 (Draft) |
-| 版本 | v2.2 |
+| 版本 | v2.3 |
 | 日期 | 2026-08-07 |
 | 范围 | `src/` 全量约 39,000 行 C++（阶段 0.5 下线后减少约 4,300 行） |
 | Provider 范围 | **仅保留 chayns + retool**；nexos / openai 下线（v1.5 决策） |
@@ -184,7 +184,7 @@
 
 ## 2. 架构决策记录 (ADR)
 
-### ADR-01 采用四层架构 + 依赖倒置
+### ADR-01 采用四层架构 + 一个横切 `platform` target + 依赖倒置
 
 ```
 Layer 4  transport      Drogon Controllers / Filters / Sinks
@@ -194,6 +194,10 @@ Layer 1  infrastructure Provider / DbManager / HttpClient / Clock
 ```
 
 依赖方向严格自上而下；Layer 1 实现 Layer 2 定义的接口（ports）。
+
+> **v2.3 术语澄清**：`platform/`（`Result.h` / `Logging.h` / `Config.h`）是**横切设施，不是第五层** —— 四层都可依赖它，它不依赖任何层。
+> 它在 CMake 里确实是第 5 个 target，所以 §9 写「五层 target」指的是 **target 计数**，§3 目录结构同理。
+> 统一口径：**架构分层 = 4，CMake target = 5（4 层 + platform）**。
 
 **理由**：领域层无外部依赖是可测试性的前提，其余目标均依赖此条。
 
@@ -268,6 +272,30 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 现有 `ProviderResult` 收敛为 `Result<Generation>` 的特化使用。
 
 **理由**：当前存在 `ProviderResult` / `Errors` / `ErrorEvent` / `ErrorStats` 四套并行的错误表达。
+
+---
+
+#### v2.3 补充：`Result` 与第三方异常的转换边界（此前缺失）
+
+实测现状暴露了一个 ADR-05 没回答的问题：
+
+| 项 | 实测 |
+|---|---:|
+| 自己 `throw` | **10** |
+| `catch` | **100** |
+| `Result<` 现有用法 | **0** |
+| `std::optional` | 59 |
+| bool + 出参风格（粗估） | 40 |
+
+**10 个 throw 对应 100 个 catch** —— 说明九成 catch 接的不是自己抛的异常，而是 **Drogon / jsoncpp / DB 驱动**抛的。
+这类异常**无法禁止**，ADR-05 的「跨层禁止抛异常」若不指定边界，最终会变成 `Result` 与 `try/catch` 两套体系并存，比现状更糟。
+
+**补充决策**：
+
+1. **转换边界设在 infrastructure 的出口**。第三方异常一律在 Layer 1 内捕获并转为 `Error`，**禁止外泄**到 application / domain。
+2. domain / application **内部不写 `try`**；若出现，视为 Layer 1 边界没封干净，属缺陷而非风格问题。
+3. `Result<T>` 从 **0 处用法**铺到全项目是一次**大规模签名变更**，与「五层 target + include 收敛」并列压在阶段 1 的 1.0 周内**不现实**。
+   本版**不改工期数字**，仅标注该项为 §7 新增风险行，待阶段 1 启动前单独拆分立项。
 
 ---
 
@@ -1390,6 +1418,9 @@ GenerationService::applyStrictClientRules  (1643–1649，共 6 行)
 | 提交历史不可追溯 | 中 | 立即改用规范 commit message（现状多为 `08070939` 类时间戳） |
 | **P13：`ApiManager::getApiInfoByModelName` 对空队列调 `top()` 属未定义行为** | **高** | **当前唯一已定位的生产期 UB**，非重构引入。按 §0-E-2 的 P2 处置：先写替身测试记录现状，再修。修复前不得扩大 `ApiManager` 调用面 |
 | **R2 中 B 类须先改 CMake，链接闭包不可预测** | **高→中** | 仍是最大工期不确定源，但 v2.2 已由 18 条收窄至 **14 条**（剥离 3 条纯头 + 排除 1 条误报），并按 impl 行数分 B1/B2/B3 三层（见 §0-E-3）。B3 三条（2601/1441/532 行）仍**禁止打包报工期** |
+| **`Result<T>` 从 0 处用法铺开是大规模签名变更** | **高** | 实测 `Result<` 现有用法为 **0**、`catch` 达 **100**。ADR-05 的 v2.3 补充已定转换边界（infra 出口），但铺开工作量被压在阶段 1 的 1.0 周内不现实，须单独拆分立项 |
+| **模块间存在 3 个双向依赖环，阻断 ADR-02 的 target 拆分** | **高** | CMake 不允许 static library 循环依赖。v2.3 已实测定位到文件:行号，新增**阶段 0.7 解环**（2 天）；其中 2 个为弱环可立即断开，`Session.cpp → chaynsapi.h` 属真 DIP 违规，转阶段 2 |
+| `GenerationServiceEmitAndToolBridge.cpp` 分析篇幅与风险倒挂 | 中 | 2213 行、含 SSE 时序 + XML 增量解析 + 工具桥接状态机，是全项目语义最复杂处，文档仅提及 8 次；而 2600 行的 `accountManager`（CRUD + 轮换，路径清晰）提及 30 次。§4.3 Pipeline 拆解前须补专项分析 |
 | ~~R2 中 4 条 `impl=0` 纯头组件可能是规则误报~~ **（v2.2 结案，见 §0-E-3）** | 中→低 | 逐条实证：**仅 `Apicomn.h` 1 条为真误报**（13 行，2 个前向声明 + 单值 enum，无可断言行为）；另 3 条是**真实缺口**，其中 2 条零链接成本 |
 
 ---
@@ -1525,6 +1556,94 @@ v2.0 把 23 条分为「A 已链接(5)」与「B 未链接(18)」，判据是 `.
 
 ---
 
+## 0-F. 依赖环实测与阶段 0.7「解环」（v2.3 新增）
+
+### 先纠正一次我自己的错误测量
+
+v2.2 之前用「include 路径前缀」判定模块归属，测出 3 条边、**0 个环**，据此认为 ADR-02 可直接落地。
+**该判据本身有缺陷** —— 项目里绝大多数 include 写的是 basename（这正是 ADR-03 要治的病），前缀匹配自然什么都查不到。
+
+改用 **basename → 模块的全量映射**重测（同名头文件歧义数 = **0**，映射唯一，结论可靠）：
+**13 条模块间依赖边，3 个双向环。**
+
+### 为什么这件事必须排在阶段 1 之前
+
+ADR-02 靠 `target_link_libraries` 在编译期强制分层，而 **CMake 不允许 static library 之间循环依赖**。
+环不解开，阶段 1 的五个 target 拆不出来 —— 这是**硬约束，不是风格偏好**。
+
+### 三个环逐条定性（已定位到文件:行号）
+
+| 环 | 具体 include 点 | 性质 | 处置 |
+|---|---|---|---|
+| `apiManager` ↔ `apipoint` | `ApiManager.h:2` → `apipoint/APIinterface.h`；`chaynsapi.h:5` → `apiManager/ApiFactory.h` | **弱环** | **前向声明即可断**，见下 |
+| `dbManager` ↔ `metrics` | `ErrorStatsDbManager.h:11` → `metrics/ErrorEvent.h`；`ErrorStatsService.h:6` → `dbManager/metrics/ErrorStatsDbManager.h` | **弱环** | **移动一个文件即可断** |
+| `apipoint` ↔ `sessionManager` | `APIinterface.h:5` / `chaynsapi.h:4` → `Session.h`；**`Session.cpp:6` → `chaynsapi.h`** | **一半合法 + 一条真违规** | 拆两半处理 |
+
+#### 环 1 · `apiManager ↔ apipoint`：弱环，0.5 天
+
+`ApiManager.h` 只以 `std::shared_ptr<APIinterface>` 形式持有（成员、构造参数、返回值），**从不解引用**。
+`shared_ptr` 的声明与拷贝**不要求完整类型**，因此把 `#include` 降级为前向声明、include 下沉到 `.cpp` 即可。
+
+> **本仓已有先例**：`Apicomn.h:9` 就写着 `class APIinterface;` —— 这个做法在项目里已经用过，不是新引入的技巧。
+
+另一方向（`chaynsapi.h` → `ApiFactory.h`）是 **Provider 自注册**模式，`nexosapi` / `retoolapi` / `openai` 四个实现都这么写。
+注意：**阶段 0.5 会删掉 openai 与 nexos**，届时该方向只剩 2 处，成本进一步下降。
+
+#### 环 2 · `dbManager ↔ metrics`：弱环，0.5 天
+
+唯一成因是 **`ErrorEvent.h` 放错了地方**。它是一个纯数据模型，却住在 `metrics/`（服务层）里，
+导致 `dbManager` 为了用这个数据结构反向依赖了 `metrics`。
+
+**处置**：把 `ErrorEvent.h` 移到 `domain/model/`（按 §3 目标结构），两侧同时向下依赖它，环自动消失。
+**这不需要任何接口倒置，只是把文件放回它该在的层。**
+
+#### 环 3 · `apipoint ↔ sessionManager`：其中三条边里，只有一条是真违规
+
+这是我复审中最值得记下的一点 —— **不能整个环一起判死刑**：
+
+| 边 | 方向 | 按 ADR-01 是否合法 |
+|---|---|---|
+| `APIinterface.h:5` → `Session.h` | Layer 1 → Layer 2 | ✅ **合法**。infrastructure 依赖 domain 正是依赖倒置期望的方向 |
+| `chaynsapi.cpp` → `HistoryReplayBudget.h` / `OutboundBudget.h` | Layer 1 → Layer 2 | ✅ **合法**，同上 |
+| `GenerationService.cpp:16` / `EmitAndToolBridge.cpp:18` → `apipoint/ProviderResult.h` | Layer 2/3 → Layer 1 | ⚠️ **形式违规，但成因是文件放错层** |
+| **`Session.cpp:6` → `chaynsapi.h`** | **Layer 2 → Layer 1 具体实现** | ❌ **真违规**。domain 直接依赖一个具体 Provider |
+
+**拆解结论**：
+
+- `ProviderResult.h` 与 `ErrorEvent.h` 同病 —— 它是**纯聚合体**（v2.2 已用 `static_assert` 实证），除 jsoncpp 外零依赖，
+  本就属于 `domain/model/`。**移动文件即可消除这两条边**，同时 §0-E-3 的 H2 测试用例位置也随之确定。
+- 唯独 `Session.cpp:6 → chaynsapi.h` 是**真正的 DIP 违规**：`chatSession` 单例直接 new 了一个具体 Provider。
+  这条边**必须靠 `IChatProvider` port + 组合根注入才能断**，与**阶段 2「消灭单例」是同一件事**，
+  在阶段 0.7 强行处理会做两遍 —— **本版明确不排期，转阶段 2 批次**。
+
+### 阶段 0.7 · 解环（新增，排在阶段 1 之前）
+
+| 任务 | 估时 | 阻断的环 |
+|---|---:|---|
+| C1 `ApiManager.h` include 降级为前向声明 | 0.5 天 | 环 1 |
+| C2 `ErrorEvent.h` 移入 `domain/model/` | 0.5 天 | 环 2 |
+| C3 `ProviderResult.h` 移入 `domain/model/` | 0.5 天 | 环 3 的两条形式违规边 |
+| C4 环检测脚本化，纳入 R 系列规则（**R4**）+ CI 门禁 | 0.5 天 | 防回归 |
+| **小计** | **2 天 ≈ 0.4 周** | 3 环中的 2 个完全解开，第 3 个降为单边 |
+
+> **C4 是这四项里最重要的一项。** 前三项是一次性清理，若无门禁，环会以同样的方式长回来 ——
+> 这正是 ADR-02「文档约束必然腐化，构建约束不会」那句话所指的情形。
+
+**残留**：`Session.cpp → chaynsapi.h` 单向边保留至阶段 2。也就是说 **阶段 1 的 target 拆分需容忍 `domain → infrastructure` 一条临时边**，
+建议用 CMake 注释显式标注为「阶段 2 前的已知例外」，而不是悄悄放行。
+
+### 工期影响
+
+| | 周 |
+|---|---:|
+| v2.2 口径（含 A 类 + H 类） | 9.1 |
+| **阶段 0.7 解环** | **+0.4** |
+| **合计** | **≈ 9.5 周** |
+
+> 不含：P4、`BackgroundTaskQueue`、B 类 14 条、以及 ADR-05 补充中新拆出的 `Result` 铺开工作量。
+
+---
+
 ## 10. 变更记录
 
 | 版本 | 日期 | 变更 |
@@ -1542,3 +1661,4 @@ v2.0 把 23 条分为「A 已链接(5)」与「B 未链接(18)」，判据是 `.
 | v2.0 | 2026-08-07 | **R2 口径纠错 + 首批处置单落地**。（1）**R2 由 2 → 23，是口径错误不是漏扫**：v1.9 用头文件 basename 子串匹配判断是否被测，既误判也漏扫；`tools/architecture_audit.py` 改用 **`g++ -MM` 编译期依赖闭包**，并以 `src/test/CMakeLists.txt` 的 `TEST_SOURCES` / `PROJECT_SOURCES` 为真值来源，同时修正测试信号识别（`DROGON_TEST` / `CHECK` / `REQUIRE`，此前误按 gtest 假定）。基线落盘 `doc/adr/audit-baseline.json`，错误版本留档 `audit-baseline.INVALID-r2-bug.json.bak`。（2）**`BridgeHelpers` 已补测出榜**（`src/test/test_bridge_helpers.cpp`）。（3）**新增 §0-E-2「R2 首批处置方案」**：23 条按「是否已链接进测试二进制」分 **A 类 5 条 / B 类 18 条**，A 类优先（零构建风险），排序 P0 `SessionCodec` → P1 `TextExtractor` → P2 `ApiManager` → P3 `ApiFactory` → P4 `SessionDbManager`。（4）**新增 P13**：`ApiManager` 四项真实缺陷 —— `getApiInfoByModelName` 空队列 `top()` 为 **UB**、查询接口用 `operator[]` 致 nullptr 条目膨胀、`updateApiInfo` 空实现、`flushModelnameApiQueueMap` 疑似空操作。（5）**三处自我推翻**：`app()` 在测试中**可用**（`test_main.cc` 于后台线程跑事件循环），故排除 `init()` 的理由改为「无信息量 + 单例污染」而非「会崩」；`session_st` 为 **32** 字段而非 31；`apiType` 映射为 **3 份**而非 2 份。（6）**三项探查结论**：`ApiType` 枚举确认仅 2 值（三元映射完备）；`Session.h` 中 OpenSSL 仅见于注释与声明、无内联实现，**P0 无链接风险**；`v` 字段全仓仅 1 处写入、**零处读取**，为死字段。（7）**变异验真由 1 条增至 4 条** —— 用例间覆盖重叠，单条不足以证明断言独立有效。（8）**新增待核实项**：R2 中 4 条 `impl=0` 的纯头文件组件可能是**规则误报**，需逐条判定是否存在可断言行为。**本版不调总工期**；R2 降幅、用例数与断言数均须实跑后回填，不做估算 |
 | v2.1 | 2026-08-07 | **消歧义版：把「不明确」全部落成可复算的确定值或显式标注**。（1）**修正三个版本的工期矛盾**：§9 长期显示 7.5 周、§10 的 v1.8 写 7.9 周，新增「工期对账」表锁定 **7.9 周为唯一口径**，并说明 7.5 是阶段基线故予保留。（2）**§0-E-2 首次获得工期归属**：P0 2 天 / P1 0.5 天 / P2 1.5 天 / P3 0.5 天 = **4.5 天 ≈ 0.9 周**，计入后 **≈ 8.8 周**；P4 明确**暂不排期**；P2 估时标注为**唯一带前置条件项**（`ProviderResult` 可否默认构造，不成立则作废转入不可估算区）。（3）**§7 风险表补 3 行**：P13 的 UB（高，标注为当前唯一已定位的生产期 UB）、R2 B 类 18 条链接闭包不可预测（高，对策为**禁止打包报工期**）、4 条纯头组件疑似规则误报（中，若成立应修规则而非硬补测试）。（4）**两处数字补出处**：`ImageInfo` 5 字段实为 `contracts/GenerationRequest.h:110` 定义而非 `Session.h`；`SessionCodec.cpp` 四段变量名 `req`/`resp`/`st`/`pv` 与 10+4+11+7=32 已可复算。（5）**阶段 1/3/5 显式标注「有意暂缓细化」**并给出细化触发条件，消除「粗纲 = 遗漏」的歧义。本版**只消歧义，不改任何技术决策** |
 | v2.2 | 2026-08-07 | **三项待定全部实证结案，并推翻自己的 A/B 二分法**。（1）**议题 1 结案**：`provider::ProviderResult` 经四条 `static_assert` + `g++ -fsyntax-only` 实证为**可默认构造/拷贝/移动/赋值（rc=0）**，系纯聚合体、7 个成员全带默认初值。P2 的 1.5 天**解除前置条件**，至此 §9 估时表**不含任何待定条件**。（2）**议题 3 结案**：4 条 `impl=0` 组件逐条实证 —— 仅 `Apicomn.h`（13 行，2 前向声明 + 单值 enum）为**真误报**；`ToolDefinitionResolver`（含 namespace 递归遍历逻辑）与 `ProviderResult`（3 判定式 + 5 工厂）是**真实缺口**；`BackgroundTaskQueue`（函数内静态单例 + 线程池）真实但**并入阶段 2 单例治理**，避免做两遍。（3）**议题 2 结案 + 自我推翻**：新增 **§0-E-3**，v2.0 的 A/B 二分法**判据有误** —— 纯头组件无 `.cpp` 可链接、测试零 CMake 成本，却被归入 B 类，凭空多记 4 笔成本。改为 **A(5) / H(3) / B(14) / 排除(1)** 三分法；B 类由 18 收窄至 14 并分 B1(8)/B2(3)/B3(3) 三层，B2 三条 dbManager 与 P4 合并为同一前置（DB 替身策略未定，4 条一律不估时），B3 三条仍禁止估时。（4）**工期**：H 类 2 条 +1.5 天 ≈ 0.3 周，总计 **≈ 9.1 周**（7.9 基线 + 0.9 A 类 + 0.3 H 类）。（5）**故意未做**：R2 排除规则未写入脚本、`audit-baseline.json` 仍为 23 —— 改规则须同时改基线，混入文档提交会让防回归失效；文档口径(22+1)与脚本口径(23)的差异已在 §0-E-3 记录 |
+| v2.3 | 2026-08-07 | **架构复审：选型基本正确，但发现一处阶段排序缺陷**。（1）**再次纠正自己的测量**：v2.2 前用 include 路径前缀判定模块归属，测出 0 个环；该判据对 basename 式 include 无效（而本仓正是 basename 为主）。改用 basename→模块全量映射（歧义数 0）重测，实得 **13 条边、3 个双向环**。（2）**新增 §0-F + 阶段 0.7「解环」（2 天，排在阶段 1 之前）**：ADR-02 靠 CMake target 强制分层，而 **CMake 不允许 static library 循环依赖**，环不解开阶段 1 无法落地 —— 这是硬约束。（3）**三环逐条定性**：`apiManager↔apipoint` 为弱环，`ApiManager.h` 仅以 `shared_ptr<APIinterface>` 持有、从不解引用，前向声明即可断（`Apicomn.h:9` 已有同样先例）；`dbManager↔metrics` 唯一成因是 `ErrorEvent.h` 放错层，移入 `domain/model/` 即消失；`apipoint↔sessionManager` **三条边中只有一条是真违规** —— `APIinterface.h→Session.h` 是 Layer1→Layer2，**符合 ADR-01 的期望方向**，`GenerationService.cpp→ProviderResult.h` 属文件放错层（`ProviderResult` 已实证为纯聚合体，本属 `domain/model/`），唯独 **`Session.cpp:6→chaynsapi.h`**（domain 直接依赖具体 Provider）是真 DIP 违规，须靠 `IChatProvider` + 组合根注入，**与阶段 2 是同一件事，不排期、转阶段 2**。（4）**新增 R4 环检测门禁**：前三项是一次性清理，无门禁则环会长回来 —— 正是 ADR-02 那句话所指的情形。（5）**ADR-05 补充转换边界**：实测 10 个 `throw` 对应 **100 个 `catch`**，九成接的是 Drogon/jsoncpp/DB 驱动的异常，禁不掉；明确转换边界设在 **infrastructure 出口**，domain/application 内部不写 `try`。同时指出 `Result<` 现有用法为 **0**，铺开是大规模签名变更，压在阶段 1 的 1.0 周内不现实，须单独立项（已入 §7）。（6）**术语统一**：ADR-01 的「四层」与 §3/§9 的「五层 target」并存易误读 —— `platform/` 是横切设施非分层，口径定为 **架构分层 4 / CMake target 5**。（7）**§7 补 3 行**（Result 铺开、依赖环、EmitAndToolBridge 篇幅与风险倒挂：2213 行仅提及 8 次，而 2600 行的 accountManager 提及 30 次）。（8）**工期**：9.1 + 0.4 = **≈ 9.5 周** |
