@@ -35,6 +35,7 @@ set(TEST_SOURCES
     test_request_adapters.cpp
     test_xml_tool_call_codec.cpp
     test_bridge_protocol_codec.cpp
+    test_bridge_helpers.cpp
     test_action_protocol.cpp
     test_tool_call_validator.cpp
     test_strict_client_rules.cpp
