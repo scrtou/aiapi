@@ -83,7 +83,8 @@ Json::Value normalizedDefinitions(const Json::Value& tools,
                                   const BridgeDefinitionOptions& options) {
     Json::Value definitions(Json::arrayValue);
     if (!tools.isArray()) return definitions;
-    const int maxChars = std::max(0, std::min(options.maxDescriptionChars, 2000));
+    // 不再硬夹上限：完全尊重配置 max_description_chars，仅做非负保护。
+    const int maxChars = std::max(0, options.maxDescriptionChars);
     for (const auto& tool : tools) {
         if (!tool.isObject() || tool.get("type", "").asString() != "function" ||
             !tool.isMember("function") || !tool["function"].isObject()) {
@@ -175,7 +176,10 @@ BridgeDecodeResult adaptCompiled(const actionproto::CompileResult& compiled,
     result.protocol = protocol;
     result.diagnostic = compiled.diagnostic;
     if (compiled.valid) {
-        auto adapted = actionproto::adaptForClient(compiled.envelope, clientType);
+        auto adapted = actionproto::adaptForCapabilities(
+            compiled.envelope,
+            actionproto::capabilitiesForClient(clientType,
+                                               /*parallelToolCalls=*/false));
         result.toolCalls = std::move(adapted.toolCalls);
         result.text = std::move(adapted.text);
     }
@@ -296,21 +300,31 @@ public:
     }
 
     std::string buildPolicy(const BridgePolicyOptions& options) const override {
-        const bool strict = options.clientType == "RooCode" ||
-                            options.clientType == "Kilo-Code" ||
+        const auto capabilities = actionproto::capabilitiesForClient(
+            options.clientType, options.parallelToolCalls);
+        // 严格性来自能力 IR；retoolapi 是通道级（非客户端级）强约束，保留。
+        const bool strict = capabilities.isStrictToolClient() ||
                             options.channel == "retoolapi";
         std::ostringstream policy;
         policy << "Context: Software engineering collaboration\n";
         policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
         policy << "Use only the XML bridge format defined here.\n";
+        policy << "Every response MUST contain exactly 1 action.\n";
         if (!options.forcedToolName.empty()) {
             policy << "Required tool for this response: " << options.forcedToolName << "\n";
         } else if (options.toolChoice == "required" || strict ||
                    options.requireToolForCurrentRequest) {
-            policy << "Each response MUST output exactly 1 tool call.\n";
-            policy << "If no other tool is needed, use attempt_completion.\n";
+            policy << "The action MUST be a tool call.\n";
+            const std::string completionTool =
+                capabilities.requiresCompletionTool()
+                    ? capabilities.completionToolName
+                    : std::string("attempt_completion");
+            policy << "When the task is finished, the action is "
+                   << completionTool << ".\n";
+            policy << "Never emit both a tool call and prose, and never emit neither.\n";
         } else {
-            policy << "Output a tool call only when an API call is needed; otherwise respond normally.\n";
+            policy << "The action is a tool call when external state is required; otherwise it is your normal answer.\n";
+            policy << "Never emit a tool call together with prose.\n";
         }
         policy << "When calling a tool, output ONLY this XML with no prefix or suffix:\n";
         policy << options.sentinel << "\n";
@@ -464,8 +478,14 @@ BridgeWireFormat resolveBridgeWireFormat(const Json::Value& toolBridgeConfig,
                                          const std::string& clientType,
                                          const std::string& channel,
                                          const std::string& model) {
-    BridgeWireFormat format = clientType == "Codex"
-        ? BridgeWireFormat::Json : BridgeWireFormat::Xml;
+    // 默认线格式由能力 IR 决定：偏好 XML 的客户端走 action-v2，其余走 action-v3。
+    const auto capabilities =
+        actionproto::capabilitiesForClient(clientType, /*parallelToolCalls=*/false);
+    BridgeWireFormat format = capabilities.prefersXmlWire
+        ? BridgeWireFormat::Xml
+        : (capabilities.family == actionproto::ClientFamily::Codex
+               ? BridgeWireFormat::Json
+               : BridgeWireFormat::Xml);
     if (!toolBridgeConfig.isObject()) return format;
     if (toolBridgeConfig.isMember("format") &&
         toolBridgeConfig["format"].isString()) {

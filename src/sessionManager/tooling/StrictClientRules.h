@@ -1,6 +1,7 @@
 #ifndef STRICT_CLIENT_RULES_H
 #define STRICT_CLIENT_RULES_H
 
+#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include "sessionManager/contracts/GenerationEvent.h"
 #include <json/json.h>
 #include <string>
@@ -29,11 +30,21 @@ void applyStrictClientRules(
 /**
  * @brief 判断客户端是否为严格工具客户端
  *
- * @param clientType 客户端类型字符串
- * @return true 如果是 Kilo-Code 或 RooCode
+ * 判定完全委派给客户端能力 IR，本层不再比较 clientType 字符串，
+ * 因此 RooCode / Roo-Code / roocode 等变体自动等价。
+ *
+ * 本函数是全项目唯一的 isStrictToolClient(clientType) 定义（inline，
+ * 曾在 ToolCallValidator.cpp 中存在重复实现，已删除）；新增调用点直接
+ * 包含本头文件即可，切勿再就地复制一份。
+ *
+ * 此处固定 parallelToolCalls=false：严格性只由
+ * requiresActionEveryTurn / completionToolName 决定，与并行开关无关，
+ * 传入 false 可让调用方无需持有请求上下文。
  */
 inline bool isStrictToolClient(const std::string& clientType) {
-    return clientType == "Kilo-Code" || clientType == "RooCode";
+    return actionproto::capabilitiesForClient(clientType,
+                                             /*parallelToolCalls=*/false)
+        .isStrictToolClient();
 }
 
 /**
@@ -54,6 +65,11 @@ bool hasApplyDiffFailureContext(
  * @brief 构建 Roo/Kilo 的 apply_diff 精确匹配与失败恢复规则
  */
 std::string buildStrictApplyDiffPolicy(bool recoveringFromFailure);
+
+// 构建 Glob 静默截断回退规则。
+// 仅在同时提供了 Glob 与某个 shell 类工具时才有意义，调用方需自行判断。
+// shellToolName 为实际可用的 shell 工具名（如 Shell / exec_command）。
+std::string buildGlobTruncationFallbackPolicy(const std::string& shellToolName);
 
 }
 

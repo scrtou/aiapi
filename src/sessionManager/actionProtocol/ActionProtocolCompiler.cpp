@@ -100,6 +100,11 @@ CompileResult compileJsonAction(
             return failure(CompileError::MissingAction,
                            "action-v3 tool_calls must be a non-empty array");
         }
+        if (options.capabilities.maxToolCalls > 0 &&
+            calls.size() > options.capabilities.maxToolCalls) {
+            return failure(CompileError::MultipleActions,
+                           "action-v3 response exceeds the allowed tool_calls for this turn");
+        }
         for (const auto& call : calls) {
             if (!call.isObject()) {
                 return failure(CompileError::InvalidActionShape,
@@ -136,22 +141,102 @@ CompileResult compileJsonAction(
 
 } // namespace
 
-ClientCapabilities capabilitiesForClient(const std::string& clientType,
+// 家族的稳定可读名，仅用于日志与诊断输出。
+// 不要用它反向解析或再做字符串比较——判定一律走 ClientCapabilities 字段。
+const char* clientFamilyName(ClientFamily family) {
+    switch (family) {
+        case ClientFamily::RooKilo: return "RooKilo";
+        case ClientFamily::Codex: return "Codex";
+        case ClientFamily::ClaudeCode: return "ClaudeCode";
+        case ClientFamily::Generic: break;
+    }
+    return "Generic";
+}
+
+// clientType 字符串的**唯一**解析点（详见头文件顶部的硬性规则）。
+// 归一化策略：剔除分隔符（- _ 空格 .）后统一转小写，因此
+//   "Kilo-Code" / "kilo_code" / "KILOCODE" / "kilo" 全部收敛到 RooKilo。
+// 未识别的客户端一律落到 Generic —— 采取「不认识就按标准 OpenAI 行为处理」
+// 的保守策略，避免误套用某个家族的特殊约束而破坏正常客户端。
+ClientFamily normalizeClientType(const std::string& clientType) {
+    // clientType 字符串的唯一解析点。大小写与连字符变体在此统一收敛，
+    // 下游模块不得再自行比较字符串。
+    std::string key;
+    key.reserve(clientType.size());
+    for (char c : clientType) {
+        if (c == '-' || c == '_' || c == ' ' || c == '.') {
+            continue;
+        }
+        key.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (key == "roocode" || key == "roo" || key == "kilocode" || key == "kilo") {
+        return ClientFamily::RooKilo;
+    }
+    if (key == "codex") {
+        return ClientFamily::Codex;
+    }
+    if (key == "claudecode" || key == "claude") {
+        return ClientFamily::ClaudeCode;
+    }
+    return ClientFamily::Generic;
+}
+
+// 家族能力矩阵：本函数是所有客户端行为差异的**唯一声明处**。
+// 新接入一个客户端时的标准流程：
+//   1. 在 normalizeClientType 增加别名识别；
+//   2. 在此 switch 增加一个 case，只写与默认值不同的字段；
+//   3. 若出现现有字段无法表达的差异，回头在头文件新增能力位——
+//      切勿在调用点重新引入 clientType 字符串比较。
+// 默认值（Generic）即标准 OpenAI 兼容语义，故各 case 都是「差异清单」。
+ClientCapabilities capabilitiesForFamily(ClientFamily family,
                                           bool parallelToolCalls) {
     ClientCapabilities capabilities;
+    capabilities.family = family;
     capabilities.supportsParallelCalls = parallelToolCalls;
     capabilities.maxToolCalls = parallelToolCalls ? 16 : 1;
 
-    if (clientType == "RooCode" || clientType == "Kilo-Code") {
-        capabilities.requiresActionEveryTurn = true;
-        capabilities.maxToolCalls = 1;
-    } else if (clientType == "Codex") {
-        capabilities.supportsCustomTools = true;
-    } else if (clientType == "ClaudeCode" || clientType == "Claude-Code") {
-        capabilities.supportsCustomTools = true;
-        capabilities.maxToolCalls = parallelToolCalls ? 16 : 1;
+    switch (family) {
+        case ClientFamily::RooKilo:
+            // Roo/Kilo 只消费工具调用：final_response 会在适配层被还原成
+            // attempt_completion，因此这里声明为不支持裸文本收尾。
+            capabilities.requiresActionEveryTurn = true;
+            capabilities.supportsFinalText = false;
+            capabilities.supportsParallelCalls = false;
+            capabilities.maxToolCalls = 1;
+            capabilities.completionToolName = "attempt_completion";
+            capabilities.prefersXmlWire = true;
+            capabilities.allowsProseWithToolCall = false;
+            capabilities.requiresStrictToolNames = true;
+            capabilities.coalescesParallelCalls = true;
+            break;
+        case ClientFamily::Codex:
+            // Codex 支持 freeform/custom 工具定义。
+            capabilities.supportsCustomTools = true;
+            // Codex 在未开启并行时要求把多调用收敛为首个调用。
+            capabilities.coalescesParallelCalls = !parallelToolCalls;
+            // Codex 客户端一旦读到 finish_reason="tool_calls" 即结束本轮文本消费，
+            // 故零宽会话 ID 之类的带外文本必须早于工具调用事件下发，否则会被丢弃。
+            capabilities.stopsConsumingTextAfterToolCall = true;
+            break;
+        case ClientFamily::ClaudeCode:
+            // Claude Code 的约束与 Codex 同构：自定义工具 + 文本须前置。
+            capabilities.supportsCustomTools = true;
+            capabilities.coalescesParallelCalls = !parallelToolCalls;
+            capabilities.stopsConsumingTextAfterToolCall = true;
+            break;
+        case ClientFamily::Generic:
+            // 标准 OpenAI 兼容客户端：全部沿用结构体默认值，不做任何特化。
+            break;
     }
     return capabilities;
+}
+
+ClientCapabilities capabilitiesForClient(const std::string& clientType,
+                                          bool parallelToolCalls) {
+    return capabilitiesForFamily(normalizeClientType(clientType),
+                                 parallelToolCalls);
 }
 
 CompileResult ActionProtocolCompiler::compileResponse(
@@ -327,10 +412,15 @@ std::string ActionProtocolCompiler::buildRouterPolicy(
     // “协议编译器”，上游模型更容易把它识别成可执行的工具路由任务。
     policy << "Context: Software engineering collaboration\n";
     policy << "Task: Generate the next tool call instruction (tools are executed by an external system)\n";
-    policy << "Goal: Based on the user request, select and output exactly 1 tool to call.\n";
+    policy << "Goal: Based on the user request, emit exactly 1 action.\n";
     policy << "Note: Do NOT explain whether you have access/permissions. Do NOT ask the user to paste file contents. Use the listed tools directly (e.g., call read_file/list_files when you need files).\n";
-    policy << "Each response MUST output exactly 1 action protocol action.\n";
-    policy << "If no other tool is needed, use final_response (the Codex equivalent of attempt_completion) to output the final result.\n\n";
+    policy << "Every response MUST contain exactly 1 action.\n";
+    policy << "An action is either tool_calls (external state is required) or final_response (the task is finished).\n";
+    policy << "Never emit both, and never emit neither.\n";
+    if (!capabilities.supportsFinalText) {
+        policy << "final_response is converted into the client completion tool call.\n";
+    }
+    policy << "\n";
     policy << "Transport contract:\n";
     policy << "Your entire response MUST be the exact sentinel followed by one JSON object.\n";
     policy << "Output no prose, markdown, analysis, prefix, or suffix outside the envelope.\n";
@@ -351,6 +441,9 @@ std::string ActionProtocolCompiler::buildRouterPolicy(
     } else {
         policy << "At most " << capabilities.maxToolCalls
                << " independent tool_calls are allowed.\n";
+    }
+    if (capabilities.requiresActionEveryTurn) {
+        policy << "Plain text outside an action is discarded by the client.\n";
     }
     return policy.str();
 }

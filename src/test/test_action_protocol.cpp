@@ -5,6 +5,13 @@
 
 using namespace actionproto;
 
+namespace {
+std::string buildRouterPolicyFor(const std::string& clientType, bool parallel) {
+    return ActionProtocolCompiler::buildRouterPolicy(
+        "<S/>", capabilitiesForClient(clientType, parallel));
+}
+} // namespace
+
 DROGON_TEST(ActionProtocol_CompilesJsonToolCall)
 {
     const std::string sentinel = "<Function_Json123_Start/>";
@@ -185,6 +192,47 @@ DROGON_TEST(ActionProtocol_ClientCapabilities)
     const auto roo = capabilitiesForClient("RooCode", true);
     CHECK(roo.requiresActionEveryTurn);
     CHECK(roo.maxToolCalls == 1);
+    CHECK(roo.supportsFinalText == false);
+    CHECK(roo.supportsParallelCalls == false);
+}
+
+DROGON_TEST(ActionProtocol_RejectsMoreToolCallsThanClientAllows)
+{
+    CompileOptions options;
+    options.expectedSentinel = "<S/>";
+    options.wireFormat = WireFormat::JsonV3;
+    options.capabilities = capabilitiesForClient("RooCode", true);
+
+    const std::string twoCalls =
+        "<S/>{\"protocol\":\"action-v3\",\"tool_calls\":["
+        "{\"name\":\"a\",\"arguments\":{}},"
+        "{\"name\":\"b\",\"arguments\":{}}]}";
+    const auto rejected =
+        ActionProtocolCompiler::compileResponse(twoCalls, options);
+    CHECK(rejected.matched);
+    CHECK(rejected.valid == false);
+    CHECK(rejected.diagnostic.code == CompileError::MultipleActions);
+
+    const std::string oneCall =
+        "<S/>{\"protocol\":\"action-v3\",\"tool_calls\":["
+        "{\"name\":\"a\",\"arguments\":{}}]}";
+    const auto accepted =
+        ActionProtocolCompiler::compileResponse(oneCall, options);
+    CHECK(accepted.valid);
+    REQUIRE(accepted.envelope.toolCalls.size() == 1);
+}
+
+DROGON_TEST(ActionProtocol_PolicyStatesExactlyOneActionContract)
+{
+    const auto roo = buildRouterPolicyFor("RooCode", true);
+    CHECK(roo.find("Every response MUST contain exactly 1 action.") != std::string::npos);
+    CHECK(roo.find("Never emit both, and never emit neither.") != std::string::npos);
+    CHECK(roo.find("final_response is converted into the client completion tool call.")
+          != std::string::npos);
+
+    const auto codex = buildRouterPolicyFor("Codex", true);
+    CHECK(codex.find("Every response MUST contain exactly 1 action.") != std::string::npos);
+    CHECK(codex.find("final_response is converted into") == std::string::npos);
 }
 
 DROGON_TEST(ActionProtocol_AdapterKeepsClientSpecificCompletionAtEdge)

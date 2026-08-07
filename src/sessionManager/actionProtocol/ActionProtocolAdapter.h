@@ -14,7 +14,12 @@ struct AdaptedActionResult {
 };
 
 // 将客户端无关的 ActionEnvelope 转换为内部 GenerationEvent 语义。
-// 客户端专用名称（例如 Roo 的 attempt_completion）只允许出现在适配器中。
+// 适配器只读取能力 IR：收尾工具名由 capabilities.completionToolName 决定，
+// 客户端字符串不再出现在本层。
+AdaptedActionResult adaptForCapabilities(const ActionEnvelope& envelope,
+                                         const ClientCapabilities& capabilities);
+
+// 兼容旧调用点：内部先把 clientType 归一化为能力 IR 再委派。
 AdaptedActionResult adaptForClient(const ActionEnvelope& envelope,
                                    const std::string& clientType);
 

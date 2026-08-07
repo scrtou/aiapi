@@ -302,10 +302,17 @@ std::string codexToolOutputText(const Json::Value& item)
 {
     const std::string type = item.get("type", "tool_call_output").asString();
     const std::string callId = item.get("call_id", "").asString();
+    const std::string outputStr = compactJson(item.get("output", Json::Value("")));
+
+    // 观测点：区分"客户端未回传完整工具结果"与"桥接层丢内容"。
+    LOG_DEBUG << "[请求适配器] 工具结果原文: type=" << type
+              << ", callId=" << (callId.empty() ? "(空)" : callId)
+              << ", outputBytes=" << outputStr.size()
+              << ", head=" << outputStr.substr(0, std::min<size_t>(outputStr.size(), 200));
+
     std::string text = "\n[tool_result type=" + type;
     if (!callId.empty()) text += " call_id=" + callId;
-    text += "]\n" + compactJson(item.get("output", Json::Value(""))) +
-            "\n[/tool_result]\n";
+    text += "]\n" + outputStr + "\n[/tool_result]\n";
     return text;
 }
 
@@ -637,10 +644,13 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     const std::string userAgent = req->getHeader("user-agent");
     const std::string originator = req->getHeader("originator");
     const std::string codexWindowId = req->getHeader("x-codex-window-id");
+    // Only enable the Codex protocol adapter for an explicitly identified
+    // Codex client. x-codex-window-id is also sent by some Codex-compatible
+    // clients and is therefore insufficient evidence of native Responses SSE
+    // and function-call support on its own.
     const bool isCodex = originator == "codex-tui" ||
                          userAgent.rfind("codex-tui/", 0) == 0 ||
-                         userAgent.rfind("codex_cli_rs/", 0) == 0 ||
-                         !codexWindowId.empty();
+                         userAgent.rfind("codex_cli_rs/", 0) == 0;
     std::string clientType = userAgent;
 
     if (isCodex) {
@@ -684,7 +694,10 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     stripBearer(auth);
     clientInfo["client_authorization"] = auth;
     
-    LOG_INFO << "[请求适配器] 识别到客户端类型：" << (clientType.empty() ? "未知" : clientType);
+    LOG_INFO << "[请求适配器] 识别到客户端类型：" << (clientType.empty() ? "未知" : clientType)
+             << ", rawUserAgent=" << (userAgent.empty() ? "(空)" : userAgent)
+             << ", originator=" << (originator.empty() ? "(空)" : originator)
+             << ", codexWindowId=" << (codexWindowId.empty() ? "(空)" : codexWindowId);
     LOG_INFO << "[请求适配器] 客户端凭证："
              << (auth.empty() ? "未提供" : ("已提供(长度=" + std::to_string(auth.size()) + ")"));
     

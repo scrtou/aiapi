@@ -260,8 +260,15 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         // Retry exactly once on plain text or malformed transport output.
         const std::string clientType = safeJsonAsString(
             session.provider.clientInfo.get("client_type", ""), "");
+        // 重试闸门：仅在「Codex 家族 + 通道无原生工具 + 本轮确实要用工具」
+        // 全部成立时才启用。四个附加条件缺一不可，否则会对普通对话
+        // （如 tool_choice=none 或工具表为空）触发无意义的二次请求。
+        // 家族判定读能力 IR 的 family 字段，不再比较 clientType 字符串。
         const bool codexRooCompatActive =
-            clientType == "Codex" && !supportsToolCalls && !toolChoiceNone &&
+            actionproto::capabilitiesForClient(clientType,
+                                              session.request.parallelToolCalls)
+                    .family == actionproto::ClientFamily::Codex &&
+            !supportsToolCalls && !toolChoiceNone &&
             !session.provider.toolBridgeTrigger.empty() &&
             toolsForBridge.isArray() && toolsForBridge.size() > 0;
         if (codexRooCompatActive) {

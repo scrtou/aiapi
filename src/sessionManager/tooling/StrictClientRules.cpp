@@ -149,6 +149,21 @@ std::string buildStrictApplyDiffPolicy(bool recoveringFromFailure) {
     return policy.str();
 }
 
+std::string buildGlobTruncationFallbackPolicy(const std::string& shellToolName) {
+    if (shellToolName.empty()) return "";
+    std::ostringstream policy;
+    policy << "\nGlob result-completeness rules:\n";
+    policy << "- Glob may report \"Matched N file(s)\" while returning only the first few dozen paths, with no truncation notice.\n";
+    policy << "- After each Glob call, count the paths you actually received and compare that count with N.\n";
+    policy << "- If the received count is smaller than N, treat the list as INCOMPLETE. Do not answer from it and do not claim it is the full set.\n";
+    policy << "- To recover, call " << shellToolName
+           << " and re-collect the paths yourself, for example with find/ls plus a narrower directory or pattern.\n";
+    policy << "- Prefer narrowing the scope (a specific subdirectory, an extension filter, or a depth limit) over requesting the entire tree again.\n";
+    policy << "- Only report a file list as complete when the count you received matches N, or when you re-derived it through "
+           << shellToolName << ".\n";
+    return policy.str();
+}
+
 void applyStrictClientRules(
     const std::string& clientType,
     std::string& textContent,

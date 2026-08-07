@@ -1,3 +1,4 @@
+#include "sessionManager/tooling/StrictClientRules.h"
 #include "sessionManager/tooling/ToolCallValidator.h"
 #include "sessionManager/tooling/ToolDefinitionResolver.h"
 #include <drogon/drogon.h>
@@ -621,10 +622,6 @@ size_t ToolCallValidator::filterInvalidToolCalls(
 // ============================================================================
 // 全局辅助函数
 // ============================================================================
-
-bool isStrictToolClient(const std::string& clientType) {
-    return clientType == "Kilo-Code" || clientType == "RooCode";
-}
 
 ValidationMode getRecommendedValidationMode(const std::string& clientType) {
     // Roo/Kilo 客户端使用 Relaxed 模式（仅校验关键字段）

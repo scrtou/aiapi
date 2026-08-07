@@ -320,14 +320,28 @@ DROGON_TEST(RequestAdapters_CodexCliStableSessionFromBodyFallback)
     CHECK(genReq.clientInfo["client_session_source"].asString() == "body.conversation_id");
 }
 
-DROGON_TEST(RequestAdapters_CodexWindowIdIsNotUsedAsConversationId)
+DROGON_TEST(RequestAdapters_CodexWindowIdAloneDoesNotEnableCodexProtocol)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
     body["input"] = "hello";
 
-    auto req = makeJsonRequest(body);
+    auto req = makeJsonRequest(body, "compatible-client/1.0");
     req->addHeader("x-codex-window-id", "window-only-789");
+    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+
+    CHECK(genReq.clientInfo["client_type"].asString() == "compatible-client/1.0");
+    CHECK(!genReq.clientInfo.isMember("client_session_id"));
+}
+
+DROGON_TEST(RequestAdapters_RealCodexMayIncludeWindowId)
+{
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "hello";
+
+    auto req = makeJsonRequest(body, "codex_cli_rs/0.133.0");
+    req->addHeader("x-codex-window-id", "window-789");
     const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
 
     CHECK(genReq.clientInfo["client_type"].asString() == "Codex");

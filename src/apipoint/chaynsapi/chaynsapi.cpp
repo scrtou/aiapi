@@ -887,6 +887,7 @@ void chaynsapi::postChatMessage(session_st& session)
                                      << ", reasoningCount=" << reasoningMessages.size();
                             LOG_INFO << "[chaynsAPI] 回复已接收: textLength="
                                      << response_message.size();
+                            LOG_DEBUG << "[chaynsAPI] 回复内容: " << response_message;
                             break;
                         }
                     }

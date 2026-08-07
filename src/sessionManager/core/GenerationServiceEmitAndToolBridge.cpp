@@ -391,6 +391,9 @@ void appendCodexJsonBridgePolicy(std::ostringstream& policy,
                                 const std::string& triggerSignal,
                                 bool parallelToolCalls,
                                 bool requireToolForCurrentRequest) {
+    // 此处硬编码 "Codex" 是有意为之：本函数专职生成 Codex 家族的 JSON 桥策略，
+    // 客户端身份是函数契约的一部分而非运行时输入。仍走 capabilitiesForClient
+    // 而不手工拼装能力，是为了让策略文本自动跟随家族矩阵演进。
     const auto capabilities = actionproto::capabilitiesForClient("Codex", parallelToolCalls);
     policy << actionproto::ActionProtocolCompiler::buildRouterPolicy(triggerSignal, capabilities);
     if (!forcedToolName.empty()) {
@@ -520,15 +523,27 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // 获取客户端类型，用于后续的客户端特定处理
     const std::string clientType = safeJsonAsString(session.provider.clientInfo.get("client_type", ""), "");
     
+    // 客户端能力 IR：本函数内所有客户端差异均由该对象描述，不再比较字符串。
+    // 之所以在此处一次性求值并复用，是因为能力是「客户端 × parallelToolCalls」
+    // 的函数——同一请求内必须保持一致，分散重算会有取值漂移风险。
+    const auto clientCaps = actionproto::capabilitiesForClient(
+        clientType, session.request.parallelToolCalls);
+
     // 判断是否为"严格工具客户端"（Roo/Kilo）
     // 这类客户端要求：每次响应必须且只能包含 1 个工具调用
-    const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
+    // 判定依据是能力 IR 的推导谓词（requiresActionEveryTurn && 有收尾工具），
+    // 而非客户端名——新增同类客户端时此处无需改动。
+    const bool strictToolClient = clientCaps.isStrictToolClient();
 
     // ==================== 步骤 2: 工具调用解析 ====================
     // 检查当前通道是否原生支持工具调用
     // 如果支持，上游会直接返回结构化的 tool_calls，无需再从文本中二次解析
     const bool supportsToolCalls = getChannelSupportsToolCalls(session.request.api);
-    const bool codexRooCompat = clientType == "Codex" && !supportsToolCalls;
+    // Codex 兼容模式：仅当通道**不**原生支持 tool_calls 时启用。
+    // 此时上游只会吐纯文本，需要按 Roo 风格从文本里二次解析 action 协议；
+    // 若通道原生支持则不应介入，避免对结构化结果做多余的文本解析。
+    const bool codexRooCompat =
+        clientCaps.family == actionproto::ClientFamily::Codex && !supportsToolCalls;
     
     const ToolChoiceSpec toolChoiceSpec = parseToolChoiceSpec(session.request.toolChoice);
     const bool toolChoiceNone = toolChoiceSpec.none;
@@ -909,9 +924,18 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         }
     }
 
-    if (clientType == "Codex" && !session.request.parallelToolCalls && toolCalls.size() > 1) {
-        LOG_WARN << "[生成服务][Codex] parallel_tool_calls=false，已仅保留第一个工具调用";
-        toolCalls.erase(toolCalls.begin() + 1, toolCalls.end());
+    // ---- 并行工具调用收敛 ----
+    // 上限来自能力 IR（Codex 在 parallel_tool_calls=false 时为 1），
+    // 不再对客户端名做硬编码判断，因此该规则天然适用于任何声明了
+    // coalescesParallelCalls 的家族。
+    // 策略选择「截断」而非「报错」：多余调用丢弃后客户端仍可在下一轮补做，
+    // 而报错会直接中断会话，代价明显更高。
+    // 截断后紧接着重排 index，保证下发的 tool_call 索引连续从 0 起。
+    if (clientCaps.coalescesParallelCalls &&
+        toolCalls.size() > clientCaps.maxToolCalls) {
+        LOG_WARN << "[生成服务][ToolBridge] 客户端能力限制 maxToolCalls="
+                 << clientCaps.maxToolCalls << "，已截断多余工具调用";
+        toolCalls.erase(toolCalls.begin() + clientCaps.maxToolCalls, toolCalls.end());
     }
     for (size_t i = 0; i < toolCalls.size(); ++i) {
         toolCalls[i].index = static_cast<int>(i);
@@ -940,8 +964,11 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     if (sessionManager.isZeroWidthMode() &&
         !usesStableClientSession &&
         !sessionIdToEmbed.empty()) {
-        if (!toolCalls.empty() && (clientType == "claudecode" || clientType == "Codex")) {
+        if (!toolCalls.empty() && clientCaps.stopsConsumingTextAfterToolCall) {
             // 工具客户端可能在 tool_calls 后停止消费文本，因此先发送仅含零宽 ID 的文本事件。
+            // 该分支由能力位驱动（Codex / ClaudeCode 置位），而非客户端名比较：
+            // 若不前置，会话 ID 将随被丢弃的尾部文本一起丢失，导致下一轮无法续聊。
+            // 这里发出的是「仅零宽字符」的文本事件，对用户可见内容无任何影响。
             std::string zwOnly = chatSession::embedSessionIdInText("", sessionIdToEmbed);
             if (!zwOnly.empty()) {
                 generation::OutputTextDone zwDone;
@@ -1632,8 +1659,17 @@ void GenerationService::applyStrictClientRules(
  */
 void GenerationService::transformRequestForToolBridge(session_st& session) {
     const std::string clientType = safeJsonAsString(session.provider.clientInfo.get("client_type", ""), "");
-    const bool strictToolClient = (clientType == "Kilo-Code" || clientType == "RooCode");
-    const bool codexRooCompat = clientType == "Codex";
+    // 请求改写侧同样以能力 IR 为唯一判据，确保与响应侧（emitResultEvents）
+    // 对同一请求得出完全一致的结论——两侧若不一致，会出现
+    // 「按严格协议下发提示词、却按宽松协议解析响应」的错配。
+    const auto clientCaps = actionproto::capabilitiesForClient(
+        clientType, session.request.parallelToolCalls);
+    const bool strictToolClient = clientCaps.isStrictToolClient();
+    // 注意：与响应侧不同，此处不叠加 supportsToolCalls 条件。
+    // 请求阶段尚未确定实际通道能力，故对 Codex 一律注入 action 协议提示词；
+    // 多注入是安全的（原生支持时模型仍会走结构化 tool_calls），漏注入则会失败。
+    const bool codexRooCompat =
+        clientCaps.family == actionproto::ClientFamily::Codex;
 
     Json::Value toolBridgeConfig(Json::objectValue);
     const auto& customConfig = drogon::app().getCustomConfig();
@@ -1696,7 +1732,7 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
             }
 
             if (maxDescriptionChars < 0) maxDescriptionChars = 0;
-            if (maxDescriptionChars > 2000) maxDescriptionChars = 2000;
+            // 上限由配置自行决定，不再钳制为 2000。
         }
     }
 
@@ -2056,6 +2092,33 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
     const bool hasStrictApplyDiffTool = (strictToolClient || codexRooCompat) &&
         (toolcall::hasToolNamed(session.request.tools, "apply_diff") ||
          toolcall::hasToolNamed(session.request.toolsRaw, "apply_diff"));
+    // Glob 静默截断回退：仅在同时存在 Glob 与某个 shell 类工具时注入。
+    // 缺少 shell 工具时规则无法执行，注入反而是噪声，因此必须严格前置判断。
+    std::string globFallbackShellTool;
+    {
+        const bool hasGlobTool =
+            toolcall::hasToolNamed(session.request.tools, "Glob") ||
+            toolcall::hasToolNamed(session.request.toolsRaw, "Glob");
+        if (hasGlobTool) {
+            static const char* kShellToolCandidates[] = {
+                "Shell", "shell", "exec_command", "execute_command",
+                "run_command", "Bash", "bash", "terminal"
+            };
+            for (const char* candidate : kShellToolCandidates) {
+                if (toolcall::hasToolNamed(session.request.tools, candidate) ||
+                    toolcall::hasToolNamed(session.request.toolsRaw, candidate)) {
+                    globFallbackShellTool = candidate;
+                    break;
+                }
+            }
+        }
+    }
+    if (!globFallbackShellTool.empty()) {
+        LOG_INFO << "[生成服务][" << clientType
+                 << "] 检测到 Glob 与 shell 工具共存，已注入 Glob 截断回退规则, shellTool="
+                 << globFallbackShellTool;
+    }
+
     const bool recoveringApplyDiffFailure = hasStrictApplyDiffTool &&
         toolcall::hasApplyDiffFailureContext(
             session.provider.messageContext,
@@ -2090,6 +2153,10 @@ void GenerationService::transformRequestForToolBridge(session_st& session) {
 
         if (hasStrictApplyDiffTool) {
             policy << toolcall::buildStrictApplyDiffPolicy(recoveringApplyDiffFailure);
+        }
+
+        if (!globFallbackShellTool.empty()) {
+            policy << toolcall::buildGlobTruncationFallbackPolicy(globFallbackShellTool);
         }
 
         policy << "\nAPI Definitions:\n";
