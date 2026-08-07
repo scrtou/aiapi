@@ -36,3 +36,40 @@
 > 根文件中 `include_directories` **零命中**。当前 include 路径的实际暴露方式**尚未查清**，
 > 因此原文「越界会立即链接失败」这一断言**连现状基础都没有核实过**。
 > 阶段 1 建 target 前，需先做一次 include path 暴露方式的实测。
+
+
+---
+
+## 现状实测结果（2026-08-07）
+
+本 ADR 原文要求「阶段 1 建 target 前，需先做一次 include path 暴露方式的实测」。已完成。
+报告：[`../reports/adr-02-03-include-audit.md`](../reports/adr-02-03-include-audit.md)
+
+### 核心发现：手段 2 无对象，手段 1 有条款漏洞
+
+仓库自有 CMakeLists 共 3 个（根 16 行薄壳 / `src` / `src/test`），
+**没有任何全局 `include_directories()`** —— 手段 2 假设的敌人不存在。
+
+真正的问题是 `target_include_directories` **被用成了全局**：`src/CMakeLists.txt:108-137`
+一次暴露 **28 个子目录**，任何 `.cpp` 都能用文件名直接命中其它模块的私有头。
+
+**手段 1 只约束「经由什么机制暴露」，未约束「暴露多少」，按原文当前仓库可判定合规。**
+这是条款漏洞。
+
+### 手段表修订
+
+| # | 修订后 |
+|---|---|
+| 1 | 仅经 `target_include_directories` 暴露，**且每个 target 至多 1 个目录**（`src/` 根）。当前 28 个 |
+| 2 | 禁用全局 `include_directories()` —— **降级为防退化约束，当前无对象，不计工作量** |
+| 3 | 架构测试扫描 `domain` 的 `#include`（不变）|
+| **6** | **（新增）CI 检查各 target 的 include 目录列表必须一致** —— `src/` 28 个（:108）、`src/test/` 8 个（:96），两份内容不同，已漂移 |
+
+### P12 补充：测试与主程序的耦合方式
+
+`src/test/CMakeLists.txt:58-93` 用 `PROJECT_SOURCES` 逐个列举 **32 个**主程序 `.cpp`，
+与测试源一起 `add_executable` —— **测试不链接主程序产物，而是重新编译其中一部分**。
+主程序源文件约 80 个，**其余六成测试侧根本不编译**；新增源文件若不同步登记则**静默漏测**，
+且与根 CMakeLists「源清单只维护一处」的注释直接矛盾。
+
+阶段 1 建 library target 后测试应改为链接，`PROJECT_SOURCES` 消失（顺带收益，不计工期）。
