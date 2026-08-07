@@ -78,8 +78,10 @@ WORKDIR /usr/aiapi/src/build
 RUN cmake ..
 RUN make -j $(nproc)
 
-# 复制默认配置文件
-RUN cp /usr/aiapi/config.sqlite.example.json /usr/aiapi/src/config.json
+# 复制默认配置文件（config.sqlite.example.json 已删除，改用 config.example.json）
+# 运行时若通过 volumes 挂载 ./data/config.json 到 /usr/aiapi/src/config.json，
+# 挂载会覆盖此默认文件；此处仅保证无挂载时容器仍有可用配置。
+RUN cp /usr/aiapi/config.example.json /usr/aiapi/src/config.json
 
 # 暴露端口
 EXPOSE 5555 5556
