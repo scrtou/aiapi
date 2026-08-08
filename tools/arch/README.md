@@ -1,4 +1,4 @@
-# tools/arch —— 模块依赖环门禁（C4 / R4）
+# tools/arch —— 架构门禁（C4 / R4，共五道）
 
 ## 为什么需要它
 
@@ -26,11 +26,17 @@ python3 tools/arch/check_cycles.py --write-baseline
 
 ## 退出码
 
-| 码 | 含义 |
-|---:|---|
-| 0 | 通过（无新增环） |
-| 1 | 存在超出基线的环或双向边 |
-| 2 | **前提被破坏**：出现跨目录同名头文件，基名判据失效 |
+| 码 | 脚本 | 含义 |
+|---:|---|---|
+| 0 | 两者 | 通过 |
+| 1 | check_cycles | 存在超出基线的环或双向边 |
+| 2 | check_cycles | **前提被破坏**：出现跨目录同名头文件，基名判据失效 |
+| 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现出边） |
+| 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 dbManager 直连 |
+| 4 | check_startup_wiring | 注入缺失，或注入晚于 `init()` |
+
+> 码 4 在两个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
+> workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
 
 ## 判据说明（重要）
 
@@ -87,3 +93,28 @@ python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.js
 扫描复用与前三道相同的头文件基名索引，原因是路径判据会漏两类写法——
 无路径的 `#include "ErrorStatsDbManager.h"`，以及 `.cc` 扩展名的文件。
 手工 grep 曾因此漏报 4 个文件（10 vs 实际 14）。
+
+
+## 门禁 5：启动接线（退出码 4）
+
+```bash
+python3 tools/arch/check_startup_wiring.py
+```
+
+校验 `src/main.cc` 中每个已完成依赖倒置的 Manager：`setStore` 注入**存在**，且**早于** `init()`。
+
+**为什么需要第五道**：这道守的是单元测试在结构上覆盖不到的地方。
+倒置后实现由组合根注入，注入语句漏写时**编译通过、全部单元测试通过**
+（R4 试点 B 期间真实发生过，183 项测试全绿），运行期却静默退化为 Null 实现。
+单元测试自行注入 Fake，不经过启动路径，因此再多的单元测试也堵不住这个洞。
+
+**为什么要校验顺序而非仅校验存在**：`init()` 内部会建表并写入默认数据。
+注入若晚于 `init()`，这些写操作全部落到 Null 实现上，症状与漏注入相同。
+
+**已知局限**：判据是正则文本匹配，只认 `X::getInstance().setStore(` 这一种写法。
+若注入被包进辅助函数（如 `wireDependencies()`），检查会**误报 FAIL**。
+当前两个 Manager 写法一致，尚可接受；写法一旦分化就必须改判据。
+
+**自检探针**：workflow 的 gate selftest 中，probe C 删除注入断言 rc=4，
+probe D 把注入移到 `init()` 之后断言 rc=4。缺 probe D 的话，
+「只搜字符串不看顺序」的退化改法会全绿通过。

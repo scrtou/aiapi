@@ -34,6 +34,13 @@ jobs:
       - name: R4 - dbManager include ratchet (file-level)
         run: python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
 
+      # 启动接线（退出码 4）。这道守的是单元测试结构上覆盖不到的地方：
+      # 依赖倒置后 Manager 由 main.cc 注入实现，注入语句漏写时编译与全部
+      # 单元测试照常通过（本次重构中真实发生过），运行期却静默退化为 Null 实现。
+      # 测试自己注入 Fake，不经过启动路径，故只能靠静态检查补位。
+      - name: R4 - startup wiring (injection must exist and precede init)
+        run: python3 tools/arch/check_startup_wiring.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面四道会全绿，只有这一步能发现。
@@ -69,13 +76,43 @@ jobs:
           expect_rc 3 python3 tools/arch/check_cycles.py --layer-rules tools/arch/layer-rules.json
           rm -f src/domain/__selftest_probe.h
 
+          echo '--- probe C: main.cc loses its setStore injection -> expect rc=4 ---'
+          # 复现 48 步的真实事故：注入语句漏写。
+          # 注意这里不能用 sed -i 删行后靠 git checkout 复原——
+          # 若本次 PR 本就修改了 main.cc，checkout 会连正常改动一起丢掉。
+          cp src/main.cc /tmp/probe_c.bak
+          grep -v 'ChannelManager::getInstance().setStore' src/main.cc > /tmp/probe_c.cc
+          cp /tmp/probe_c.cc src/main.cc
+          expect_rc 4 python3 tools/arch/check_startup_wiring.py
+          cp /tmp/probe_c.bak src/main.cc
+
+          echo '--- probe D: setStore placed after init -> expect rc=4 ---'
+          # 仅「存在」不够：注入若晚于 init，init 期间的建表与默认数据仍走 Null 实现。
+          # 这一步断言检查器确实校验了顺序，而不只是搜到字符串就放行。
+          cp src/main.cc /tmp/probe_d.bak
+          python3 - <<'PROBE_D'
+          import io, re
+          p = 'src/main.cc'
+          lines = io.open(p, encoding='utf-8').read().splitlines(True)
+          idx = next(i for i, l in enumerate(lines)
+                     if re.search(r'ChannelManager::getInstance\(\)\.setStore\(', l))
+          set_line = lines.pop(idx)
+          init_idx = next(i for i, l in enumerate(lines)
+                          if re.search(r'ChannelManager::getInstance\(\)\.init\(', l))
+          lines.insert(init_idx + 1, set_line)
+          io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
+          PROBE_D
+          expect_rc 4 python3 tools/arch/check_startup_wiring.py
+          cp /tmp/probe_d.bak src/main.cc
+
           echo '--- restore check: probe paths only ---'
           # 断言范围必须只覆盖探针触碰过的路径。
           # 用全仓库 git status 会把「本次 PR 的正常改动」误判为探针残留，
           # 断的就不是「探针已复原」而是「工作区干净」——两者不是一回事。
           probe_dirty=$(git status --porcelain -- \
             src/retoolWorkspace/RetoolWorkspaceManager.cpp \
-            src/domain/)
+            src/domain/ \
+            src/main.cc)
           if [ -n "$probe_dirty" ]; then
             echo '::error::selftest failed to restore probe paths'
             echo "$probe_dirty"
