@@ -1277,7 +1277,7 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     if (!downstreamApiKey.empty()) {
         request->addHeader("Authorization", "Bearer " + downstreamApiKey);
     }
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, 300.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
         return Json::Value();
