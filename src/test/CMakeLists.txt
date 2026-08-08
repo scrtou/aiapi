@@ -55,6 +55,7 @@ set(TEST_SOURCES
     test_channel_store_port.cpp
     test_account_store_port.cpp
     test_retool_provision_health.cpp
+    test_health_ready_probe.cpp
     stub_db_collaborators.cpp
 )
 
@@ -83,6 +84,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallNormalizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeHelpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
+    # 步骤 181：为 /ready 库探针补测试，需真身编译进来（符号缺口实测为 0）。
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/HealthController.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatJsonSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatSseSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesJsonSink.cpp
