@@ -14,6 +14,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <dbManager/account/accountDbManager.h>
 
 using namespace drogon;
 

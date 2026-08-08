@@ -14,122 +14,14 @@
 #include <set>
 #include <cstdint>
 #include "domain/port/APIinterface.h"
-#include <../dbManager/account/accountDbManager.h>
 using namespace std;
-using namespace drogon;
 class AccountDbManager;
-// 账号状态常量
-namespace AccountStatus {
-    const string WAITING = "waiting";       // 待注册（已创建占位记录）
-    const string REGISTERING = "registering"; // 注册中（HTTP请求已发送）
-    const string ACTIVE = "active";         // 正常激活
-    const string DISABLED = "disabled";     // 已禁用
-}
 
-struct Accountinfo_st
-{
-    string apiName;
-    string userName;
-    string passwd;
-    string authToken;
-    int useCount;
-    bool tokenStatus=false;
-    bool accountStatus=false;
-    int userTobitId;
-    string personId;
-    string createTime;
-    string accountType;  // 账号类型: "pro" 或 "free"
-    string status;       // 账号状态: "pending", "active", "disabled"
-    std::int64_t workspaceUacId = 0; // Chayns Pro 账号所属 workspace
+// 纯数据类型（Accountinfo_st / AccountCompare / AccountAutomationSettings /
+// AccountRequirement / AccountStatus）已下沉至中立层，见该文件头注释。
+#include "domain/model/AccountData.h"
+#include <dbManager/account/accountDbManager.h>
 
-    Accountinfo_st(){}
-    Accountinfo_st(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active",std::int64_t workspaceUacId=0)
-    {
-        this->apiName = apiName;
-        this->userName = userName;
-        this->passwd = passwd;
-        this->authToken = authToken;
-        this->useCount = useCount;
-        this->tokenStatus = tokenStatus;
-        this->accountStatus = accountStatus;
-        this->userTobitId = userTobitId;
-        this->personId = personId;
-        this->createTime = createTime;
-        this->accountType = accountType;
-        this->status = status;
-        this->workspaceUacId = workspaceUacId;
-    }
-
-    // 将请求/数据库中的 JSON 字段解析为统一账号结构（仅保留 camelCase 新命名）。
-    static Accountinfo_st fromJson(const Json::Value& value)
-    {
-        Accountinfo_st result;
-        result.apiName = value.get("apiName", "").asString();
-        result.userName = value.get("userName", "").asString();
-        result.passwd = value.get("password", "").asString();
-        result.authToken = value.get("authToken", "").asString();
-        result.useCount = value.get("useCount", 0).asInt();
-        result.tokenStatus = value.get("tokenStatus", false).asBool();
-        result.accountStatus = value.get("accountStatus", false).asBool();
-        result.userTobitId = value.get("userTobitId", 0).asInt();
-        result.personId = value.get("personId", "").asString();
-        result.createTime = value.get("createTime", "").asString();
-        result.accountType = value.get("accountType", "free").asString();
-        result.status = value.get("status", "active").asString();
-        result.workspaceUacId = value.get("workspaceUacId", Json::Int64(0)).asInt64();
-        if (result.workspaceUacId < 0) {
-            result.workspaceUacId = 0;
-        }
-        return result;
-    }
-
-    // 将账号结构导出为统一 JSON（仅保留 camelCase 新命名）。
-    Json::Value toJson() const
-    {
-        Json::Value value;
-        value["apiName"] = apiName;
-        value["userName"] = userName;
-        value["password"] = passwd;
-        value["authToken"] = authToken;
-        value["useCount"] = useCount;
-        value["tokenStatus"] = tokenStatus;
-        value["accountStatus"] = accountStatus;
-        value["userTobitId"] = userTobitId;
-        value["personId"] = personId;
-        value["createTime"] = createTime;
-        value["accountType"] = accountType;
-        value["status"] = status;
-        value["workspaceUacId"] = Json::Int64(workspaceUacId);
-        return value;
-    }
-};
-
-struct AccountCompare
-{
-    bool operator()(const shared_ptr<Accountinfo_st>& a, const shared_ptr<Accountinfo_st>& b)
-    {
-        if(a->tokenStatus!=b->tokenStatus)return b->tokenStatus;
-        return a->useCount > b->useCount;
-    }
-};
-
-struct AccountAutomationSettings
-{
-    bool autoDeleteEnabled = true;
-    int deleteAfterDays = 6;
-    bool autoRegisterEnabled = true;
-    // Responses API namespace definitions are recursively flattened into Tool Bridge leaves.
-    // Enabled by default for backward compatibility.
-    bool namespaceToolBridgeEnabled = true;
-};
-
-enum class AccountRequirement
-{
-    AnyValid,
-    FreeOnly,
-    ProOnly
-};
-//定义函数指针
 
 class AccountManager
 {

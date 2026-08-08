@@ -4,6 +4,7 @@
 // ConfigDbManager / RetoolWorkspaceManager 等大量数据库依赖，不适合链接进单元测试。
 // 这里提供最小桩实现，保证链接通过且返回默认配置。
 #include <accountManager/accountManager.h>
+#include <dbManager/account/accountDbManager.h>
 
 AccountManager::AccountManager() = default;
 AccountManager::~AccountManager() = default;

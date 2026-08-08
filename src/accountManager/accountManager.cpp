@@ -18,6 +18,7 @@
 #include <utils/LoginResponseLogSummary.h>
 #include <utils/NexosRegistrationMailPolicy.h>
 #include <utils/NexosUserAgent.h>
+#include <dbManager/account/accountDbManager.h>
 using namespace drogon;
 using namespace drogon::orm;
 

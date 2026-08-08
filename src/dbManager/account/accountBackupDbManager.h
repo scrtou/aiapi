@@ -1,7 +1,7 @@
 #ifndef ACCOUNT_BACKUP_DB_MANAGER_H
 #define ACCOUNT_BACKUP_DB_MANAGER_H
 
-#include <accountManager/accountManager.h>
+#include "domain/model/AccountData.h"
 #include <drogon/orm/DbClient.h>
 #include <list>
 #include <memory>

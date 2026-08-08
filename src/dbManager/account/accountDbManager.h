@@ -5,7 +5,7 @@
 #include <string>
 #include <list>
 #include <memory>
-#include <accountManager/accountManager.h>
+#include "domain/model/AccountData.h"
 #include <dbManager/DbType.h>
 
 using std::list;
