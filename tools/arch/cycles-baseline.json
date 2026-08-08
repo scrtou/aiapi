@@ -1,0 +1,41 @@
+{
+  "sccs": [
+    [
+      "accountManager",
+      "apiManager",
+      "apipoint",
+      "channelManager",
+      "dbManager",
+      "managedAccount",
+      "metrics",
+      "retoolWorkspace",
+      "sessionManager"
+    ]
+  ],
+  "bidirectional": [
+    [
+      "accountManager",
+      "apipoint"
+    ],
+    [
+      "accountManager",
+      "dbManager"
+    ],
+    [
+      "apipoint",
+      "apiManager"
+    ],
+    [
+      "dbManager",
+      "metrics"
+    ],
+    [
+      "retoolWorkspace",
+      "dbManager"
+    ],
+    [
+      "sessionManager",
+      "apipoint"
+    ]
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "sccs": [
+    [
+      "apipoint",
+      "sessionManager"
+    ]
+  ],
+  "bidirectional": [
+    [
+      "apipoint",
+      "sessionManager"
+    ]
+  ]
+}

@@ -1179,3 +1179,28 @@ ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/Erro
 
 **阶段 0.7：0.4 → 0.8 周（+0.4）。总工期 10.5 → 10.9 周。**
 这不是新增范围，是原方案漏算的部分 —— 不补上阶段 1 无法开工。
+
+
+### 0-F 补充 · C4 已交付（2026-08-08）
+
+阶段 0.7 的 C4（环检测脚本化 + CI 门禁）**已提前实现并落库**，阶段 0.7 开工即可用：
+
+| 交付物 | 说明 |
+|---|---|
+| `tools/arch/check_cycles.py` | Tarjan SCC + 双向边检测，带 `file:line` 证据 |
+| `tools/arch/cycles-baseline.json` | 当前实测态：**1 个 9 节点 SCC / 6 条双向边** |
+| `tools/arch/cycles-target.json` | **阶段 0.7 验收标准的机器可读形式**：SCC 仅剩 `{apipoint, sessionManager}` |
+| `doc/adr/rules/R4-no-dependency-cycles.md` | 规则条款 |
+| `.github/workflows/arch-cycles.yml` | CI 门禁（防回归强制 + 目标基线信息性） |
+
+退出码：`0` 通过 / `1` 超出基线 / `2` 前提被破坏（跨目录同名头文件）。
+
+**四项自测均已实跑通过**：基线态 PASS(0)；人为制造 `utils → accountManager` 反向边 → FAIL(1) 并打印四行证据；
+制造同名 `ErrorEvent.h` → 前提自检拦截(2)；用目标基线跑当前代码 → FAIL(1)（阶段 0.7 未做，正确行为）。
+
+> **验收标准现在是可执行的**：阶段 0.7 完工的判据就是
+> `check_cycles.py --baseline tools/arch/cycles-target.json` 退出码为 0。
+
+**新增观察**：9 节点 SCC 中的 `channelManager` 与 `managedAccount` **没有任何双向边** ——
+它们是通过多跳路径被卷进环里的。这进一步说明「逐条看双向边」永远发现不了完整的环，
+必须做全图 SCC。

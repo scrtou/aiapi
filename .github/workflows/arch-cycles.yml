@@ -1,0 +1,25 @@
+name: arch-cycles (R4)
+
+on:
+  push:
+    paths: ['src/**', 'tools/arch/**', '.github/workflows/arch-cycles.yml']
+  pull_request:
+    paths: ['src/**', 'tools/arch/**', '.github/workflows/arch-cycles.yml']
+
+jobs:
+  check-cycles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # 防回归：实测结果必须是基线的子集
+      - name: R4 - no new dependency cycles
+        run: python3 tools/arch/check_cycles.py --evidence --baseline tools/arch/cycles-baseline.json
+
+      # 进度指示：阶段 0.7 完成前预期失败，故不阻断
+      - name: Stage 0.7 target (informational)
+        continue-on-error: true
+        run: python3 tools/arch/check_cycles.py --baseline tools/arch/cycles-target.json
