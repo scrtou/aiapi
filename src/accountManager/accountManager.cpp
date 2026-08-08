@@ -878,6 +878,26 @@ bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
     }
     return true;
 }
+void AccountManager::rebuildPoolLocked(const std::string& apiName)
+{
+    // Voraussetzung: accountListMutex wird vom Aufrufer gehalten.
+    // Der Sortierschluessel (tokenStatus, useCount) ist veraenderlich; eine bereits
+    // eingefuegte Entry bleibt bei Aenderung an falscher Heap-Position. Deshalb wird
+    // der Pool aus dem Index accountList neu aufgebaut (gleiche Filterregel wie beim Laden).
+    auto listIt = accountList.find(apiName);
+    if (listIt == accountList.end() || listIt->second.empty()) {
+        accountPoolMap.erase(apiName);
+        return;
+    }
+    auto rebuiltQueue = std::make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
+    for (const auto& [_, account] : listIt->second) {
+        if (!account || account->status != AccountStatus::ACTIVE || shouldExcludeFromPoolOnLoad(account)) {
+            continue;
+        }
+        rebuiltQueue->push(account);
+    }
+    accountPoolMap[apiName] = rebuiltQueue;
+}
 bool AccountManager::updateAccount(Accountinfo_st accountinfo)
 {
     std::lock_guard<std::mutex> lock(accountListMutex);
@@ -897,6 +917,8 @@ bool AccountManager::updateAccount(Accountinfo_st accountinfo)
     account->accountType = accountinfo.accountType;
     account->status = accountinfo.status;
     account->workspaceUacId = accountinfo.workspaceUacId;
+    // Schluesselfelder (tokenStatus/useCount) koennen sich geaendert haben -> Heap neu ordnen.
+    rebuildPoolLocked(accountinfo.apiName);
     return true;
 }
 bool AccountManager::deleteAccountbyPost(string apiName,string userName)
@@ -945,7 +967,9 @@ void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& accou
                 LOG_INFO << "[账户管理] 账户列表已更新: " << accountList[apiName][account->userName]->userName << ", 新值: " << accountList[apiName][account->userName]->useCount;
             }
         }
-        accountPoolMap[apiName]->push(account);
+        // useCount wurde erhoeht -> Position im Heap ist veraltet; Pool neu aufbauen
+        // (der zuvor entnommene Account ist ueber accountList weiterhin enthalten).
+        rebuildPoolLocked(apiName);
     } else {
         vector<shared_ptr<Accountinfo_st>> tempAccounts;
         bool found = false;
@@ -1642,6 +1666,7 @@ void AccountManager::setStatusAccountStatus(string apiName,string userName,bool 
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->accountStatus = status;
+        rebuildPoolLocked(apiName);
     }
 }
 void AccountManager::setStatusTokenStatus(string apiName,string userName,bool status)
@@ -1650,6 +1675,9 @@ void AccountManager::setStatusTokenStatus(string apiName,string userName,bool st
     if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
     {
         accountList[apiName][userName]->tokenStatus = status;
+        // tokenStatus ist primaeres Sortierkriterium -> Pool sofort neu ordnen,
+        // sonst liefert getAccount() weiterhin den entwerteten Account aus.
+        rebuildPoolLocked(apiName);
         if(!status && !shouldSkipLifecycleRefresh(accountList[apiName][userName]))
             {
                 std::lock_guard<std::mutex> lock2(accountListNeedUpdateMutex);

@@ -30,6 +30,11 @@ class AccountManager
     map<string,shared_ptr<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>> accountPoolMap;
     map<string,map<string,shared_ptr<Accountinfo_st>>> accountList;// 二级索引结构：apiName -> userName -> accountInfo
     mutable std::mutex accountListMutex;  // 保护 accountList 的互斥锁
+    // Heap-Invariante: Der Sortierschluessel (tokenStatus, useCount) ist veraenderlich.
+    // Wird er nach dem push() geaendert, bleibt die Ordnung von accountPoolMap veraltet.
+    // Diese Helferfunktion baut den Pool einer API aus accountList neu auf.
+    // Voraussetzung: accountListMutex ist vom Aufrufer bereits gehalten (nicht rekursiv!).
+    void rebuildPoolLocked(const std::string& apiName);
     std::set<int> registeringAccountIds_;     // 正在注册中的账号ID集合
     mutable std::mutex registeringMutex_;     // 保护 registeringAccountIds_ 的互斥锁
     list<shared_ptr<Accountinfo_st>> accountListNeedUpdate;//需要更新的账号,
