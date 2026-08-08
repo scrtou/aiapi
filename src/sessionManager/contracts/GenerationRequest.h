@@ -5,6 +5,7 @@
 #include <vector>
 #include <optional>
 #include <json/json.h>
+#include "domain/model/ImageInfo.h"
 
 /**
  * @brief 请求入口类型（API endpoint）
@@ -107,13 +108,7 @@ struct Message {
  *
  * 当前请求中的图片列表
  */
-struct ImageInfo {
-    std::string base64Data;      // base64编码的图片数据
-    std::string mediaType;       // 图片类型如 image/png, image/jpeg
-    std::string uploadedUrl;     // 上传后的图片URL
-    int width = 0;
-    int height = 0;
-};
+// ImageInfo 已迁至 domain/model/ImageInfo.h（见文件头 include）
 
 namespace continuity {
 

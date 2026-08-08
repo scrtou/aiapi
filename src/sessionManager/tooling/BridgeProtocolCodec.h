@@ -4,6 +4,7 @@
 #include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include "sessionManager/contracts/GenerationEvent.h"
 
+#include "domain/model/BridgeWireFormat.h"
 #include <json/json.h>
 #include <memory>
 #include <string>
@@ -11,11 +12,7 @@
 
 namespace toolcall {
 
-enum class BridgeWireFormat {
-    Unset,
-    Json,
-    Xml
-};
+// BridgeWireFormat 已迁至 domain/model/BridgeWireFormat.h
 
 const char* bridgeWireFormatName(BridgeWireFormat format);
 BridgeWireFormat parseBridgeWireFormat(const std::string& value,
