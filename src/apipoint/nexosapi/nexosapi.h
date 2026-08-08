@@ -1,7 +1,7 @@
 #ifndef NEXOSAPI_H
 #define NEXOSAPI_H
 
-#include <apipoint/APIinterface.h>
+#include "domain/port/APIinterface.h"
 #include <apiManager/ApiFactory.h>
 #include <memory>
 #include <mutex>

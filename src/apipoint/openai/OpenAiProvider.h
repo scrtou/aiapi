@@ -1,7 +1,7 @@
 #ifndef OPENAI_PROVIDER_H
 #define OPENAI_PROVIDER_H
 
-#include <apipoint/APIinterface.h>
+#include "domain/port/APIinterface.h"
 #include <apiManager/ApiFactory.h>
 #include <mutex>
 #include <string>

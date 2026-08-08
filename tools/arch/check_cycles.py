@@ -195,7 +195,12 @@ def main():
     allowed_sccs = {tuple(sorted(c)) for c in base.get('sccs', [])}
     allowed_bidir = {tuple(p) for p in base.get('bidirectional', [])}
 
-    new_sccs = [c for c in sccs if tuple(c) not in allowed_sccs]
+    # 判据：SCC 只要被某个基线 SCC 覆盖（子集）就是改善，放行。
+    # 用等值比较会把「环缩小」误判为「新增环」——环从 n=9 缩到 n=4 时
+    # 元组不再相等，假阳性 FAIL。真正的回归特征是出现基线覆盖不到的成员。
+    allowed_sets = [set(c) for c in allowed_sccs]
+    new_sccs = [c for c in sccs
+                if not any(set(c) <= a for a in allowed_sets)]
     new_bidir = [p for p in bidir if p not in allowed_bidir]
 
     print('')
@@ -210,6 +215,11 @@ def main():
         return 1
 
     kept_sccs = len([c for c in sccs if tuple(c) in allowed_sccs])
+    shrunk = [c for c in sccs
+              if tuple(c) not in allowed_sccs
+              and any(set(c) < a for a in allowed_sets)]
+    for c in shrunk:
+        print('  改善 环已缩小: {%s}  n=%d（基线中它属于更大的环）' % (', '.join(c), len(c)))
     kept_bidir = len([p for p in bidir if p in allowed_bidir])
     print('  PASS 无新增环')
     if len(allowed_sccs) > kept_sccs or len(allowed_bidir) > kept_bidir:

@@ -15,7 +15,7 @@
  *
  * 从 sessionManager/core/Session.h 抽出。原文件把纯数据 session_st 与带
  * DB 持久化/后台线程/读写锁的 chatSession 混装，导致 12 个只需要 session_st
- * 的文件（含 apipoint/APIinterface.h）被迫依赖整个 sessionManager。
+ * 的文件（含 domain/port/APIinterface.h）被迫依赖整个 sessionManager。
  *
  * 本文件不含行为逻辑，不依赖 sessionManager 的任何头。
  */
