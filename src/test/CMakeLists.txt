@@ -51,6 +51,7 @@ set(TEST_SOURCES
     test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
     test_background_task_queue_shutdown.cpp
+    test_retool_workspace_store_port.cpp
     stub_account_manager.cpp
 )
 
@@ -90,6 +91,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsModelCatalog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../retoolWorkspace/RetoolWorkspaceManager.cpp
 )
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})
