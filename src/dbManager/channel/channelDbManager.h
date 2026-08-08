@@ -6,6 +6,7 @@
 #include <list>
 #include <memory>
 #include <dbManager/account/accountDbManager.h>  // 引入 DbType 枚举
+#include <domain/port/IChannelStore.h>
 #include <domain/model/ChannelInfo.h>  // Channelinfo_st 已搬迁至 domain/model（R4 试点 B）
 
 using std::list;
@@ -15,7 +16,7 @@ using std::string;
 using drogon::app;
 
 
-class ChannelDbManager
+class ChannelDbManager : public IChannelStore
 {
 public:
     static shared_ptr<ChannelDbManager> getInstance()
