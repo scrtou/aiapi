@@ -1,6 +1,6 @@
 #include "OpenAiProvider.h"
 #include <drogon/drogon.h>
-#include <apipoint/ProviderResult.h>
+#include "domain/model/ProviderResult.h"
 #include <apiManager/ApiManager.h>
 #include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <sstream>

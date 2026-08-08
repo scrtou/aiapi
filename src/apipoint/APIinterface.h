@@ -3,7 +3,7 @@
 #include <string>
 #include <map>
 #include "domain/model/SessionData.h"
-#include "ProviderResult.h"
+#include "domain/model/ProviderResult.h"
 
 using std::map;
 using std::string;

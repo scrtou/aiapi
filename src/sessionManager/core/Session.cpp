@@ -3,7 +3,6 @@
 #include <time.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
-#include "chaynsapi.h"
 #include <apiManager/ApiManager.h>
 #include <apiManager/Apicomn.h>
 #include <tools/ZeroWidthEncoder.h>

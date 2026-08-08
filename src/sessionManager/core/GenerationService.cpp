@@ -13,7 +13,7 @@
 #include "sessionManager/tooling/BridgeProtocolCodec.h"
 #include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
 #include <apiManager/ApiManager.h>
-#include <apipoint/ProviderResult.h>
+#include "domain/model/ProviderResult.h"
 #include <tools/ZeroWidthEncoder.h>
 #include <channelManager/channelManager.h>
 #include <metrics/ErrorStatsService.h>
