@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+#include <domain/port/IRetoolWorkspaceStore.h>
+#include <memory>
+
 class RetoolWorkspaceManager
 {
   public:
@@ -28,6 +31,12 @@ class RetoolWorkspaceManager
     bool markWorkspaceUsageFinished(const std::string& workspaceId, std::string* errorMessage = nullptr);
     bool disableWorkspace(const std::string& workspaceId, std::string* errorMessage = nullptr);
 
+    // R4 依赖倒置：由组合根(main.cc)注入具体实现。
+    void setStore(std::shared_ptr<IRetoolWorkspaceStore> store);
+
   private:
     RetoolWorkspaceManager() = default;
+    IRetoolWorkspaceStore* requireStore();
+
+    std::shared_ptr<IRetoolWorkspaceStore> store_;
 };

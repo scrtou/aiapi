@@ -6,10 +6,11 @@
 #include <memory>
 #include <optional>
 #include <domain/model/RetoolWorkspaceInfo.h>
+#include <domain/port/IRetoolWorkspaceStore.h>
 #include <string>
 #include <vector>
 
-class RetoolWorkspaceDbManager
+class RetoolWorkspaceDbManager : public IRetoolWorkspaceStore
 {
   public:
     static std::shared_ptr<RetoolWorkspaceDbManager> getInstance()
@@ -24,20 +25,20 @@ class RetoolWorkspaceDbManager
         return instance;
     }
 
-    bool ensureTable(std::string* errorMessage = nullptr);
-    bool upsertWorkspace(const RetoolWorkspaceInfo& info, std::string* errorMessage = nullptr);
-    bool deleteWorkspace(const std::string& workspaceId, std::string* errorMessage = nullptr);
+    bool ensureTable(std::string* errorMessage = nullptr) override;
+    bool upsertWorkspace(const RetoolWorkspaceInfo& info, std::string* errorMessage = nullptr) override;
+    bool deleteWorkspace(const std::string& workspaceId, std::string* errorMessage = nullptr) override;
     std::optional<RetoolWorkspaceInfo> getWorkspace(const std::string& workspaceId,
-                                                    std::string* errorMessage = nullptr);
-    std::vector<RetoolWorkspaceInfo> listWorkspaces(std::string* errorMessage = nullptr);
+                                                    std::string* errorMessage = nullptr) override;
+    std::vector<RetoolWorkspaceInfo> listWorkspaces(std::string* errorMessage = nullptr) override;
     bool updateWorkspaceStatus(const std::string& workspaceId,
                                const std::string& status,
                                const std::string& verifyStatus,
-                               std::string* errorMessage = nullptr);
+                               std::string* errorMessage = nullptr) override;
     bool updateWorkspaceUsage(const std::string& workspaceId,
                               int inUseCount,
                               bool touchLastUsedAt,
-                              std::string* errorMessage = nullptr);
+                              std::string* errorMessage = nullptr) override;
 
   private:
     void detectDbType();

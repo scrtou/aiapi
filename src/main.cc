@@ -5,6 +5,7 @@
 #include <sessionManager/core/Session.h>
 #include <metrics/ErrorStatsService.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <utils/BackgroundTaskQueue.h>
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
@@ -234,6 +235,7 @@ int main() {
 
             ChannelManager::getInstance().init();
             AccountManager::getInstance().init();
+            RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
             RetoolWorkspaceManager::getInstance().init();
             ApiManager::getInstance().init();
 
