@@ -93,6 +93,12 @@ class NullChannelStore : public IChannelStore
 void ChannelManager::setStore(std::shared_ptr<IChannelStore> store)
 {
     channelDbManager = std::move(store);
+    // channelCache_ 是「当前 store 内容的镜像」。换掉 store 后旧镜像立即失效，
+    // 若不清空，getChannelList() 会返回已不属于当前 store 的陈旧数据。
+    // 生产路径上 main.cc 仅在 init() 前调用一次，此时缓存本就为空，故为空操作；
+    // init() 内的 reloadCache() 负责按新 store 重新填充。
+    std::unique_lock<std::shared_mutex> lock(cacheMutex_);
+    channelCache_.clear();
 }
 
 IChannelStore* ChannelManager::requireStore()
