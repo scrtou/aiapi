@@ -1855,6 +1855,47 @@ std::string generateRandomString(int length) {
     return ret;
 }
 
+namespace {
+// 纯数据装配：按渠道构造 register-and-login 的 workflow 请求体。
+// 从 autoRegisterAccount 逐字搬迁，无副作用、不触库、不发请求。
+Json::Value buildRegistrationWorkflowBody(const std::string& apiName,
+                                          const std::string& firstName,
+                                          const std::string& lastName,
+                                          const std::string& password)
+{
+    Json::Value workflowBody;
+    workflowBody["mail_policy"]["expiry_time_ms"] = 3600000;
+    workflowBody["proxy_policy"]["enabled"] = false;
+    workflowBody["identity"]["first_name"] = firstName;
+    workflowBody["identity"]["last_name"] = lastName;
+    workflowBody["identity"]["password"] = password;
+
+    if (apiName == "nexosapi") {
+        const auto nexosMailPolicy = nexos::resolveRegistrationMailPolicy(app().getCustomConfig());
+        workflowBody["site"] = "nexos";
+        workflowBody["mail_policy"]["providers"] = Json::arrayValue;
+        for (const auto& provider : nexosMailPolicy.providers) {
+            workflowBody["mail_policy"]["providers"].append(provider);
+        }
+        workflowBody["mail_policy"]["domain_preference"] = Json::arrayValue;
+        for (const auto& domain : nexosMailPolicy.domainPreference) {
+            workflowBody["mail_policy"]["domain_preference"].append(domain);
+        }
+        workflowBody["mail_policy"]["expiry_time_ms"] = nexosMailPolicy.expiryTimeMs;
+        workflowBody["strategy"]["registration_mode"] = "drission";
+        workflowBody["strategy"]["login_mode"] = "drission";
+        workflowBody["strategy"]["timeout_seconds"] = 900;
+    } else {
+        workflowBody["site"] = "chayns";
+        workflowBody["strategy"]["registration_mode"] = "api_first";
+        workflowBody["strategy"]["login_mode"] = "api_first";
+        workflowBody["strategy"]["timeout_seconds"] = 360;
+    }
+
+    return workflowBody;
+}
+}  // namespace
+
 bool AccountManager::autoRegisterAccount(string apiName)
 {
     LOG_INFO << "[自动注册] 开始为渠道 " << apiName << " 自动注册账号";
@@ -1962,34 +2003,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
     auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
-    Json::Value workflowBody;
-    workflowBody["mail_policy"]["expiry_time_ms"] = 3600000;
-    workflowBody["proxy_policy"]["enabled"] = false;
-    workflowBody["identity"]["first_name"] = firstName;
-    workflowBody["identity"]["last_name"] = lastName;
-    workflowBody["identity"]["password"] = password;
-
-    if (apiName == "nexosapi") {
-        const auto nexosMailPolicy = nexos::resolveRegistrationMailPolicy(app().getCustomConfig());
-        workflowBody["site"] = "nexos";
-        workflowBody["mail_policy"]["providers"] = Json::arrayValue;
-        for (const auto& provider : nexosMailPolicy.providers) {
-            workflowBody["mail_policy"]["providers"].append(provider);
-        }
-        workflowBody["mail_policy"]["domain_preference"] = Json::arrayValue;
-        for (const auto& domain : nexosMailPolicy.domainPreference) {
-            workflowBody["mail_policy"]["domain_preference"].append(domain);
-        }
-        workflowBody["mail_policy"]["expiry_time_ms"] = nexosMailPolicy.expiryTimeMs;
-        workflowBody["strategy"]["registration_mode"] = "drission";
-        workflowBody["strategy"]["login_mode"] = "drission";
-        workflowBody["strategy"]["timeout_seconds"] = 900;
-    } else {
-        workflowBody["site"] = "chayns";
-        workflowBody["strategy"]["registration_mode"] = "api_first";
-        workflowBody["strategy"]["login_mode"] = "api_first";
-        workflowBody["strategy"]["timeout_seconds"] = 360;
-    }
+    Json::Value workflowBody = buildRegistrationWorkflowBody(apiName, firstName, lastName, password);
 
     request->setMethod(HttpMethod::Post);
     request->setPath(path);
