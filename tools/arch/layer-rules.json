@@ -17,7 +17,7 @@
     },
     "channelManager": {
       "allow_out": [
-        "dbManager"
+        "domain"
       ]
     },
     "metrics": {
@@ -46,5 +46,5 @@
       ]
     }
   },
-  "_note": "棘轮：冻结出度<=3模块的出边现状，防止倒退。不主张现状即目标态。controllers/apipoint/sessionManager 出度过高，冻结无意义，待分层映射确定后再纳入。"
+  "_note": "棘轮：冻结出度<=3模块的出边现状，防止倒退。不主张现状即目标态。controllers/apipoint/sessionManager 出度过高，冻结无意义，待分层映射确定后再纳入。 channelManager 已完成依赖倒置（试点B），出边由 dbManager 收紧为 domain。"
 }

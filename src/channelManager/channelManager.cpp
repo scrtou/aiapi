@@ -57,6 +57,54 @@ std::list<Channelinfo_st> buildDefaultChannels()
 
 }
 
+// ---------------------------------------------------------------------------
+// R4 依赖倒置支撑代码（试点 B，样式对齐 RetoolWorkspaceManager）
+// ---------------------------------------------------------------------------
+namespace
+{
+// 未注入实现时的 Null Object：不崩溃，但留下可诊断日志。
+// init() 会立刻建表并写内置渠道，若静默失败会难以排查，故每次调用都告警。
+class NullChannelStore : public IChannelStore
+{
+  public:
+    bool addChannel(struct Channelinfo_st) override { return fail(); }
+    bool updateChannel(struct Channelinfo_st) override { return fail(); }
+    bool deleteChannel(int) override { return fail(); }
+    bool getChannel(std::string, struct Channelinfo_st&) override { return fail(); }
+    std::list<Channelinfo_st> getChannelList() override
+    {
+        fail();
+        return {};
+    }
+    bool isTableExist() override { return fail(); }
+    void createTable() override { fail(); }
+    void checkAndUpgradeTable() override { fail(); }
+    bool updateChannelStatus(std::string, bool) override { return fail(); }
+
+  private:
+    static bool fail()
+    {
+        LOG_ERROR << "[渠道管理] store 未注入（应由 main.cc 在 init() 前调 setStore）";
+        return false;
+    }
+};
+}  // namespace
+
+void ChannelManager::setStore(std::shared_ptr<IChannelStore> store)
+{
+    channelDbManager = std::move(store);
+}
+
+IChannelStore* ChannelManager::requireStore()
+{
+    if (channelDbManager != nullptr)
+    {
+        return channelDbManager.get();
+    }
+    static NullChannelStore nullStore;
+    return &nullStore;
+}
+
 ChannelManager::ChannelManager()
 {
 }
@@ -68,27 +116,26 @@ ChannelManager::~ChannelManager()
 void ChannelManager::reloadCache()
 {
     // 调用方必须持有 unique_lock(cacheMutex_)
-    channelCache_ = channelDbManager->getChannelList();
+    channelCache_ = requireStore()->getChannelList();
 }
 
 void ChannelManager::init()
 {
     LOG_INFO << "[渠道管理] 初始化开始";
-    channelDbManager = ChannelDbManager::getInstance();
-    if (!channelDbManager->isTableExist())
+    if (!requireStore()->isTableExist())
     {
-        channelDbManager->createTable();
+        requireStore()->createTable();
     }
     else
     {
-        channelDbManager->checkAndUpgradeTable();
+        requireStore()->checkAndUpgradeTable();
     }
 
     // 确保内置渠道存在：渠道名固定，默认目标账号数为 0，默认不支持工具调用
     for (const auto& channel : buildDefaultChannels()) {
         Channelinfo_st existing;
-        if (!channelDbManager->getChannel(channel.channelName, existing)) {
-            if (channelDbManager->addChannel(channel)) {
+        if (!requireStore()->getChannel(channel.channelName, existing)) {
+            if (requireStore()->addChannel(channel)) {
                 LOG_INFO << "[渠道管理] 已自动生成内置渠道: " << channel.channelName;
             } else {
                 LOG_WARN << "[渠道管理] 自动生成内置渠道失败: " << channel.channelName;
@@ -106,7 +153,7 @@ void ChannelManager::init()
 
 bool ChannelManager::addChannel(struct Channelinfo_st channelinfo)
 {
-    bool ok = channelDbManager->addChannel(channelinfo);
+    bool ok = requireStore()->addChannel(channelinfo);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
         reloadCache();
@@ -116,7 +163,7 @@ bool ChannelManager::addChannel(struct Channelinfo_st channelinfo)
 
 bool ChannelManager::updateChannel(struct Channelinfo_st channelinfo)
 {
-    bool ok = channelDbManager->updateChannel(channelinfo);
+    bool ok = requireStore()->updateChannel(channelinfo);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
         reloadCache();
@@ -136,7 +183,7 @@ bool ChannelManager::deleteChannel(int channelId)
         }
     }
 
-    bool ok = channelDbManager->deleteChannel(channelId);
+    bool ok = requireStore()->deleteChannel(channelId);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
         reloadCache();
@@ -153,7 +200,7 @@ list<Channelinfo_st> ChannelManager::getChannelList()
 
 bool ChannelManager::updateChannelStatus(string channelName, bool status)
 {
-    bool ok = channelDbManager->updateChannelStatus(channelName, status);
+    bool ok = requireStore()->updateChannelStatus(channelName, status);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
         reloadCache();

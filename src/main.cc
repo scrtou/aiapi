@@ -4,6 +4,7 @@
 #include <channelManager/channelManager.h>
 #include <sessionManager/core/Session.h>
 #include <metrics/ErrorStatsService.h>
+#include <dbManager/channel/channelDbManager.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <utils/BackgroundTaskQueue.h>
@@ -233,6 +234,9 @@ int main() {
                 LOG_INFO << "会话追踪模式：Hash（默认）";
             }
 
+            // R4 试点 B：注入 Channel 持久化实现。
+            // 必须早于 init()——init() 会立刻建表并写入内置渠道。
+            ChannelManager::getInstance().setStore(ChannelDbManager::getInstance());
             ChannelManager::getInstance().init();
             AccountManager::getInstance().init();
             RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
