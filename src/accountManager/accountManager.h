@@ -53,6 +53,8 @@ class AccountManager
     // 未注入时 requireStore() 回退到 NullAccountStore（见 .cpp），不崩溃但留可诊断日志。
     shared_ptr<IAccountStore> accountDbManager;
     IAccountStore* requireStore();
+    // 自动注册失败时的回滚：先改回 WAITING 再删除占位记录（删除要求状态为 WAITING）。
+    void rollbackWaitingAccount(int waitingId);
 
     // R4 续：渠道列表来源。改造前是 ChannelDbManager::getInstance() 直呼（3 处）。
     // 复用试点 B 已有的 IChannelStore 端口，未新造抽象。

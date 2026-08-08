@@ -1896,6 +1896,12 @@ Json::Value buildRegistrationWorkflowBody(const std::string& apiName,
 }
 }  // namespace
 
+void AccountManager::rollbackWaitingAccount(int waitingId)
+{
+    requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+    requireStore()->deleteWaitingAccount(waitingId);
+}
+
 bool AccountManager::autoRegisterAccount(string apiName)
 {
     LOG_INFO << "[自动注册] 开始为渠道 " << apiName << " 自动注册账号";
@@ -2025,8 +2031,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
                   << ", " << account_logging::summarizeLoginTransport(
                          httpStatus, contentType, bodySize);
         // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
@@ -2041,8 +2046,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
                          responseBody.size())
                   << ", " << account_logging::summarizeParseError(errs);
         // 解析失败，删除待注册记录
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
@@ -2053,16 +2057,14 @@ bool AccountManager::autoRegisterAccount(string apiName)
                          response->getHeader("content-type"),
                          responseBody.size())
                   << ", " << account_logging::summarizeLoginError(jsonResponse);
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
     string taskId = jsonResponse["data"].get("task_id", "").asString();
     if (taskId.empty()) {
         LOG_ERROR << "[自动注册] workflow 响应缺少 task_id";
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
@@ -2143,8 +2145,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
         }
         LOG_ERROR << "[自动注册] workflow 未成功完成: "
                   << account_logging::summarizeWorkflowEnvelope(workflowDetail);
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
@@ -2185,8 +2186,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
                   << ", emailPresent=" << (!email.empty())
                   << ", identityPresent=" << (!personid.empty())
                   << ", sessionCredentialPresent=" << (!token.empty());
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
@@ -2218,8 +2218,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     } else {
         LOG_ERROR << "[自动注册] 账号激活失败, ID: " << waitingId;
         // 激活失败，删除待注册记录（以防万一）
-        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
