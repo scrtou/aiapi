@@ -1111,3 +1111,71 @@ N8 普查已完成，报告见 `doc/adr/reports/N8-cancellation-audit.md`。要�
    阶段 1 建 library target 后应消失（不计工期）。
 
 **工期 10.4 → 10.5 周。**
+
+
+---
+
+## 0-F 修订 · 阶段 0.7 疑似第四环核对结果（2026-08-08）
+
+报告：`doc/adr/reports/stage-0.7-fourth-cycle-audit.md`
+
+### 1. 原疑问：证伪
+
+ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/ErrorStatsDbManager.h`
+**就是已登记的环 2**（本文 :811 原文逐字一致），C2 已覆盖，**不是第四个环**。
+
+### 2. 连带发现：环不是 3 个，是 6 条双向边 / 1 个 9 节点 SCC
+
+判据「头文件基名 → 顶层目录」，**跨目录同名头文件数 = 0，无歧义**。三条**未登记**边：
+
+| 边 | 正向 | 反向 | 性质 |
+|---|---|---|---|
+| `accountManager ↔ dbManager` | `accountManager.h:17` → `accountDbManager.h` | `accountDbManager.h:8` / `accountBackupDbManager.h:4` → `accountManager.h` | DB 层只为用 `Accountinfo_st` 等 struct 而反依赖整个服务层 —— **与 ErrorEvent.h 同病** |
+| `accountManager ↔ apipoint` | `accountManager.h:16` → `APIinterface.h`（仅 `:195` 作 `shared_ptr` 参数，从不解引用）| `chaynsapi.h:3` / `nexosapi.cpp:3` → `accountManager.h` | **与环 1 的 C1 同模式**，前向声明即可断 |
+| `retoolWorkspace ↔ dbManager` | `RetoolWorkspaceManager.cpp:4` → `RetoolWorkspaceDbManager.h` | `RetoolWorkspaceDbManager.h:8` → `RetoolWorkspaceInfo.h`（144 行纯数据，无 `.cpp`）| **与 ErrorEvent.h 第三次同病** |
+
+### 3. 最严重：C1+C2+C3 解不开这个环
+
+本文 :846 写「3 环中的 2 个完全解开」。**目录级依赖图上不成立**：
+
+| 方案 | SCC 节点数 | 双向边 |
+|---|---:|---:|
+| 基线 | 9 | 6 |
+| **C1+C2+C3（现方案）** | **9** | 5 |
+| + C5 | 9 | 4 |
+| + C6 | 3 | 2 |
+| + C7 | **2** | **1** |
+
+> **现方案执行完毕后 SCC 仍是 9 个节点，与基线相同。**
+> RFC-001:392 已写明 CMake 不允许 static library 循环依赖 ——
+> **按现方案，阶段 0.7 完成后阶段 1 依然会失败。**
+
+**漏因**：三环表是逐条人工定位的，未做全图 SCC 计算。人工看边准，但看不出九个模块合起来是一个环 ——
+这正是 C4 该做的事，却排在 C1~C3 之后。**C4 提前到第一项。**
+
+### 4. 阶段 0.7 任务表修订
+
+| 任务 | 估时 | 消除 | 状态 |
+|---|---:|---|---|
+| **C4** 环检测脚本化 + CI 门禁（R4）| 0.5 天 | 防回归 + 提供基线 | **提前为第一项** |
+| C1 `ApiManager.h` 前向声明 | 0.5 天 | 边 1 | 不变 |
+| C2 `ErrorEvent.h` → `domain/model/` | 0.5 天 | 边 2 | 不变 |
+| C3 `ProviderResult.h` → `domain/model/` | 0.5 天 | 边 3 形式违规 | 不变 |
+| **C5** `RetoolWorkspaceInfo.h` → `domain/model/` | **0.5 天** | 边 6 | **新增** |
+| **C6** `accountManager.h` 拆出 `Accountinfo_st` 等 → `domain/model/AccountInfo.h` | **1 天** | 边 4 | **新增（唯一需动手术项，仍无接口倒置）** |
+| **C7** `accountManager.h:16` 前向声明 + 下沉 | **0.5 天** | 边 5 | **新增** |
+| **小计** | **4 天 ≈ 0.8 周** | | 原 2 天 / 0.4 周 |
+
+### 5. 验收标准修订
+
+| 原 | 修订 |
+|---|---|
+| 三个环拆除 | **全图 SCC ≤ 1，且唯一残留为 `{apipoint, sessionManager}`** |
+
+残留由 `Session.cpp:6 → chaynsapi.h` 造成（真 DIP 违规），**转阶段 2 与「消灭单例」同批** ——
+本文 :836 的原判断成立，不变。S4 实测与该标准一致。
+
+### 6. 工期
+
+**阶段 0.7：0.4 → 0.8 周（+0.4）。总工期 10.5 → 10.9 周。**
+这不是新增范围，是原方案漏算的部分 —— 不补上阶段 1 无法开工。

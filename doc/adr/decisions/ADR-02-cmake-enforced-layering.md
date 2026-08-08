@@ -73,3 +73,17 @@
 且与根 CMakeLists「源清单只维护一处」的注释直接矛盾。
 
 阶段 1 建 library target 后测试应改为链接，`PROJECT_SOURCES` 消失（顺带收益，不计工期）。
+
+
+### 阶段 1 前置风险（2026-08-08 实测）
+
+本 ADR 靠 `target_link_libraries` 强制分层，而 CMake **不允许 static library 循环依赖**。
+
+实测：`src/` 顶层目录依赖图存在 **1 个 9 节点强连通分量**，
+且阶段 0.7 现方案（C1+C2+C3）执行后 **SCC 仍是 9 个节点，与基线相同**。
+
+> **按原方案，阶段 1 的 target 拆分会直接失败。**
+
+阶段 0.7 已扩为 7 项（新增 C5/C6/C7）、0.8 周，验收标准由「三个环拆除」改为
+**全图 SCC ≤ 1 且唯一残留为 `{apipoint, sessionManager}`**（该残留转阶段 2）。
+详见 [`../reports/stage-0.7-fourth-cycle-audit.md`](../reports/stage-0.7-fourth-cycle-audit.md)。

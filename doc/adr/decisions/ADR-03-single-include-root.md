@@ -60,3 +60,14 @@
 `metrics/ErrorStatsService.h:6` → `dbManager/metrics/ErrorStatsDbManager.h`，
 而 `ErrorStatsDbManager.h:11` → `metrics/ErrorEvent.h`。
 **已提交阶段 0.7 核对**：确认是否属已登记的三个环，若否则为**第四个环**。
+
+
+### 阶段 0.7 核对结果（2026-08-08）：证伪
+
+上文提交核对的 `metrics ↔ dbManager` 双向依赖，**经查即已登记的环 2**（migration-plan:811），
+C2 处方已覆盖，**不是第四个环**。
+
+但该核对连带查出：全库实为 **6 条双向边 / 1 个 9 节点 SCC**，另有三条未登记边，
+且 **C1+C2+C3 执行后 SCC 仍为 9 节点**。详见
+[`../reports/stage-0.7-fourth-cycle-audit.md`](../reports/stage-0.7-fourth-cycle-audit.md)。
+阶段 0.7 已相应扩为 0.8 周。

@@ -173,3 +173,21 @@ DB 边界经评估后**明确排除**，不留待办。工期 10.3 → 10.4 周�
   **六成源文件测试侧根本不编译**
 
 工期 10.4 → 10.5 周。
+
+
+## 阶段 0.7 疑似第四环核对（2026-08-08）
+
+**原疑问证伪，连带发现更严重问题。**
+
+- ADR-03 提交的 `metrics ↔ dbManager` **就是已登记的环 2**，C2 已覆盖，不是第四个环
+- 但全库实测为 **6 条双向边 / 1 个 9 节点 SCC**，另有三条未登记边：
+  `accountManager ↔ dbManager`、`accountManager ↔ apipoint`、`retoolWorkspace ↔ dbManager`
+- 三条中有两条与 `ErrorEvent.h` **同病**（纯数据头文件放错层）：
+  `RetoolWorkspaceInfo.h`（144 行无 .cpp）、`accountManager.h` 里的 `Accountinfo_st` 等 4 个类型
+- **最严重**：C1+C2+C3 执行后 **SCC 仍为 9 节点，与基线相同** ——
+  CMake 不允许 static library 循环依赖，**按现方案阶段 0.7 完成后阶段 1 依然会失败**
+- 漏因：三环表逐条人工定位，未做全图 SCC 计算 —— 看得出边，看不出九个模块合起来是一个环。
+  **C4「环检测脚本化」提前为第一项**
+- 阶段 0.7 新增 C5/C6/C7，验收标准由「三个环拆除」改为 **SCC ≤ 1 且残留仅 {apipoint, sessionManager}**
+
+阶段 0.7：0.4 → 0.8 周。总工期 10.5 → 10.9 周。
