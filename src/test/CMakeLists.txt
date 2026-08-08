@@ -56,6 +56,7 @@ set(TEST_SOURCES
     test_account_store_port.cpp
     test_retool_provision_health.cpp
     test_health_ready_probe.cpp
+    test_controller_utils.cpp
     stub_db_collaborators.cpp
 )
 
