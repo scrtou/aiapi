@@ -762,7 +762,19 @@ void AccountManager::normalizeNexosAccountsInDatabase()
  
 void AccountManager::loadAccount()
 {
-    accountPoolMap.clear();
+    // 重载语义：accountPoolMap（调度池）与 accountList（apiName->userName 二级索引）必须一起失效。
+    // 历史实现只清 accountPoolMap，导致 accountList 残留「DB 已删、内存仍在」的幽灵账号：
+    // loadAccountFromDatebase 对 trial_budget_exceeded 记录只做备份+删库+continue，不回填索引，
+    // 而索引本身没有任何清理入口。幽灵条目会被 getAccountList() 的所有消费者读到
+    // （健康探针账号计数、账号列表接口、nexosapi 选号等）。
+    // 在同一临界区内原子清空两者，避免读到「池空索引旧」的中间态。
+    // 注意：accountListMutex 是非递归 std::mutex，addAccount() 内部会自行加锁，
+    // 因此这里必须用独立作用域，锁不得跨到下面的加载调用。
+    {
+        std::lock_guard<std::mutex> lock(accountListMutex);
+        accountPoolMap.clear();
+        accountList.clear();
+    }
     LOG_INFO << "[账户管理] 加载账户开始";
     // 旧设计备注：可从配置文件加载账号，当前优先从数据库加载
     if(requireStore()->isTableExist())
