@@ -2,11 +2,9 @@
   "_comment": "业务层直接 include dbManager 的文件白名单（棘轮）。新增即 FAIL(4)。冻结现状，不主张现状即目标态。",
   "allowed_files": [
     "accountManager/accountManager.cpp",
-    "accountManager/accountManager.h",
     "apipoint/chaynsapi/chaynsThreadReaper.cpp",
     "apipoint/chaynsapi/chaynsapi.cpp",
     "apipoint/nexosapi/nexosapi.cpp",
-    "channelManager/channelManager.h",
     "controllers/AccountController.cc",
     "controllers/HealthController.cc",
     "controllers/MetricsController.cc",

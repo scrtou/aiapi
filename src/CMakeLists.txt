@@ -25,6 +25,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(${PROJECT_NAME}
     main.cc
     accountManager/accountManager.cpp
+    accountManager/RetoolProvisionHealth.cpp
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp

@@ -97,6 +97,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/channel/channelDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/accountManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/RetoolProvisionHealth.cpp
 )
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})

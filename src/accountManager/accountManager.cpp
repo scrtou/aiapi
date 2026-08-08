@@ -18,8 +18,49 @@
 #include <utils/LoginResponseLogSummary.h>
 #include <utils/NexosRegistrationMailPolicy.h>
 #include <utils/NexosUserAgent.h>
+#include "RetoolProvisionHealth.h"
 using namespace drogon;
 using namespace drogon::orm;
+
+// The Retool provision-health state machine moved to RetoolProvisionHealth.h/.cpp.
+// These using-declarations keep the call sites in the member functions unchanged.
+using retoolProvision::RetoolProvisionHealth;
+using retoolProvision::loadRetoolProvisionHealth;
+using retoolProvision::persistRetoolProvisionHealth;
+using retoolProvision::isRetoolProvisionCoolingDown;
+using retoolProvision::markRetoolProvisionSuccess;
+using retoolProvision::markRetoolProvisionFailure;
+
+// Adapter binding the narrow IKeyValueConfigStore port to the concrete ConfigDbManager.
+// It lives HERE on purpose: accountManager.cpp is already on the db-include ratchet
+// list, so the extraction introduces no NEW file with a direct dbManager dependency.
+namespace {
+class ConfigDbKeyValueStore : public IKeyValueConfigStore
+{
+  public:
+    bool ensureTable(std::string* errorMessage = nullptr) override
+    {
+        return ConfigDbManager::getInstance()->ensureTable(errorMessage);
+    }
+    std::optional<std::string> getValue(const std::string& key,
+                                        std::string* errorMessage = nullptr) override
+    {
+        return ConfigDbManager::getInstance()->getValue(key, errorMessage);
+    }
+    bool setValues(const std::map<std::string, std::string>& entries,
+                   std::string* errorMessage = nullptr) override
+    {
+        return ConfigDbManager::getInstance()->setValues(entries, errorMessage);
+    }
+};
+
+IKeyValueConfigStore& retoolConfigStore()
+{
+    static ConfigDbKeyValueStore store;
+    return store;
+}
+}  // namespace
+
 
 namespace {
 
@@ -28,19 +69,6 @@ constexpr const char* kDeleteAfterDaysKey = "account_automation.delete_after_day
 constexpr const char* kAutoRegisterEnabledKey = "account_automation.auto_register_enabled";
 constexpr const char* kNamespaceToolBridgeEnabledKey = "tool_bridge.namespace_enabled";
 constexpr int kDefaultDeleteAfterDays = 6;
-constexpr const char* kRetoolFailureCountKey = "retoolapi.provision.consecutive_failures";
-constexpr const char* kRetoolLastFailureAtKey = "retoolapi.provision.last_failure_at";
-constexpr const char* kRetoolLastFailureReasonKey = "retoolapi.provision.last_failure_reason";
-constexpr const char* kRetoolCooldownUntilKey = "retoolapi.provision.cooldown_until";
-constexpr int kRetoolFailureThreshold = 3;
-constexpr int kRetoolCooldownMinutes = 30;
-struct RetoolProvisionHealth
-{
-    int consecutiveFailures = 0;
-    std::string lastFailureAt;
-    std::string lastFailureReason;
-    std::string cooldownUntil;
-};
 
 AccountAutomationSettings loadAccountAutomationSettingsFromCustomConfig(const Json::Value& customConfig) {
     AccountAutomationSettings settings;
@@ -111,71 +139,6 @@ bool isRetoolWorkspaceActive(const RetoolWorkspaceInfo& workspace) {
     return workspace.status != "disabled";
 }
 
-RetoolProvisionHealth loadRetoolProvisionHealth(std::string* errorMessage = nullptr)
-{
-    RetoolProvisionHealth state;
-    auto configDbManager = ConfigDbManager::getInstance();
-    configDbManager->ensureTable(errorMessage);
-    if (auto value = configDbManager->getValue(kRetoolFailureCountKey, nullptr); value && !value->empty()) {
-        try { state.consecutiveFailures = std::stoi(*value); } catch (...) {}
-    }
-    if (auto value = configDbManager->getValue(kRetoolLastFailureAtKey, nullptr); value) {
-        state.lastFailureAt = *value;
-    }
-    if (auto value = configDbManager->getValue(kRetoolLastFailureReasonKey, nullptr); value) {
-        state.lastFailureReason = *value;
-    }
-    if (auto value = configDbManager->getValue(kRetoolCooldownUntilKey, nullptr); value) {
-        state.cooldownUntil = *value;
-    }
-    return state;
-}
-
-bool persistRetoolProvisionHealth(const RetoolProvisionHealth& state, std::string* errorMessage = nullptr)
-{
-    return ConfigDbManager::getInstance()->setValues({
-        {kRetoolFailureCountKey, std::to_string(std::max(0, state.consecutiveFailures))},
-        {kRetoolLastFailureAtKey, state.lastFailureAt},
-        {kRetoolLastFailureReasonKey, state.lastFailureReason},
-        {kRetoolCooldownUntilKey, state.cooldownUntil},
-    }, errorMessage);
-}
-
-bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state)
-{
-    if (state.cooldownUntil.empty()) return false;
-    try
-    {
-        auto untilDate = trantor::Date::fromDbStringLocal(state.cooldownUntil);
-        return untilDate.secondsSinceEpoch() > trantor::Date::now().secondsSinceEpoch();
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
-
-void markRetoolProvisionSuccess()
-{
-    RetoolProvisionHealth state;
-    state.consecutiveFailures = 0;
-    state.cooldownUntil.clear();
-    persistRetoolProvisionHealth(state, nullptr);
-}
-
-void markRetoolProvisionFailure(const std::string& reason)
-{
-    auto state = loadRetoolProvisionHealth(nullptr);
-    state.consecutiveFailures = std::max(0, state.consecutiveFailures) + 1;
-    state.lastFailureAt = trantor::Date::now().toDbStringLocal();
-    state.lastFailureReason = reason;
-    if (state.consecutiveFailures >= kRetoolFailureThreshold)
-    {
-        auto cooldownUntil = trantor::Date::date().after(static_cast<double>(kRetoolCooldownMinutes) * 60.0);
-        state.cooldownUntil = cooldownUntil.toDbStringLocal();
-    }
-    persistRetoolProvisionHealth(state, nullptr);
-}
 
 bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& configDbManager,
                                        const AccountAutomationSettings& settings,
@@ -1821,7 +1784,7 @@ void AccountManager::checkChannelAccountCount(string apiName)
 
     if (channel.channelName == "retoolapi")
     {
-        const auto health = loadRetoolProvisionHealth(nullptr);
+        const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
         if (isRetoolProvisionCoolingDown(health))
         {
             LOG_WARN << "[账户管理] Retool 渠道处于冷却期，跳过自动补注册。cooldownUntil="
@@ -1907,7 +1870,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
     if (apiName == "retoolapi")
     {
-        const auto health = loadRetoolProvisionHealth(nullptr);
+        const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
         if (isRetoolProvisionCoolingDown(health))
         {
             LOG_WARN << "[自动注册] Retool 渠道处于冷却期，跳过自动注册。cooldownUntil="
@@ -1929,17 +1892,17 @@ bool AccountManager::autoRegisterAccount(string apiName)
             if (workspace.workspaceId.empty())
             {
                 const auto reason = error.empty() ? std::string("unknown error") : error;
-                markRetoolProvisionFailure(reason);
+                markRetoolProvisionFailure(retoolConfigStore(), reason);
                 LOG_ERROR << "[自动注册] Retool workspace 创建失败: " << reason;
                 return false;
             }
-            markRetoolProvisionSuccess();
+            markRetoolProvisionSuccess(retoolConfigStore());
             LOG_INFO << "[自动注册] Retool workspace 创建成功: " << workspace.workspaceId;
             return true;
         }
         catch (const std::exception& ex)
         {
-            markRetoolProvisionFailure(ex.what());
+            markRetoolProvisionFailure(retoolConfigStore(), ex.what());
             LOG_ERROR << "[自动注册] Retool workspace 创建异常: " << ex.what();
             return false;
         }
