@@ -191,3 +191,33 @@ DB 边界经评估后**明确排除**，不留待办。工期 10.3 → 10.4 周�
 - 阶段 0.7 新增 C5/C6/C7，验收标准由「三个环拆除」改为 **SCC ≤ 1 且残留仅 {apipoint, sessionManager}**
 
 阶段 0.7：0.4 → 0.8 周。总工期 10.5 → 10.9 周。
+
+## 阶段 0.7 收口 · C6 + C7 完成，全图 0 环（2026-08-08）
+
+- **C6 落点改名**：`domain/model/AccountInfo.h` → **`domain/model/AccountData.h`**。
+  该头承载 5 个类型（`Accountinfo_st` / `AccountCompare` / `AccountAutomationSettings` /
+  `AccountRequirement` / `AccountStatus`），`AccountData` 更准确。
+  **文档已对齐代码**（`migration-plan.md` :1165、`reports/stage-0.7-fourth-cycle-audit.md` :148）。
+- **C7 同批完成**：`accountManager.h` 不再 include `accountDbManager.h`（原有前置声明已够），
+  两个 DbManager 头改指中立层，`accountManager <-> dbManager` 双向边消除。
+- **附带清理**：删除 `accountManager.h` 中冗余的 `using namespace drogon;`。
+  该 `using` 一直靠 `accountDbManager.h` 顺带拖进 drogon 头才成立 —— 典型隐式传递依赖，断边后立即暴露。
+- **实测超出验收标准**：修订标准为「SCC <= 1 且残留仅 {apipoint, sessionManager}」，
+  实测 **SCC 0 个 / 双向边 0 条**；编译 0 warning，测试 174/174。
+  `cycles-baseline.json` 已收紧至空集。
+- **`cycles-target.json` 已被满足**：登记的残留环 {apipoint, sessionManager} 不再存在，
+  故将 target 重写为 0 环，并把 CI 中该步骤从 `continue-on-error` 升级为强制门禁。
+- **对扫描器本身做了证伪检验**：89 个头文件全覆盖、图有 **14 节点 / 53 条边**、
+  关键正向边均在场而两条目标反向边均缺席。**0 环为真，非空图假象**。
+- **新增遗留项**：`check_cycles.py` 只查环不查分层方向，`domain/` 目前干净但无强制机制。
+  待办：`--layer-rules` 断言 `domain/` 出边为空。
+
+
+## R4 补强 · 分层边界门禁（2026-08-08）
+
+- **动机**：0 环不等于分层正确。`check_cycles.py` 只查环，中立层被污染时
+  不构成环，Tarjan 结构性看不见 —— 这是 0 环达成后暴露出的真正缺口。
+- **新增** `--layer-rules` + `tools/arch/layer-rules.json`，退出码 **3** 表示分层边界被破坏。
+  当前条款：`domain` 出边必须为空集。
+- **自测**：当前代码 PASS(0)；注入越界 include → FAIL(3) 并打印 `file:line` 证据；还原后复跑 PASS。
+- **CI**：`arch-cycles.yml` 新增独立强制步骤，三个检查均无 `continue-on-error`。

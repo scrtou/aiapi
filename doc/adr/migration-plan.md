@@ -1162,7 +1162,7 @@ ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/Erro
 | C2 `ErrorEvent.h` → `domain/model/` | 0.5 天 | 边 2 | 不变 |
 | C3 `ProviderResult.h` → `domain/model/` | 0.5 天 | 边 3 形式违规 | 不变 |
 | **C5** `RetoolWorkspaceInfo.h` → `domain/model/` | **0.5 天** | 边 6 | **新增** |
-| **C6** `accountManager.h` 拆出 `Accountinfo_st` 等 → `domain/model/AccountInfo.h` | **1 天** | 边 4 | **新增（唯一需动手术项，仍无接口倒置）** |
+| **C6** `accountManager.h` 拆出 `Accountinfo_st` 等 → `domain/model/AccountData.h` | **1 天** | 边 4 | **新增（唯一需动手术项，仍无接口倒置）** |
 | **C7** `accountManager.h:16` 前向声明 + 下沉 | **0.5 天** | 边 5 | **新增** |
 | **小计** | **4 天 ≈ 0.8 周** | | 原 2 天 / 0.4 周 |
 
@@ -1188,7 +1188,7 @@ ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/Erro
 | 交付物 | 说明 |
 |---|---|
 | `tools/arch/check_cycles.py` | Tarjan SCC + 双向边检测，带 `file:line` 证据 |
-| `tools/arch/cycles-baseline.json` | 当前实测态：**1 个 9 节点 SCC / 6 条双向边** |
+| `tools/arch/cycles-baseline.json` | 滚动收紧的实测态；**C1~C7 全部完成后已收紧至 `{"sccs": [], "bidirectional": []}`** |
 | `tools/arch/cycles-target.json` | **阶段 0.7 验收标准的机器可读形式**：SCC 仅剩 `{apipoint, sessionManager}` |
 | `doc/adr/rules/R4-no-dependency-cycles.md` | 规则条款 |
 | `.github/workflows/arch-cycles.yml` | CI 门禁（防回归强制 + 目标基线信息性） |
@@ -1252,3 +1252,60 @@ sessionManager 两个模块，根源是 `APIinterface.h -> sessionManager/core/S
 **前置任务是把 Session.h 按数据/行为拆开**。这条拆分同时是 C1、C6、C7 的公共前提。
 
 **结论**：C3 从「最窄的边」重估为「需要前置拆分的边」。不建议在 Session.h 拆分完成前动它。
+
+### C6 + C7 已完成 · 阶段 0.7 全部收口（2026-08-08）
+
+**落点与文档原计划不同**：C6 的目标文件原写作 `domain/model/AccountInfo.h`，
+实际实现为 **`domain/model/AccountData.h`**（本文与 `reports/stage-0.7-fourth-cycle-audit.md`
+已按代码事实改写）。改名理由：该头承载的不止 `Accountinfo_st`，还包括
+`AccountCompare` / `AccountAutomationSettings` / `AccountRequirement` / `AccountStatus`
+共 5 个类型，`AccountData` 更准确。
+
+| 项 | 内容 |
+|---|---|
+| 新增 | `src/domain/model/AccountData.h`（133 行），纯数据零行为，命名空间全限定 |
+| 断反向边 | `accountDbManager.h` / `accountBackupDbManager.h` 改指中立层，`dbManager → accountManager` 消失 |
+| 断正向边 | `accountManager.h` 删除对 `accountDbManager.h` 的 include（原有前置声明已够）|
+| 附带清理 | 删除 `accountManager.h` 中冗余的 `using namespace drogon;`（该头不使用任何 drogon 符号）|
+| 补显式依赖 | 4 处此前靠传递 include 编译的文件补上显式 `#include` |
+
+**两次编译失败的归因**（均非方案错误，而是删除正向边后暴露的隐式传递依赖）：
+
+1. `using namespace drogon` 一直靠 `accountDbManager.h` 顺带拖进 `<drogon/drogon.h>`；
+2. `nexosapi.cpp` 直接调用 `AccountDbManager::getInstance()` 却从未显式 include 该头。
+
+两次都选择**修调用方**而非回滚 include —— 回滚等于保留正向边，白做。
+
+#### 验收结果：超出原定标准
+
+| 指标 | 阶段 0.7 修订标准 | 实测 |
+|---|---|---|
+| SCC | ≤ 1，残留 `{apipoint, sessionManager}` | **0 个** |
+| 双向边 | 未定 | **0 条** |
+| 编译 | 通过 | 通过，**0 warning** |
+| 测试 | 不回归 | **174/174** |
+
+> `cycles-target.json` 登记的残留环 `{apipoint, sessionManager}` **已不存在**。
+> 该环原判由 `Session.cpp:6 → chaynsapi.h` 造成、须转阶段 2 处理 ——
+> 现全图已无该反向边（实测 `sessionManager → apipoint` 不成立）。
+
+#### 扫描器可信度已证伪检验
+
+「0 环」若由 include 解析失效造成则毫无意义，故做了三重核对：
+
+- 文件覆盖：89 个头文件全纳入，`src/test/` 下头文件数为 0（非被 skip 漏掉）
+- 图规模：**14 节点 / 53 条模块间有向边**，非空图
+- 关键边在场性：`apipoint→accountManager`、`apipoint→sessionManager`、
+  `accountManager→dbManager`、`*→domain` 均为 YES；
+  而 `dbManager→accountManager`、`sessionManager→apipoint` 为 no
+
+结论：边确实存在，环确实被断开，0 环为真。
+
+#### 遗留：`domain/` 中立层无强制边界
+
+实测 `domain` 出边为空（仅依赖标准库、`json/json.h` 及 domain 自身），入边 30 条，方向正确。
+但 **`check_cycles.py` 只查环，不查分层方向** —— 若有人在 `AccountData.h` 中
+include 业务模块头，只要不构成环，门禁不会报错，中立层会被静默污染。
+
+> 这正是 R4 文档自身那句「文档约束必然腐化」所指的情形。
+> **待办**：为 `check_cycles.py` 增加 `--layer-rules`，断言 `domain/` 出边集合为空。

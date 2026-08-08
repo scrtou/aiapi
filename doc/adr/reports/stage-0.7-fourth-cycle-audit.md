@@ -145,7 +145,7 @@ RFC-001:392 自己写明「CMake 不允许 static library 循环依赖」。
 | C2 `ErrorEvent.h` → `domain/model/` | 0.5 天 | 边 2 | 不变 |
 | C3 `ProviderResult.h` → `domain/model/` | 0.5 天 | 边 3 的形式违规 | 不变 |
 | **C5** `RetoolWorkspaceInfo.h` → `domain/model/` | **0.5 天** | **边 6** | **新增** |
-| **C6** `accountManager.h` 拆分：`Accountinfo_st` 等数据类型 → `domain/model/AccountInfo.h` | **1 天** | **边 4** | **新增** |
+| **C6** `accountManager.h` 拆分：`Accountinfo_st` 等数据类型 → `domain/model/AccountData.h` | **1 天** | **边 4** | **新增** |
 | **C7** `accountManager.h:16` `APIinterface.h` → 前向声明 + 下沉 `.cpp` | **0.5 天** | **边 5** | **新增** |
 | **小计** | **4 天 ≈ 0.8 周** | | 原 2 天 / 0.4 周 |
 

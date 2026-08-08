@@ -19,7 +19,11 @@ jobs:
       - name: R4 - no new dependency cycles
         run: python3 tools/arch/check_cycles.py --evidence --baseline tools/arch/cycles-baseline.json
 
-      # 进度指示：阶段 0.7 完成前预期失败，故不阻断
-      - name: Stage 0.7 target (informational)
-        continue-on-error: true
+      # 阶段 0.7 已完成（2026-08-08）：target 收紧为 0 环，升级为强制门禁
+      - name: R4 - zero-cycle target (enforced)
         run: python3 tools/arch/check_cycles.py --baseline tools/arch/cycles-target.json
+
+      # 分层边界：环检测看不见「中立层被污染」——污染不构成环。
+      # domain/ 出边一旦非空即失败（退出码 3）。
+      - name: R4 - layer boundary (domain must stay neutral)
+        run: python3 tools/arch/check_cycles.py --layer-rules tools/arch/layer-rules.json

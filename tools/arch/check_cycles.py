@@ -5,7 +5,8 @@
 # 仓库里 200 处 include 只写文件名，路径前缀判据完全看不见它们。
 # 基名判据成立的前提是「头文件名全库唯一」，本脚本先自检该前提，不成立直接失败。
 #
-# 退出码：0 = 通过；1 = 存在超出基线的环；2 = 前提被破坏（存在跨目录同名头文件）。
+# 退出码：0 = 通过；1 = 存在超出基线的环；2 = 前提被破坏（存在跨目录同名头文件）；
+#         3 = 分层边界被破坏（--layer-rules）。
 import argparse
 import io
 import json
@@ -136,6 +137,8 @@ def main():
     ap.add_argument('--skip', nargs='*', default=['test', 'build', 'third_party'])
     ap.add_argument('--baseline', help='基线 JSON；实际环必须是基线的子集')
     ap.add_argument('--write-baseline', action='store_true')
+    ap.add_argument('--layer-rules',
+                    help='分层边界规则 JSON；模块出边必须是 allow_out 的子集')
     ap.add_argument('--evidence', action='store_true', help='打印每条边的 file:line 证据')
     args = ap.parse_args()
 
@@ -169,6 +172,34 @@ def main():
     print('== 强连通分量（真正的环）%d 个 ==' % len(sccs))
     for comp in sccs:
         print('  {%s}  n=%d' % (', '.join(comp), len(comp)))
+
+    # 分层边界检查：环检测看不见「中立层被污染」——那不构成环。
+    # domain/ 出边一旦非空，ADR-01 的方向约束就已失效，必须单独断言。
+    if args.layer_rules:
+        with io.open(args.layer_rules, encoding='utf-8') as fh:
+            rules = json.load(fh)
+        layer_bad = []
+        print('')
+        print('== 分层边界（%s）==' % args.layer_rules)
+        for mod, spec in sorted(rules.get('modules', {}).items()):
+            allow = set(spec.get('allow_out', []))
+            actual = set(edges.get(mod, {}))
+            bad = sorted(actual - allow)
+            if bad:
+                layer_bad.append(mod)
+                print('  FAIL %s 越界出边 -> %s（允许: %s）'
+                      % (mod, ', '.join(bad), sorted(allow) or '无'))
+                for d in bad:
+                    for ev in edges[mod][d][:3]:
+                        print('         %s' % ev)
+            else:
+                print('  OK   %s 出边 %s，未越界'
+                      % (mod, sorted(actual) or '(空)'))
+        if layer_bad:
+            print('')
+            print('  中立层被污染：%d 个模块越界。这不构成环，环检测永远发现不了。'
+                  % len(layer_bad))
+            return 3
 
     current = {'sccs': [sorted(c) for c in sccs],
                'bidirectional': [list(p) for p in bidir]}
