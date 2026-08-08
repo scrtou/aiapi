@@ -1994,15 +1994,15 @@ bool AccountManager::autoRegisterAccount(string apiName)
     const string fullUrl = getRegistServiceUrl(apiName);
     if (fullUrl.empty()) {
         LOG_ERROR << "[自动注册] 未找到 " << apiName << " 的注册服务URL";
-        // 注册失败，删除待注册记录
-        requireStore()->deleteWaitingAccount(waitingId);
+        // 注册失败，回滚待注册记录（须先改回 WAITING，删除 SQL 带状态过滤）
+        rollbackWaitingAccount(waitingId);
         return false;
     }
 
     string baseUrl, path;
     if (!splitUrl(fullUrl, baseUrl, path)) {
         LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
-        requireStore()->deleteWaitingAccount(waitingId);
+        rollbackWaitingAccount(waitingId);
         return false;
     }
     LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
