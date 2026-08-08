@@ -6,7 +6,8 @@
 # 基名判据成立的前提是「头文件名全库唯一」，本脚本先自检该前提，不成立直接失败。
 #
 # 退出码：0 = 通过；1 = 存在超出基线的环；2 = 前提被破坏（存在跨目录同名头文件）；
-#         3 = 分层边界被破坏（--layer-rules）。
+#         3 = 分层边界被破坏（--layer-rules）；
+#         4 = 新增了业务层对 dbManager 的直接 include（--db-ratchet）。
 import argparse
 import io
 import json
@@ -131,6 +132,79 @@ def show_evidence(edges, a, b, indent):
         print('%s%s' % (indent, ev))
 
 
+def scan_db_includes(root, skip_dirs, header_index, target='dbManager'):
+    """扫描 target 模块之外、直接 include target 头文件的源文件。
+
+    粒度是**文件**不是模块：模块粒度下，一个已在白名单的模块可以无限追加
+    新的 include 而不被发现，棘轮就形同虚设。
+    返回 {相对路径: [证据行, ...]}。
+    """
+    hits = {}
+    for path in walk_files(root, skip_dirs):
+        src = top_module(path, root)
+        if src == target:
+            continue
+        try:
+            with io.open(path, encoding='utf-8', errors='ignore') as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, 1):
+            m = INCLUDE_RE.match(line)
+            if not m:
+                continue
+            if header_index.get(os.path.basename(m.group(1))) == target:
+                rel = os.path.relpath(path, root).replace(os.sep, '/')
+                hits.setdefault(rel, []).append('%s:%d -> %s' % (rel, lineno, m.group(1)))
+    return hits
+
+
+def check_db_ratchet(path, hits, root):
+    """棘轮判定。返回退出码（0 通过 / 4 新增违规）。"""
+    with io.open(path, encoding='utf-8') as fh:
+        spec = json.load(fh)
+    allowed = set(spec.get('allowed_files', []))
+    must_clean = sorted(spec.get('must_stay_clean', []))
+
+    actual = set(hits)
+    added = sorted(actual - allowed)
+    removed = sorted(allowed - actual)
+
+    print('')
+    print('== dbManager 直接依赖棘轮（%s）==' % path)
+    print('  冻结 %d 个文件，当前实际 %d 个' % (len(allowed), len(actual)))
+
+    failed = False
+    for rel in added:
+        failed = True
+        print('  FAIL 新增直连 dbManager: %s' % rel)
+        for ev in hits[rel][:3]:
+            print('         %s' % ev)
+
+    # 已倒置的模块必须保持零直连，否则等于把缝隙又焊死了。
+    for mod in must_clean:
+        dirty = sorted(r for r in actual if r.split('/')[0] == mod)
+        if dirty:
+            failed = True
+            print('  FAIL %s 应保持零直连（已完成依赖倒置），却出现: %s'
+                  % (mod, ', '.join(dirty)))
+        else:
+            print('  OK   %s 保持零直连' % mod)
+
+    if failed:
+        print('')
+        print('  业务层要访问数据，请经 domain/port 下的接口注入，'
+              '照 IRetoolWorkspaceStore 的做法。')
+        print('  确需放宽，请显式改 %s 并在提交信息里说明理由。' % path)
+        return 4
+
+    print('  PASS 无新增直连')
+    if removed:
+        print('  改善 %d 个文件已解除直连: %s' % (len(removed), ', '.join(removed)))
+        print('  记得收紧棘轮：--write-db-ratchet')
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--root', default='src')
@@ -140,6 +214,10 @@ def main():
     ap.add_argument('--layer-rules',
                     help='分层边界规则 JSON；模块出边必须是 allow_out 的子集')
     ap.add_argument('--evidence', action='store_true', help='打印每条边的 file:line 证据')
+    ap.add_argument('--db-ratchet',
+                    help='dbManager 直接依赖棘轮 JSON；新增直连即 FAIL(4)')
+    ap.add_argument('--write-db-ratchet', action='store_true',
+                    help='按当前现状写入/收紧 --db-ratchet 清单')
     args = ap.parse_args()
 
     if not os.path.isdir(args.root):
@@ -200,6 +278,34 @@ def main():
             print('  中立层被污染：%d 个模块越界。这不构成环，环检测永远发现不了。'
                   % len(layer_bad))
             return 3
+
+    # dbManager 直接依赖棘轮：环检测与分层检查都看不见它。
+    # accountManager -> dbManager 是单向边，不成环；模块也已在 layer-rules 白名单里。
+    # 但"白名单模块内部无限追加 include"正是倒置成果被悄悄侵蚀的路径。
+    if args.db_ratchet or args.write_db_ratchet:
+        hits = scan_db_includes(args.root, skip, header_index)
+        target = args.db_ratchet or 'tools/arch/db-include-ratchet.json'
+        if args.write_db_ratchet:
+            payload = {
+                '_comment': ('业务层直接 include dbManager 的文件白名单（棘轮）。'
+                             '新增即 FAIL(4)。冻结现状，不主张现状即目标态。'),
+                'allowed_files': sorted(hits),
+                'must_stay_clean': ['retoolWorkspace'],
+                '_note': ('must_stay_clean 列出已完成依赖倒置的模块，必须保持零直连。'
+                          '每完成一个模块的倒置，把它从 allowed_files 移除并加入此列表。'),
+            }
+            parent = os.path.dirname(target)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with io.open(target, 'w', encoding='utf-8') as fh:
+                fh.write(json.dumps(payload, indent=2, ensure_ascii=False))
+                fh.write('\n')
+            print('')
+            print('已写入 dbManager 棘轮: %s（%d 个文件）' % (target, len(hits)))
+        else:
+            rc = check_db_ratchet(target, hits, args.root)
+            if rc:
+                return rc
 
     current = {'sccs': [sorted(c) for c in sccs],
                'bidirectional': [list(p) for p in bidir]}

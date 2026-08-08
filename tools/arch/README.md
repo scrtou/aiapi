@@ -58,3 +58,32 @@ python3 tools/arch/check_cycles.py --write-baseline
 `{apipoint, sessionManager}` 由 `sessionManager/core/Session.cpp:6 -> chaynsapi.h` 造成，
 是**真 DIP 违规**（domain 直接依赖具体 Provider），必须靠 `IChatProvider` port + 组合根注入才能断，
 **已明确转阶段 2 与「消灭单例」同批处理**，不在阶段 0.7 范围内。
+
+## 门禁 4：dbManager 直接依赖棘轮（退出码 4）
+
+```bash
+python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
+```
+
+业务层直接 `#include` dbManager 头文件的**文件级**白名单。新增即 FAIL。
+
+**为什么需要第四道**：前三道都看不见这类退化。
+`accountManager -> dbManager` 是单向边，不成环（门禁 1/2 无感）；
+该模块也已在 `layer-rules.json` 的 `allow_out` 里（门禁 3 放行）。
+于是「在已白名单模块里无限追加 include」成了倒置成果被悄悄侵蚀的通道。
+粒度定在**文件**而非模块，就是为了堵这条路。
+
+**两类判定**：
+- `allowed_files`：冻结现状。出现清单外的文件即 FAIL。
+- `must_stay_clean`：已完成依赖倒置的模块，必须保持零直连。
+  这是显式表达意图，而不是依赖「它恰好不在清单里」。
+
+**工作流**：
+- 完成一个模块的倒置后，把它从 `allowed_files` 移除、加入 `must_stay_clean`。
+- 解除直连后脚本会提示 `--write-db-ratchet` 收紧清单。减少不算违规，不会 FAIL。
+- 确需放宽，显式改 JSON 并在提交信息里写明理由。
+
+**判据坑（实测记录）**：
+扫描复用与前三道相同的头文件基名索引，原因是路径判据会漏两类写法——
+无路径的 `#include "ErrorStatsDbManager.h"`，以及 `.cc` 扩展名的文件。
+手工 grep 曾因此漏报 4 个文件（10 vs 实际 14）。
