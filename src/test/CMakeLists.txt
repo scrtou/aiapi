@@ -54,6 +54,7 @@ set(TEST_SOURCES
     test_retool_workspace_store_port.cpp
     test_channel_store_port.cpp
     test_account_store_port.cpp
+    test_retool_provision_health.cpp
     stub_db_collaborators.cpp
 )
 
