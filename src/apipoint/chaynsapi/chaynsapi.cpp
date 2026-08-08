@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utils/chaynsBrowserImpersonation.h>
+#include "sessionManager/core/Session.h"
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 

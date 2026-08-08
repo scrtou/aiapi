@@ -2,7 +2,7 @@
 #define APIINTERFACE_H
 #include <string>
 #include <map>
-#include "sessionManager/core/Session.h"
+#include "domain/model/SessionData.h"
 #include "ProviderResult.h"
 
 using std::map;

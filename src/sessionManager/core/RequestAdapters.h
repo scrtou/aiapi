@@ -2,7 +2,7 @@
 #define REQUEST_ADAPTERS_H
 
 #include "sessionManager/contracts/GenerationRequest.h"
-#include "sessionManager/core/Session.h"
+#include "domain/model/SessionData.h"
 #include <drogon/HttpRequest.h>
 #include <json/json.h>
 

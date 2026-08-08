@@ -29,6 +29,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_set>
+#include "sessionManager/core/Session.h"
 
 using namespace drogon;
 using namespace provider;

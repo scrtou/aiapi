@@ -1,7 +1,7 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
 #include <accountManager/accountManager.h>
-#include "sessionManager/core/Session.h"
+#include "domain/model/SessionData.h"
 #include "../../apiManager/ApiFactory.h"
 #include <list>
 #include <map>

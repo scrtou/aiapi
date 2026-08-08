@@ -25,6 +25,7 @@
 #include <random>
 #include <sstream>
 #include <unordered_set>
+#include "sessionManager/core/Session.h"
 
 using namespace drogon;
 using namespace provider;

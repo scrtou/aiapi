@@ -1,7 +1,7 @@
 #ifndef BRIDGE_HELPERS_H
 #define BRIDGE_HELPERS_H
 
-#include "sessionManager/core/Session.h"
+#include "domain/model/SessionData.h"
 #include "sessionManager/contracts/GenerationEvent.h"
 #include <metrics/ErrorStatsService.h>
 #include <domain/model/ErrorEvent.h>

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <random>
 #include <sstream>
+#include "sessionManager/core/Session.h"
 
 namespace {
 

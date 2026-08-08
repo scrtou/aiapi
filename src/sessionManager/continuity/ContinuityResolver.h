@@ -3,7 +3,7 @@
 
 #include <string>
 #include "sessionManager/contracts/GenerationRequest.h"
-#include "sessionManager/core/Session.h"
+#include "domain/model/SessionData.h"
 /**
  * @brief 会话连续性决策结果
  */
