@@ -6,7 +6,6 @@
     "apipoint/chaynsapi/chaynsapi.cpp",
     "apipoint/nexosapi/nexosapi.cpp",
     "controllers/AccountController.cc",
-    "controllers/HealthController.cc",
     "controllers/MetricsController.cc",
     "controllers/RetoolWorkspaceController.cc",
     "main.cc",

@@ -29,6 +29,13 @@ REQUIRED = [
     ('AccountManager', 'setChannelStore', 'R4 试点 C 续·渠道列表'),
 ]
 
+# 步骤 176：静态 setter 形式的接线（无单例、无 init）。
+# HealthController 复用 IAccountStore 端口做 /ready 的库探针；漏注入不崩溃，
+# 只会让 /ready 恒报 not_ready —— 正因为静默，更需要门禁守。
+REQUIRED_STATIC = [
+    ('HealthController', 'setDbProbe', 'R4·/ready 库探针'),
+]
+
 
 def line_of(lines, pattern):
     for i, ln in enumerate(lines, 1):
@@ -59,6 +66,14 @@ def main():
             failed = True
         else:
             print('OK   %s.%s(%s): 注入(第 %d 行) 早于 init(第 %d 行)' % (cls, setter, note, set_ln, init_ln))
+
+    for cls, setter, note in REQUIRED_STATIC:
+        set_ln = line_of(lines, re.escape(cls) + r'::' + re.escape(setter) + r'\(')
+        if set_ln is None:
+            print('FAIL %s::%s(%s): main.cc 缺少注入，探针为空将恒判 not_ready' % (cls, setter, note))
+            failed = True
+        else:
+            print('OK   %s::%s(%s): 已注入(第 %d 行)' % (cls, setter, note, set_ln))
 
     return 4 if failed else 0
 

@@ -1,13 +1,18 @@
 #include "HealthController.h"
 #include <apiManager/ApiManager.h>
 #include <accountManager/accountManager.h>
-#include <dbManager/account/accountDbManager.h>
 #include <drogon/drogon.h>
 
 std::chrono::steady_clock::time_point HealthController::startTime_ = std::chrono::steady_clock::now();
+std::shared_ptr<IAccountStore> HealthController::dbProbe_;
 
 void HealthController::setStartTime(std::chrono::steady_clock::time_point startTime) {
     startTime_ = startTime;
+}
+
+void HealthController::setDbProbe(std::shared_ptr<IAccountStore> probe) {
+    // 仅在启动接线阶段调用一次，早于 app().run() 开始收请求，故不加锁。
+    dbProbe_ = std::move(probe);
 }
 
 void HealthController::health(const drogon::HttpRequestPtr&,
@@ -35,7 +40,8 @@ void HealthController::ready(const drogon::HttpRequestPtr&,
     bool accountOk = false;
 
     try {
-        dbOk = AccountDbManager::getInstance()->isTableExist();
+        const auto probe = dbProbe_;
+        dbOk = probe && probe->isTableExist();
     } catch (...) {
         dbOk = false;
     }

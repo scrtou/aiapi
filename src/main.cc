@@ -244,6 +244,9 @@ int main() {
             // R4 试点 C：注入 Account 持久化实现。
             // 必须早于 init()——init() 会立刻建表并迁移/规整既有账号。
             AccountManager::getInstance().setStore(AccountDbManager::getInstance());
+            // /ready 的库探针复用同一个 AccountDbManager 实例（未新造端口）。
+            // 漏注入不会崩溃，只会让 /ready 恒报 not_ready —— 故由启动接线门禁守住。
+            HealthController::setDbProbe(AccountDbManager::getInstance());
             // 渠道列表来源，同样必须早于 init()：init() 启动的后台线程会调用
             // checkChannelAccountCounts()。未注入则回退 Null 实现、渠道列表恒空，
             // 自动补注册静默失效（不崩溃，故必须由启动接线门禁守住）。
