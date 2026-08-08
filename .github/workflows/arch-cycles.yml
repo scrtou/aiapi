@@ -41,10 +41,32 @@ jobs:
       - name: R4 - startup wiring (injection must exist and precede init)
         run: python3 tools/arch/check_startup_wiring.py
 
+      # 测试注册一致性（退出码 4）。守的是「绿色本身是假的」这一类事故：
+      # src/test/CMakeLists.txt 用 ParseAndAddDrogonTests，它在 configure 期
+      # 扫描 DROGON_TEST 宏生成 add_test。只 cmake --build 而不重新 configure 时，
+      # 新用例会被编译进二进制却不进 ctest 名单，ctest 照报 100% tests passed，
+      # 而新用例一次都没跑（本次重构中真实发生：用例数长期停在 188，
+      # 重新 configure 后才是 190）。前五道门禁全都看不见这一类问题。
+      #
+      # 注意本步在 CI 上运行于 DEGRADED 模式：CI 不做 cmake configure
+      # （.deps 里的 Drogon 44M 且不入库，构建代价远超本门禁价值），
+      # 因而拿不到 ctest 名单，只能退到文件级判据
+      # （src/test/*.cpp 实际文件 vs CMakeLists 的 TEST_SOURCES）。
+      # **盲区必须写明**：降级判据抓得住「新增测试文件忘了登记」，
+      # 抓不住「文件早已登记、只是新增 DROGON_TEST 未重新 configure」——
+      # 也就是上面描述的那一种。本步通过不等于该类事故已被拦截；
+      # 完整判据需在本地跑 --require-strict。
+      - name: R4 - test registration consistency (degraded on CI)
+        run: python3 tools/arch/check_test_registration.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面四道会全绿，只有这一步能发现。
       - name: R4 - gate selftest (gates must actually fail)
+        # 本步硬依赖 bash：restore check 用了进程替换 diff <(...) <(...)，
+        # 在 dash 下是语法错误（实测 dash -n 报 "(" unexpected）。
+        # Actions 在 Linux 上默认就是 bash，但依赖应写明而非依赖默认值。
+        shell: bash
         run: |
           set -u
           fail=0
@@ -52,24 +74,49 @@ jobs:
           expect_rc() {
             local want="$1"; shift
             set +e
-            "$@" > /tmp/selftest.log 2>&1
+            "$@" > "$PROBE_TMP"/selftest.log 2>&1
             local got=$?
             set -e
             if [ "$got" != "$want" ]; then
               echo "::error::selftest expected rc=$want got rc=$got for: $*"
-              tail -20 /tmp/selftest.log
+              tail -20 "$PROBE_TMP"/selftest.log
               fail=1
             else
               echo "  ok  rc=$got  $*"
             fi
           }
 
+          # 无论本步如何退出（正常、探针断言失败、内联脚本崩溃、被中断），
+          # 都必须把探针改写过的源文件还原。CI 上容器即弃看似无所谓，
+          # 但同一段脚本也会被人在本地跑，崩在半路会留下被改坏的工作区。
+          # 注意不能用 git checkout 复原：那会连带抹掉 PR 自身的未提交改动。
+          # 每次运行用独立目录，绝不能用固定 /tmp 路径：
+          # 否则脚本若在取备份之前就退出，trap 会把**上一次运行**遗留的
+          # 备份 cp 回源文件，把开发者当前的改动直接覆盖掉（已实测复现）。
+          PROBE_TMP="$(mktemp -d)"
+          restore_probes() {
+            [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
+            [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/main.cc
+            [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
+            rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp
+            rm -rf "$PROBE_TMP"
+            return 0
+          }
+          trap restore_probes EXIT
+
+          # 探针会临时改写真实源文件。复原是否成功，必须用「跑前/跑后」快照来断言。
+          probe_snapshot() {
+            md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc 2>&1
+            find src/domain src/test -type f 2>/dev/null | sort | xargs -r md5sum 2>&1
+          }
+          snapshot_before=$(probe_snapshot)
+
           echo '--- probe A: business layer adds direct dbManager include -> expect rc=4 ---'
-          cp src/retoolWorkspace/RetoolWorkspaceManager.cpp /tmp/probe_a.bak
+          cp src/retoolWorkspace/RetoolWorkspaceManager.cpp "$PROBE_TMP"/probe_a.bak
           sed -i '2i #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>' \
             src/retoolWorkspace/RetoolWorkspaceManager.cpp
           expect_rc 4 python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
-          cp /tmp/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
+          cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
 
           echo '--- probe B: domain/ gains an outgoing edge -> expect rc=3 ---'
           printf '#pragma once\n#include "RetoolWorkspaceManager.h"\n' > src/domain/__selftest_probe.h
@@ -80,45 +127,74 @@ jobs:
           # 复现 48 步的真实事故：注入语句漏写。
           # 注意这里不能用 sed -i 删行后靠 git checkout 复原——
           # 若本次 PR 本就修改了 main.cc，checkout 会连正常改动一起丢掉。
-          cp src/main.cc /tmp/probe_c.bak
-          grep -v 'ChannelManager::getInstance().setStore' src/main.cc > /tmp/probe_c.cc
-          cp /tmp/probe_c.cc src/main.cc
+          cp src/main.cc "$PROBE_TMP"/probe_c.bak
+          grep -v 'ChannelManager::getInstance().setStore' src/main.cc > "$PROBE_TMP"/probe_c.cc
+          cp "$PROBE_TMP"/probe_c.cc src/main.cc
           expect_rc 4 python3 tools/arch/check_startup_wiring.py
-          cp /tmp/probe_c.bak src/main.cc
+          cp "$PROBE_TMP"/probe_c.bak src/main.cc
 
           echo '--- probe D: setStore placed after init -> expect rc=4 ---'
           # 仅「存在」不够：注入若晚于 init，init 期间的建表与默认数据仍走 Null 实现。
           # 这一步断言检查器确实校验了顺序，而不只是搜到字符串就放行。
-          cp src/main.cc /tmp/probe_d.bak
+          cp src/main.cc "$PROBE_TMP"/probe_d.bak
           python3 - <<'PROBE_D'
           import io, re
           p = 'src/main.cc'
           lines = io.open(p, encoding='utf-8').read().splitlines(True)
-          idx = next(i for i, l in enumerate(lines)
-                     if re.search(r'ChannelManager::getInstance\(\)\.setStore\(', l))
+          # 两处查找都必须给 default。裸 next() 找不到时抛 StopIteration，
+          # 脚本会死在下面的复原 cp 之前，把 main.cc 留在破坏态——
+          # 这与本步「探针必须复原」的设计意图直接冲突。
+          idx = next((i for i, l in enumerate(lines)
+                      if re.search(r'ChannelManager::getInstance\(\)\.setStore\(', l)), -1)
+          if idx < 0:
+              print('probe D 无法进行：main.cc 中找不到 setStore 注入行。')
+              print('若注入方式已重构，请同步更新本探针与 check_startup_wiring.py。')
+              raise SystemExit(1)
           set_line = lines.pop(idx)
-          init_idx = next(i for i, l in enumerate(lines)
-                          if re.search(r'ChannelManager::getInstance\(\)\.init\(', l))
+          init_idx = next((i for i, l in enumerate(lines)
+                           if re.search(r'ChannelManager::getInstance\(\)\.init\(', l)), -1)
+          if init_idx < 0:
+              print('probe D 无法进行：main.cc 中找不到 ChannelManager init 行。')
+              raise SystemExit(1)
           lines.insert(init_idx + 1, set_line)
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_D
           expect_rc 4 python3 tools/arch/check_startup_wiring.py
-          cp /tmp/probe_d.bak src/main.cc
+          cp "$PROBE_TMP"/probe_d.bak src/main.cc
 
-          echo '--- restore check: probe paths only ---'
-          # 断言范围必须只覆盖探针触碰过的路径。
-          # 用全仓库 git status 会把「本次 PR 的正常改动」误判为探针残留，
-          # 断的就不是「探针已复原」而是「工作区干净」——两者不是一回事。
-          probe_dirty=$(git status --porcelain -- \
-            src/retoolWorkspace/RetoolWorkspaceManager.cpp \
-            src/domain/ \
-            src/main.cc)
-          if [ -n "$probe_dirty" ]; then
+          echo '--- probe E: unregistered test -> expect rc=4 (both modes) ---'
+          # 断言这道门禁确实会失败；若哪天它被改成永远返回 0，
+          # 上一步会一直绿，只有这里能发现。
+          #
+          # 探针里必须写一个真正的 DROGON_TEST，才能同时触发两种判据：
+          #   DEGRADED（CI 现状）：文件不在 TEST_SOURCES        -> rc=4
+          #   STRICT （有 build）：声明的用例名未出现在 ctest 名单 -> rc=4
+          # 早先版本只写了一个空文件，STRICT 下对它完全透明、返回 0，
+          # 那样这个探针就成了「只在特定环境才成立的断言」——
+          # 恰恰是本 job 要防的那种假绿。
+          printf '#include <drogon/drogon_test.h>\nDROGON_TEST(SelftestProbeUnregistered)\n{\n    CHECK(1 == 1);\n}\n' \
+            > src/test/__selftest_probe.cpp
+          expect_rc 4 python3 tools/arch/check_test_registration.py
+          rm -f src/test/__selftest_probe.cpp
+
+          echo '--- restore check: before/after snapshot ---'
+          # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。
+          #
+          # 早先版本用 git status 比对探针路径。那等于在断言「工作区干净」，
+          # 而我们要断言的是「探针复原了」——两者不是一回事：
+          # 只要 PR 自身改动的文件与探针路径有交集（例如本 job 的探针 C/D 就
+          # 落在 src/main.cc 上，而任何动接线的 PR 都会改它），断言必然误报。
+          # 缩小路径范围只能减少碰撞概率，改不了判据的性质。
+          #
+          # 快照法与 PR 改了什么完全无关，只回答「探针有没有复原」。
+          # 注意快照必须在**第一个探针之前**采集，见本步开头的 snapshot_before。
+          snapshot_after=$(probe_snapshot)
+          if [ "$snapshot_before" != "$snapshot_after" ]; then
             echo '::error::selftest failed to restore probe paths'
-            echo "$probe_dirty"
+            diff <(echo "$snapshot_before") <(echo "$snapshot_after") || true
             fail=1
           else
-            echo '  ok  probe paths restored'
+            echo '  ok  probe paths restored (byte-identical to pre-probe snapshot)'
           fi
 
           exit $fail

@@ -2,6 +2,7 @@
 
 #include <accountManager/accountManager.h>
 #include <domain/port/IAccountStore.h>
+#include <domain/port/IChannelStore.h>
 
 #include <list>
 #include <memory>
@@ -81,4 +82,63 @@ DROGON_TEST(AccountStorePortFallsBackWhenNotInjected)
 {
     AccountManager::getInstance().setStore(nullptr);
     CHECK(AccountManager::getInstance().isAccountRegisteringByUsername("__no_store__") == false);
+}
+
+
+// ---------------------------------------------------------------------------
+// R4 试点 C 续：AccountManager 对 ChannelDbManager 的直呼倒置（步骤 98）。
+//
+// 改造前 accountManager.cpp 有 3 处 ChannelDbManager::getInstance() 直呼。
+// 复用已有的 IChannelStore 端口，无需新造抽象。
+//
+// 断言范围刻意收窄，理由：
+// checkChannelAccountCount 在「渠道已找到且启用」的分支会调用 autoRegisterAccount，
+// 那是真实网络注册且含 sleep(5s)，单测不可进入。
+// 故 Fake 返回空列表，强制走「未找到渠道」的早退分支——
+// 该分支在 getChannelList() 之后立即 return，既安全又足以证明依赖来源已被倒置。
+// 本用例不覆盖补注册业务逻辑；那需要能拦截 autoRegisterAccount 的接缝，尚不具备。
+namespace
+{
+
+class FakeChannelStoreForAccount : public IChannelStore
+{
+  public:
+    int listCalls = 0;
+    std::list<Channelinfo_st> rows;   // 刻意留空：强制走「未找到渠道」早退分支
+
+    bool addChannel(struct Channelinfo_st) override { return true; }
+    bool updateChannel(struct Channelinfo_st) override { return true; }
+    bool deleteChannel(int) override { return true; }
+    bool getChannel(std::string, struct Channelinfo_st&) override { return false; }
+    std::list<Channelinfo_st> getChannelList() override
+    {
+        ++listCalls;
+        return rows;
+    }
+    bool isTableExist() override { return true; }
+    void createTable() override {}
+    void checkAndUpgradeTable() override {}
+    bool updateChannelStatus(std::string, bool) override { return true; }
+};
+
+}  // namespace
+
+// 渠道列表必须来自注入的 store，而非 ChannelDbManager 单例。
+DROGON_TEST(AccountManagerUsesInjectedChannelStore)
+{
+    auto fake = std::make_shared<FakeChannelStoreForAccount>();
+    AccountManager::getInstance().setChannelStore(fake);
+
+    // 空列表 -> 必定走「未找到渠道」早退，不会触达 autoRegisterAccount。
+    AccountManager::getInstance().checkChannelAccountCount("__kein_kanal__");
+
+    CHECK(fake->listCalls == 1);
+}
+
+// 未注入 channelStore 时安全退化：不崩溃，且不误入补注册路径。
+DROGON_TEST(AccountManagerChannelStoreFallsBackWhenNotInjected)
+{
+    AccountManager::getInstance().setChannelStore(nullptr);
+    AccountManager::getInstance().checkChannelAccountCount("__kein_kanal__");
+    CHECK(true);   // 走到这里即证明未崩溃
 }

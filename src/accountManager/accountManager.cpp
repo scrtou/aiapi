@@ -470,11 +470,48 @@ class NullAccountStore : public IAccountStore
     bool updateAccountStatusById(int, std::string) override { complain(); return false; }
     std::string getAccountStatusByUsername(std::string, std::string) override { complain(); return ""; }
 };
+
+// 同上：channelStore 未注入时的 Null Object，与 NullAccountStore 同构。
+// 不崩溃，但每次调用留可诊断日志，便于定位接线遗漏。
+class NullChannelStoreForAccount : public IChannelStore
+{
+    static void complain()
+    {
+        LOG_ERROR << "[账号管理] channelStore 未注入（应由 main.cc 在 init() 前调 setChannelStore）";
+    }
+  public:
+    bool addChannel(struct Channelinfo_st) override { complain(); return false; }
+    bool updateChannel(struct Channelinfo_st) override { complain(); return false; }
+    bool deleteChannel(int) override { complain(); return false; }
+    bool getChannel(std::string, struct Channelinfo_st&) override { complain(); return false; }
+    std::list<Channelinfo_st> getChannelList() override { complain(); return {}; }
+    bool isTableExist() override { complain(); return false; }
+    void createTable() override { complain(); }
+    void checkAndUpgradeTable() override { complain(); }
+    bool updateChannelStatus(std::string, bool) override { complain(); return false; }
+};
+
 }  // namespace（NullAccountStore 专用）
 
 void AccountManager::setStore(std::shared_ptr<IAccountStore> store)
 {
     accountDbManager = std::move(store);
+}
+
+void AccountManager::setChannelStore(std::shared_ptr<IChannelStore> store)
+{
+    channelStore = std::move(store);
+}
+
+IChannelStore* AccountManager::requireChannelStore()
+{
+    if (channelStore)
+        return channelStore.get();
+    static NullChannelStoreForAccount nullStore;
+    LOG_ERROR << "[账号管理] channelStore 未注入，回退 NullChannelStoreForAccount";
+    // 自定义空删除器：静态存储期对象不能被 shared_ptr 释放。
+    channelStore = std::shared_ptr<IChannelStore>(&nullStore, [](IChannelStore*){});
+    return channelStore.get();
 }
 
 IAccountStore* AccountManager::requireStore()
@@ -1749,7 +1786,7 @@ void AccountManager::checkChannelAccountCounts()
         return;
     }
 
-    auto channelDbManager = ChannelDbManager::getInstance();
+    auto* channelDbManager = requireChannelStore();
     auto channelList = channelDbManager->getChannelList();
 
     for(const auto& channel : channelList)
@@ -1760,7 +1797,7 @@ void AccountManager::checkChannelAccountCounts()
 
 void AccountManager::checkChannelAccountCount(string apiName)
 {
-    auto channelDbManager = ChannelDbManager::getInstance();
+    auto* channelDbManager = requireChannelStore();
     auto channelList = channelDbManager->getChannelList();
     auto channelIt = std::find_if(channelList.begin(), channelList.end(), [&](const auto& channel) {
         return channel.channelName == apiName;
@@ -2550,7 +2587,7 @@ void AccountManager::cleanExpiredAccounts()
         static_cast<double>(automationSettings.deleteAfterDays) * 24.0 * 3600.0;
 
     std::map<std::string, int> channelRetentionDays;
-    for (const auto& channel : ChannelDbManager::getInstance()->getChannelList()) {
+    for (const auto& channel : requireChannelStore()->getChannelList()) {
         channelRetentionDays[channel.channelName] = channel.accountRetentionDays;
     }
     

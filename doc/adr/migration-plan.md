@@ -426,7 +426,7 @@ DELETE FROM accounts WHERE api_name = 'nexosapi';
 | `controllers/ChannelController.cc` | 第 13 行白名单 |
 | `sessionManager/continuity/OutboundBudget.cpp` | 删 `kFallbackNexos`(11) / `kFallbackMsgNexos`(17) 及两处分支(27/36) |
 | `utils/ConfigValidator.cpp` | 删邮件策略校验（第 2 行 include + 167-170 行） |
-| `test/stub_account_manager.cpp` | 同步桩函数签名 |
+| ~~`test/stub_account_manager.cpp`~~ | **已失效**：该桩于 4f46ab3 被真实 `accountManager.cpp` 取代并移出 TEST_SOURCES，文件已于本次删除。二者定义同一批 `AccountManager` 符号，同时链接会 multiple definition，不可能共存 |
 | `test/test_outbound_budget.cpp` | 删 nexos 断言 |
 | `src/CMakeLists.txt` | 删第 34 行源文件、第 116 行 include 目录 |
 

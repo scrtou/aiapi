@@ -20,6 +20,7 @@ using namespace std;
 // AccountRequirement / AccountStatus）已下沉至中立层，见该文件头注释。
 #include "domain/model/AccountData.h"
 #include <domain/port/IAccountStore.h>
+#include <domain/port/IChannelStore.h>
 
 
 class AccountManager
@@ -52,12 +53,20 @@ class AccountManager
     // 未注入时 requireStore() 回退到 NullAccountStore（见 .cpp），不崩溃但留可诊断日志。
     shared_ptr<IAccountStore> accountDbManager;
     IAccountStore* requireStore();
+
+    // R4 续：渠道列表来源。改造前是 ChannelDbManager::getInstance() 直呼（3 处）。
+    // 复用试点 B 已有的 IChannelStore 端口，未新造抽象。
+    // 命名不与上面的 setStore 重载：AccountManager 有两条独立接线，
+    // 同名会让 main.cc 意图含糊，也让启动接线门禁难以分辨。
+    shared_ptr<IChannelStore> channelStore;
+    IChannelStore* requireChannelStore();
      AccountManager();
     ~AccountManager();
 
     public:
     // R4 试点 C 注入点：必须在 init() 之前调用（init() 会立刻建表/迁移账号）。
     void setStore(std::shared_ptr<IAccountStore> store);
+    void setChannelStore(std::shared_ptr<IChannelStore> store);
 
     static AccountManager& getInstance()
     {
