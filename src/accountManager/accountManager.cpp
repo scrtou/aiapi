@@ -930,18 +930,10 @@ bool AccountManager::deleteAccountbyPost(string apiName,string userName)
         accountList[apiName][userName]->accountStatus = false;
         accountList[apiName].erase(userName);
 
-        if (accountList[apiName].empty()) {
-            accountPoolMap.erase(apiName);
-        } else {
-            auto rebuiltQueue = std::make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
-            for (const auto& [_, account] : accountList[apiName]) {
-                if (!account || account->status != AccountStatus::ACTIVE || shouldExcludeFromPoolOnLoad(account)) {
-                    continue;
-                }
-                rebuiltQueue->push(account);
-            }
-            accountPoolMap[apiName] = rebuiltQueue;
-        }
+        // Identisch zur Neuaufbau-Logik in rebuildPoolLocked(): dort wird der leere Fall
+        // ebenfalls durch Entfernen des Pool-Eintrags behandelt. Eine zweite Kopie hier
+        // wuerde bei kuenftigen Aenderungen der Filterregel auseinanderlaufen.
+        rebuildPoolLocked(apiName);
         return true;
     }
     return false;
