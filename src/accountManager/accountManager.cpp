@@ -1153,7 +1153,7 @@ bool AccountManager::checkChaynsToken(string token)
     request->setMethod(HttpMethod::Get);
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, 30.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] 令牌校验请求失败, result=" << static_cast<int>(result);
         LOG_INFO << "[账户管理] Chayns 令牌校验结束";
@@ -1188,7 +1188,7 @@ bool AccountManager::checkNexosToken(string token)
     request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", token);
 
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, 30.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] Nexos cookies 校验失败, result=" << static_cast<int>(result);
         return false;
@@ -1584,7 +1584,7 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
                 auto checkRequest = HttpRequest::newHttpRequest();
                 checkRequest->setMethod(HttpMethod::Get);
                 checkRequest->setPath(path);
-                auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest);
+                auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest, 30.0);
                 if (checkResponse && checkResponse->getStatusCode() == 200) {
                     LOG_INFO << "[账户管理] 目标主机已连通，探测路径: " << path
                              << "，累计重试次数: " << retryCount << " 次";
