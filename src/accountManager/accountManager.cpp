@@ -18,7 +18,6 @@
 #include <utils/LoginResponseLogSummary.h>
 #include <utils/NexosRegistrationMailPolicy.h>
 #include <utils/NexosUserAgent.h>
-#include <dbManager/account/accountDbManager.h>
 using namespace drogon;
 using namespace drogon::orm;
 
@@ -442,6 +441,53 @@ std::string getDownstreamBearerApiKey(const std::string& name) {
     return "";
 }
 
+// R4 试点 C：未注入实现时的 Null Object，与试点 B 的 NullChannelStore 同构。
+// 不崩溃（避免把接线遗漏升级成生产事故），但每次调用都留可诊断日志。
+//
+// 位置说明：本文件开头第 25 行起有一个跨越 300+ 行的匿名 namespace（至 357 行闭合）。
+// 成员函数定义若落在其内部，会触发
+// "definition of AccountManager::xxx is not in namespace enclosing AccountManager"。
+// 故这里另起独立匿名 namespace，且整块置于该闭合之后、init() 之前。
+namespace {
+class NullAccountStore : public IAccountStore
+{
+    static void complain()
+    {
+        LOG_ERROR << "[账号管理] store 未注入（应由 main.cc 在 init() 前调 setStore）";
+    }
+  public:
+    bool addAccount(struct Accountinfo_st) override { complain(); return false; }
+    bool updateAccount(struct Accountinfo_st) override { complain(); return false; }
+    bool deleteAccount(std::string, std::string) override { complain(); return false; }
+    bool isTableExist() override { complain(); return false; }
+    void createTable() override { complain(); }
+    void checkAndUpgradeTable() override { complain(); }
+    std::list<Accountinfo_st> getAccountDBList() override { complain(); return {}; }
+    int createWaitingAccount(std::string) override { complain(); return -1; }
+    bool activateAccount(int, struct Accountinfo_st) override { complain(); return false; }
+    bool deleteWaitingAccount(int) override { complain(); return false; }
+    int countAccountsByChannel(std::string, bool) override { complain(); return 0; }
+    bool updateAccountStatusById(int, std::string) override { complain(); return false; }
+    std::string getAccountStatusByUsername(std::string, std::string) override { complain(); return ""; }
+};
+}  // namespace（NullAccountStore 专用）
+
+void AccountManager::setStore(std::shared_ptr<IAccountStore> store)
+{
+    accountDbManager = std::move(store);
+}
+
+IAccountStore* AccountManager::requireStore()
+{
+    if (accountDbManager)
+        return accountDbManager.get();
+    static NullAccountStore nullStore;
+    LOG_ERROR << "[账号管理] store 未注入，回退 NullAccountStore";
+    // 自定义空删除器：nullStore 是静态存储期对象，不能被 shared_ptr 释放。
+    accountDbManager = std::shared_ptr<IAccountStore>(&nullStore, [](IAccountStore*){});
+    return accountDbManager.get();
+}
+
 AccountManager::AccountManager()
 {
 
@@ -622,15 +668,19 @@ bool AccountManager::updateAccountAutomationSettings(const AccountAutomationSett
 void AccountManager::init()
 {
     LOG_INFO << "[账户管理] 初始化开始";
-    accountDbManager = AccountDbManager::getInstance();
+    // R4 试点 C：不再自取 AccountDbManager 单例。store 由 main.cc 在 init() 前注入。
+    // 未注入时 requireStore() 回退 NullAccountStore 并打错误日志，便于定位接线遗漏。
+    // 此处提前调用一次，是为了让「接线遗漏」在启动阶段就出现在日志里，
+    // 而不是等到某个业务分支才暴露。所有实际访问也都经由 requireStore()（步骤 88）。
+    (void)requireStore();
     AccountBackupDbManager::getInstance()->ensureTable();
-    if(!accountDbManager->isTableExist())
+    if(!requireStore()->isTableExist())
     {
-        accountDbManager->createTable();
+        requireStore()->createTable();
     }
     else
     {
-        accountDbManager->checkAndUpgradeTable();
+        requireStore()->checkAndUpgradeTable();
     }
     normalizeNexosAccountsInDatabase();
     loadAccountAutomationSettings();
@@ -664,7 +714,7 @@ void AccountManager::init()
 void AccountManager::normalizeNexosAccountsInDatabase()
 {
     LOG_INFO << "[账户管理] 开始规范化 Nexos 历史账号用户名";
-    auto dbAccounts = accountDbManager->getAccountDBList();
+    auto dbAccounts = requireStore()->getAccountDBList();
     int migratedCount = 0;
 
     for (const auto& account : dbAccounts) {
@@ -680,7 +730,7 @@ void AccountManager::normalizeNexosAccountsInDatabase()
             if (normalizedToken != account.authToken) {
                 Accountinfo_st normalized = account;
                 normalized.authToken = normalizedToken;
-                if (accountDbManager->updateAccount(normalized)) {
+                if (requireStore()->updateAccount(normalized)) {
                     ++migratedCount;
                     LOG_INFO << "[账户管理] Nexos 账号 cookies 已规范化: " << account.userName;
                 }
@@ -698,8 +748,8 @@ void AccountManager::normalizeNexosAccountsInDatabase()
         migrated.userName = email;
         migrated.authToken = normalizedToken;
 
-        if (accountDbManager->addAccount(migrated)) {
-            if (accountDbManager->deleteAccount(account.apiName, account.userName)) {
+        if (requireStore()->addAccount(migrated)) {
+            if (requireStore()->deleteAccount(account.apiName, account.userName)) {
                 ++migratedCount;
                 LOG_INFO << "[账户管理] Nexos 账号用户名已规范化: "
                          << account.userName << " -> " << email;
@@ -715,7 +765,7 @@ void AccountManager::loadAccount()
     accountPoolMap.clear();
     LOG_INFO << "[账户管理] 加载账户开始";
     // 旧设计备注：可从配置文件加载账号，当前优先从数据库加载
-    if(accountDbManager->isTableExist())
+    if(requireStore()->isTableExist())
     {
         loadAccountFromDatebase();
     }
@@ -1432,7 +1482,7 @@ void AccountManager::updateToken()
             (this->*updateTokenMap[account->apiName])(account);
             if(account->tokenStatus)
             {
-                accountDbManager->updateAccount(*account);
+                requireStore()->updateAccount(*account);
                 refreshAccountQueue(account->apiName);
             }
         }
@@ -1526,7 +1576,7 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
 void AccountManager::loadAccountFromDatebase()
 {
     LOG_INFO << "[账户管理] 开始从数据库加载账号";
-    auto accountDBList = accountDbManager->getAccountDBList();
+    auto accountDBList = requireStore()->getAccountDBList();
     int archivedCount = 0;
     for(auto& accountinfo:accountDBList)
     {
@@ -1536,7 +1586,7 @@ void AccountManager::loadAccountFromDatebase()
                 accountinfo,
                 "startup_trial_budget_exceeded_cleanup"
             );
-            if (backedUp && accountDbManager->deleteAccount(accountinfo.apiName, accountinfo.userName)) {
+            if (backedUp && requireStore()->deleteAccount(accountinfo.apiName, accountinfo.userName)) {
                 ++archivedCount;
                 LOG_WARN << "[账户管理] 启动时发现 Trial Budget Exceeded 账号，已迁移到备份库并从主库删除: "
                          << accountinfo.userName;
@@ -1563,7 +1613,7 @@ void AccountManager::saveAccountToDatebase()
     {
         for(auto& userName:apiName.second)
         {
-            accountDbManager->addAccount(*(userName.second.get()));
+            requireStore()->addAccount(*(userName.second.get()));
         }
     }
     LOG_INFO << "[账户管理] 账号写回数据库完成";
@@ -1646,7 +1696,7 @@ void AccountManager::waitUpdateAccountToken()
 
             // 仅在更新成功时更新数据库和刷新队列
             if (account->tokenStatus) {
-                if (!accountDbManager->updateAccount(*account)) {
+                if (!requireStore()->updateAccount(*account)) {
                     LOG_ERROR << "[账户管理] 更新数据库账号记录失败";
                     continue;
                 }
@@ -1776,7 +1826,7 @@ void AccountManager::checkChannelAccountCount(string apiName)
         return;
     }
 
-    int currentCount = accountDbManager->countAccountsByChannel(channel.channelName, true);
+    int currentCount = requireStore()->countAccountsByChannel(channel.channelName, true);
     LOG_INFO << "[账户管理] 渠道状态 -> 名称: " << channel.channelName
              << "，目标数量: " << channel.accountCount
              << "，当前数量（含待注册）: " << currentCount;
@@ -1859,7 +1909,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     }
     
     // Step 1: 创建待注册记录，预占位置
-    int waitingId = accountDbManager->createWaitingAccount(apiName);
+    int waitingId = requireStore()->createWaitingAccount(apiName);
     if (waitingId < 0) {
         LOG_ERROR << "[自动注册] 创建待注册记录失败: " << apiName;
         return false;
@@ -1871,7 +1921,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
         std::lock_guard<std::mutex> lock(registeringMutex_);
         registeringAccountIds_.insert(waitingId);
     }
-    accountDbManager->updateAccountStatusById(waitingId, AccountStatus::REGISTERING);
+    requireStore()->updateAccountStatusById(waitingId, AccountStatus::REGISTERING);
     LOG_INFO << "[自动注册] 账号状态已更新为注册中, ID: " << waitingId;
     
     // 使用 RAII 确保无论如何都会从追踪集合中移除
@@ -1898,14 +1948,14 @@ bool AccountManager::autoRegisterAccount(string apiName)
     if (fullUrl.empty()) {
         LOG_ERROR << "[自动注册] 未找到 " << apiName << " 的注册服务URL";
         // 注册失败，删除待注册记录
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
     string baseUrl, path;
     if (!splitUrl(fullUrl, baseUrl, path)) {
         LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
     LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
@@ -1961,8 +2011,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
                   << ", " << account_logging::summarizeLoginTransport(
                          httpStatus, contentType, bodySize);
         // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -1977,8 +2027,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
                          responseBody.size())
                   << ", " << account_logging::summarizeParseError(errs);
         // 解析失败，删除待注册记录
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -1989,16 +2039,16 @@ bool AccountManager::autoRegisterAccount(string apiName)
                          response->getHeader("content-type"),
                          responseBody.size())
                   << ", " << account_logging::summarizeLoginError(jsonResponse);
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
     string taskId = jsonResponse["data"].get("task_id", "").asString();
     if (taskId.empty()) {
         LOG_ERROR << "[自动注册] workflow 响应缺少 task_id";
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -2079,8 +2129,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
         }
         LOG_ERROR << "[自动注册] workflow 未成功完成: "
                   << account_logging::summarizeWorkflowEnvelope(workflowDetail);
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -2121,8 +2171,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
                   << ", emailPresent=" << (!email.empty())
                   << ", identityPresent=" << (!personid.empty())
                   << ", sessionCredentialPresent=" << (!token.empty());
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -2134,7 +2184,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     // Step 3: 注册成功，激活账号记录
     Accountinfo_st newAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
     
-    if (accountDbManager->activateAccount(waitingId, newAccount)) {
+    if (requireStore()->activateAccount(waitingId, newAccount)) {
         LOG_INFO << "[自动注册] 账号激活成功: emailPresent=true";
         addAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
         
@@ -2154,8 +2204,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
     } else {
         LOG_ERROR << "[自动注册] 账号激活失败, ID: " << waitingId;
         // 激活失败，删除待注册记录（以防万一）
-        accountDbManager->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-        accountDbManager->deleteWaitingAccount(waitingId);
+        requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
+        requireStore()->deleteWaitingAccount(waitingId);
         return false;
     }
 
@@ -2397,7 +2447,7 @@ void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
         account->accountType = newAccountType;
         
         // 更新数据库
-        if (accountDbManager->updateAccount(*account)) {
+        if (requireStore()->updateAccount(*account)) {
             LOG_INFO << "[账户管理] 账号类型已写入数据库，用户: " << account->userName;
         } else {
             LOG_ERROR << "[账户管理] 账号类型写入数据库失败，用户: " << account->userName;
@@ -2478,7 +2528,7 @@ bool AccountManager::isAccountRegistering(int pendingId)
 bool AccountManager::isAccountRegisteringByUsername(const string& userName)
 {
     // 检查数据库中的状态
-    string status = accountDbManager->getAccountStatusByUsername("chaynsapi", userName);
+    string status = requireStore()->getAccountStatusByUsername("chaynsapi", userName);
     return status == AccountStatus::REGISTERING;
 }
 
@@ -2641,7 +2691,7 @@ void AccountManager::cleanExpiredAccounts()
         }
         
         // 3) 从本地数据库删除
-        accountDbManager->deleteAccount(account.apiName, account.userName);
+        requireStore()->deleteAccount(account.apiName, account.userName);
         LOG_INFO << "[自动清理] 数据库记录已删除: " << account.userName;
     }
 

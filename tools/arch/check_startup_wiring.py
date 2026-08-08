@@ -17,6 +17,9 @@ MAIN = 'src/main.cc'
 REQUIRED = [
     ('ChannelManager', 'R4 试点 B'),
     ('RetoolWorkspaceManager', 'R4 试点 A'),
+    # 试点 C 补登记（步骤 92）。此前漏登记，main.cc 接线正确纯属偶然而非保障。
+    # 该缺口的现实后果在步骤 86 已实测：未注入时 AccountManager 会空指针解引用而崩溃。
+    ('AccountManager', 'R4 试点 C'),
 ]
 
 

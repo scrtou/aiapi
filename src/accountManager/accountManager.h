@@ -15,12 +15,11 @@
 #include <cstdint>
 #include "domain/port/APIinterface.h"
 using namespace std;
-class AccountDbManager;
 
 // 纯数据类型（Accountinfo_st / AccountCompare / AccountAutomationSettings /
 // AccountRequirement / AccountStatus）已下沉至中立层，见该文件头注释。
 #include "domain/model/AccountData.h"
-#include <dbManager/account/accountDbManager.h>
+#include <domain/port/IAccountStore.h>
 
 
 class AccountManager
@@ -49,11 +48,17 @@ class AccountManager
         {"nexosapi", &AccountManager::checkNexosToken}
     };
     // 旧字段保留：历史版本用于缓存 API 名称列表
-    shared_ptr<AccountDbManager> accountDbManager;
+    // R4 试点 C：只持端口，不持 AccountDbManager 具体实现。
+    // 未注入时 requireStore() 回退到 NullAccountStore（见 .cpp），不崩溃但留可诊断日志。
+    shared_ptr<IAccountStore> accountDbManager;
+    IAccountStore* requireStore();
      AccountManager();
     ~AccountManager();
 
     public:
+    // R4 试点 C 注入点：必须在 init() 之前调用（init() 会立刻建表/迁移账号）。
+    void setStore(std::shared_ptr<IAccountStore> store);
+
     static AccountManager& getInstance()
     {
         static AccountManager instance;

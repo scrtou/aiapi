@@ -53,7 +53,8 @@ set(TEST_SOURCES
     test_background_task_queue_shutdown.cpp
     test_retool_workspace_store_port.cpp
     test_channel_store_port.cpp
-    stub_account_manager.cpp
+    test_account_store_port.cpp
+    stub_db_collaborators.cpp
 )
 
 # 需要链接的项目源文件（用于测试）
@@ -94,6 +95,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../retoolWorkspace/RetoolWorkspaceManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/channel/channelDbManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/accountManager.cpp
 )
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})

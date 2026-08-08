@@ -1,5 +1,8 @@
 #include <drogon/drogon.h>
 #include <accountManager/accountManager.h>
+// R4 试点 C：main.cc 是组装根，需同时见到端口与实现才能接线。
+// accountManager.h 已不再 include 实现头，故这里必须显式引入（IWYU）。
+#include <dbManager/account/accountDbManager.h>
 #include <apiManager/ApiManager.h>
 #include <channelManager/channelManager.h>
 #include <sessionManager/core/Session.h>
@@ -238,6 +241,9 @@ int main() {
             // 必须早于 init()——init() 会立刻建表并写入内置渠道。
             ChannelManager::getInstance().setStore(ChannelDbManager::getInstance());
             ChannelManager::getInstance().init();
+            // R4 试点 C：注入 Account 持久化实现。
+            // 必须早于 init()——init() 会立刻建表并迁移/规整既有账号。
+            AccountManager::getInstance().setStore(AccountDbManager::getInstance());
             AccountManager::getInstance().init();
             RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
             RetoolWorkspaceManager::getInstance().init();
