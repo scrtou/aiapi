@@ -1223,3 +1223,32 @@ ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/Erro
 注意：SCC 仍是 9 节点。断掉两条双向边不减小环的规模，metrics / retoolWorkspace
 仍通过多跳路径留在环内。决定 SCC 大小的是 accountManager / apipoint / apiManager /
 sessionManager 四者的核心纠缠，即 C1、C3、C6、C7。
+
+
+### C3 首次尝试：前置声明方案证伪（2026-08-08）
+
+目标边：`apiManager <--> apipoint`。方向 B 只有一条 include：
+`ApiManager.h -> apipoint/APIinterface.h`，看起来是最窄的一条边。
+
+**试过的方案**：把该 include 换成 `class APIinterface;` 前置声明。
+
+**失败原因**（已实测，非推测）：`ApiManager` 不是只持有指针，它解引用成员：
+
+- `ApiManager.cpp:17` / `:50` / `:64` 直接访问 `api->ModelInfoMap`
+- `ApiManager.cpp:90` 构造 `shared_ptr<APIinterface>`，析构点需要 `sizeof(T)`
+
+前置声明无法满足以上任一条。改动已回滚，编译与门禁恢复基线态。
+
+**顺带发现的结构性问题**：`APIinterface.h` 的头闭包共 7 个文件，跨 apipoint 与
+sessionManager 两个模块，根源是 `APIinterface.h -> sessionManager/core/Session.h`。
+而 `Session.h`（464 行）把两类东西塞在一起：
+
+| 内容 | 性质 | 能否进 domain |
+|---|---|---|
+| `session_st` / `ApiType` / `SessionTrackingMode` | 纯数据结构 | 可以 |
+| `chatSession` | 带 DB 持久化、后台线程、锁的管理器 | 不可以 |
+
+`Session.h` 被 15 个文件引用，`Session.cpp` 有 1258 行。因此 C3 不是搬文件能解决的，
+**前置任务是把 Session.h 按数据/行为拆开**。这条拆分同时是 C1、C6、C7 的公共前提。
+
+**结论**：C3 从「最窄的边」重估为「需要前置拆分的边」。不建议在 Session.h 拆分完成前动它。
