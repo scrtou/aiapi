@@ -3,7 +3,7 @@
 #include <functional>
 #include <json/json.h>
 #include <optional>
-#include <retoolWorkspace/RetoolWorkspaceInfo.h>
+#include <domain/model/RetoolWorkspaceInfo.h>
 #include <string>
 
 class RetoolWorkspaceService

@@ -1,7 +1,7 @@
 #ifndef METRICS_ERROR_STATS_SERVICE_H
 #define METRICS_ERROR_STATS_SERVICE_H
 
-#include "ErrorEvent.h"
+#include <domain/model/ErrorEvent.h>
 #include "ErrorStatsConfig.h"
 #include "../dbManager/metrics/ErrorStatsDbManager.h"
 #include <memory>

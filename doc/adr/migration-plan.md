@@ -1204,3 +1204,22 @@ ADR-03 提交核对的 `metrics/ErrorStatsService.h` ↔ `dbManager/metrics/Erro
 **新增观察**：9 节点 SCC 中的 `channelManager` 与 `managedAccount` **没有任何双向边** ——
 它们是通过多跳路径被卷进环里的。这进一步说明「逐条看双向边」永远发现不了完整的环，
 必须做全图 SCC。
+
+
+### C2 + C5 已完成（2026-08-08）
+
+两个纯数据结构头迁入 `src/domain/model/`：
+
+| 原位置 | 新位置 | 断掉的双向边 |
+|---|---|---|
+| `src/metrics/ErrorEvent.h` | `src/domain/model/ErrorEvent.h` | `dbManager <--> metrics` |
+| `src/retoolWorkspace/RetoolWorkspaceInfo.h` | `src/domain/model/RetoolWorkspaceInfo.h` | `retoolWorkspace <--> dbManager` |
+
+- 用 `git mv` 保留历史；10 处 include 统一改写为 `<domain/model/...>`（原先混用三种写法）
+- 两个头均无对应 `.cpp`，CMake 源文件表无需改动，仅补 include 根
+- 全量编译通过，0 warning
+- 双向边 6 -> 4，基线已收紧并提交
+
+注意：SCC 仍是 9 节点。断掉两条双向边不减小环的规模，metrics / retoolWorkspace
+仍通过多跳路径留在环内。决定 SCC 大小的是 accountManager / apipoint / apiManager /
+sessionManager 四者的核心纠缠，即 C1、C3、C6、C7。

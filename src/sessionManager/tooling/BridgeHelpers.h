@@ -4,7 +4,7 @@
 #include "sessionManager/core/Session.h"
 #include "sessionManager/contracts/GenerationEvent.h"
 #include <metrics/ErrorStatsService.h>
-#include <metrics/ErrorEvent.h>
+#include <domain/model/ErrorEvent.h>
 #include <json/json.h>
 #include <string>
 #include <string_view>

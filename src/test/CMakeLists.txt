@@ -83,6 +83,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatSseSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesJsonSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesSseSink.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../domain
+    ${CMAKE_CURRENT_SOURCE_DIR}/../domain/model
     ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiFactory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsModelCatalog.cpp

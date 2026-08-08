@@ -122,6 +122,8 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount/service
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers
                            ${CMAKE_CURRENT_SOURCE_DIR}/controllers/sinks
+                           ${CMAKE_CURRENT_SOURCE_DIR}/domain
+                           ${CMAKE_CURRENT_SOURCE_DIR}/domain/model
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
                            ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/channel

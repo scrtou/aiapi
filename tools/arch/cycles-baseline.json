@@ -26,14 +26,6 @@
       "apiManager"
     ],
     [
-      "dbManager",
-      "metrics"
-    ],
-    [
-      "retoolWorkspace",
-      "dbManager"
-    ],
-    [
       "sessionManager",
       "apipoint"
     ]

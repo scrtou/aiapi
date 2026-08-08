@@ -9,7 +9,7 @@
  */
 
 #include <drogon/drogon_test.h>
-#include "../metrics/ErrorEvent.h"
+#include <domain/model/ErrorEvent.h>
 
 using namespace metrics;
 

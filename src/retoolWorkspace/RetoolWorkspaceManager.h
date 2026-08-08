@@ -1,7 +1,7 @@
 #pragma once
 
 #include <optional>
-#include <retoolWorkspace/RetoolWorkspaceInfo.h>
+#include <domain/model/RetoolWorkspaceInfo.h>
 #include <string>
 #include <vector>
 

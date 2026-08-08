@@ -5,7 +5,7 @@
 #include <dbManager/DbType.h>
 #include <memory>
 #include <optional>
-#include <retoolWorkspace/RetoolWorkspaceInfo.h>
+#include <domain/model/RetoolWorkspaceInfo.h>
 #include <string>
 #include <vector>
 

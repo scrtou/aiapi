@@ -17,7 +17,7 @@
 #include <tools/ZeroWidthEncoder.h>
 #include <channelManager/channelManager.h>
 #include <metrics/ErrorStatsService.h>
-#include <metrics/ErrorEvent.h>
+#include <domain/model/ErrorEvent.h>
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
 #include <cctype>

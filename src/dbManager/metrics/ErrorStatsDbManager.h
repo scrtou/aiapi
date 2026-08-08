@@ -8,7 +8,7 @@
 #include <optional>
 #include <memory>
 #include <chrono>
-#include "../../metrics/ErrorEvent.h"
+#include <domain/model/ErrorEvent.h>
 
 namespace metrics {
 

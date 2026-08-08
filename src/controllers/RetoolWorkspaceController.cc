@@ -5,7 +5,7 @@
 #include <dbManager/config/ConfigDbManager.h>
 #include <managedAccount/service/ManagedAccountService.h>
 #include <optional>
-#include <retoolWorkspace/RetoolWorkspaceInfo.h>
+#include <domain/model/RetoolWorkspaceInfo.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <retoolWorkspace/RetoolWorkspaceService.h>
 
