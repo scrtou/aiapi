@@ -1,4 +1,5 @@
 #include <managedAccount/backends/RetoolWorkspaceBackend.h>
+#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 
@@ -14,7 +15,7 @@ std::vector<ManagedAccountRecord> RetoolWorkspaceBackend::list()
         record.provider = "retool";
         record.displayName = item.baseUrl.empty() ? item.email : item.baseUrl;
         record.status = item.status;
-        record.metadata = item.toJson(true);
+        record.metadata = retoolworkspacecodec::toJson(item, true);
         records.push_back(record);
     }
     return records;
@@ -34,7 +35,7 @@ std::optional<ManagedAccountRecord> RetoolWorkspaceBackend::get(const std::strin
     record.provider = "retool";
     record.displayName = workspace->baseUrl.empty() ? workspace->email : workspace->baseUrl;
     record.status = workspace->status;
-    record.metadata = workspace->toJson(true);
+    record.metadata = retoolworkspacecodec::toJson(*workspace, true);
     return record;
 }
 
@@ -56,6 +57,6 @@ std::optional<ManagedExecutionContext> RetoolWorkspaceBackend::buildExecutionCon
     ManagedExecutionContext context;
     context.kind = ManagedAccountKind::RetoolWorkspace;
     context.id = workspace->workspaceId;
-    context.data = workspace->toJson(true);
+    context.data = retoolworkspacecodec::toJson(*workspace, true);
     return context;
 }

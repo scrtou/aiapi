@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <drogon/drogon.h>
+#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <stdexcept>
 #include <utils/BackgroundTaskQueue.h>
@@ -31,7 +32,7 @@ std::string shellEscape(const std::string& value)
 
 RetoolWorkspaceInfo persistWorkspaceFromRoot(const Json::Value& root, std::string* errorMessage)
 {
-    RetoolWorkspaceInfo info = RetoolWorkspaceInfo::fromJson(root["data"]["workspace"]);
+    RetoolWorkspaceInfo info = retoolworkspacecodec::fromJson(root["data"]["workspace"]);
     if (info.workspaceId.empty())
     {
         info.workspaceId = !info.subdomain.empty() ? info.subdomain : info.baseUrl;

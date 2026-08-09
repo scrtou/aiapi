@@ -1,4 +1,5 @@
 #include <apipoint/retoolapi/retoolapi.h>
+#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <channelManager/channelManager.h>
 #include <drogon/drogon.h>
@@ -543,7 +544,7 @@ bool retoolapi::populateProviderResources(const std::string& workspaceId, Json::
         }
     }
 
-    RetoolWorkspaceInfo info = RetoolWorkspaceInfo::fromJson(workspaceJson);
+    RetoolWorkspaceInfo info = retoolworkspacecodec::fromJson(workspaceJson);
     if (info.workspaceId.empty())
     {
         info.workspaceId = workspaceId;

@@ -1,4 +1,5 @@
 #include <controllers/RetoolWorkspaceController.h>
+#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <controllers/ControllerUtils.h>
 #include <channelManager/channelManager.h>
@@ -79,7 +80,7 @@ void RetoolWorkspaceController::createWorkspace(
         auto workspace = RetoolWorkspaceService::getInstance().provisionWorkspace(*jsonPtr);
         Json::Value response(Json::objectValue);
         response["status"] = "success";
-        response["workspace"] = workspace.toJson(true);
+        response["workspace"] = retoolworkspacecodec::toJson(workspace, true);
         ctl::sendJson(callback, response, k200OK);
     }
     catch (const std::exception& ex)
@@ -95,7 +96,7 @@ void RetoolWorkspaceController::upsertWorkspace(
     std::shared_ptr<Json::Value> jsonPtr;
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
 
-    RetoolWorkspaceInfo info = RetoolWorkspaceInfo::fromJson(*jsonPtr);
+    RetoolWorkspaceInfo info = retoolworkspacecodec::fromJson(*jsonPtr);
     if (info.workspaceId.empty())
     {
         ctl::sendError(callback, k400BadRequest, "invalid_request_error", "workspaceId is required");
@@ -126,7 +127,7 @@ void RetoolWorkspaceController::upsertWorkspace(
 
     Json::Value response(Json::objectValue);
     response["status"] = "success";
-    response["workspace"] = info.toJson(true);
+    response["workspace"] = retoolworkspacecodec::toJson(info, true);
     ctl::sendJson(callback, response, k200OK);
 }
 
@@ -150,7 +151,7 @@ void RetoolWorkspaceController::workspaceInfo(
     }
 
     Json::Value response(Json::objectValue);
-    response["workspace"] = workspace->toJson(true);
+    response["workspace"] = retoolworkspacecodec::toJson(*workspace, true);
     auto executionContext = ManagedAccountService::getInstance().buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, *workspaceId, nullptr);
     response["hasExecutionContext"] = executionContext.has_value();
