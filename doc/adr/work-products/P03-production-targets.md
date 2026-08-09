@@ -1,9 +1,9 @@
-# W01 · 生产 target 化设计
+# P3-W1 · 生产 target 化设计
 
 | 项 | 值 |
 |---|---|
 | 状态 | TODO |
-| 前置 | W00 clean baseline、运行时覆盖报告 |
+| 前置 | P0 clean baseline；P1 行为安全网全部退出门禁通过 |
 | 目标 | 删除测试 `PROJECT_SOURCES`，建立唯一 production source owner |
 
 ## Target 责任

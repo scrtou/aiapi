@@ -20,7 +20,7 @@
 | [`target-architecture.md`](./target-architecture.md) | 目标文件树、target DAG 和对象所有权 |
 | [`module-catalog.md`](./module-catalog.md) | 目标模块、类、方法和直接调用者 |
 | [`flow-contracts.md`](./flow-contracts.md) | 启动/生成/账号/回收/停机调用契约 |
-| [`refactor-workbook.md`](./refactor-workbook.md) | 工作包、阶段产物和状态 |
+| [`refactor-workbook.md`](./refactor-workbook.md) | migration 阶段内部的工作项、产物和状态；不定义独立顺序 |
 | [`interface-drafts.md`](./interface-drafts.md) | 非契约性的接口示例 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 历史纠错和版本演进 |
 

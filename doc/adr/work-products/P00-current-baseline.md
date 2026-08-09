@@ -1,4 +1,4 @@
-# W00 · 源码审计与基线产物
+# P0-W1 · 当前真值与基线产物
 
 | 项 | 值 |
 |---|---|
@@ -19,8 +19,8 @@
 
 1. 不纳入用户未提交的 Chayns 源码改动；
 2. 代码提交后生成 clean baseline；
-3. 开启 W01（生产 library 化）前建立真实运行时覆盖报告；
-4. 将假上游 fixture 和 SIGTERM harness 保存到 `doc/adr/work-products/` 对应工作包。
+3. 进入 P1 行为安全网并建立真实运行时覆盖报告；P1 完成前不得开始 P3 production target 化；
+4. 将假上游 fixture 和 SIGTERM harness 保存到 `doc/adr/work-products/` 对应 P1 工作包。
 
 ## 回滚
 

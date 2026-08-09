@@ -34,7 +34,8 @@
 1. 新增 `target-architecture.md`：完整目标文件树、CMake target DAG 和对象所有权。
 2. 新增 `module-catalog.md`：目标模块主要类、方法和直接调用者。
 3. 新增 `flow-contracts.md`：启动、Chat/Responses、Provider、账号、thread 回收和停机调用链。
-4. 新增 `refactor-workbook.md` 及 W00 产物，要求每个工作包及时记录设计、测试、调用图和回滚方式。
+4. 新增 `refactor-workbook.md` 及阶段产物，要求每个工作包及时记录设计、测试、调用图和回滚方式；
+   v3.3 后统一采用 `P阶段-W工作项` 编号，避免形成第二套施工顺序。
 
 ## v3.3 文档目录清理（2026-08-09）
 
