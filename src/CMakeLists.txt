@@ -60,6 +60,8 @@ add_executable(${PROJECT_NAME}
     apipoint/nexosapi/nexosapi.cpp
     apipoint/openai/OpenAiProvider.cpp
     apipoint/retoolapi/retoolapi.cpp
+    apipoint/retoolapi/RetoolHttpTransport.cpp
+    apipoint/retoolapi/RetoolClock.cpp
     channelManager/channelManager.cpp
     managedAccount/backends/ClassicProviderAccountBackend.cpp
     managedAccount/backends/RetoolWorkspaceBackend.cpp

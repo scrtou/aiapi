@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <optional>
 #include <sstream>
-#include <thread>
+#include <stdexcept>
 
 using namespace drogon;
 
@@ -123,7 +123,30 @@ class ScopedWorkspaceUsage
 };
 }  // namespace
 
-retoolapi::retoolapi() = default;
+retoolapi::retoolapi()
+    : retoolapi(retool::makeDrogonRetoolHttpTransport(), retool::makeRealRetoolClock())
+{
+}
+
+retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport)
+    : retoolapi(std::move(transport), retool::makeRealRetoolClock())
+{
+}
+
+retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
+                     std::shared_ptr<retool::IRetoolClock> clock)
+    : transport_(std::move(transport)), clock_(std::move(clock))
+{
+    if (!transport_)
+    {
+        throw std::invalid_argument("retoolapi requires a non-null HTTP transport");
+    }
+    if (!clock_)
+    {
+        throw std::invalid_argument("retoolapi requires a non-null clock");
+    }
+}
+
 retoolapi::~retoolapi() = default;
 
 void* retoolapi::createApi()
@@ -358,7 +381,6 @@ HttpResponsePtr retoolapi::sendJsonRequest(
     const Json::Value& workspaceJson,
     double timeoutSeconds) const
 {
-    auto client = HttpClient::newHttpClient(baseUrl);
     auto req = body ? HttpRequest::newHttpJsonRequest(*body) : HttpRequest::newHttpRequest();
     req->setMethod(method);
     req->setPath(path);
@@ -368,7 +390,7 @@ HttpResponsePtr retoolapi::sendJsonRequest(
     req->addHeader("x-retool-client-version", "3.356.0-f7a1e09 (Build 313746)");
     req->addHeader("user-agent", "Mozilla/5.0");
     req->addHeader("cookie", buildCookieHeader(workspaceJson));
-    auto [result, resp] = client->sendRequest(req, timeoutSeconds);
+    auto [result, resp] = transport_->send(baseUrl, req, timeoutSeconds);
     if (result != ReqResult::Ok || !resp)
     {
         return nullptr;
@@ -572,14 +594,24 @@ Json::Value retoolapi::buildAnthropicWorkflowTemplate(const Json::Value& destina
                                                       const std::string& prompt,
                                                       const std::string& model) const
 {
-    Json::Value sourceWorkspace(Json::objectValue);
-    sourceWorkspace["baseUrl"] = envOrDefault("RETOOL2_BASE_URL", "https://subscrtou1.retool.com");
-    sourceWorkspace["accessToken"] = envOrDefault(
-        "RETOOL2_ACCESS_TOKEN",
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ4c3JmVG9rZW4iOiI5ZjcyY2Y4NC1iZDAxLTQ2MGEtYmM3ZC04ZGZiOWI3MzNiNDEiLCJ2ZXJzaW9uIjoiMS4yIiwiaWF0IjoxNzczNjcxMTk3fQ.wshv4O2bJc9gx1LRaRPadncGBi9Un2euBcs-P5EKZgo");
-    sourceWorkspace["xsrfToken"] = envOrDefault("RETOOL2_XSRF_TOKEN", "9f72cf84-bd01-460a-bc7d-8dfb9b733b41");
+    const auto sourceBaseUrl = envOrDefault("RETOOL2_BASE_URL", "");
+    const auto sourceAccessToken = envOrDefault("RETOOL2_ACCESS_TOKEN", "");
+    const auto sourceXsrfToken = envOrDefault("RETOOL2_XSRF_TOKEN", "");
+    const auto sourceWorkflowId = envOrDefault("RETOOL2_ANTHROPIC_WORKFLOW_ID", "");
+    // Cloning is optional.  Never carry a live workspace URL or credential as
+    // a source-code fallback; when the explicit source is not configured the
+    // caller safely patches the destination workflow instead.
+    if (sourceBaseUrl.empty() || sourceAccessToken.empty() ||
+        sourceXsrfToken.empty() || sourceWorkflowId.empty())
+    {
+        return Json::Value(Json::nullValue);
+    }
 
-    const auto sourceWorkflowId = envOrDefault("RETOOL2_ANTHROPIC_WORKFLOW_ID", "268937e3-028a-4502-8c26-f8f7cb87375d");
+    Json::Value sourceWorkspace(Json::objectValue);
+    sourceWorkspace["baseUrl"] = sourceBaseUrl;
+    sourceWorkspace["accessToken"] = sourceAccessToken;
+    sourceWorkspace["xsrfToken"] = sourceXsrfToken;
+
     auto sourceResp = sendJsonRequest(
         sourceWorkspace.get("baseUrl", "").asString(),
         Get,
@@ -632,9 +664,10 @@ Json::Value retoolapi::buildAnthropicWorkflowTemplate(const Json::Value& destina
 
     const auto destinationAnthropicResource = workspaceJson.get("anthropicResourceName", "").asString();
     for (const auto& sourceResource : {
-             envOrDefault("RETOOL2_ANTHROPIC_RESOURCE", "16aef8a4-100d-4668-869f-f726d13947d5"),
-             envOrDefault("RETOOL2_OPENAI_RESOURCE", "5872d1e8-a6e6-4e39-af14-b94b3c584e2e")})
+             envOrDefault("RETOOL2_ANTHROPIC_RESOURCE", ""),
+             envOrDefault("RETOOL2_OPENAI_RESOURCE", "")})
     {
+        if (sourceResource.empty()) continue;
         auto pos = serialized.find(sourceResource);
         while (!destinationAnthropicResource.empty() && pos != std::string::npos)
         {
@@ -839,7 +872,7 @@ provider::ProviderResult retoolapi::requestWorkflow(session_st& session)
             return provider::ProviderResult::fail(provider::ProviderError::internal(
                 jsonToStringOrCompactJson(code1["output"]["error"], "workflow failed")));
         }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        clock_->sleepFor(std::chrono::seconds(1));
     }
     return provider::ProviderResult::fail(provider::ProviderError::timeout("retool workflow run timed out"));
 }
@@ -992,7 +1025,7 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
                 if (errorMessage) *errorMessage = message;
                 return false;
             }
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            clock_->sleepFor(std::chrono::seconds(1));
         }
         if (errorMessage) *errorMessage = "retool agent replay timed out";
         return false;
@@ -1298,7 +1331,7 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
             }
             return provider::ProviderResult::fail(provider::ProviderError::internal(message));
         }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        clock_->sleepFor(std::chrono::seconds(1));
     }
     return provider::ProviderResult::fail(provider::ProviderError::timeout("retool agent run timed out"));
 }

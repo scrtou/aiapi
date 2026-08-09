@@ -1,0 +1,17 @@
+{
+  "fixture_version": 1,
+  "source": "synthetic-characterization",
+  "scenario": "workflow fetch returns HTTP 200 with invalid JSON",
+  "exchange": {
+    "request": {
+      "base_url": "https://workspace.invalid",
+      "method": "GET",
+      "path": "/api/workflow/workflow-1"
+    },
+    "response": {"status": 200, "raw_body": "not-json"}
+  },
+  "observed_mapping": {
+    "code": "Unknown",
+    "status_code": 200
+  }
+}

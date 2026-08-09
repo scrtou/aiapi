@@ -1,0 +1,77 @@
+{
+  "fixture_version": 1,
+  "source": "synthetic-characterization",
+  "scenario": "workflow success with OpenAI binding",
+  "exchanges": [
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/workflow/workflow-1",
+        "headers_present": ["x-xsrf-token", "cookie"]
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "workflow": {
+            "id": "workflow-1",
+            "organizationId": "organization-1",
+            "templateData": "[\"instruction\",\"old instruction\",\"model\",\"old-model\",\"providerId\",\"old-provider\",\"providerName\",\"old-name\",\"providerResourceName\",\"old-resource\",\"OpenAIProviderQuery\",\"^1;\",\"old-resource\"]"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "POST",
+        "path": "/api/workflow/workflow-1",
+        "body_contains": [
+          "synthetic current question",
+          "gpt-4o-mini",
+          "retoolAIBuiltIn::openAI",
+          "openai-resource-synthetic"
+        ]
+      },
+      "response": {"status": 200, "body": {"saved": true}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "POST",
+        "path": "/api/workflow/run",
+        "body_fields": {"workflowId": "workflow-1"}
+      },
+      "response": {"status": 200, "body": {"id": "workflow-run-1"}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/workflowRun/getBlockLevelLogs?runId=workflow-run-1"
+      },
+      "response": {
+        "status": 200,
+        "body": {"blockLevelLogs": {"code1": {"status": "RUNNING"}}}
+      }
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/workflowRun/getBlockLevelLogs?runId=workflow-run-1"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "blockLevelLogs": {
+            "code1": {
+              "status": "SUCCESS",
+              "output": {"data": " synthetic workflow answer "}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

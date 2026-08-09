@@ -1,0 +1,83 @@
+{
+  "fixture_version": 1,
+  "source": "synthetic-characterization",
+  "scenario": "agent success with Anthropic binding",
+  "exchanges": [
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/workflow/agent-1",
+        "headers_present": ["x-xsrf-token", "cookie"]
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "workflow": {
+            "id": "agent-1",
+            "templateData": "[\"model\",\"old-model\",\"providerId\",\"old-provider\",\"providerName\",\"old-name\",\"providerResourceName\",\"old-resource\"]"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "POST",
+        "path": "/api/workflow/agent-1",
+        "body_contains": [
+          "claude-sonnet-4-6",
+          "retoolAIBuiltIn::anthropic",
+          "anthropic-resource-synthetic"
+        ]
+      },
+      "response": {"status": 200, "body": {"saved": true}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "POST",
+        "path": "/api/agents/agent-1/threads",
+        "body_fields": {"name": "aiapi-thread", "timezone": "UTC"}
+      },
+      "response": {"status": 200, "body": {"id": "thread-1"}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "POST",
+        "path": "/api/agents/agent-1/threads/thread-1/messages",
+        "body_fields": {
+          "type": "text",
+          "text": "synthetic agent question",
+          "timezone": "UTC"
+        }
+      },
+      "response": {"status": 200, "body": {"agentRunId": "agent-run-1"}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/agents/agent-1/logs/agent-run-1?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100"
+      },
+      "response": {"status": 200, "body": {"status": "RUNNING", "trace": []}}
+    },
+    {
+      "request": {
+        "base_url": "https://workspace.invalid",
+        "method": "GET",
+        "path": "/api/agents/agent-1/logs/agent-run-1?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "status": "COMPLETED",
+          "trace": [
+            {"data": {"data": {"content": " synthetic agent answer "}}}
+          ]
+        }
+      }
+    }
+  ]
+}

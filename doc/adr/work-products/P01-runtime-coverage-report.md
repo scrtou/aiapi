@@ -13,12 +13,12 @@
 
 | 项 | 值 |
 |---|---:|
-| production 实现文件 | 67 |
-| 已编入并 instrument 的实现文件 | 45 |
-| 未编入测试 target 的实现文件 | 22 |
-| 行覆盖（仅已 instrument 实现） | 4639/10963 (42.32%) |
-| 分支覆盖（仅已 instrument 实现） | 6747/32827 (20.55%) |
-| gcda 文件 | 82 |
+| production 实现文件 | 69 |
+| 已编入并 instrument 的实现文件 | 51 |
+| 未编入测试 target 的实现文件 | 18 |
+| 行覆盖（仅已 instrument 实现） | 5058/11999 (42.15%) |
+| 分支覆盖（仅已 instrument 实现） | 7431/36137 (20.56%) |
+| gcda 文件 | 89 |
 | 工具 | `gcov (Debian 12.2.0-14+deb12u1) 12.2.0` |
 
 ## 3. 高风险路径
@@ -29,9 +29,9 @@
 | Generation ToolBridge transform/emit | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `instrumented` | 83/1097 (7.57%) | 82/3233 (2.54%) |
 | Chat/Responses four GenerationService output modes | `src/sessionManager/core/GenerationService.cpp` | `instrumented` | 128/265 (48.30%) | 257/965 (26.63%) |
 | Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 247/1760 (14.03%) | 396/6937 (5.71%) |
-| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 57/64 (89.06%) | 105/196 (53.57%) |
+| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 57/64 (89.06%) | 109/196 (55.61%) |
 | HTTP Controller Chat/Responses route edge | `src/controllers/AiApiController.cc` | `not_instrumented` | n/a | n/a |
-| Retool workflow/agent upstream paths | `src/apipoint/retoolapi/retoolapi.cpp` | `not_instrumented` | n/a | n/a |
+| Retool workflow/agent upstream paths | `src/apipoint/retoolapi/retoolapi.cpp` | `instrumented` | 406/889 (45.67%) | 677/3140 (21.56%) |
 | Process shutdown orchestration | `src/main.cc` | `not_instrumented` | n/a | n/a |
 
 ### 目标函数执行证据
@@ -52,11 +52,11 @@
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::loadAccount(` | `executed` | 15 | 12/13 (92.31%) | 32/50 (64.00%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::enqueue(` | `executed` | 6 | 17/17 (100.00%) | 37/60 (61.67%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::shutdown(` | `executed` | 4 | 13/13 (100.00%) | 18/26 (69.23%) |
-| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 8 | 16/23 (69.57%) | 45/98 (45.92%) |
+| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 8 | 16/23 (69.57%) | 49/98 (50.00%) |
 | HTTP Controller Chat/Responses route edge | `AiApiController::chaynsapichat(` | `not_instrumented` | n/a | n/a | n/a |
 | HTTP Controller Chat/Responses route edge | `AiApiController::responsesCreate(` | `not_instrumented` | n/a | n/a | n/a |
-| Retool workflow/agent upstream paths | `retoolapi::requestWorkflow(` | `not_instrumented` | n/a | n/a | n/a |
-| Retool workflow/agent upstream paths | `retoolapi::requestAgent(` | `not_instrumented` | n/a | n/a | n/a |
+| Retool workflow/agent upstream paths | `retoolapi::requestWorkflow(` | `executed` | 8 | 60/75 (80.00%) | 125/344 (36.34%) |
+| Retool workflow/agent upstream paths | `retoolapi::requestAgent(` | `executed` | 3 | 114/315 (36.19%) | 205/1288 (15.92%) |
 | Process shutdown orchestration | `main(` | `not_instrumented` | n/a | n/a | n/a |
 
 ## 4. 未编入测试 target 的生产实现
@@ -66,7 +66,6 @@
 - `src/apipoint/chaynsapi/chaynsThreadReaper.cpp`
 - `src/apipoint/nexosapi/nexosapi.cpp`
 - `src/apipoint/openai/OpenAiProvider.cpp`
-- `src/apipoint/retoolapi/retoolapi.cpp`
 - `src/controllers/AccountController.cc`
 - `src/controllers/AiApiController.cc`
 - `src/controllers/ChannelController.cc`
@@ -80,9 +79,6 @@
 - `src/dbManager/metrics/StatusDbManager.cpp`
 - `src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp`
 - `src/main.cc`
-- `src/managedAccount/backends/ClassicProviderAccountBackend.cpp`
-- `src/managedAccount/backends/RetoolWorkspaceBackend.cpp`
-- `src/managedAccount/service/ManagedAccountService.cpp`
 - `src/retoolWorkspace/RetoolWorkspaceService.cpp`
 - `src/tools/accountlogin/login_client.cpp`
 
@@ -92,13 +88,16 @@
 |---|---|---:|---:|
 | `src/accountManager/RetoolProvisionHealth.cpp` | `executed` | 49/50 (98.00%) | 50/86 (58.14%) |
 | `src/accountManager/accountManager.cpp` | `executed` | 247/1760 (14.03%) | 396/6937 (5.71%) |
-| `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 2/10 (20.00%) |
+| `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 3/10 (30.00%) |
 | `src/apiManager/ApiManager.cpp` | `executed` | 18/63 (28.57%) | 15/174 (8.62%) |
 | `src/apipoint/chaynsapi/ChaynsClock.cpp` | `executed` | 6/6 (100.00%) | 1/2 (50.00%) |
 | `src/apipoint/chaynsapi/ChaynsHttpTransport.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/6 (0.00%) |
 | `src/apipoint/chaynsapi/ChaynsMessageCorrelation.cpp` | `executed` | 76/86 (88.37%) | 110/190 (57.89%) |
 | `src/apipoint/chaynsapi/ChaynsModelCatalog.cpp` | `executed` | 197/219 (89.95%) | 294/556 (52.88%) |
 | `src/apipoint/chaynsapi/chaynsapi.cpp` | `executed` | 543/1003 (54.14%) | 905/3232 (28.00%) |
+| `src/apipoint/retoolapi/RetoolClock.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/2 (0.00%) |
+| `src/apipoint/retoolapi/RetoolHttpTransport.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/6 (0.00%) |
+| `src/apipoint/retoolapi/retoolapi.cpp` | `executed` | 406/889 (45.67%) | 677/3140 (21.56%) |
 | `src/channelManager/channelManager.cpp` | `executed` | 55/98 (56.12%) | 79/208 (37.98%) |
 | `src/controllers/HealthController.cc` | `executed` | 31/52 (59.62%) | 35/96 (36.46%) |
 | `src/controllers/sinks/ChatJsonSink.cpp` | `executed` | 94/109 (86.24%) | 111/222 (50.00%) |
@@ -108,6 +107,9 @@
 | `src/dbManager/channel/channelDbManager.cpp` | `instrumented_not_executed` | 0/196 (0.00%) | 0/648 (0.00%) |
 | `src/dbManager/metrics/ErrorStatsDbManager.cpp` | `instrumented_not_executed` | 0/260 (0.00%) | 0/964 (0.00%) |
 | `src/dbManager/session/SessionDbManager.cpp` | `instrumented_not_executed` | 0/265 (0.00%) | 0/848 (0.00%) |
+| `src/managedAccount/backends/ClassicProviderAccountBackend.cpp` | `instrumented_not_executed` | 0/65 (0.00%) | 0/100 (0.00%) |
+| `src/managedAccount/backends/RetoolWorkspaceBackend.cpp` | `executed` | 9/40 (22.50%) | 5/48 (10.42%) |
+| `src/managedAccount/service/ManagedAccountService.cpp` | `executed` | 4/30 (13.33%) | 1/14 (7.14%) |
 | `src/metrics/ErrorStatsConfig.cpp` | `executed` | 56/66 (84.85%) | 111/184 (60.33%) |
 | `src/metrics/ErrorStatsService.cpp` | `executed` | 18/184 (9.78%) | 9/454 (1.98%) |
 | `src/retoolWorkspace/RetoolWorkspaceManager.cpp` | `executed` | 50/58 (86.21%) | 17/38 (44.74%) |

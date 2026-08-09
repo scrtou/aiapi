@@ -77,6 +77,7 @@ set(TEST_SOURCES
     test_login_response_log_summary.cpp
     test_background_task_queue_shutdown.cpp
     test_retool_workspace_store_port.cpp
+    test_retool_provider_fixture.cpp
     test_channel_store_port.cpp
     test_account_store_port.cpp
     test_account_reload_ghost_index.cpp
@@ -131,8 +132,14 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsHttpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsClock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/chaynsapi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/RetoolHttpTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/RetoolClock.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/retoolapi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../retoolWorkspace/RetoolWorkspaceManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/backends/ClassicProviderAccountBackend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/backends/RetoolWorkspaceBackend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/service/ManagedAccountService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/channel/channelDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/accountManager.cpp

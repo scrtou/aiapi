@@ -2,8 +2,11 @@
 #define RETOOLAPI_H
 
 #include "domain/port/APIinterface.h"
+#include "RetoolClock.h"
+#include "RetoolHttpTransport.h"
 #include <apiManager/ApiFactory.h>
 #include <drogon/HttpResponse.h>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <string>
@@ -15,6 +18,9 @@ class retoolapi : public APIinterface
     static void* createApi();
 
     retoolapi();
+    explicit retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport);
+    retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
+              std::shared_ptr<retool::IRetoolClock> clock);
     ~retoolapi() override;
 
     provider::ProviderResult generate(session_st& session) override;
@@ -68,6 +74,8 @@ class retoolapi : public APIinterface
     std::mutex threadMutex_;
     std::unordered_map<std::string, std::string> agentThreadMap_;
     std::unordered_map<std::string, std::string> conversationWorkspaceMap_;
+    std::shared_ptr<retool::IRetoolHttpTransport> transport_;
+    std::shared_ptr<retool::IRetoolClock> clock_;
 };
 
 #endif

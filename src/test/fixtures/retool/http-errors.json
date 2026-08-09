@@ -1,0 +1,10 @@
+{
+  "fixture_version": 1,
+  "source": "synthetic-characterization",
+  "scenario": "workflow fetch error mapping",
+  "cases": [
+    {"status": 401, "expected_code": "AuthError", "body": {"error": "synthetic unauthorized"}},
+    {"status": 429, "expected_code": "RateLimited", "body": {"error": "synthetic rate limit"}},
+    {"status": 503, "expected_code": "InternalError", "body": {"error": "synthetic unavailable"}}
+  ]
+}
