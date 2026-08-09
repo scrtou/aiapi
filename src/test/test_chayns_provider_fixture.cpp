@@ -5,6 +5,12 @@
 #include <apipoint/chaynsapi/ChaynsClock.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
+#include <apiManager/ApiManager.h>
+#include <controllers/sinks/ChatJsonSink.h>
+#include <controllers/sinks/ChatSseSink.h>
+#include <controllers/sinks/ResponsesJsonSink.h>
+#include <controllers/sinks/ResponsesSseSink.h>
+#include <sessionManager/core/GenerationService.h>
 
 #include <algorithm>
 #include <deque>
@@ -251,6 +257,42 @@ session_st makeRequest(const std::string& model,
     return session;
 }
 
+GenerationRequest makeGenerationRequest(EndpointType endpoint,
+                                        bool stream,
+                                        const std::string& input)
+{
+    GenerationRequest request;
+    request.endpointType = endpoint;
+    request.provider = "chaynsapi";
+    request.model = "fixture-free-model";
+    request.messages = {Message::user(input)};
+    request.currentInput = input;
+    request.continuityTexts = {input};
+    request.toolChoice = "none";
+    request.stream = stream;
+    request.requestId = "fixture-request-" + input;
+    return request;
+}
+
+struct GenerationFixtureHarness
+{
+    GenerationFixtureHarness()
+    {
+        installAccount("free");
+        transport = std::make_shared<FixtureChaynsTransport>();
+        transport->enqueue("model-catalog.json");
+        transport->enqueue("thread-create-free.json");
+        transport->enqueue("poll-messages.json");
+        provider = std::make_shared<chaynsapi>(transport);
+        provider->init();
+        ApiManager::getInstance().addApiInfo(
+            std::make_shared<ApiInfo>("chaynsapi", provider));
+    }
+
+    std::shared_ptr<FixtureChaynsTransport> transport;
+    std::shared_ptr<chaynsapi> provider;
+};
+
 }  // namespace
 
 DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
@@ -365,4 +407,109 @@ DROGON_TEST(ChaynsProvider_FakeClockReachesPollingDeadlineWithoutWallClockWait)
     CHECK(clock->requestedSleeps[0] == std::chrono::milliseconds(200));
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_ChatJsonRunsGenerationServiceAndProductionSink)
+{
+    GenerationFixtureHarness harness;
+    Json::Value body;
+    int status = 0;
+    ChatJsonSink sink(
+        [&](const Json::Value& value, int valueStatus) {
+            body = value;
+            status = valueStatus;
+        },
+        "fixture-free-model");
+    GenerationService service;
+    const auto error = service.runGuarded(
+        makeGenerationRequest(EndpointType::ChatCompletions, false, "chat-json-input"),
+        sink);
+
+    CHECK(!error.has_value());
+    CHECK(status == 200);
+    CHECK(body["object"].asString() == "chat.completion");
+    CHECK(body["choices"][0]["message"]["content"].asString() ==
+          "synthetic final answer");
+    CHECK(harness.transport->remaining() == 0);
+    CHECK(harness.transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_ChatSseRunsGenerationServiceAndProductionSink)
+{
+    GenerationFixtureHarness harness;
+    std::string chunks;
+    int closes = 0;
+    ChatSseSink sink(
+        [&](const std::string& chunk) {
+            chunks += chunk;
+            return true;
+        },
+        [&]() { ++closes; },
+        "fixture-free-model");
+    GenerationService service;
+    const auto error = service.runGuarded(
+        makeGenerationRequest(EndpointType::ChatCompletions, true, "chat-sse-input"),
+        sink);
+
+    CHECK(!error.has_value());
+    CHECK(chunks.find("synthetic final answer") != std::string::npos);
+    CHECK(chunks.find("[DONE]") != std::string::npos);
+    CHECK(closes == 1);
+    CHECK(harness.transport->remaining() == 0);
+    CHECK(harness.transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_ResponsesJsonRunsGenerationServiceAndProductionSink)
+{
+    GenerationFixtureHarness harness;
+    Json::Value body;
+    int status = 0;
+    ResponsesJsonSink sink(
+        [&](const Json::Value& value, int valueStatus) {
+            body = value;
+            status = valueStatus;
+        },
+        "fixture-free-model",
+        0,
+        false);
+    GenerationService service;
+    const auto error = service.runGuarded(
+        makeGenerationRequest(EndpointType::Responses, false, "responses-json-input"),
+        sink);
+
+    CHECK(!error.has_value());
+    CHECK(status == 200);
+    CHECK(body["object"].asString() == "response");
+    REQUIRE(body["output"].isArray());
+    CHECK(body["output"][0]["content"][0]["text"].asString() ==
+          "synthetic final answer");
+    CHECK(harness.transport->remaining() == 0);
+    CHECK(harness.transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
+{
+    GenerationFixtureHarness harness;
+    std::string chunks;
+    int closes = 0;
+    ResponsesSseSink sink(
+        [&](const std::string& chunk) {
+            chunks += chunk;
+            return true;
+        },
+        [&]() { ++closes; },
+        "fixture-free-model",
+        false);
+    GenerationService service;
+    const auto error = service.runGuarded(
+        makeGenerationRequest(EndpointType::Responses, true, "responses-sse-input"),
+        sink);
+
+    CHECK(!error.has_value());
+    CHECK(chunks.find("response.created") != std::string::npos);
+    CHECK(chunks.find("synthetic final answer") != std::string::npos);
+    CHECK(chunks.find("response.completed") != std::string::npos);
+    CHECK(closes == 1);
+    CHECK(harness.transport->remaining() == 0);
+    CHECK(harness.transport->errors.empty());
 }

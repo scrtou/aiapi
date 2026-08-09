@@ -102,6 +102,9 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/Session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/SessionCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RequestAdapters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/GenerationService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/ClientOutputSanitizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolCompiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolAdapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallBridge.cpp
@@ -110,6 +113,7 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/StrictClientRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ForcedToolCallGenerator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallNormalizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolDefinitionEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeHelpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
     # 步骤 181：为 /ready 库探针补测试，需真身编译进来（符号缺口实测为 0）。
