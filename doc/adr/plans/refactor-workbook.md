@@ -16,7 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W3 正式分层 target carve-out。P3-W1 已建立 68/68 生产实现唯一 owner/compile；P3-W2 已把 422/422 自有 include 收敛为从 `src/` 起的完整路径，CMake 子目录 include root 为 0；normal/coverage/ASan 均 260/260 PASS。当前只允许执行 P3-W3，逐闭包替代并最终删除 `aiapi_legacy`。
+当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W3 正式分层 target carve-out。P3-W1 已建立 68/68 生产实现唯一 owner/compile；P3-W2 已把 422/422 自有 include 收敛为从 `src/` 起的完整路径，CMake 子目录 include root 为 0；P3-W3 当前六个正式 target 已存在，27 个 implementation 已迁出，legacy 为 40，正式 target DAG/legacy ceiling 门禁已启用；normal/coverage/ASan 均 260/260 PASS。当前仍只允许执行 P3-W3，按阻断边逐闭包替代并最终删除 `aiapi_legacy`，不得整批改名伪造完成。
 
 ## 按 migration-plan 排列的工作项
 

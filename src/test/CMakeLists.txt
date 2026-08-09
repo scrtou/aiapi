@@ -108,7 +108,7 @@ aiapi_enable_coverage(${PROJECT_NAME})
 # target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
 #
 # and comment out the following lines
-target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy Drogon::Drogon)
+target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy aiapi_runtime Drogon::Drogon)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
@@ -116,7 +116,8 @@ if (UNIX)
     add_executable(aiapi_shutdown_signal_fixture
         support/shutdown_signal_fixture.cpp)
     aiapi_enable_coverage(aiapi_shutdown_signal_fixture)
-    target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE aiapi_legacy Drogon::Drogon)
+    target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE
+        aiapi_legacy aiapi_runtime Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
 endif()
 

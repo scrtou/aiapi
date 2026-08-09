@@ -88,6 +88,11 @@ jobs:
       - name: P3 - canonical include paths
         run: python3 tools/arch/check_include_paths.py
 
+      # P3-W3：正式 target 的 CMake link 边必须严格符合 ADR-02；迁移期间
+      # legacy source 数只能下降，最终以 --require-no-legacy 执行退出门禁。
+      - name: P3 - layered target DAG and legacy ratchet
+        run: python3 tools/arch/check_target_layers.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面各道会全绿，只有这一步能发现。
@@ -129,6 +134,7 @@ jobs:
             [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
             rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp \
               src/__source_owner_selftest_probe.cpp src/__include_path_selftest_probe.cpp
+            [ -f "$PROBE_TMP"/probe_target_cmake.bak ] && cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
             rm -rf "$PROBE_TMP"
             return 0
           }
@@ -136,7 +142,7 @@ jobs:
 
           # 探针会临时改写真实源文件。复原是否成功，必须用「跑前/跑后」快照来断言。
           probe_snapshot() {
-            md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc 2>&1
+            md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc src/CMakeLists.txt 2>&1
             find src/domain src/test -type f 2>/dev/null | sort | xargs -r md5sum 2>&1
             find src -maxdepth 1 -type f -name '*selftest_probe*' 2>/dev/null | \
               sort | xargs -r md5sum 2>&1
@@ -224,6 +230,12 @@ jobs:
           printf '#include "../outside.h"\n' > src/__include_path_selftest_probe.cpp
           expect_rc 1 python3 tools/arch/check_include_paths.py
           rm -f src/__include_path_selftest_probe.cpp
+
+          echo '--- probe H: transport links infrastructure -> expect rc=1 ---'
+          cp src/CMakeLists.txt "$PROBE_TMP"/probe_target_cmake.bak
+          sed -i '/target_link_libraries(aiapi_transport PUBLIC/a\    aiapi_infrastructure' src/CMakeLists.txt
+          expect_rc 1 python3 tools/arch/check_target_layers.py
+          cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
 
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。

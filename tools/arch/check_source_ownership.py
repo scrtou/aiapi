@@ -50,6 +50,7 @@ def fail(messages: list[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compile-commands", type=Path)
+    parser.add_argument("--require-no-legacy", action="store_true")
     args = parser.parse_args()
 
     failures: list[str] = []
@@ -72,8 +73,21 @@ def main() -> int:
         failures.append("src/test/CMakeLists.txt still declares PROJECT_SOURCES")
     if re.search(r"\.\./[^\s)]*\.(?:cpp|cc)\b", test_cmake):
         failures.append("test target still compiles a production implementation path")
-    if "target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy" not in test_cmake:
-        failures.append("aiapi_test does not link the canonical production library")
+    test_cmake_active = "\n".join(
+        line.split("#", 1)[0] for line in test_cmake.splitlines())
+    test_link = re.search(
+        r"target_link_libraries\(\$\{PROJECT_NAME\}\s+PRIVATE(.*?)\)",
+        test_cmake_active,
+        re.S,
+    )
+    test_link_body = test_link.group(1) if test_link else ""
+    if "aiapi_runtime" not in test_link_body:
+        failures.append("aiapi_test does not link aiapi_runtime")
+    if args.require_no_legacy:
+        if "aiapi_legacy" in test_cmake_active:
+            failures.append("test CMake still references aiapi_legacy")
+    elif "aiapi_legacy" not in test_link_body:
+        failures.append("aiapi_test does not link the transitional aiapi_legacy target")
 
     if args.compile_commands:
         path = args.compile_commands.resolve()
@@ -91,9 +105,10 @@ def main() -> int:
     if failures:
         fail(failures)
 
+    mode = "formal targets only" if args.require_no_legacy else "formal targets plus legacy scaffold"
     print(
         "PASS source ownership: "
-        f"{len(files)} production implementations, one owner/compile each; tests link aiapi_legacy")
+        f"{len(files)} production implementations, one owner/compile each; tests link {mode}")
     return 0
 
 

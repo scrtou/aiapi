@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate the aiapi production coverage baseline from GCC gcov JSON.
 
-Production implementations are compiled once by ``aiapi_legacy`` and reused by
-the test executables.  The collector reads that library's gcda files plus the
-``aiapi_test`` gcda files (needed for production inline/header code instantiated
-by tests).  It deliberately excludes the unexecuted production ``aiapi`` target.
+Production implementations are compiled once by their canonical production
+library and reused by the test executables.  During P3 this means the formal
+``aiapi_*`` layered libraries plus the shrinking ``aiapi_legacy`` scaffold.
+The collector reads those libraries' gcda files plus the ``aiapi_test`` gcda
+files (needed for production inline/header code instantiated by tests).  It
+deliberately excludes the unexecuted production ``aiapi`` executable target.
 Files absent from the test-linked object graph are reported as
 ``not_instrumented`` instead of being silently omitted or assigned a made-up
 denominator.
@@ -189,6 +191,12 @@ def merge_gcov_file(records, item):
 def collect(build_dir, gcov):
     target_markers = (
         os.sep + "aiapi_legacy.dir" + os.sep,
+        os.sep + "aiapi_platform.dir" + os.sep,
+        os.sep + "aiapi_domain.dir" + os.sep,
+        os.sep + "aiapi_application.dir" + os.sep,
+        os.sep + "aiapi_infrastructure.dir" + os.sep,
+        os.sep + "aiapi_transport.dir" + os.sep,
+        os.sep + "aiapi_runtime.dir" + os.sep,
         os.sep + "aiapi_test.dir" + os.sep,
     )
     data_files = sorted(
@@ -198,7 +206,7 @@ def collect(build_dir, gcov):
     )
     if not data_files:
         raise RuntimeError(
-            "no aiapi_legacy/aiapi_test gcda files found; build with "
+            "no production-library/aiapi_test gcda files found; build with "
             "AIAPI_ENABLE_COVERAGE=ON and run ctest first"
         )
 
@@ -354,8 +362,9 @@ def make_report(build_dir, gcov, data_files, records):
             "gcov": version,
             "gcda_files": len(data_files),
             "note": (
-                "Production implementations are compiled once by aiapi_legacy; tests "
-                "link that archive and provide execution evidence for pulled objects."
+                "Production implementations are compiled once by their canonical "
+                "aiapi_* production library; tests link those targets and provide "
+                "execution evidence for pulled objects."
             ),
         },
         "summary": {
@@ -383,8 +392,8 @@ def markdown(report):
         "",
         "## 1. 口径",
         "",
-        "- 数据源：测试进程运行产生的 `aiapi_legacy`/`aiapi_test` gcda；只统计仓库 `src/` 下生产文件。",
-        "- 生产 `.cpp/.cc` 只由 `aiapi_legacy` 编译一次；测试链接该库，不维护第二份生产源清单。",
+        "- 数据源：测试进程运行产生的 `aiapi_*` production libraries/`aiapi_test` gcda；只统计仓库 `src/` 下生产文件。",
+        "- 生产 `.cpp/.cc` 只由其 canonical production library 编译一次；测试链接这些 target，不维护第二份生产源清单。",
         "- 未进入测试链接对象图的文件标为 `not_instrumented`，不伪造可执行行分母，也不算入百分比。",
         "- 分支采用 GCC gcov 分支口径，包含编译器生成的异常处理分支。",
         "",

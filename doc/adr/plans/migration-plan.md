@@ -36,7 +36,7 @@
 
 **当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W3（正式分层 target carve-out）。**
 
-P3-W1/W2 已完成：68/68 生产源的 owner/compile count 为 1，测试只链接生产库；101 个自有头 basename 冲突为 0，422/422 自有 include 现均使用 `<path/from/src>`，relative/basename/`..` 为 0，CMake 只保留 1 个 `src/` 根且子目录 root 为 0。normal/coverage/ASan 均 260/260 PASS，include/source ownership/test registration/architecture/cycle/layer/startup/provider-retirement 门禁通过。当前只允许执行 P3-W3，按可编译闭包建立正式 target 并最终删除 `aiapi_legacy`；不得提前进入 domain codec。
+P3-W1/W2 已完成：68/68 生产源的 owner/compile count 为 1，测试只链接生产库；101 个自有头 basename 冲突为 0，422/422 自有 include 现均使用 `<path/from/src>`，relative/basename/`..` 为 0，CMake 只保留 1 个 `src/` 根且子目录 root 为 0。P3-W3 已建立六个正式 target，并把 27 个闭包迁至 platform/infrastructure/transport/runtime，legacy 从 67 降至 40；正式 target DAG 由 `check_target_layers.py` 强制，domain/application 的 INTERFACE 状态和剩余反向边已如实登记，不能冒充分层完成。当前批次 normal/coverage/ASan 均 260/260 PASS，include/source ownership/test registration/architecture/cycle/layer/startup/provider-retirement 门禁通过。当前仍只允许执行 P3-W3，逐闭包清空并最终删除 `aiapi_legacy`；不得提前进入 domain codec，也不得把剩余源码整批改名为 runtime 来伪造完成。
 
 ---
 

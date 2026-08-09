@@ -67,38 +67,19 @@ function(aiapi_register_production_sources owner)
     target_sources(${owner} PRIVATE ${ARGN})
 endfunction()
 
-set(AIAPI_LEGACY_SOURCES
-    accountManager/accountManager.cpp
+set(AIAPI_PLATFORM_SOURCES
+    tools/ZeroWidthEncoder.cpp
+)
+
+set(AIAPI_INFRASTRUCTURE_SOURCES
     accountManager/AccountHttpTransport.cpp
     accountManager/AccountClock.cpp
-    accountManager/RetoolProvisionHealth.cpp
-    apiManager/ApiFactory.cpp
-    apiManager/ApiManager.cpp
-    apipoint/chaynsapi/chaynsapi.cpp
     apipoint/chaynsapi/ChaynsHttpTransport.cpp
     apipoint/chaynsapi/ChaynsClock.cpp
     apipoint/chaynsapi/ChaynsModelCatalog.cpp
     apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
-    apipoint/chaynsapi/chaynsThreadReaper.cpp
-    apipoint/retoolapi/retoolapi.cpp
     apipoint/retoolapi/RetoolHttpTransport.cpp
     apipoint/retoolapi/RetoolClock.cpp
-    channelManager/channelManager.cpp
-    managedAccount/backends/ClassicProviderAccountBackend.cpp
-    managedAccount/backends/RetoolWorkspaceBackend.cpp
-    managedAccount/service/ManagedAccountService.cpp
-    controllers/AiApiController.cc
-    controllers/AccountController.cc
-    controllers/ChannelController.cc
-    controllers/MetricsController.cc
-    controllers/LogController.cc
-    controllers/HealthController.cc
-    controllers/RetoolWorkspaceController.cc
-    controllers/RetiredProviderTombstone.cc
-    controllers/sinks/ChatSseSink.cpp
-    controllers/sinks/ChatJsonSink.cpp
-    controllers/sinks/ResponsesSseSink.cpp
-    controllers/sinks/ResponsesJsonSink.cpp
     dbManager/account/accountDbManager.cpp
     dbManager/account/accountBackupDbManager.cpp
     dbManager/channel/channelDbManager.cpp
@@ -110,6 +91,40 @@ set(AIAPI_LEGACY_SOURCES
     dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
     metrics/ErrorStatsConfig.cpp
     metrics/ErrorStatsService.cpp
+    utils/ConfigValidator.cpp
+)
+
+set(AIAPI_TRANSPORT_SOURCES
+    controllers/sinks/ChatSseSink.cpp
+    controllers/sinks/ChatJsonSink.cpp
+    controllers/sinks/ResponsesSseSink.cpp
+    controllers/sinks/ResponsesJsonSink.cpp
+    controllers/LogController.cc
+)
+
+set(AIAPI_RUNTIME_SOURCES
+    utils/ApplicationShutdown.cpp
+)
+
+set(AIAPI_LEGACY_SOURCES
+    accountManager/accountManager.cpp
+    accountManager/RetoolProvisionHealth.cpp
+    apiManager/ApiFactory.cpp
+    apiManager/ApiManager.cpp
+    apipoint/chaynsapi/chaynsapi.cpp
+    apipoint/chaynsapi/chaynsThreadReaper.cpp
+    apipoint/retoolapi/retoolapi.cpp
+    channelManager/channelManager.cpp
+    managedAccount/backends/ClassicProviderAccountBackend.cpp
+    managedAccount/backends/RetoolWorkspaceBackend.cpp
+    managedAccount/service/ManagedAccountService.cpp
+    controllers/AiApiController.cc
+    controllers/AccountController.cc
+    controllers/ChannelController.cc
+    controllers/MetricsController.cc
+    controllers/HealthController.cc
+    controllers/RetoolWorkspaceController.cc
+    controllers/RetiredProviderTombstone.cc
     retoolWorkspace/RetoolWorkspaceManager.cpp
     retoolWorkspace/RetoolWorkspaceService.cpp
     sessionManager/core/Session.cpp
@@ -132,10 +147,44 @@ set(AIAPI_LEGACY_SOURCES
     sessionManager/tooling/ToolCallBridge.cpp
     sessionManager/tooling/ToolCallValidator.cpp
     sessionManager/tooling/XmlTagToolCallCodec.cpp
-    tools/ZeroWidthEncoder.cpp
-    utils/ConfigValidator.cpp
-    utils/ApplicationShutdown.cpp
 )
+
+# First P3-W3 closed module: a standard-library-only platform utility.  Keep
+# the canonical src/ include root on the lowest target so every higher target
+# receives exactly the same usage requirement through the target DAG.
+add_library(aiapi_platform STATIC)
+aiapi_register_production_sources(aiapi_platform ${AIAPI_PLATFORM_SOURCES})
+target_include_directories(aiapi_platform
+                           PUBLIC
+                           ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(aiapi_platform PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_platform)
+
+# Domain and application currently expose header contracts only.  Their JSON
+# migration debt remains P3-W4; declaring the targets here establishes the
+# allowed target DAG without pretending the debt has already been removed.
+add_library(aiapi_domain INTERFACE)
+target_link_libraries(aiapi_domain INTERFACE aiapi_platform)
+target_compile_features(aiapi_domain INTERFACE cxx_std_17)
+
+add_library(aiapi_application INTERFACE)
+target_link_libraries(aiapi_application INTERFACE aiapi_domain aiapi_platform)
+target_compile_features(aiapi_application INTERFACE cxx_std_17)
+
+add_library(aiapi_infrastructure STATIC)
+aiapi_register_production_sources(aiapi_infrastructure ${AIAPI_INFRASTRUCTURE_SOURCES})
+target_compile_features(aiapi_infrastructure PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_infrastructure)
+
+add_library(aiapi_transport STATIC)
+aiapi_register_production_sources(aiapi_transport ${AIAPI_TRANSPORT_SOURCES})
+target_compile_features(aiapi_transport PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_transport)
+
+add_library(aiapi_runtime STATIC)
+aiapi_register_production_sources(aiapi_runtime ${AIAPI_RUNTIME_SOURCES})
+target_compile_features(aiapi_runtime PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_runtime)
 
 # Temporary P3 scaffold: main and tests link the same compiled production objects.
 # Subsequent P3 work items carve closed modules out, then delete aiapi_legacy.
@@ -153,16 +202,40 @@ message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 target_link_libraries(aiapi_legacy PUBLIC Drogon::Drogon)
 target_link_libraries(aiapi_legacy PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 target_link_libraries(aiapi_legacy PUBLIC PostgreSQL::PostgreSQL)
+target_link_libraries(aiapi_legacy PUBLIC
+    aiapi_application
+    aiapi_infrastructure
+    aiapi_transport)
 target_compile_features(aiapi_legacy PUBLIC cxx_std_17)
 aiapi_enable_coverage(aiapi_legacy)
 
-# Static registration objects (IMPLEMENT_RUNTIME) have no ordinary symbol edge
-# from main, so the production executable must retain the complete archive.
+target_link_libraries(aiapi_infrastructure PUBLIC
+    aiapi_domain
+    aiapi_platform
+    Drogon::Drogon
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    PostgreSQL::PostgreSQL)
+target_link_libraries(aiapi_transport PUBLIC
+    aiapi_application
+    aiapi_domain
+    aiapi_platform
+    Drogon::Drogon)
+target_link_libraries(aiapi_runtime PUBLIC
+    aiapi_application
+    aiapi_infrastructure
+    aiapi_transport)
+
+# Provider/controller static registration objects have no ordinary symbol edge
+# from main.  Retain the shrinking legacy archive plus the formal transport
+# archive (which now owns LogController); tests deliberately keep ordinary
+# archive extraction so their DB stubs remain isolated.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        "-Wl,--whole-archive" aiapi_legacy "-Wl,--no-whole-archive")
+        "-Wl,--whole-archive" aiapi_legacy aiapi_transport "-Wl,--no-whole-archive"
+        aiapi_runtime)
 else()
-    target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy)
+    target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy aiapi_runtime)
 endif()
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 aiapi_enable_coverage(${PROJECT_NAME})
@@ -171,10 +244,6 @@ aiapi_enable_coverage(${PROJECT_NAME})
 
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
-
-target_include_directories(aiapi_legacy
-                           PUBLIC
-                           ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

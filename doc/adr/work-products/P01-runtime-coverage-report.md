@@ -4,8 +4,8 @@
 
 ## 1. 口径
 
-- 数据源：测试进程运行产生的 `aiapi_legacy`/`aiapi_test` gcda；只统计仓库 `src/` 下生产文件。
-- 生产 `.cpp/.cc` 只由 `aiapi_legacy` 编译一次；测试链接该库，不维护第二份生产源清单。
+- 数据源：测试进程运行产生的 `aiapi_*` production libraries/`aiapi_test` gcda；只统计仓库 `src/` 下生产文件。
+- 生产 `.cpp/.cc` 只由其 canonical production library 编译一次；测试链接这些 target，不维护第二份生产源清单。
 - 未进入测试链接对象图的文件标为 `not_instrumented`，不伪造可执行行分母，也不算入百分比。
 - 分支采用 GCC gcov 分支口径，包含编译器生成的异常处理分支。
 
@@ -16,8 +16,8 @@
 | production 实现文件 | 68 |
 | 已编入并 instrument 的实现文件 | 53 |
 | 未进入测试链接对象图的实现文件 | 15 |
-| 行覆盖（仅已 instrument 实现） | 6036/11713 (51.53%) |
-| 分支覆盖（仅已 instrument 实现） | 9218/34851 (26.45%) |
+| 行覆盖（仅已 instrument 实现） | 6028/11713 (51.46%) |
+| 分支覆盖（仅已 instrument 实现） | 9210/34851 (26.43%) |
 | gcda 文件 | 94 |
 | 工具 | `gcov (Debian 12.2.0-14+deb12u1) 12.2.0` |
 
@@ -28,9 +28,9 @@
 | Chayns generate/postChatMessage | `src/apipoint/chaynsapi/chaynsapi.cpp` | `instrumented` | 543/1003 (54.14%) | 905/3232 (28.00%) |
 | Generation ToolBridge transform/emit | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `instrumented` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | Chat/Responses four GenerationService output modes | `src/sessionManager/core/GenerationService.cpp` | `instrumented` | 141/265 (53.21%) | 305/965 (31.61%) |
-| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
+| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
 | BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 70/77 (90.91%) | 130/230 (56.52%) |
-| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
+| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
 | Session cleaner interrupt/join | `src/sessionManager/core/Session.cpp` | `instrumented` | 218/701 (31.10%) | 283/2084 (13.58%) |
 | Chayns reaper interrupt/join | `src/apipoint/chaynsapi/chaynsThreadReaper.cpp` | `instrumented` | 40/109 (36.70%) | 35/234 (14.96%) |
 | Streaming disconnect boundary | `src/utils/IoLoopResponseStream.h` | `instrumented` | 47/55 (85.45%) | 35/66 (53.03%) |
@@ -103,7 +103,7 @@
 | `src/accountManager/AccountClock.cpp` | `executed` | 2/5 (40.00%) | 1/2 (50.00%) |
 | `src/accountManager/AccountHttpTransport.cpp` | `executed` | 2/6 (33.33%) | 1/6 (16.67%) |
 | `src/accountManager/RetoolProvisionHealth.cpp` | `executed` | 49/50 (98.00%) | 50/86 (58.14%) |
-| `src/accountManager/accountManager.cpp` | `executed` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
+| `src/accountManager/accountManager.cpp` | `executed` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
 | `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 3/10 (30.00%) |
 | `src/apiManager/ApiManager.cpp` | `executed` | 18/63 (28.57%) | 15/174 (8.62%) |
 | `src/apipoint/chaynsapi/ChaynsClock.cpp` | `executed` | 6/6 (100.00%) | 1/2 (50.00%) |
