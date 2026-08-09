@@ -1,89 +1,41 @@
-# ADR-02 用 CMake target 强制分层，而非依靠约定
+# ADR-02 用 CMake target 与架构规则共同强制边界
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，待实施 |
-| 来源 | RFC-001 v2.5 §2（原行 209~217），P4 拆分外移 |
-| 迁移落点 | 见 [`migration-plan.md`](../migration-plan.md) |
-| 数字真值源 | [`architecture-baseline.md`](../architecture-baseline.md) |
+| 状态 | 已接受，部分落地 |
+| 当前版本 | v3.0 |
 
----
+## 决策
 
-## 决策与理由
+```text
+aiapi_platform
+aiapi_domain          -> aiapi_platform
+aiapi_application     -> aiapi_domain, aiapi_platform
+aiapi_infrastructure  -> aiapi_domain, aiapi_platform, third-party IO libraries
+aiapi_transport       -> aiapi_application, aiapi_domain, aiapi_platform, Drogon
+aiapi                 -> 上述适配器 target（组合根）
+```
 
-拆分为独立 library target，由 **target 级 include 可见性 + 架构测试**共同阻断非法依赖。
+测试链接这些 library target，不再在 `src/test/CMakeLists.txt` 复制生产 `.cpp` 清单。
 
-> **P10 修正**：原文写「通过 `target_link_libraries` 的可见性在**编译期**阻断」，**表述不准确**。
-> `target_link_libraries` 约束的是链接与 usage requirement 的传递；而「领域层 include 了 Drogon 头」
-> 会不会报错，取决于该头是否在 include path 上可见 —— 若经全局路径、传递依赖或系统路径可见，
-> 仅 include 一个纯声明头**不必然产生链接错误**。二者被混为一谈。
+## 为什么必须有两道门
 
-**理由**：P1 的根因是「约定没有强制力」。文档约束必然腐化，构建约束不会。
+ADR-03 的单一 include 根会让源码看见 `src/` 下所有头文件。因此 `target_link_libraries` 能约束链接和 usage requirements，但不能单独阻止 domain include 一个自包含的 infrastructure 头。必须同时运行 `tools/arch/check_cycles.py --layer-rules ...`。
 
----
+禁止再声称“domain 不链接 Drogon，所以 include Drogon 会自动失败”。这取决于头文件可见性和符号使用，不是可靠边界。
 
-## 强制手段（P10 明确，替代「链接失败」单一手段）
+## 强制措施
 
-| # | 手段 | 作用 |
-|---:|---|---|
-| 1 | 所有 include 目录仅经 `target_include_directories` 的 `PRIVATE/PUBLIC/INTERFACE` 暴露 | 让越界 include 在编译期真的找不到头 |
-| 2 | **禁用全局 `include_directories()`** | 全局路径会让手段 1 失效 |
-| 3 | 架构测试：扫描 `domain` 源文件的 `#include`，命中禁列即失败 | 兜住手段 1/2 的漏网 |
-| 4 | CI 使用**干净构建目录**验证 | 防止残留缓存掩盖违规 |
-| 5 | 可选：clang-tidy / IWYU 作为附加门禁 | 增量收紧 |
+1. 禁止全局 `include_directories()`；
+2. 每个自有 target 只暴露仓库 include 根；
+3. target 只能按上述 DAG 链接；
+4. layer rules 校验全部模块方向，而不只检查环；
+5. CI 使用干净构建目录；
+6. 测试链接生产 library，并校验测试注册一致性；
+7. 新增源码未进入任何 target 时 CI 失败。
 
-> **现状实测（P10）**：仓库自有 `CMakeLists.txt` 仅 3 个（根 / `src` / `src/test`），
-> 根文件中 `include_directories` **零命中**。当前 include 路径的实际暴露方式**尚未查清**，
-> 因此原文「越界会立即链接失败」这一断言**连现状基础都没有核实过**。
-> 阶段 1 建 target 前，需先做一次 include path 暴露方式的实测。
+## 迁移与验收
 
+按“先建立库、再逐模块搬入”迁移，每次只移动一个可编译闭包，不复制源码形成双轨。完成后删除单一 `add_executable` 的生产清单和测试侧 `PROJECT_SOURCES`。
 
----
-
-## 现状实测结果（2026-08-07）
-
-本 ADR 原文要求「阶段 1 建 target 前，需先做一次 include path 暴露方式的实测」。已完成。
-报告：[`../reports/adr-02-03-include-audit.md`](../reports/adr-02-03-include-audit.md)
-
-### 核心发现：手段 2 无对象，手段 1 有条款漏洞
-
-仓库自有 CMakeLists 共 3 个（根 16 行薄壳 / `src` / `src/test`），
-**没有任何全局 `include_directories()`** —— 手段 2 假设的敌人不存在。
-
-真正的问题是 `target_include_directories` **被用成了全局**：`src/CMakeLists.txt:108-137`
-一次暴露 **28 个子目录**，任何 `.cpp` 都能用文件名直接命中其它模块的私有头。
-
-**手段 1 只约束「经由什么机制暴露」，未约束「暴露多少」，按原文当前仓库可判定合规。**
-这是条款漏洞。
-
-### 手段表修订
-
-| # | 修订后 |
-|---|---|
-| 1 | 仅经 `target_include_directories` 暴露，**且每个 target 至多 1 个目录**（`src/` 根）。当前 28 个 |
-| 2 | 禁用全局 `include_directories()` —— **降级为防退化约束，当前无对象，不计工作量** |
-| 3 | 架构测试扫描 `domain` 的 `#include`（不变）|
-| **6** | **（新增）CI 检查各 target 的 include 目录列表必须一致** —— `src/` 28 个（:108）、`src/test/` 8 个（:96），两份内容不同，已漂移 |
-
-### P12 补充：测试与主程序的耦合方式
-
-`src/test/CMakeLists.txt:58-93` 用 `PROJECT_SOURCES` 逐个列举 **32 个**主程序 `.cpp`，
-与测试源一起 `add_executable` —— **测试不链接主程序产物，而是重新编译其中一部分**。
-主程序源文件约 80 个，**其余六成测试侧根本不编译**；新增源文件若不同步登记则**静默漏测**，
-且与根 CMakeLists「源清单只维护一处」的注释直接矛盾。
-
-阶段 1 建 library target 后测试应改为链接，`PROJECT_SOURCES` 消失（顺带收益，不计工期）。
-
-
-### 阶段 1 前置风险（2026-08-08 实测）
-
-本 ADR 靠 `target_link_libraries` 强制分层，而 CMake **不允许 static library 循环依赖**。
-
-实测：`src/` 顶层目录依赖图存在 **1 个 9 节点强连通分量**，
-且阶段 0.7 现方案（C1+C2+C3）执行后 **SCC 仍是 9 个节点，与基线相同**。
-
-> **按原方案，阶段 1 的 target 拆分会直接失败。**
-
-阶段 0.7 已扩为 7 项（新增 C5/C6/C7）、0.8 周，验收标准由「三个环拆除」改为
-**全图 SCC ≤ 1 且唯一残留为 `{apipoint, sessionManager}`**（该残留转阶段 2）。
-详见 [`../reports/stage-0.7-fourth-cycle-audit.md`](../reports/stage-0.7-fourth-cycle-audit.md)。
+验收要求：干净构建和测试通过、依赖图无环、layer rules 无新增豁免、测试不重新编译私有生产源码，且人为注入非法依赖时 CI 能失败。

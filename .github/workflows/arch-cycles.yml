@@ -2,9 +2,19 @@ name: arch-cycles (R4)
 
 on:
   push:
-    paths: ['src/**', 'tools/arch/**', '.github/workflows/arch-cycles.yml']
+    paths:
+      - 'src/**'
+      - 'tools/arch/**'
+      - 'tools/architecture_audit.py'
+      - 'doc/adr/audit-baseline.json'
+      - '.github/workflows/arch-cycles.yml'
   pull_request:
-    paths: ['src/**', 'tools/arch/**', '.github/workflows/arch-cycles.yml']
+    paths:
+      - 'src/**'
+      - 'tools/arch/**'
+      - 'tools/architecture_audit.py'
+      - 'doc/adr/audit-baseline.json'
+      - '.github/workflows/arch-cycles.yml'
 
 jobs:
   check-cycles:
@@ -14,6 +24,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      # R1/R2/R3 是结构棘轮，不是运行时覆盖。先跑工具自检，防止错误
+      # 口径生成一个“永远绿色”的基线。
+      - name: Architecture audit - semantics selftest
+        run: python3 tools/architecture_audit.py --selftest
+
+      - name: Architecture audit - R1/R2/R3 ratchet
+        run: python3 tools/architecture_audit.py --baseline doc/adr/audit-baseline.json
 
       # 防回归：实测结果必须是基线的子集
       - name: R4 - no new dependency cycles

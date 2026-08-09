@@ -1,29 +1,48 @@
-# ADR-01 采用四层架构 + 一个横切 platform target + 依赖倒置
+# ADR-01 采用端口与适配器架构
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，待实施 |
-| 来源 | RFC-001 v2.5 §2（原行 190~208），P4 拆分外移 |
-| 迁移落点 | 见 [`migration-plan.md`](../migration-plan.md) |
-| 数字真值源 | [`architecture-baseline.md`](../architecture-baseline.md) |
+| 状态 | 已接受，迁移中 |
+| 当前版本 | v3.0 |
 
----
+## 决策
 
-## 决策与理由
+项目划分为四类组件和一个横切基础 target。它们不是按编号排列的线性层级：
 
+```text
+transport ───────> application ───────> domain
+      │                                      ▲
+      └──────── composition root ────────────┤
+infrastructure ──────────────────────────────┘
+
+platform <── domain/application/infrastructure/transport
 ```
-Layer 4  transport      Drogon Controllers / Filters / Sinks
-Layer 3  application    UseCase 编排，无 IO
-Layer 2  domain         纯逻辑 + 接口定义（零外部依赖）
-Layer 1  infrastructure Provider / DbManager / HttpClient / Clock
-```
 
-依赖方向严格自上而下；Layer 1 实现 Layer 2 定义的接口（ports）。
+- `domain`：业务值类型、纯规则和 ports。
+- `application`：用例与流程编排；可以调用 port 触发 IO，但不知道具体 DB、HTTP 或 Drogon 类型。
+- `infrastructure`：DB、Provider、HTTP、时钟等 port 实现。
+- `transport`：Drogon Controller、Filter、协议编解码和 Sink。
+- `platform`：`Result`、日志抽象、进程配置值等无业务方向的公共设施。
+- `AppContext/main.cc` 是唯一允许同时知道所有具体实现的组合根。
 
-> **v2.3 术语澄清**：`platform/`（`Result.h` / `Logging.h` / `Config.h`）是**横切设施，不是第五层** —— 四层都可依赖它，它不依赖任何层。
-> 它在 CMake 里确实是第 5 个 target，所以 §9 写「五层 target」指的是 **target 计数**，§3 目录结构同理。
-> 统一口径：**架构分层 = 4，CMake target = 5（4 层 + platform）**。
+依赖规则是：**适配器依赖内侧端口，内侧不依赖适配器**。
 
-**理由**：领域层无外部依赖是可测试性的前提，其余目标均依赖此条。
+## Domain 依赖政策
 
----
+目标态 `aiapi_domain` 只允许 C++ 标准库和 `aiapi_platform`，禁止直接依赖 JsonCpp、Drogon、PostgreSQL、OpenSSL 及任何具体 Provider/DbManager/Controller。
+
+当前 `src/domain/model/` 中的 JsonCpp 依赖是迁移债务，不是永久豁免：
+
+1. domain 类型只保留强类型字段；
+2. `fromJson()/toJson()` 移到 transport 或 infrastructure codec；
+3. 暂时无法迁出的依赖登记到 `tools/arch/layer-rules.json` 的有上限债务清单；
+4. 清单只能减少，最终归零。
+
+“domain 无 IO”的准确含义是 domain 不直接执行具体 IO，也不包含协议/驱动类型；不是说 application 不能经 port 发起 IO。
+
+## 验收
+
+- `aiapi_domain` 可独立编译和运行单元测试；
+- domain 中 `Json::`、Drogon、PostgreSQL、OpenSSL 引用为 0；
+- 依赖方向由 ADR-02 的 target DAG 和架构规则共同检查；
+- 边缘 JSON codec 有往返或契约测试。

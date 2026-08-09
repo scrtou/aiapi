@@ -1,15 +1,17 @@
-# 架构决策记录（ADR）索引
+# 当前架构决策
 
-> 每条 ADR 独立成文，可单独修订、单独作废，不再随 RFC-001 正文一起漂移。
-> RFC-001 §2 仅保留本索引的摘要表。
+本目录只表达当前有效决策。历史纠错在 `../CHANGELOG.md` 和 git 历史中查阅，执行进度以 `../migration-plan.md` 为准。
 
-| 编号 | 标题 | 状态 |
+| ADR | 当前决策 | 状态 |
 |---|---|---|
-| [ADR-01](./ADR-01-layered-architecture.md) | 四层架构 + 横切 platform + 依赖倒置 | 已接受 |
-| [ADR-02](./ADR-02-cmake-enforced-layering.md) | CMake target 强制分层 | 已接受 |
-| [ADR-03](./ADR-03-single-include-root.md) | include 路径收敛为单一根 | 已接受 |
-| [ADR-04](./ADR-04-cxx17-fixed.md) | 固定 C++17，移除标准探测 | **已落地** |
-| [ADR-05](./ADR-05-result-type.md) | Result 类型统一，跨层禁止抛异常 | 已接受（P5 补齐语义） |
-| [ADR-06](./ADR-06-composition-root.md) | 单例改为组合根注入 | 已接受（P5 补齐语义） |
-| [ADR-07](./ADR-07-provider-template-method.md) | Provider 模板方法 + 可组合管线 | 已接受（P5 补齐语义） |
-| [ADR-08](./ADR-08-concurrency-and-shutdown.md) | 并发模型与停机时序 | 已接受 |
+| [ADR-01](./ADR-01-layered-architecture.md) | 端口与适配器；domain 最终移除 JsonCpp | 迁移中 |
+| [ADR-02](./ADR-02-cmake-enforced-layering.md) | CMake target DAG + 架构规则共同强制边界 | 部分落地 |
+| [ADR-03](./ADR-03-single-include-root.md) | 单一 include 根与完整路径 | 待实施 |
+| [ADR-04](./ADR-04-cxx17-fixed.md) | 固定 C++17 | 已实施 |
+| [ADR-05](./ADR-05-result-type.md) | 跨层失败使用 Result，按垂直切片迁移 | 待实施 |
+| [ADR-06](./ADR-06-composition-root.md) | 组合根替代业务 Service Locator | 迁移中 |
+| [ADR-07](./ADR-07-provider-template-method.md) | 生产 Provider 继承薄 ProviderBase + 可组合策略 | 待实施 |
+| [ADR-08](./ADR-08-concurrency-and-shutdown.md) | 统一 deadline、背压和安全停机 | 部分落地 |
+| [ADR-09](./ADR-09-http-io-boundary.md) | HTTP/DB/轮询只在 infrastructure，取消贯穿阻塞边界 | 待实施 |
+| [ADR-10](./ADR-10-domain-model-codec-boundary.md) | domain 纯模型，JSON/DB codec 在边缘 | 待实施 |
+| [ADR-11](./ADR-11-production-test-targets.md) | 生产库唯一 source owner，测试只链接库 | 待实施 |

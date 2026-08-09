@@ -6,6 +6,31 @@
 
 ---
 
+## v3.0 当前方案收口（2026-08-09）
+
+本版不是继续追加勘误，而是重写当前执行面；旧版本仍由本文件后续章节和 git 历史保存。
+
+1. 架构审计升级到 v3：统一 `.h/.hpp/.cpp/.cc`；R2 改为直接/显式 test owner，传递 include 不再冒充覆盖；真实覆盖转 gcov/llvm-cov。
+2. 基线以 v3 重新起算。R2 与旧版不可横向比较；dirty 快照不再称为可复现发布基线。
+3. RFC 和 migration-plan 删除工期，改为严格前置条件与退出门禁。
+4. ADR-01 改用端口与适配器依赖图；明确 application 可经 port 触发 IO，domain 最终移除 JsonCpp。
+5. ADR-02 明确 CMake DAG 与架构 include 规则必须共同工作；单一 include 根本身不提供隔离。
+6. ADR-05 改为按 Provider/application/transport 垂直切片铺开 Result，不再塞进阶段 1 一次性全改。
+7. ADR-07 改为强制生产 Provider 继承薄 ProviderBase：保留 chayns/retool，删除 OpenAiProvider/nexos；ProviderBase 只统一边界，协议流程仍由组合策略实现。
+8. Provider 数据下线改为 dry-run、事务归档、对账和独立恢复脚本；代码回滚不再被错误描述为可以恢复 DELETE 数据。
+9. ADR-08 统一为一个绝对 shutdown deadline；明确 C++17 join 无超时，超时后不得继续析构活动线程访问的对象。
+10. migration-plan 重排为九个无工期阶段：真值、安全网、Provider 退役、构建/domain、AppContext/停机、Service Locator、Provider/Result、上帝对象、收口。
+
+## v3.1 源码全量审计与方案加固（2026-08-09）
+
+1. 新增 `source-audit-2026-08.md`，按文件、模块、调用流程、线程所有权和错误/取消边界记录当前真值。
+2. 取证确认 `APIinterface` 仍为八职责宽接口、domain 仍依赖 JsonCpp、测试仍复制生产源，故将三项提升为重构前置门禁。
+3. 新增 ADR-09（HTTP/IO 边界）、ADR-10（领域模型/codec）、ADR-11（生产库与测试 target）。
+4. migration-plan 增加 Provider 方法拆分表、正式 target 闭包、流程级覆盖清单及按调用图的 Service Locator 迁移顺序。
+5. 明确 `chatSession`、`GenerationService`、`AccountManager`、`ApiManager` 和 `BackgroundTaskQueue` 必要时整体重写，禁止永久 Legacy facade 双轨。
+
+---
+
 ## P10 外部评审响应：文档冻结与范围收敛（本轮）
 
 收到 9 条外部评审意见，**逐条取证后裁决：5 条成立、1 条部分成立、3 条不成立**。

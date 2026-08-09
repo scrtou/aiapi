@@ -1,50 +1,24 @@
 {
-  "_comment": "分层边界：模块允许的出边白名单。domain/ 为中立层，不得依赖任何业务模块。违规退出码 3。",
+  "_comment": "v3 当前模块出边棘轮。它冻结现状、防止新增方向，不表示所有允许边都是目标架构；迁移完成一条边后立即收紧。",
   "modules": {
-    "domain": {
-      "allow_out": []
+    "<root>": {
+      "allow_out": ["accountManager", "apiManager", "apipoint", "channelManager", "controllers", "dbManager", "metrics", "retoolWorkspace", "sessionManager", "utils"],
+      "role": "composition root; may know concrete modules"
     },
-    "utils": {
-      "allow_out": []
-    },
-    "tools": {
-      "allow_out": []
-    },
-    "apiManager": {
-      "allow_out": [
-        "domain"
-      ]
-    },
-    "channelManager": {
-      "allow_out": [
-        "domain"
-      ]
-    },
-    "metrics": {
-      "allow_out": [
-        "dbManager",
-        "domain"
-      ]
-    },
-    "retoolWorkspace": {
-      "allow_out": [
-        "dbManager",
-        "domain",
-        "utils"
-      ]
-    },
-    "dbManager": {
-      "allow_out": [
-        "domain",
-        "utils"
-      ]
-    },
-    "managedAccount": {
-      "allow_out": [
-        "accountManager",
-        "retoolWorkspace"
-      ]
-    }
+    "domain": {"allow_out": []},
+    "utils": {"allow_out": []},
+    "tools": {"allow_out": []},
+    "models": {"allow_out": []},
+    "apiManager": {"allow_out": ["domain"]},
+    "channelManager": {"allow_out": ["domain"]},
+    "dbManager": {"allow_out": ["domain", "utils"]},
+    "retoolWorkspace": {"allow_out": ["domain", "utils"]},
+    "metrics": {"allow_out": ["dbManager", "domain"]},
+    "managedAccount": {"allow_out": ["accountManager", "retoolWorkspace"]},
+    "accountManager": {"allow_out": ["apiManager", "channelManager", "dbManager", "domain", "retoolWorkspace", "utils"]},
+    "apipoint": {"allow_out": ["accountManager", "apiManager", "channelManager", "dbManager", "domain", "managedAccount", "retoolWorkspace", "sessionManager", "utils"]},
+    "controllers": {"allow_out": ["accountManager", "apiManager", "apipoint", "channelManager", "dbManager", "domain", "managedAccount", "retoolWorkspace", "sessionManager", "utils"]},
+    "sessionManager": {"allow_out": ["accountManager", "apiManager", "channelManager", "dbManager", "domain", "metrics", "tools"]}
   },
-  "_note": "棘轮：冻结出度<=3模块的出边现状，防止倒退。不主张现状即目标态。controllers/apipoint/sessionManager 出度过高，冻结无意义，待分层映射确定后再纳入。 channelManager 已完成依赖倒置（试点B），出边由 dbManager 收紧为 domain。"
+  "_target": "最终由 platform/domain/application/infrastructure/transport target 规则替代；当前业务模块白名单只能收紧。"
 }

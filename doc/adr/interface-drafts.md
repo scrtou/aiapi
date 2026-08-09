@@ -1,250 +1,223 @@
-# RFC-001 派生文档 · 关键接口草案（interface-drafts）
+# RFC-001 关键接口草案
 
-> 本文承接 RFC-001 §4。**这些是草案，不是契约** —— 实现阶段可在不改 ADR 的前提下调整签名。
-> 若某处调整会**违反** [`decisions/`](./decisions/) 中任一条 ADR，则必须先改 ADR、再改本文。
+> 本文是实现草案，不是独立决策。与 ADR 冲突时以 `decisions/` 为准；修改决策必须先更新 ADR。
 
-| 关联 | 链接 |
-|---|---|
-| 决策依据 | [`decisions/README.md`](./decisions/README.md) |
-| 落地次序 | [`migration-plan.md`](./migration-plan.md) |
+## 1. 纯领域请求
 
----
-
-## 4. 关键接口草案（C++17）
-
-### 4.1 拆解 APIinterface（解决 P3 / P4）
-
-现状：单一接口 7 个方法，混合三类职责。拆为三个：
+domain 类型不包含 `Json::Value`。HTTP JSON 和上游 JSON 在边缘 codec 中转换。
 
 ```cpp
-// domain/ports/IChatProvider.h —— 只管生成，输入不可变
-struct ProviderCapabilities {
-    bool nativeToolCalls   = false;
-    bool streaming         = true;
-    bool serverSideHistory = false;   // chayns / retool 有上游线程
-    int  maxContextTokens  = 0;
+struct ToolDefinition {
+    std::string name;
+    std::string description;
+    Schema schema;                  // 项目自有强类型 schema/值树
 };
 
-class IChatProvider {
-public:
-    virtual ~IChatProvider() = default;
-    [[nodiscard]] virtual Result<Generation> generate(const ProviderRequest& req) = 0;
-    [[nodiscard]] virtual ProviderCapabilities capabilities() const = 0;
+struct ProviderRequest {
+    std::string conversationId;
+    std::string model;
+    std::string systemPrompt;
+    std::vector<Message> messages;
+    std::vector<Image> images;
+    std::vector<ToolDefinition> tools;
+    ToolChoice toolChoice;
+    bool parallelToolCalls = true;
 };
 ```
+
+若一次性引入通用 `Schema` 代价过高，可先使用边缘层拥有的序列化字符串作为过渡，但不得把 JsonCpp 类型放回 domain port。
+
+## 2. Result
 
 ```cpp
-// domain/ports/IProviderLifecycle.h —— 生命周期与健康检查
-class IProviderLifecycle {
-public:
-    virtual ~IProviderLifecycle() = default;
-    virtual void initialize() = 0;
-    [[nodiscard]] virtual Result<void> refreshTokens() = 0;
-    [[nodiscard]] virtual Result<ModelCatalog> listModels() = 0;
-};
-```
+struct OkTag {};
+struct ErrTag {};
 
-```cpp
-// domain/ports/IUpstreamThreadStore.h —— 上游会话映射
-// 对应原 eraseChatinfoMap / transferThreadContext
-class IUpstreamThreadStore {
-public:
-    virtual ~IUpstreamThreadStore() = default;
-    virtual void unbind(std::string_view conversationId) = 0;
-    virtual void rebind(std::string_view fromId, std::string_view toId) = 0;
-};
-```
-
-**要点**：
-- `generate` 接收 `const ProviderRequest&` 而非 `session_st&`；
-  `ProviderRequest` 是为上游裁剪过的扁平 DTO，不含可变会话状态。
-- `ProviderCapabilities` 用于替代当前散落各处的 `if (providerName == "xxx")` 硬判断。
-
----
-
-### 4.2 ProviderBase 模板方法（解决 P6）
-
-```cpp
-// infrastructure/provider/ProviderBase.h
-class ProviderBase : public IChatProvider {
-public:
-    ProviderBase(IAccountRepository& accounts, IMetricsSink& metrics, IClock& clock);
-
-    // final：共性流程固定，子类不得覆盖
-    [[nodiscard]] Result<Generation> generate(const ProviderRequest& req) final;
-
-protected:
-    // —— 差异点，子类必须实现 ——
-    [[nodiscard]] virtual Result<HttpRequest>  buildRequest(const ProviderRequest&) = 0;
-    [[nodiscard]] virtual Result<void>         applyAuth(HttpRequest&, const Account&) = 0;
-    [[nodiscard]] virtual Result<ChunkOutcome> parseChunk(std::string_view raw) = 0;
-    [[nodiscard]] virtual Error mapUpstreamError(int status, std::string_view body) = 0;
-
-private:
-    // —— 共性，且各自独立可单测 ——
-    SseFramer            framer_;
-    RetryPolicy          retry_;
-    IAccountRepository&  accounts_;
-    IMetricsSink&        metrics_;
-    IClock&              clock_;
-};
-```
-
-共性流程（基类内固定）：
-账号选取 → 鉴权 → 发起请求 → 超时控制 → SSE 分帧 → 逐片解析
-→ 错误映射 → 重试退避 → 指标上报 → 归一化返回。
-
-> `parseChunk` 用 `std::string_view` 实现零拷贝解析——这是保留 C++17 的直接收益之一。
-
----
-
-### 4.3 生成流水线（解决 P5）
-
-将 `GenerationServiceEmitAndToolBridge.cpp` 的 2213 行拆为显式 stage：
-
-```
-NormalizeRequest → ResolveContinuity → ApplyHistoryBudget
-→ EncodeToolDefinitions → CallProvider → DecodeToolCalls
-→ ValidateToolCalls → NormalizeToolArgs → SanitizeOutput → Emit
-```
-
-```cpp
-// application/pipeline/Stage.h
-class Stage {
-public:
-    virtual ~Stage() = default;
-    [[nodiscard]] virtual std::string_view name() const = 0;
-    [[nodiscard]] virtual Result<void> run(GenCtx& ctx) = 0;
-};
-
-class Pipeline {
-public:
-    template <typename S, typename... Args>
-    Pipeline& emplace(Args&&... args) {          // 就地构造，避免调用方写 make_unique
-        stages_.push_back(std::make_unique<S>(std::forward<Args>(args)...));
-        return *this;
-    }
-    [[nodiscard]] Result<void> execute(GenCtx& ctx);   // 任一 stage 失败即短路
-private:
-    std::vector<std::unique_ptr<Stage>> stages_;
-};
-```
-
-按能力动态裁剪：
-
-```cpp
-Pipeline p;
-p.emplace<NormalizeRequest>()
- .emplace<ResolveContinuity>(continuityResolver)
- .emplace<ApplyHistoryBudget>(budget);
-
-const auto caps = provider.capabilities();
-if (!caps.nativeToolCalls) {           // 上游不支持原生工具调用才装桥接
-    p.emplace<EncodeToolDefinitions>(encoder);
-}
-p.emplace<CallProvider>(provider);
-if (!caps.nativeToolCalls) {
-    p.emplace<DecodeToolCalls>(xmlCodec);
-}
-p.emplace<ValidateToolCalls>(validator)
- .emplace<NormalizeToolArgs>()
- .emplace<SanitizeOutput>()
- .emplace<Emit>(sink);
-```
-
-**收益**：每个 stage 可独立单测；日志与 tracing 统一在 `Pipeline::execute` 中植入。
-
----
-
-### 4.4 组合根（解决 P2）
-
-```cpp
-// AppContext.h
-struct AppContext {
-    // —— infrastructure ——
-    std::shared_ptr<IClock>                clock;
-    std::shared_ptr<IAccountRepository>    accounts;
-    std::shared_ptr<IChannelRegistry>      channels;
-    std::shared_ptr<ISessionStore>         sessions;
-    std::shared_ptr<IMetricsSink>          metrics;
-    std::shared_ptr<IProviderFactory>      providers;
-
-    // —— application ——
-    std::shared_ptr<ChatCompletionUseCase> chat;
-    std::shared_ptr<ResponsesUseCase>      responses;
-    std::shared_ptr<AccountUseCase>        account;
-    std::shared_ptr<ChannelUseCase>        channel;
-
-    [[nodiscard]] static Result<AppContext> build(const Config& cfg);
-};
-```
-
-Controller 通过构造函数持有 UseCase 引用，不再调用任何 `getInstance()`。
-
----
-
-### 4.5 Result<T, Error>（C++17 实现）
-
-用 `std::variant` 做判别式联合——**不需要**自建 optional/expected 垫片：
-
-```cpp
-// platform/Result.h
-struct Error {
-    enum class Code {
-        Network, Auth, RateLimited, InvalidRequest,
-        Timeout, ServiceUnavailable, Internal, Unknown
-    };
-    Code        code = Code::Unknown;
-    std::string message;
-    std::string upstreamCode;   // 上游原始错误码
-    int         httpStatus = 0;
-};
-
-template <typename T>
+template<class T>
 class [[nodiscard]] Result {
 public:
-    Result(T v)      : data_(std::move(v)) {}
-    Result(Error e)  : data_(std::move(e)) {}
-
-    [[nodiscard]] bool ok() const noexcept {
-        return std::holds_alternative<T>(data_);
+    static Result success(T value) {
+        return Result(OkTag{}, std::move(value));
     }
+    static Result failure(Error error) {
+        return Result(ErrTag{}, std::move(error));
+    }
+
+    bool ok() const noexcept;
     explicit operator bool() const noexcept { return ok(); }
-
-    const T&     value() const& { return std::get<T>(data_); }
-    T&&          value() &&     { return std::get<T>(std::move(data_)); }
-    const Error& error() const  { return std::get<Error>(data_); }
-
-    // 函数式组合，减少层层 if (!r.ok()) return r.error();
-    template <typename F>
-    auto andThen(F&& f) -> decltype(f(std::declval<const T&>())) {
-        if (!ok()) return error();
-        return f(value());
-    }
+    const T& value() const&;
+    T&& value() &&;
+    const Error& error() const&;
 
 private:
+    Result(OkTag, T value) : data_(std::move(value)) {}
+    Result(ErrTag, Error error) : data_(std::move(error)) {}
     std::variant<T, Error> data_;
 };
 
-// void 特化
-template <>
+template<>
 class [[nodiscard]] Result<void> {
 public:
-    Result() = default;
-    Result(Error e) : error_(std::move(e)) {}
-    [[nodiscard]] bool ok() const noexcept { return !error_.has_value(); }
-    explicit operator bool() const noexcept { return ok(); }
-    const Error& error() const { return *error_; }
+    static Result success();
+    static Result failure(Error error);
+    bool ok() const noexcept;
+    const Error& error() const&;
 private:
     std::optional<Error> error_;
 };
 ```
 
-**相比 C++14 方案的优势**（保留 C++17 的直接收益）：
-- 真正的判别式联合，不同时占用 T 与 Error 的空间
-- 不要求 `T` 可默认构造
-- `[[nodiscard]]` 使忽略错误变为编译警告
-- `andThen` 让 Pipeline 各 stage 的错误传播链条简洁
+实现需要覆盖 move-only 值、错误态访问、`T == Error`、void 和 nodiscard 编译门禁。
 
----
+## 3. Deadline 与取消
 
+```cpp
+using Deadline = std::chrono::steady_clock::time_point;
+
+class CancellationToken {
+public:
+    void cancel() noexcept;
+    bool isCancelled() const noexcept;
+};
+
+struct ProviderCallContext {
+    CancellationToken& cancellation;
+    Deadline deadline;
+    GenerationEventSink& sink;
+
+    std::chrono::milliseconds remaining() const;
+};
+```
+
+所有 timeout 都从绝对 deadline 计算，禁止每层重新开始一个完整相对超时。
+
+## 4. Provider ports
+
+```cpp
+struct ProviderCapabilities {
+    bool nativeToolCalls = false;
+    bool upstreamHistory = false;
+    bool supportsImages = false;
+};
+
+struct ProviderResponse {
+    std::string text;
+    std::vector<ToolCall> toolCalls;
+    std::optional<Usage> usage;
+    ProviderMetadata metadata;
+};
+
+class IChatProvider {
+public:
+    virtual ~IChatProvider() = default;
+    virtual Result<ProviderResponse> generate(
+        const ProviderRequest&, ProviderCallContext&) = 0;
+    virtual ProviderCapabilities capabilities() const = 0;
+};
+
+class IProviderCatalog {
+public:
+    virtual ~IProviderCatalog() = default;
+    virtual Result<std::vector<ModelInfo>> listModels(Deadline) = 0;
+};
+
+class IUpstreamConversationStore {
+public:
+    virtual ~IUpstreamConversationStore() = default;
+    virtual Result<void> unbind(std::string_view id) = 0;
+    virtual Result<void> rebind(std::string_view from, std::string_view to) = 0;
+};
+
+// 所有生产 Provider 必须继承这个 infrastructure 层的薄基类。
+// application 只依赖 IChatProvider；测试 fake 可以直接实现 IChatProvider。
+class ProviderBase : public IChatProvider {
+public:
+    Result<ProviderResponse> generate(
+        const ProviderRequest& request,
+        ProviderCallContext& context) final;
+
+protected:
+    // 只统一边界，不规定 HTTP/轮询/SSE 流程。
+    virtual Result<ProviderResponse> doGenerate(
+        const ProviderRequest&, ProviderCallContext&) = 0;
+    virtual std::string_view providerName() const noexcept = 0;
+};
+```
+
+`ProviderBase::generate()` 的公共实现负责 cancellation/deadline 前置检查、异常转换、tracing/metrics、结果合法性检查和单次错误上报。ProviderBase 不保存请求级可变成员，也不包含 `buildRequest → send → parseChunk` 固定模板；Retry、轮询、账号选择、错误映射和 HTTP timeout 由具体 Provider 组合。
+
+聊天、模型目录、生命周期和上游会话映射分开，避免重建当前多职责 `APIinterface`。
+
+## 5. GenerationEventSink
+
+```cpp
+class GenerationEventSink {
+public:
+    virtual ~GenerationEventSink() = default;
+    // ShuttingDown/Disconnected 会触发同一请求的 CancellationToken。
+    virtual Result<void> emit(const GenerationEvent&) = 0;
+};
+```
+
+Sink 的 transport 实现在创建它的 Drogon loop 上发送；worker 只调用线程安全代理。
+
+## 6. Application Pipeline
+
+```cpp
+struct GenerationContext {
+    GenerationRequest request;
+    ProviderResponse providerResponse;
+    CancellationToken& cancellation;
+    Deadline deadline;
+};
+
+class Stage {
+public:
+    virtual ~Stage() = default;
+    virtual std::string_view name() const noexcept = 0;
+    virtual Result<void> run(GenerationContext&) = 0;
+};
+```
+
+Pipeline 当前保持同步，由 worker 执行。先从现有函数中抽取纯规则；不要先创建十个只有转发逻辑的空 Stage。
+
+## 7. 队列
+
+```cpp
+enum class EnqueueResult {
+    Accepted,
+    QueueFull,
+    ShuttingDown,
+    Stopped
+};
+
+class ITaskExecutor {
+public:
+    virtual ~ITaskExecutor() = default;
+    virtual EnqueueResult enqueue(Task task) = 0;
+    virtual void beginDraining() = 0;
+    virtual bool waitUntil(Deadline deadline) = 0;
+};
+```
+
+`waitUntil(false)` 后不能析构仍被 worker 使用的 executor；由 AppContext 进入 ADR-08 定义的进程级超时兜底。
+
+## 8. AppContext
+
+```cpp
+class AppContext {
+public:
+    static Result<std::unique_ptr<AppContext>> build(const ProcessConfig&);
+    Result<void> shutdown(Deadline deadline); // 幂等
+
+    ChatCompletionUseCase& chat();
+    ResponsesUseCase& responses();
+
+private:
+    // 声明顺序不承担停机语义；shutdown 显式编排。
+    Infrastructure infrastructure_;
+    Application application_;
+};
+```
+
+默认唯一所有权；只有异步跨任务共享时才提升为 `shared_ptr`。
