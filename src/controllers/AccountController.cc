@@ -1,4 +1,5 @@
 #include <controllers/AccountController.h>
+#include <accountManager/AccountJsonCodec.h>
 #include <controllers/ControllerUtils.h>
 #include <accountManager/accountManager.h>
 #include <channelManager/channelManager.h>
@@ -19,21 +20,9 @@ namespace {
 // 对外账号响应统一输出：仅保留 camelCase 新字段，彻底移除旧字段。
 Json::Value buildAccountPublicJson(const Accountinfo_st& account)
 {
-    Json::Value item;
-    item["apiName"] = account.apiName;
-    item["userName"] = account.userName;
-    item["password"] = account.passwd;
-    item["authToken"] = account.authToken;
-    item["useCount"] = account.useCount;
-    item["tokenStatus"] = account.tokenStatus;
-    item["accountStatus"] = account.accountStatus;
-    item["userTobitId"] = account.userTobitId;
-    item["personId"] = account.personId;
-    item["createTime"] = account.createTime;
-    item["accountType"] = account.accountType;
-    item["workspaceUacId"] = Json::Int64(account.workspaceUacId);
-    item["status"] = account.status;
-    return item;
+    // This legacy admin endpoint historically returns credentials.  Keep that
+    // wire contract explicit while the codec's safe default remains redacted.
+    return accountcodec::toJson(account, true);
 }
 
 bool parseAccountPayload(const Json::Value& value,
@@ -49,7 +38,7 @@ bool parseAccountPayload(const Json::Value& value,
         return false;
     }
 
-    account = Accountinfo_st::fromJson(value);
+    account = accountcodec::fromJson(value);
     if (account.workspaceUacId < 0) {
         errorMessage = "workspaceUacId must be greater than or equal to 0.";
         return false;
@@ -517,4 +506,3 @@ void AccountController::accountSettingsUpdate(const HttpRequestPtr &req, std::fu
     response["settings"] = buildAccountAutomationSettingsJson(updatedSettings);
     ctl::sendJson(callback, response);
 }
-

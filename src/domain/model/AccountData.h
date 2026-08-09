@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <json/json.h>
 
 // 账号状态常量
 namespace AccountStatus {
@@ -59,48 +58,6 @@ struct Accountinfo_st
         this->workspaceUacId = workspaceUacId;
     }
 
-    // 将请求/数据库中的 JSON 字段解析为统一账号结构（仅保留 camelCase 新命名）。
-    static Accountinfo_st fromJson(const Json::Value& value)
-    {
-        Accountinfo_st result;
-        result.apiName = value.get("apiName", "").asString();
-        result.userName = value.get("userName", "").asString();
-        result.passwd = value.get("password", "").asString();
-        result.authToken = value.get("authToken", "").asString();
-        result.useCount = value.get("useCount", 0).asInt();
-        result.tokenStatus = value.get("tokenStatus", false).asBool();
-        result.accountStatus = value.get("accountStatus", false).asBool();
-        result.userTobitId = value.get("userTobitId", 0).asInt();
-        result.personId = value.get("personId", "").asString();
-        result.createTime = value.get("createTime", "").asString();
-        result.accountType = value.get("accountType", "free").asString();
-        result.status = value.get("status", "active").asString();
-        result.workspaceUacId = value.get("workspaceUacId", Json::Int64(0)).asInt64();
-        if (result.workspaceUacId < 0) {
-            result.workspaceUacId = 0;
-        }
-        return result;
-    }
-
-    // 将账号结构导出为统一 JSON（仅保留 camelCase 新命名）。
-    Json::Value toJson() const
-    {
-        Json::Value value;
-        value["apiName"] = apiName;
-        value["userName"] = userName;
-        value["password"] = passwd;
-        value["authToken"] = authToken;
-        value["useCount"] = useCount;
-        value["tokenStatus"] = tokenStatus;
-        value["accountStatus"] = accountStatus;
-        value["userTobitId"] = userTobitId;
-        value["personId"] = personId;
-        value["createTime"] = createTime;
-        value["accountType"] = accountType;
-        value["status"] = status;
-        value["workspaceUacId"] = Json::Int64(workspaceUacId);
-        return value;
-    }
 };
 
 struct AccountCompare

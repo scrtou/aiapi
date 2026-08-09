@@ -1,5 +1,6 @@
 #include <managedAccount/backends/ClassicProviderAccountBackend.h>
 
+#include <accountManager/AccountJsonCodec.h>
 #include <accountManager/accountManager.h>
 
 namespace
@@ -34,7 +35,7 @@ std::vector<ManagedAccountRecord> ClassicProviderAccountBackend::list()
             record.provider = apiName;
             record.displayName = userName;
             record.status = account->status;
-            record.metadata = account->toJson();
+            record.metadata = accountcodec::toJson(*account, true);
             records.push_back(record);
         }
     }
@@ -61,7 +62,7 @@ std::optional<ManagedAccountRecord> ClassicProviderAccountBackend::get(const std
     record.provider = apiName;
     record.displayName = userName;
     record.status = account->status;
-    record.metadata = account->toJson();
+    record.metadata = accountcodec::toJson(*account, true);
     return record;
 }
 
