@@ -16,7 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P2（阶段 2，可恢复地退役 nexos/OpenAiProvider）**，正在执行 P2-W1 Provider 数据 dry-run 和归档/恢复脚本。P1-W1～P1-W5 已完成真实生产入口安全网，normal/coverage/ASan 均为 258/258 PASS。P2-W1 的数据对账和往返恢复门禁通过前，不能开始 P2-W2 代码退役，更不能提前进入 P3。
+当前是 **P2（阶段 2，可恢复地退役 nexos/OpenAiProvider）**，正在执行 P2-W2 tombstone 与代码退役。P2-W1 已交付 SQLite preflight、归档/恢复脚本和自动 fixture，升级 schema 副本往返、幂等与冲突 rollback 已通过；目标部署环境仍须按报告补只读 preflight，不能把本地 fixture 冒充生产证据。阶段 2 精确门禁全部通过前不能进入 P3。
 
 ## 按 migration-plan 排列的工作项
 
@@ -28,8 +28,8 @@
 | P1-W3 | 阶段 1 | Retool workflow/agent characterization | [`P01-retool-characterization.md`](../work-products/P01-retool-characterization.md) | DONE |
 | P1-W4 | 阶段 1 | Generation/Account 权威实现 characterization | [`P01-generation-account-characterization.md`](../work-products/P01-generation-account-characterization.md) | DONE |
 | P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | [`P01-shutdown-characterization.md`](../work-products/P01-shutdown-characterization.md) | DONE |
-| P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | SQL、对账和往返演练报告 | DOING |
-| P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | 410、配置/指标清理、精确门禁 | TODO |
+| P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | [`P02-provider-data-retirement.md`](../work-products/P02-provider-data-retirement.md) | DONE |
+| P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | 410、配置/指标清理、精确门禁 | DOING |
 | P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | TODO |
 | P3-W2 | 阶段 3 | 单一 include 根和完整路径 | include 改写/防回归报告 | TODO |
 | P3-W3 | 阶段 3 | domain 模型与 JSON codec 分离 | 往返 fixture、domain 第三方依赖为 0 | TODO |

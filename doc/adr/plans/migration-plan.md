@@ -33,9 +33,9 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 2（可恢复地退役 nexos/OpenAiProvider），当前工作项 P2-W1（Provider 数据 dry-run 和归档/恢复脚本）。**
+**当前执行阶段：阶段 2（可恢复地退役 nexos/OpenAiProvider），当前工作项 P2-W2（tombstone 与代码退役）。**
 
-阶段 1 已完成：`P01-shutdown-characterization.md` 汇总 Chayns、Retool、Generation、Account、SIGTERM/队列/断连的真实生产入口证据；R1=0，normal/coverage/ASan 均为 258/258 PASS。当前只允许执行 P2-W1；归档/恢复数据往返与对账通过前不得执行 P2-W2 代码删除，也不能提前进入 P3。
+P2-W1 已完成：`P02-provider-data-retirement.md` 交付 SQLite 只读 preflight、事务归档/恢复脚本和离线 fixture；本地升级 schema 副本已完成 archive/delete/restore 对账，幂等、schema 漂移、snapshot 不一致、主键/唯一键冲突均能 rollback。当前没有运行中的目标部署数据库，不能把 fixture/`build/data` 证据称为生产 dry-run；上线时仍须按报告执行只读预检和停服副本演练。当前只允许执行 P2-W2，不得提前进入 P3。
 
 ---
 
