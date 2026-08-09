@@ -113,6 +113,7 @@ add_executable(${PROJECT_NAME}
     sessionManager/tooling/XmlTagToolCallCodec.cpp
     tools/ZeroWidthEncoder.cpp
     utils/ConfigValidator.cpp
+    utils/ApplicationShutdown.cpp
 )
 
 # ##############################################################################

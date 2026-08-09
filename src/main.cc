@@ -11,6 +11,7 @@
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <utils/BackgroundTaskQueue.h>
+#include <utils/ApplicationShutdown.h>
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <dbManager/session/SessionDbManager.h>
@@ -399,15 +400,10 @@ int main() {
     // deleteThread / purgeExhaustedThreads），全程不碰 BackgroundTaskQueue，
     // 两者之间不存在生产者-消费者关系。
     //
-    // 真实理由是停机窗口：Reaper 单轮要对最多 batchLimit 个上游线程逐个发
-    // HTTP DELETE，并按 deleteSpacingMs 限速，一轮可能耗时数分钟。stop() 会
-    // 置位 stopRequested_ 并 join，必须最先发起，让这段网络 IO 与后续各项
-    // 停机步骤重叠收敛；若放到队列 shutdown() 之后，总停机时间会线性叠加，
-    // 容器编排的 SIGTERM 宽限期（通常 30s）到点后会直接 SIGKILL。
-    LOG_INFO << "[停机] 正在停止 chayns thread reaper...";
-    chaynsThreadReaper::getInstance().stop();
-    LOG_INFO << "[停机] chayns thread reaper 已停止";
-
+    // 当前精确语义是串行 join，并不会与后续步骤重叠：Reaper 单轮可能对多个
+    // 上游线程逐个发 HTTP DELETE，若正阻塞在同步 IO 中，stop() 会一直等到该
+    // 调用返回。把它放在首位只保证其他 owner 尚未 teardown；它仍可能独占整个
+    // SIGTERM 宽限期。P1 harness 已记录该缺口，deadline/cancellation 留到 P4。
     // N4: 原先 AccountManager 的 4 个后台线程全部 detach，进程退出时被强行
     // 截断，可能在持有 accountListNeedUpdateMutex 或 DB 连接的状态下消失。
     // 现已改为持有 std::thread 成员 + 条件变量可中断睡眠，此处统一 join。
@@ -415,19 +411,14 @@ int main() {
     // 顺序：必须在 BackgroundTaskQueue::shutdown() 之前——账号线程（尤其是
     // checkToken/cleanExpiredAccounts）会向该队列投递任务，若队列先关闭并
     // fail-fast 拒收，这些任务会静默丢失且刷屏拒收日志。
-    LOG_INFO << "[停机] 正在关闭账号管理器后台线程...";
-    AccountManager::getInstance().stopBackgroundThreads();
-    LOG_INFO << "[停机] 账号管理器后台线程已关闭";
-
     // N4: 会话过期清理线程同样由 detach 改为 join；它在每轮里会同步删除 DB 中
     // 过期快照，必须在 DB 相关设施拆除前干净退出。
-    LOG_INFO << "[停机] 正在停止会话过期清理线程...";
-    chatSession::getInstance()->stopClearExpiredSession();
-    LOG_INFO << "[停机] 会话过期清理线程已停止";
-
-    LOG_INFO << "[停机] 正在关闭后台任务队列...";
-    BackgroundTaskQueue::instance().shutdown();
-    LOG_INFO << "[停机] 后台任务队列已停机";
+    lifecycle::runApplicationShutdown({
+        [] { chaynsThreadReaper::getInstance().stop(); },
+        [] { AccountManager::getInstance().stopBackgroundThreads(); },
+        [] { chatSession::getInstance()->stopClearExpiredSession(); },
+        [] { BackgroundTaskQueue::instance().shutdown(); },
+    });
 
     return 0;
 }

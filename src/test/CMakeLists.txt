@@ -77,6 +77,8 @@ set(TEST_SOURCES
     test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
     test_background_task_queue_shutdown.cpp
+    test_application_shutdown_harness.cpp
+    test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
     test_retool_provider_fixture.cpp
     test_channel_store_port.cpp
@@ -145,6 +147,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountHttpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountClock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/RetoolProvisionHealth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/chaynsThreadReaper.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ApplicationShutdown.cpp
 )
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})
@@ -171,6 +175,16 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+
+if (UNIX)
+    add_executable(aiapi_shutdown_signal_fixture
+        support/shutdown_signal_fixture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ApplicationShutdown.cpp)
+    target_include_directories(aiapi_shutdown_signal_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE Drogon::Drogon)
+    add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
+endif()
 
 if (COMMAND ParseAndAddDrogonTests)
     ParseAndAddDrogonTests(${PROJECT_NAME})

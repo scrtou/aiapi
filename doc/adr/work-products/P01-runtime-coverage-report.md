@@ -13,12 +13,12 @@
 
 | 项 | 值 |
 |---|---:|
-| production 实现文件 | 68 |
-| 已编入并 instrument 的实现文件 | 50 |
-| 未编入测试 target 的实现文件 | 18 |
-| 行覆盖（仅已 instrument 实现） | 5800/11956 (48.51%) |
-| 分支覆盖（仅已 instrument 实现） | 8807/36021 (24.45%) |
-| gcda 文件 | 90 |
+| production 实现文件 | 69 |
+| 已编入并 instrument 的实现文件 | 52 |
+| 未编入测试 target 的实现文件 | 17 |
+| 行覆盖（仅已 instrument 实现） | 5913/12084 (48.93%) |
+| 分支覆盖（仅已 instrument 实现） | 8987/36357 (24.72%) |
+| gcda 文件 | 94 |
 | 工具 | `gcov (Debian 12.2.0-14+deb12u1) 12.2.0` |
 
 ## 3. 高风险路径
@@ -28,11 +28,15 @@
 | Chayns generate/postChatMessage | `src/apipoint/chaynsapi/chaynsapi.cpp` | `instrumented` | 543/1003 (54.14%) | 905/3232 (28.00%) |
 | Generation ToolBridge transform/emit | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `instrumented` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | Chat/Responses four GenerationService output modes | `src/sessionManager/core/GenerationService.cpp` | `instrumented` | 141/265 (53.21%) | 305/965 (31.61%) |
-| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 524/1765 (29.69%) | 983/6941 (14.16%) |
-| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 57/64 (89.06%) | 105/196 (53.57%) |
+| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
+| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 70/77 (90.91%) | 130/230 (56.52%) |
+| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
+| Session cleaner interrupt/join | `src/sessionManager/core/Session.cpp` | `instrumented` | 218/701 (31.10%) | 283/2084 (13.58%) |
+| Chayns reaper interrupt/join | `src/apipoint/chaynsapi/chaynsThreadReaper.cpp` | `instrumented` | 40/109 (36.70%) | 35/234 (14.96%) |
+| Streaming disconnect boundary | `src/utils/IoLoopResponseStream.h` | `instrumented` | 47/55 (85.45%) | 35/66 (53.03%) |
 | HTTP Controller Chat/Responses route edge | `src/controllers/AiApiController.cc` | `not_instrumented` | n/a | n/a |
 | Retool workflow/agent upstream paths | `src/apipoint/retoolapi/retoolapi.cpp` | `instrumented` | 406/889 (45.67%) | 677/3140 (21.56%) |
-| Process shutdown orchestration | `src/main.cc` | `not_instrumented` | n/a | n/a |
+| Process shutdown orchestration after Drogon run | `src/utils/ApplicationShutdown.cpp` | `instrumented` | 17/17 (100.00%) | 65/98 (66.33%) |
 
 ### 目标函数执行证据
 
@@ -57,20 +61,25 @@
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::deleteAccountbyPost(` | `executed` | 2 | 10/10 (100.00%) | 17/30 (56.67%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::checkToken(` | `executed` | 1 | 18/23 (78.26%) | 69/138 (50.00%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::autoRegisterAccount(` | `executed` | 2 | 133/236 (56.36%) | 332/986 (33.67%) |
-| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::enqueue(` | `executed` | 6 | 17/17 (100.00%) | 37/60 (61.67%) |
-| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::shutdown(` | `executed` | 4 | 13/13 (100.00%) | 18/26 (69.23%) |
-| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 8 | 16/23 (69.57%) | 45/98 (45.92%) |
+| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::enqueue(` | `executed` | 35 | 17/17 (100.00%) | 37/60 (61.67%) |
+| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::shutdown(` | `executed` | 8 | 13/13 (100.00%) | 18/26 (69.23%) |
+| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 11 | 16/23 (69.57%) | 49/98 (50.00%) |
+| Account worker interrupt/join | `AccountManager::stopBackgroundThreads(` | `executed` | 42 | 18/18 (100.00%) | 21/32 (65.62%) |
+| Session cleaner interrupt/join | `chatSession::stopClearExpiredSession(` | `executed` | 2 | 8/8 (100.00%) | 3/4 (75.00%) |
+| Chayns reaper interrupt/join | `chaynsThreadReaper::stop(` | `executed` | 3 | 8/8 (100.00%) | 3/4 (75.00%) |
+| Streaming disconnect boundary | `IoLoopResponseStream::send(` | `executed` | 4 | 11/12 (91.67%) | 6/12 (50.00%) |
+| Streaming disconnect boundary | `IoLoopResponseStream::sendInLoop(` | `executed` | 3 | 5/6 (83.33%) | 5/8 (62.50%) |
+| Streaming disconnect boundary | `IoLoopResponseStream::closeInLoop(` | `executed` | 4 | 7/7 (100.00%) | 4/6 (66.67%) |
 | HTTP Controller Chat/Responses route edge | `AiApiController::chaynsapichat(` | `not_instrumented` | n/a | n/a | n/a |
 | HTTP Controller Chat/Responses route edge | `AiApiController::responsesCreate(` | `not_instrumented` | n/a | n/a | n/a |
 | Retool workflow/agent upstream paths | `retoolapi::requestWorkflow(` | `executed` | 8 | 60/75 (80.00%) | 125/344 (36.34%) |
 | Retool workflow/agent upstream paths | `retoolapi::requestAgent(` | `executed` | 3 | 114/315 (36.19%) | 205/1288 (15.92%) |
-| Process shutdown orchestration | `main(` | `not_instrumented` | n/a | n/a | n/a |
+| Process shutdown orchestration after Drogon run | `lifecycle::runApplicationShutdown(` | `executed` | 1 | 14/14 (100.00%) | 64/96 (66.67%) |
 
 ## 4. 未编入测试 target 的生产实现
 
 这些文件没有运行时覆盖证据，是 P1 后续 fixture/characterization 的输入：
 
-- `src/apipoint/chaynsapi/chaynsThreadReaper.cpp`
 - `src/apipoint/nexosapi/nexosapi.cpp`
 - `src/apipoint/openai/OpenAiProvider.cpp`
 - `src/controllers/AccountController.cc`
@@ -96,13 +105,14 @@
 | `src/accountManager/AccountClock.cpp` | `executed` | 2/5 (40.00%) | 1/2 (50.00%) |
 | `src/accountManager/AccountHttpTransport.cpp` | `executed` | 2/6 (33.33%) | 1/6 (16.67%) |
 | `src/accountManager/RetoolProvisionHealth.cpp` | `executed` | 49/50 (98.00%) | 50/86 (58.14%) |
-| `src/accountManager/accountManager.cpp` | `executed` | 524/1765 (29.69%) | 983/6941 (14.16%) |
+| `src/accountManager/accountManager.cpp` | `executed` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
 | `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 3/10 (30.00%) |
 | `src/apiManager/ApiManager.cpp` | `executed` | 18/63 (28.57%) | 15/174 (8.62%) |
 | `src/apipoint/chaynsapi/ChaynsClock.cpp` | `executed` | 6/6 (100.00%) | 1/2 (50.00%) |
 | `src/apipoint/chaynsapi/ChaynsHttpTransport.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/6 (0.00%) |
 | `src/apipoint/chaynsapi/ChaynsMessageCorrelation.cpp` | `executed` | 76/86 (88.37%) | 110/190 (57.89%) |
 | `src/apipoint/chaynsapi/ChaynsModelCatalog.cpp` | `executed` | 197/219 (89.95%) | 294/556 (52.88%) |
+| `src/apipoint/chaynsapi/chaynsThreadReaper.cpp` | `executed` | 40/109 (36.70%) | 35/234 (14.96%) |
 | `src/apipoint/chaynsapi/chaynsapi.cpp` | `executed` | 543/1003 (54.14%) | 905/3232 (28.00%) |
 | `src/apipoint/retoolapi/RetoolClock.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/2 (0.00%) |
 | `src/apipoint/retoolapi/RetoolHttpTransport.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/6 (0.00%) |
@@ -133,7 +143,7 @@
 | `src/sessionManager/core/GenerationService.cpp` | `executed` | 141/265 (53.21%) | 305/965 (31.61%) |
 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `executed` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | `src/sessionManager/core/RequestAdapters.cpp` | `executed` | 540/792 (68.18%) | 1129/2996 (37.68%) |
-| `src/sessionManager/core/Session.cpp` | `executed` | 197/701 (28.10%) | 267/2084 (12.81%) |
+| `src/sessionManager/core/Session.cpp` | `executed` | 218/701 (31.10%) | 283/2084 (13.58%) |
 | `src/sessionManager/core/SessionCodec.cpp` | `instrumented_not_executed` | 0/137 (0.00%) | 0/382 (0.00%) |
 | `src/sessionManager/tooling/BridgeHelpers.cpp` | `executed` | 98/103 (95.15%) | 118/200 (59.00%) |
 | `src/sessionManager/tooling/BridgeProtocolCodec.cpp` | `executed` | 299/355 (84.23%) | 441/962 (45.84%) |
@@ -142,4 +152,5 @@
 | `src/sessionManager/tooling/ToolCallValidator.cpp` | `executed` | 268/357 (75.07%) | 488/1117 (43.69%) |
 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp` | `executed` | 333/601 (55.41%) | 392/1309 (29.95%) |
 | `src/tools/ZeroWidthEncoder.cpp` | `executed` | 58/117 (49.57%) | 42/115 (36.52%) |
+| `src/utils/ApplicationShutdown.cpp` | `executed` | 17/17 (100.00%) | 65/98 (66.33%) |
 | `src/utils/ConfigValidator.cpp` | `instrumented_not_executed` | 0/110 (0.00%) | 0/462 (0.00%) |

@@ -64,3 +64,8 @@ std::shared_ptr<chaynsThreadDbManager> chaynsThreadDbManager::getInstance()
 void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow&) {}
 void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string&) {}
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string&, const std::string&) {}
+int chaynsThreadDbManager::purgeExhaustedThreads(int, std::string*) { return 0; }
+std::vector<chaynsThreadDbManager::ThreadRow>
+chaynsThreadDbManager::loadThreadsOlderThan(int64_t, int, std::string*) { return {}; }
+bool chaynsThreadDbManager::deleteThread(const std::string&, std::string*) { return true; }
+int chaynsThreadDbManager::bumpDeleteAttempts(const std::string&, std::string*) { return 0; }

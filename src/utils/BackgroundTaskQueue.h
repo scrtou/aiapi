@@ -106,6 +106,13 @@ public:
         return tasks_.size();
     }
 
+    /// True until shutdown closes the mutex-protected enqueue boundary.
+    bool acceptingTasks() const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        return !stopping_ && !shutdownCalled_;
+    }
+
     ~BackgroundTaskQueue()
     {
         shutdown();

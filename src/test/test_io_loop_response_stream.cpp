@@ -25,6 +25,7 @@ struct StreamProbe
     std::thread::id writeThread;
     std::thread::id closeThread;
     int closeCount = 0;
+    int sendAttempts = 0;
 };
 
 class ProbeAsyncStream final : public trantor::AsyncStream
@@ -114,6 +115,34 @@ public:
 
 private:
     std::shared_ptr<DisconnectRaceProbe> probe_;
+};
+
+class FailingAsyncStream final : public trantor::AsyncStream
+{
+public:
+    explicit FailingAsyncStream(std::shared_ptr<StreamProbe> probe)
+        : probe_(std::move(probe))
+    {
+    }
+
+    bool send(const char *, size_t) override
+    {
+        std::lock_guard<std::mutex> lock(probe_->mutex);
+        ++probe_->sendAttempts;
+        return false;
+    }
+
+    void close() override
+    {
+        {
+            std::lock_guard<std::mutex> lock(probe_->mutex);
+            ++probe_->closeCount;
+        }
+        probe_->cv.notify_all();
+    }
+
+private:
+    std::shared_ptr<StreamProbe> probe_;
 };
 
 std::thread::id eventLoopThreadId(trantor::EventLoop *loop)
@@ -233,4 +262,32 @@ DROGON_TEST(IoLoopResponseStream_DoesNotReenableWriteAfterQueuedDisconnect)
     CHECK(!probe->connected);
     CHECK(!probe->writeEventEnabled);
     CHECK(probe->rejectedSends >= 1);
+}
+
+DROGON_TEST(IoLoopResponseStream_SendFailureClosesAndRejectsLaterChunks)
+{
+    auto *loop = drogon::app().getLoop();
+    REQUIRE(loop != nullptr);
+
+    auto probe = std::make_shared<StreamProbe>();
+    auto failing = std::make_unique<FailingAsyncStream>(probe);
+    auto responseStream = std::make_unique<drogon::ResponseStream>(std::move(failing));
+    auto bridge = IoLoopResponseStream::create(std::move(responseStream), loop);
+    REQUIRE(bridge != nullptr);
+
+    CHECK(bridge->send("first chunk"));
+    REQUIRE(waitForClose(probe));
+    CHECK(!bridge->isOpen());
+    int attemptsAfterFailure = 0;
+    {
+        std::lock_guard<std::mutex> lock(probe->mutex);
+        attemptsAfterFailure = probe->sendAttempts;
+    }
+    CHECK(attemptsAfterFailure >= 1);
+    CHECK(!bridge->send("late chunk"));
+    {
+        std::lock_guard<std::mutex> lock(probe->mutex);
+        CHECK(probe->sendAttempts == attemptsAfterFailure);
+        CHECK(probe->closeCount == 1);
+    }
 }

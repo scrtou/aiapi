@@ -31,11 +31,11 @@
 | AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
 | Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
-| 流程线程/错误/取消契约 | 🔄 | 审计已完成，四条集成测试和假上游尚未建立 |
+| 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 1（行为安全网），当前工作项 P1-W5（SIGTERM、队列、断连 harness）。**
+**当前执行阶段：阶段 2（可恢复地退役 nexos/OpenAiProvider），当前工作项 P2-W1（Provider 数据 dry-run 和归档/恢复脚本）。**
 
-P1-W4 已完成：`P01-generation-account-characterization.md` 通过真实 Generation/Account 入口锁定 ToolBridge、emit、token 失效和自动注册回滚；R1 已从 4 降为 0，normal/coverage ctest 均为 252/252 PASS。下一步只允许执行 P1-W5；SIGTERM、队列、断连和 ASan 门禁通过前不能进入 P2/P3。
+阶段 1 已完成：`P01-shutdown-characterization.md` 汇总 Chayns、Retool、Generation、Account、SIGTERM/队列/断连的真实生产入口证据；R1=0，normal/coverage/ASan 均为 258/258 PASS。当前只允许执行 P2-W1；归档/恢复数据往返与对账通过前不得执行 P2-W2 代码删除，也不能提前进入 P3。
 
 ---
 

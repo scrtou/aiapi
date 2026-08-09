@@ -1,6 +1,7 @@
 #include <drogon/drogon_test.h>
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <thread>
 
 #include "utils/BackgroundTaskQueue.h"
@@ -49,4 +50,74 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownIsIrreversible)
     q.shutdown();
     q.shutdown();
     CHECK(q.enqueue("after-double-shutdown", []() {}) == false);
+}
+
+DROGON_TEST(BackgroundTaskQueue_ShutdownWaitsForRunningTask)
+{
+    using namespace std::chrono_literals;
+    auto& q = BackgroundTaskQueue::instance();
+    q.start(1);
+
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    REQUIRE(q.enqueue("blocking-task", [&entered, releaseFuture]() mutable {
+        entered.set_value();
+        releaseFuture.wait();
+    }));
+    REQUIRE(enteredFuture.wait_for(2s) == std::future_status::ready);
+
+    auto stopped = std::async(std::launch::async, [&q] { q.shutdown(); });
+    CHECK(stopped.wait_for(100ms) == std::future_status::timeout);
+    release.set_value();
+    REQUIRE(stopped.wait_for(2s) == std::future_status::ready);
+    stopped.get();
+    CHECK(q.pendingCount() == 0);
+}
+
+DROGON_TEST(BackgroundTaskQueue_ShutdownDrainsBacklogAndRejectsLateWork)
+{
+    using namespace std::chrono_literals;
+    auto& q = BackgroundTaskQueue::instance();
+    q.start(2);
+
+    std::atomic<int> entered{0};
+    std::atomic<int> executed{0};
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    for (int i = 0; i < 2; ++i) {
+        REQUIRE(q.enqueue("occupied-worker", [&entered, &executed, releaseFuture]() mutable {
+            entered.fetch_add(1);
+            releaseFuture.wait();
+            executed.fetch_add(1);
+        }));
+    }
+    for (int i = 0; i < 100 && entered.load() != 2; ++i) {
+        std::this_thread::sleep_for(5ms);
+    }
+    REQUIRE(entered.load() == 2);
+
+    int accepted = 2;
+    constexpr int kBacklog = 24;
+    for (int i = 0; i < kBacklog; ++i) {
+        REQUIRE(q.enqueue("backlog", [&executed] { executed.fetch_add(1); }));
+        ++accepted;
+    }
+
+    auto stopped = std::async(std::launch::async, [&q] { q.shutdown(); });
+    // Wait until shutdown has closed the mutex-protected enqueue boundary.
+    // Unlike a timing sleep, this remains deterministic under coverage/ASan.
+    for (int i = 0; i < 200 && q.acceptingTasks(); ++i) {
+        std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE(!q.acceptingTasks());
+    CHECK(!q.enqueue("late-work", [&executed] { executed.fetch_add(1); }));
+    CHECK(stopped.wait_for(100ms) == std::future_status::timeout);
+    release.set_value();
+    REQUIRE(stopped.wait_for(3s) == std::future_status::ready);
+    stopped.get();
+    CHECK(executed.load() == accepted);
+    CHECK(q.pendingCount() == 0);
+    CHECK(!q.enqueue("after-drain", [] {}));
 }

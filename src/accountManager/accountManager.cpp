@@ -530,9 +530,14 @@ bool AccountManager::backgroundSleep(std::chrono::seconds seconds)
 
 void AccountManager::stopBackgroundThreads()
 {
-    // 幂等：exchange 保证并发下只有第一次真正执行停机与 join。
-    if (backgroundStopRequested_.exchange(true)) {
-        return;
+    // 修改等待谓词时与 backgroundSleep() 使用同一把锁，避免以下丢失唤醒：
+    // worker 已检查谓词但尚未真正进入 wait，stop 线程在此窗口 notify。
+    // 幂等：exchange 仍保证并发下只有第一次真正执行停机与 join。
+    {
+        std::lock_guard<std::mutex> lock(backgroundWakeMutex_);
+        if (backgroundStopRequested_.exchange(true)) {
+            return;
+        }
     }
 
     // 两组唤醒缺一不可：

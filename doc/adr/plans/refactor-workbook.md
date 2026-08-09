@@ -16,9 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P1（阶段 1，行为安全网）**，正在执行 P1-W5 SIGTERM、队列、断连 harness。P0 已在 clean commit
-`544bf44` 上生成发布基线，P1-W1/W2/W3 已完成 coverage 基线、Chayns 和 Retool 离线假上游。P1 全部退出门禁通过前，不能开始
-P2 Provider 退役或 P3 production target 重构。
+当前是 **P2（阶段 2，可恢复地退役 nexos/OpenAiProvider）**，正在执行 P2-W1 Provider 数据 dry-run 和归档/恢复脚本。P1-W1～P1-W5 已完成真实生产入口安全网，normal/coverage/ASan 均为 258/258 PASS。P2-W1 的数据对账和往返恢复门禁通过前，不能开始 P2-W2 代码退役，更不能提前进入 P3。
 
 ## 按 migration-plan 排列的工作项
 
@@ -29,8 +27,8 @@ P2 Provider 退役或 P3 production target 重构。
 | P1-W2 | 阶段 1 | Chayns 脱敏 fixture 与假上游 | [`P01-chayns-fixtures.md`](../work-products/P01-chayns-fixtures.md) | DONE |
 | P1-W3 | 阶段 1 | Retool workflow/agent characterization | [`P01-retool-characterization.md`](../work-products/P01-retool-characterization.md) | DONE |
 | P1-W4 | 阶段 1 | Generation/Account 权威实现 characterization | [`P01-generation-account-characterization.md`](../work-products/P01-generation-account-characterization.md) | DONE |
-| P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | 空闲/阻塞/积压/断连当前行为报告 | DOING |
-| P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | SQL、对账和往返演练报告 | TODO |
+| P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | [`P01-shutdown-characterization.md`](../work-products/P01-shutdown-characterization.md) | DONE |
+| P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | SQL、对账和往返演练报告 | DOING |
 | P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | 410、配置/指标清理、精确门禁 | TODO |
 | P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | TODO |
 | P3-W2 | 阶段 3 | 单一 include 根和完整路径 | include 改写/防回归报告 | TODO |

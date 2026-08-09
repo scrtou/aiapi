@@ -76,6 +76,30 @@ TARGETS = [
         ],
     },
     {
+        "name": "Account worker interrupt/join",
+        "file": "src/accountManager/accountManager.cpp",
+        "functions": ["AccountManager::stopBackgroundThreads("],
+    },
+    {
+        "name": "Session cleaner interrupt/join",
+        "file": "src/sessionManager/core/Session.cpp",
+        "functions": ["chatSession::stopClearExpiredSession("],
+    },
+    {
+        "name": "Chayns reaper interrupt/join",
+        "file": "src/apipoint/chaynsapi/chaynsThreadReaper.cpp",
+        "functions": ["chaynsThreadReaper::stop("],
+    },
+    {
+        "name": "Streaming disconnect boundary",
+        "file": "src/utils/IoLoopResponseStream.h",
+        "functions": [
+            "IoLoopResponseStream::send(",
+            "IoLoopResponseStream::sendInLoop(",
+            "IoLoopResponseStream::closeInLoop(",
+        ],
+    },
+    {
         "name": "HTTP Controller Chat/Responses route edge",
         "file": "src/controllers/AiApiController.cc",
         "functions": [
@@ -89,9 +113,9 @@ TARGETS = [
         "functions": ["retoolapi::requestWorkflow(", "retoolapi::requestAgent("],
     },
     {
-        "name": "Process shutdown orchestration",
-        "file": "src/main.cc",
-        "functions": ["main("],
+        "name": "Process shutdown orchestration after Drogon run",
+        "file": "src/utils/ApplicationShutdown.cpp",
+        "functions": ["lifecycle::runApplicationShutdown("],
     },
 ]
 
