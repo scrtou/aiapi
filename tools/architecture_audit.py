@@ -277,6 +277,20 @@ def baseline_counts(payload):
     return {key: int(payload.get(key, 0)) for key in ("R1", "R2", "R3")}
 
 
+def baseline_metadata_errors(payload):
+    """A release ratchet must originate from an identifiable clean commit."""
+    errors = []
+    git = payload.get("git") if isinstance(payload, dict) else None
+    if not isinstance(git, dict):
+        return ["baseline has no git metadata"]
+    commit = git.get("commit")
+    if not isinstance(commit, str) or not commit or commit == "unknown":
+        errors.append("baseline git.commit is missing or unknown")
+    if git.get("dirty") is not False:
+        errors.append("baseline git.dirty must be false")
+    return errors
+
+
 def selftest(payload):
     errors = []
     counts = payload["counts"]
@@ -313,6 +327,13 @@ def selftest(payload):
     transitive_only = set(owners) - direct - explicit
     if transitive_only:
         errors.append("transitive-only headers unexpectedly became test owners")
+
+    if baseline_metadata_errors({"git": {"commit": "abc123", "dirty": False}}):
+        errors.append("clean baseline metadata was rejected")
+    if not baseline_metadata_errors({"git": {"commit": "abc123", "dirty": True}}):
+        errors.append("dirty baseline metadata was accepted")
+    if not baseline_metadata_errors({}):
+        errors.append("missing baseline metadata was accepted")
 
     print("architecture_audit selftest v3")
     print("  extensions: .h .hpp .cpp .cc")
@@ -467,7 +488,12 @@ def main():
 
     if args.baseline and os.path.isfile(args.baseline):
         with open(args.baseline, encoding="utf-8") as stream:
-            baseline = baseline_counts(json.load(stream))
+            baseline_payload = json.load(stream)
+        metadata_errors = baseline_metadata_errors(baseline_payload)
+        if metadata_errors:
+            print("INVALID BASELINE: " + "; ".join(metadata_errors))
+            return 2
+        baseline = baseline_counts(baseline_payload)
         regressions = []
         for rule in ("R1", "R2", "R3"):
             if payload["counts"][rule] > baseline.get(rule, 0):

@@ -7,9 +7,9 @@
 | 项 | 值 |
 |---|---|
 | schema | v3 |
-| 生成时间 | `2026-08-09T02:51:48+00:00` |
-| 基础 commit | `7d7883a` |
-| 工作区 | **dirty（实施快照，不是可复现发布基线）** |
+| 生成时间 | `2026-08-09T03:54:21+00:00` |
+| 基础 commit | `544bf44` |
+| 工作区 | **clean** |
 | 扫描扩展名 | `.h/.hpp/.cpp/.cc` |
 
 发布 tag 使用的基线必须来自 `git.dirty=false`。dirty 基线只允许作为当前实施快照。
@@ -21,7 +21,7 @@
 | R1 | **4** | tooling/actionProtocol 自由函数与 GenerationService 成员同名竞争 |
 | R2 | **43** | fan-in ≥2 且无直接/显式 test owner 的生产头；**不是运行时覆盖** |
 | R3 | **13** | `.cpp/.cc` 中超过 200 行的函数候选 |
-| R3 行数 | **5004** | R3 候选总行数 |
+| R3 行数 | **5006** | R3 候选总行数 |
 
 | 规模项 | 当前值 |
 |---|---:|
@@ -29,7 +29,7 @@
 | 测试直接编译的生产源 | 38 |
 | 测试源 | 35 |
 | 测试用例 | 223 |
-| 静态断言宏计数 | 869 |
+| 静态断言宏计数 | 872 |
 
 规模项用于发现 CMake/注册漂移，不作为质量 KPI。
 
@@ -68,7 +68,7 @@ v3 口径与旧版不可比较，当前值是新棘轮起点。无行为头可�
 | 3 | 142 | 否 | `src/dbManager/config/ConfigDbManager.h` |
 | 3 | 61 | 否 | `src/managedAccount/service/ManagedAccountService.h` |
 | 3 | 30 | 否 | `src/sessionManager/tooling/ToolDefinitionEncoder.h` |
-| 2 | 1442 | 否 | `src/apipoint/chaynsapi/chaynsapi.h` |
+| 2 | 1444 | 否 | `src/apipoint/chaynsapi/chaynsapi.h` |
 | 2 | 1336 | 否 | `src/apipoint/nexosapi/nexosapi.h` |
 | 2 | 523 | 是 | `src/dbManager/metrics/ErrorStatsDbManager.h` |
 | 2 | 452 | 否 | `src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h` |
@@ -91,7 +91,7 @@ v3 口径与旧版不可比较，当前值是新棘轮起点。无行为头可�
 
 | 行数 | 位置 |
 |---:|---|
-| 865 | `src/apipoint/chaynsapi/chaynsapi.cpp:284-1148` |
+| 867 | `src/apipoint/chaynsapi/chaynsapi.cpp:284-1150` |
 | 554 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:1661-2214` |
 | 503 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:516-1018` |
 | 459 | `src/apipoint/retoolapi/retoolapi.cpp:847-1305` |

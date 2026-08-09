@@ -1,9 +1,9 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-08-09T02:51:48+00:00",
+  "generated_at": "2026-08-09T03:54:21+00:00",
   "git": {
-    "commit": "7d7883a",
-    "dirty": true
+    "commit": "544bf44",
+    "dirty": false
   },
   "definitions": {
     "R1": "tooling free-function/member-name competition",
@@ -14,12 +14,12 @@
     "R1": 4,
     "R2": 43,
     "R3": 13,
-    "R3_lines": 5004,
+    "R3_lines": 5006,
     "production_sources": 65,
     "linked_production_sources": 38,
     "test_sources": 35,
     "test_cases": 223,
-    "assertions": 869
+    "assertions": 872
   },
   "rules": {
     "R1": [
@@ -221,7 +221,7 @@
         "fanin": 2,
         "test_owners": 0,
         "linked": false,
-        "impl_lines": 1442
+        "impl_lines": 1444
       },
       {
         "header": "src/apipoint/nexosapi/nexosapi.h",
@@ -347,8 +347,8 @@
       {
         "file": "src/apipoint/chaynsapi/chaynsapi.cpp",
         "start": 284,
-        "end": 1148,
-        "lines": 865
+        "end": 1150,
+        "lines": 867
       },
       {
         "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
@@ -545,7 +545,7 @@
       {
         "file": "test_chayns_model_catalog.cpp",
         "cases": 7,
-        "assertions": 48,
+        "assertions": 51,
         "owned_headers": 2
       },
       {

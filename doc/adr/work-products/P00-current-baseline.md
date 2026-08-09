@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | DOING（审计完成；等待干净提交后重生成发布基线） |
+| 状态 | DONE |
 | 输入 | `src/` 生产头/源文件、`src/test/CMakeLists.txt`、架构门禁脚本 |
 | 输出 | `source-audit-2026-08.md`、目标结构/模块/流程文档 |
 
@@ -17,12 +17,13 @@
 - 已完成 Chayns 同步 HTTP timeout 修改审查，见
   [`P00-chayns-timeout-review.md`](./P00-chayns-timeout-review.md)。
 
-## 剩余动作
+## 完成证据
 
-1. 独立提交已审查的 Chayns timeout 修改；
-2. 在该代码提交后生成 clean baseline；
-3. 进入 P1 行为安全网并建立真实运行时覆盖报告；P1 完成前不得开始 P3 production target 化；
-4. 将假上游 fixture 和 SIGTERM harness 保存到 `doc/adr/work-products/` 对应 P1 工作包。
+1. Chayns timeout 修改已独立提交为 `544bf44`；
+2. `audit-baseline.json` 记录 `git.commit=544bf44`、`git.dirty=false`；
+3. architecture audit selftest、ratchet、cycle、layer、startup wiring、strict test registration 全部通过；
+4. 全量测试 223/223 通过；
+5. baseline 检查新增 dirty 元数据负向探针，dirty baseline 返回退出码 2。
 
 ## 回滚
 
