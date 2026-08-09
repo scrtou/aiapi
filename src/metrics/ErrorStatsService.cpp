@@ -1,4 +1,5 @@
 #include <metrics/ErrorStatsService.h>
+#include <dbManager/metrics/ErrorEventJsonCodec.h>
 #include <drogon/drogon.h>
 
 namespace metrics {
@@ -141,7 +142,7 @@ void ErrorStatsService::recordError(
     event.apiKind = apiKind;
     event.stream = stream;
     event.httpStatus = httpStatus;
-    event.detailJson = detail;
+    event.details = erroreventcodec::detailsFromJson(detail);
     event.rawSnippet = truncateRawSnippet(rawSnippet);
     event.toolName = toolName;
     
@@ -180,7 +181,7 @@ void ErrorStatsService::recordWarn(
     event.apiKind = apiKind;
     event.stream = stream;
     event.httpStatus = httpStatus;
-    event.detailJson = detail;
+    event.details = erroreventcodec::detailsFromJson(detail);
     event.rawSnippet = truncateRawSnippet(rawSnippet);
     event.toolName = toolName;
     

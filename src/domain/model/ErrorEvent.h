@@ -3,10 +3,14 @@
 
 #include <string>
 #include <chrono>
-#include <json/json.h>
 #include <cstdint>
+#include <map>
+#include <variant>
 
 namespace metrics {
+
+using ErrorDetailValue = std::variant<std::string, std::int64_t, double, bool>;
+using ErrorDetails = std::map<std::string, ErrorDetailValue>;
 
 /**
  * @brief 事件等级
@@ -107,7 +111,7 @@ struct ErrorEvent {
     
     // ========== 详情 ==========
     std::string message;                               // 简短信息（可展示）
-    Json::Value detailJson;                            // 结构化详情
+    ErrorDetails details;                             // 结构化详情（扁平标量映射）
     std::string rawSnippet;                            // 原始片段（可选，如 XML 输入/args_json）
     
     // ========== 辅助方法 ==========
@@ -159,31 +163,6 @@ struct ErrorEvent {
         return Domain::INTERNAL;  // 默认 INTERNAL
     }
     
-    /**
-     * @brief 转换为 JSON 对象（用于 API 返回）
-     */
-    Json::Value toJson() const {
-        Json::Value json;
-        json["id"] = static_cast<Json::Int64>(id);
-        json["ts"] = std::chrono::duration_cast<std::chrono::milliseconds>(
-            ts.time_since_epoch()).count();
-        json["severity"] = severityToString(severity);
-        json["domain"] = domainToString(domain);
-        json["type"] = type;
-        json["provider"] = provider;
-        json["model"] = model;
-        json["client_type"] = clientType;
-        json["api_kind"] = apiKind;
-        json["stream"] = stream;
-        json["http_status"] = httpStatus;
-        json["request_id"] = requestId;
-        json["response_id"] = responseId;
-        json["tool_name"] = toolName;
-        json["message"] = message;
-        json["detail_json"] = detailJson;
-        json["raw_snippet"] = rawSnippet;
-        return json;
-    }
 };
 
 /**

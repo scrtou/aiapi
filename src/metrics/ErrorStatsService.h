@@ -2,6 +2,7 @@
 #define METRICS_ERROR_STATS_SERVICE_H
 
 #include <domain/model/ErrorEvent.h>
+#include <json/json.h>
 #include <metrics/ErrorStatsConfig.h>
 #include <dbManager/metrics/ErrorStatsDbManager.h>
 #include <memory>
