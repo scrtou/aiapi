@@ -572,3 +572,4 @@ config.json
 build/
 src/build/
 build-review/
+build-coverage/

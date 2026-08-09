@@ -20,6 +20,29 @@ if (NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_EXTENSIONS OFF)
 endif()
 
+# Standalone test builds do not include src/CMakeLists.txt, so provide the same
+# opt-in coverage helper when it is not already defined by the parent build.
+if (NOT COMMAND aiapi_enable_coverage)
+    option(AIAPI_ENABLE_COVERAGE "enable gcov/llvm-cov instrumentation" OFF)
+    function(aiapi_enable_coverage target_name)
+        if (NOT AIAPI_ENABLE_COVERAGE)
+            return()
+        endif()
+        if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(${target_name} PRIVATE -O0 -g --coverage)
+            set_property(TARGET ${target_name} APPEND_STRING PROPERTY LINK_FLAGS " --coverage")
+        elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target_name} PRIVATE
+                -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+            set_property(TARGET ${target_name} APPEND_STRING PROPERTY LINK_FLAGS
+                " -fprofile-instr-generate -fcoverage-mapping")
+        else()
+            message(FATAL_ERROR
+                "AIAPI_ENABLE_COVERAGE supports only GCC or Clang; got ${CMAKE_CXX_COMPILER_ID}")
+        endif()
+    endfunction()
+endif()
+
 enable_testing()
 
 
@@ -108,6 +131,7 @@ set(PROJECT_SOURCES
 )
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})
+aiapi_enable_coverage(${PROJECT_NAME})
 
 # 包含目录
 target_include_directories(${PROJECT_NAME} PRIVATE

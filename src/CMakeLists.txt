@@ -22,6 +22,29 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# P1-W1: runtime line/branch coverage is opt-in and isolated from release builds.
+option(AIAPI_ENABLE_COVERAGE "enable gcov/llvm-cov instrumentation" OFF)
+
+function(aiapi_enable_coverage target_name)
+    if (NOT AIAPI_ENABLE_COVERAGE)
+        return()
+    endif()
+
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(${target_name} PRIVATE -O0 -g --coverage)
+        # LINK_FLAGS works with the repository's CMake 3.5 minimum.
+        set_property(TARGET ${target_name} APPEND_STRING PROPERTY LINK_FLAGS " --coverage")
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(${target_name} PRIVATE
+            -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET ${target_name} APPEND_STRING PROPERTY LINK_FLAGS
+            " -fprofile-instr-generate -fcoverage-mapping")
+    else()
+        message(FATAL_ERROR
+            "AIAPI_ENABLE_COVERAGE supports only GCC or Clang; got ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endfunction()
+
 add_executable(${PROJECT_NAME}
     main.cc
     accountManager/accountManager.cpp
@@ -100,6 +123,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 target_link_libraries(${PROJECT_NAME} PRIVATE PostgreSQL::PostgreSQL)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
+aiapi_enable_coverage(${PROJECT_NAME})
 # ##############################################################################
 
 
