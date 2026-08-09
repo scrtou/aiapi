@@ -2,6 +2,7 @@
 
 #include <accountManager/AccountJsonCodec.h>
 #include <controllers/codecs/ChannelJsonCodec.h>
+#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 DROGON_TEST(AccountJsonCodec_RoundTripsCurrentWireFields)
 {
@@ -80,5 +81,63 @@ DROGON_TEST(ChannelJsonCodec_DefaultsUnknownFieldsAndRedactsSecret)
 
     const Json::Value output = channelcodec::toJson(channel);
     CHECK(!output.isMember("channelkey"));
+    CHECK(!output.isMember("unknown"));
+}
+
+DROGON_TEST(RetoolWorkspaceJsonCodec_RoundTripsNestedFields)
+{
+    Json::Value input(Json::objectValue);
+    input["workspaceId"] = "ws-1";
+    input["email"] = "owner@example.invalid";
+    input["password"] = "password";
+    input["mailProvider"] = "fixture-mail";
+    input["mailAccountId"] = "mail-1";
+    input["baseUrl"] = "https://workspace.invalid";
+    input["subdomain"] = "workspace";
+    input["accessToken"] = "access-token";
+    input["xsrfToken"] = "xsrf-token";
+    input["extraCookies"]["session"] = "cookie";
+    input["openaiResourceUuid"] = "openai-uuid";
+    input["openaiResourceName"] = "openai-name";
+    input["anthropicResourceUuid"] = "anthropic-uuid";
+    input["anthropicResourceName"] = "anthropic-name";
+    input["workflowId"] = "workflow-1";
+    input["workflowApiKey"] = "workflow-key";
+    input["agentId"] = "agent-1";
+    input["status"] = "ready";
+    input["verifyStatus"] = "passed";
+    input["lastVerifyAt"] = "verified";
+    input["lastUsedAt"] = "used";
+    input["inUseCount"] = 2;
+    input["notes"]["owner"] = "test";
+    input["createdAt"] = "created";
+    input["updatedAt"] = "updated";
+
+    const auto workspace = retoolworkspacecodec::fromJson(input);
+    const Json::Value output = retoolworkspacecodec::toJson(workspace, true);
+    CHECK(output == input);
+}
+
+DROGON_TEST(RetoolWorkspaceJsonCodec_AcceptsSnakeCaseAndRedactsSecrets)
+{
+    Json::Value input(Json::objectValue);
+    input["workspace_id"] = "ws-snake";
+    input["base_url"] = "https://snake.invalid";
+    input["access_token"] = "access-token";
+    input["xsrf_token"] = "xsrf-token";
+    input["in_use_count"] = 3;
+    input["unknown"] = "ignored";
+
+    const auto workspace = retoolworkspacecodec::fromJson(input);
+    CHECK(workspace.workspaceId == "ws-snake");
+    CHECK(workspace.baseUrl == "https://snake.invalid");
+    CHECK(workspace.inUseCount == 3);
+    CHECK(workspace.status == "provisioning");
+    CHECK(workspace.verifyStatus == "unknown");
+
+    const Json::Value output = retoolworkspacecodec::toJson(workspace);
+    CHECK(!output.isMember("password"));
+    CHECK(!output.isMember("accessToken"));
+    CHECK(!output.isMember("xsrfToken"));
     CHECK(!output.isMember("unknown"));
 }

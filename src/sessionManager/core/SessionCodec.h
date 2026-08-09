@@ -2,7 +2,7 @@
 #define SESSION_CODEC_H
 
 #include <json/json.h>
-#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/LegacySessionData.h>
 
 /**
  * @brief session_st <-> Json 编解码（会话持久化快照）

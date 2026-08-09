@@ -2,7 +2,7 @@
 #define CHAYNSAPI_H
 #include <accountManager/accountManager.h>
 #include <domain/port/APIinterface.h>
-#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/LegacySessionData.h>
 #include <apiManager/ApiFactory.h>
 #include <list>
 #include <map>

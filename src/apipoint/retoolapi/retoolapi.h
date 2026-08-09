@@ -2,7 +2,7 @@
 #define RETOOLAPI_H
 
 #include <domain/port/APIinterface.h>
-#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/LegacySessionData.h>
 #include <apipoint/retoolapi/RetoolClock.h>
 #include <apipoint/retoolapi/RetoolHttpTransport.h>
 #include <apiManager/ApiFactory.h>

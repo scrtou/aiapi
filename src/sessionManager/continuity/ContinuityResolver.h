@@ -3,7 +3,7 @@
 
 #include <string>
 #include <sessionManager/contracts/GenerationRequest.h>
-#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/LegacySessionData.h>
 /**
  * @brief 会话连续性决策结果
  */
@@ -39,4 +39,3 @@ private:
 };
 
 #endif // 头文件保护结束
-

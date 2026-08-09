@@ -4,7 +4,7 @@
 #include <sessionManager/contracts/GenerationRequest.h>
 #include <sessionManager/contracts/GenerationEvent.h>
 #include <sessionManager/contracts/IResponseSink.h>
-#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/LegacySessionData.h>
 #include <sessionManager/core/SessionExecutionGate.h>
 #include <sessionManager/core/Errors.h>
 #include <sessionManager/tooling/ToolCallBridge.h>
