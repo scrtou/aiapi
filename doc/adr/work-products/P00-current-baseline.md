@@ -14,11 +14,13 @@
 - 识别 P0/P1/P2 风险，并确定必须整体重写的组件；
 - 新增 ADR-09/10/11，明确 IO、codec 和生产 target 边界；
 - `architecture_audit --selftest`、baseline、cycle、layer、223 测试通过。
+- 已完成 Chayns 同步 HTTP timeout 修改审查，见
+  [`P00-chayns-timeout-review.md`](./P00-chayns-timeout-review.md)。
 
 ## 剩余动作
 
-1. 不纳入用户未提交的 Chayns 源码改动；
-2. 代码提交后生成 clean baseline；
+1. 独立提交已审查的 Chayns timeout 修改；
+2. 在该代码提交后生成 clean baseline；
 3. 进入 P1 行为安全网并建立真实运行时覆盖报告；P1 完成前不得开始 P3 production target 化；
 4. 将假上游 fixture 和 SIGTERM harness 保存到 `doc/adr/work-products/` 对应 P1 工作包。
 

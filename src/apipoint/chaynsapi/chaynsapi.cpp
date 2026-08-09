@@ -215,7 +215,7 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image,
     
     request->setBody(body);
     
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, chayns::kUpstreamUploadTimeoutSeconds);
     
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[chaynsAPI] 上传图片失败： 网络错误";
@@ -483,7 +483,7 @@ void chaynsapi::postChatMessage(session_st& session)
             request->setPath("/v2/userSettings");
             request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
             applyChaynsRouteHeaders(request, *accountinfo, requestRoute);
-            auto [result, response] = authClient->sendRequest(request);
+            auto [result, response] = authClient->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
             if (result == ReqResult::Ok && response && response->statusCode() == k200OK) {
                 auto jsonResp = response->getJsonObject();
                 if (jsonResp) {
@@ -609,7 +609,7 @@ void chaynsapi::postChatMessage(session_st& session)
             
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
             
-            auto sendResult = client->sendRequest(reqSend);
+            auto sendResult = client->sendRequest(reqSend, chayns::kUpstreamRequestTimeoutSeconds);
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 发送后续消息失败(网络错误)";
                 sendFailed = true;
@@ -785,7 +785,8 @@ void chaynsapi::postChatMessage(session_st& session)
                 applyNewThreadText(reduced);
             }
 
-            auto sendResult = client->sendRequest(buildNewThreadRequest());
+            auto sendResult = client->sendRequest(
+                buildNewThreadRequest(), chayns::kUpstreamRequestTimeoutSeconds);
 
             // 413 fallback: upstream hard limit may be lower than configured value
             while (sendResult.first == ReqResult::Ok && sendResult.second &&
@@ -799,7 +800,8 @@ void chaynsapi::postChatMessage(session_st& session)
                          << ", originalBytes=" << full_message.size()
                          << ", retryBytes=" << reduced.size();
                 applyNewThreadText(reduced);
-                sendResult = client->sendRequest(buildNewThreadRequest());
+                sendResult = client->sendRequest(
+                    buildNewThreadRequest(), chayns::kUpstreamRequestTimeoutSeconds);
             }
 
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
@@ -906,7 +908,7 @@ void chaynsapi::postChatMessage(session_st& session)
             reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
             applyChaynsRouteHeaders(reqGet, *accountinfo, requestRoute);
 
-            auto getResult = client->sendRequest(reqGet);
+            auto getResult = client->sendRequest(reqGet, chayns::kUpstreamRequestTimeoutSeconds);
             if (getResult.first == ReqResult::Ok && getResult.second) {
                 auto responseGet = getResult.second;
                 if (responseGet->statusCode() == k200OK) {
@@ -1158,7 +1160,7 @@ bool chaynsapi::checkAlivableToken(string token)
     request->setPath("/v2/userSettings");
     request->addHeader("Authorization", "Bearer " + token);
     chayns_browser::applyBrowserHeaders(request);
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[chaynsAPI] 验证Token失败：网络错误";
         return false;
@@ -1224,7 +1226,7 @@ bool chaynsapi::loadModels(bool forceRefresh)
     request->setPath("/chayns-ai-chatbot/nativeModelChatbot");
     chayns_browser::applyBrowserHeaders(request);
     
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
     
     if (result != ReqResult::Ok || !response || response->statusCode() != k200OK) {
         LOG_ERROR << "[chaynsAPI] 从API获取模型列表失败, result=" << static_cast<int>(result)
@@ -1409,7 +1411,7 @@ bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
         origin.empty() ? CHAYNS_FREE_ORIGIN : origin,
         referer.empty() ? CHAYNS_FREE_REFERER : referer);
 
-    auto [result, response] = client->sendRequest(request);
+    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
     if (result != ReqResult::Ok || !response ||
         (response->statusCode() != k200OK && response->statusCode() != k204NoContent)) {
         LOG_WARN << "[chaynsAPI] 删除上游线程失败, result=" << static_cast<int>(result)

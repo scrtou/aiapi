@@ -159,4 +159,9 @@ DROGON_TEST(ChaynsPollingPolicy_AdaptiveBackoff)
     CHECK(chayns::pollingDelayForElapsed(seconds(15)) == seconds(1));
     CHECK(chayns::pollingDelayForElapsed(seconds(60)) == seconds(2));
     CHECK(chayns::kRequestPollingDeadline == minutes(5));
+    CHECK(chayns::kUpstreamRequestTimeoutSeconds > 0.0);
+    CHECK(chayns::kUpstreamUploadTimeoutSeconds >=
+          chayns::kUpstreamRequestTimeoutSeconds);
+    CHECK(chayns::kUpstreamRequestTimeoutSeconds <
+          duration_cast<duration<double>>(chayns::kRequestPollingDeadline).count());
 }
