@@ -48,6 +48,8 @@ endfunction()
 add_executable(${PROJECT_NAME}
     main.cc
     accountManager/accountManager.cpp
+    accountManager/AccountHttpTransport.cpp
+    accountManager/AccountClock.cpp
     accountManager/RetoolProvisionHealth.cpp
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
@@ -98,9 +100,6 @@ add_executable(${PROJECT_NAME}
     sessionManager/tooling/BridgeHelpers.cpp
     sessionManager/tooling/BridgeProtocolCodec.cpp
     sessionManager/tooling/StrictClientRules.cpp
-    sessionManager/tooling/ToolDefinitionEncoder.cpp
-    sessionManager/tooling/ForcedToolCallGenerator.cpp
-    sessionManager/tooling/ToolCallNormalizer.cpp
     sessionManager/continuity/ResponseIndex.cpp
     sessionManager/continuity/HistoryReplayBudget.cpp
     sessionManager/continuity/OutboundBudget.cpp

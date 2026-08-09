@@ -33,9 +33,9 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | 🔄 | 审计已完成，四条集成测试和假上游尚未建立 |
 
-**当前执行阶段：阶段 1（行为安全网），当前工作项 P1-W4（Generation/Account 权威实现 characterization）。**
+**当前执行阶段：阶段 1（行为安全网），当前工作项 P1-W5（SIGTERM、队列、断连 harness）。**
 
-P1-W3 已完成：`P01-retool-characterization.md` 锁定 workflow/agent 的真实生产调用、workspace 亲和、usage RAII、错误映射和离线 fake transport/clock；normal/coverage ctest 均为 244/244 PASS。下一步只允许执行 P1-W4，不能提前进入 P2/P3。
+P1-W4 已完成：`P01-generation-account-characterization.md` 通过真实 Generation/Account 入口锁定 ToolBridge、emit、token 失效和自动注册回滚；R1 已从 4 降为 0，normal/coverage ctest 均为 252/252 PASS。下一步只允许执行 P1-W5；SIGTERM、队列、断连和 ASan 门禁通过前不能进入 P2/P3。
 
 ---
 

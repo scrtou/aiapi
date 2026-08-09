@@ -184,12 +184,13 @@ std::string extractErrorMessageFromEnvelope(const Json::Value& json, const std::
     return fallback;
 }
 
-Json::Value fetchNexosChatDataByCookie(const std::string& cookieHeader) {
+Json::Value fetchNexosChatDataByCookie(
+    const std::string& cookieHeader,
+    account::IAccountHttpTransport& transport) {
     if (cookieHeader.empty()) {
         return Json::Value();
     }
 
-    auto client = HttpClient::newHttpClient("https://workspace.nexos.ai");
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/chat.data");
@@ -200,7 +201,8 @@ Json::Value fetchNexosChatDataByCookie(const std::string& cookieHeader) {
     request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", cookieHeader);
 
-    auto [result, response] = client->sendRequest(request, 30.0);
+    auto [result, response] = transport.send(
+        "https://workspace.nexos.ai", request, 30.0);
     if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
         return Json::Value();
     }
@@ -466,6 +468,28 @@ void AccountManager::setChannelStore(std::shared_ptr<IChannelStore> store)
     channelStore = std::move(store);
 }
 
+void AccountManager::setHttpTransport(std::shared_ptr<account::IAccountHttpTransport> transport)
+{
+    if (transport) httpTransport_ = std::move(transport);
+}
+
+void AccountManager::setClock(std::shared_ptr<account::IAccountClock> clock)
+{
+    if (clock) clock_ = std::move(clock);
+}
+
+account::HttpResult AccountManager::sendHttpRequest(
+    const std::string& baseUrl,
+    const drogon::HttpRequestPtr& request,
+    double timeoutSeconds) const
+{
+    if (!httpTransport_)
+    {
+        return {drogon::ReqResult::BadResponse, nullptr};
+    }
+    return httpTransport_->send(baseUrl, request, timeoutSeconds);
+}
+
 IChannelStore* AccountManager::requireChannelStore()
 {
     if (channelStore)
@@ -489,6 +513,8 @@ IAccountStore* AccountManager::requireStore()
 }
 
 AccountManager::AccountManager()
+    : httpTransport_(account::makeDrogonAccountHttpTransport()),
+      clock_(account::makeRealAccountClock())
 {
 
 }
@@ -738,7 +764,9 @@ void AccountManager::normalizeNexosAccountsInDatabase()
             continue;
         }
 
-        const Json::Value chatData = fetchNexosChatDataByCookie(normalizedToken);
+        const Json::Value chatData = httpTransport_
+            ? fetchNexosChatDataByCookie(normalizedToken, *httpTransport_)
+            : Json::Value();
         const std::string email = extractNexosEmailFromChatData(chatData);
         if (email.empty() || email == account.userName) {
             continue;
@@ -1148,12 +1176,12 @@ void AccountManager::printAccountPoolMap()
 bool AccountManager::checkChaynsToken(string token)
 {
     LOG_INFO << "[账户管理] 开始校验 Chayns 令牌";
-    auto client = HttpClient::newHttpClient("https://webapi.tobit.com/AccountService/v1.0/Chayns/User");
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/AccountService/v1.0/Chayns/User");
     request->addHeader("Authorization","Bearer " + token);
-    auto [result, response] = client->sendRequest(request, 30.0);
+    auto [result, response] = sendHttpRequest(
+        "https://webapi.tobit.com/AccountService/v1.0/Chayns/User", request, 30.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] 令牌校验请求失败, result=" << static_cast<int>(result);
         LOG_INFO << "[账户管理] Chayns 令牌校验结束";
@@ -1177,7 +1205,6 @@ bool AccountManager::checkNexosToken(string token)
         return false;
     }
 
-    auto client = HttpClient::newHttpClient("https://workspace.nexos.ai");
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/chat.data");
@@ -1188,7 +1215,7 @@ bool AccountManager::checkNexosToken(string token)
     request->addHeader("user-agent", nexos::userAgent());
     request->addHeader("cookie", token);
 
-    auto [result, response] = client->sendRequest(request, 30.0);
+    auto [result, response] = sendHttpRequest("https://workspace.nexos.ai", request, 30.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] Nexos cookies 校验失败, result=" << static_cast<int>(result);
         return false;
@@ -1262,7 +1289,6 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
         LOG_ERROR << "[账户管理] 达到最大重试次数后仍无法连通目标主机: " << baseUrl;
         return Json::Value(); // 返回空的Json对象
     }
-    auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
     Json::Value json;
     json["site"] = "chayns";
@@ -1277,7 +1303,7 @@ Json::Value AccountManager::getChaynsToken(string username,string passwd)
     if (!downstreamApiKey.empty()) {
         request->addHeader("Authorization", "Bearer " + downstreamApiKey);
     }
-    auto [result, response] = client->sendRequest(request, 300.0);
+    auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
         return Json::Value();
@@ -1351,7 +1377,6 @@ Json::Value AccountManager::getNexosToken(string username,string passwd)
         return Json::Value();
     }
 
-    auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
     Json::Value json;
     json["site"] = "nexos";
@@ -1369,7 +1394,7 @@ Json::Value AccountManager::getNexosToken(string username,string passwd)
         request->addHeader("Authorization", "Bearer " + downstreamApiKey);
     }
 
-    auto [result, response] = client->sendRequest(request, 300.0);
+    auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[账户管理] Nexos 登录服务请求失败, result=" << static_cast<int>(result);
         return Json::Value();
@@ -1570,7 +1595,6 @@ void AccountManager::checkUpdateAccountToken()
 
 // 添加检测服务可用性的函数
 bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
-    auto checkClient = HttpClient::newHttpClient(host);
     const std::vector<std::string> candidatePaths = {
         "/api/v1/health",
         "/health",
@@ -1584,7 +1608,7 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
                 auto checkRequest = HttpRequest::newHttpRequest();
                 checkRequest->setMethod(HttpMethod::Get);
                 checkRequest->setPath(path);
-                auto [checkResult, checkResponse] = checkClient->sendRequest(checkRequest, 30.0);
+                auto [checkResult, checkResponse] = sendHttpRequest(host, checkRequest, 30.0);
                 if (checkResponse && checkResponse->getStatusCode() == 200) {
                     LOG_INFO << "[账户管理] 目标主机已连通，探测路径: " << path
                              << "，累计重试次数: " << retryCount << " 次";
@@ -1596,7 +1620,7 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
         }
         
         retryCount++;
-        std::this_thread::sleep_for(std::chrono::seconds(1)); // 等待1秒后重试
+        clock_->sleepFor(std::chrono::seconds(1)); // 等待1秒后重试
     }
     
     return false;
@@ -1851,7 +1875,7 @@ void AccountManager::checkChannelAccountCount(string apiName)
                 }
                 if (i < needed - 1)
                 {
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    clock_->sleepFor(std::chrono::seconds(5));
                 }
             }
         }
@@ -1873,7 +1897,7 @@ void AccountManager::checkChannelAccountCount(string apiName)
             {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            clock_->sleepFor(std::chrono::seconds(5));
         }
     }
 }
@@ -2039,7 +2063,6 @@ bool AccountManager::autoRegisterAccount(string apiName)
     }
     LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
 
-    auto client = HttpClient::newHttpClient(baseUrl);
     auto request = HttpRequest::newHttpRequest();
     Json::Value workflowBody = buildRegistrationWorkflowBody(apiName, firstName, lastName, password);
 
@@ -2053,7 +2076,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     }
     
     LOG_INFO << "[自动注册] 发送注册请求...";
-    auto [result, response] = client->sendRequest(request, 300.0);
+    auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
 
     if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
         const int httpStatus = response ? static_cast<int>(response->getStatusCode()) : 0;
@@ -2123,10 +2146,10 @@ bool AccountManager::autoRegisterAccount(string apiName)
         if (!downstreamApiKey.empty()) {
             detailRequest->addHeader("Authorization", "Bearer " + downstreamApiKey);
         }
-        auto [detailResult, detailResponse] = client->sendRequest(detailRequest, 30.0);
+        auto [detailResult, detailResponse] = sendHttpRequest(baseUrl, detailRequest, 30.0);
         if (detailResult != ReqResult::Ok || !detailResponse) {
             LOG_WARN << "[自动注册] 查询 workflow 状态失败, attempt=" << attempt + 1;
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            clock_->sleepFor(std::chrono::seconds(3));
             continue;
         }
 
@@ -2140,12 +2163,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
                             detailResponse->getHeader("content-type"),
                             detailBody.size())
                      << ", " << account_logging::summarizeParseError(errs);
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            clock_->sleepFor(std::chrono::seconds(3));
             continue;
         }
         workflowDetail = detailJson;
         if (!isSuccessEnvelope(detailJson) || !detailJson["data"].isObject() || !detailJson["data"].isMember("task")) {
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            clock_->sleepFor(std::chrono::seconds(3));
             continue;
         }
 
@@ -2166,7 +2189,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
             workflowReachedTerminalState = true;
             break;
         }
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        clock_->sleepFor(std::chrono::seconds(3));
     }
 
     if (!workflowSucceeded) {
@@ -2282,7 +2305,6 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
     );
 
     try {
-        auto authClient = HttpClient::newHttpClient("https://auth.tobit.com");
         auto authRequest = HttpRequest::newHttpRequest();
         authRequest->setMethod(HttpMethod::Post);
         authRequest->setPath("/v2/token");
@@ -2298,7 +2320,7 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
         authRequest->setBody(tokenBody.toStyledString());
 
         LOG_INFO << "[上游删除] 请求确认 token...";
-        auto [authResult, authResponse] = authClient->sendRequest(authRequest, 30.0);
+        auto [authResult, authResponse] = sendHttpRequest("https://auth.tobit.com", authRequest, 30.0);
 
         if (authResult != ReqResult::Ok || !authResponse || authResponse->getStatusCode() != 200) {
             LOG_ERROR << "[上游删除] 获取确认 token 失败. Result: " << (int)authResult
@@ -2327,7 +2349,6 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
         LOG_INFO << "[上游删除] 获取确认 token 成功";
 
         // ====== 第二步: 删除账号 ======
-        auto deleteClient = HttpClient::newHttpClient("https://webapi.tobit.com");
         auto deleteRequest = HttpRequest::newHttpRequest();
         deleteRequest->setMethod(HttpMethod::Delete);
         deleteRequest->setPath("/AccountService/v1.0/chayns/User");
@@ -2341,7 +2362,7 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
         deleteRequest->setBody(deleteBody.toStyledString());
 
         LOG_INFO << "[上游删除] 发送删除请求...";
-        auto [delResult, delResponse] = deleteClient->sendRequest(deleteRequest, 30.0);
+        auto [delResult, delResponse] = sendHttpRequest("https://webapi.tobit.com", deleteRequest, 30.0);
 
         if (delResult != ReqResult::Ok || !delResponse || delResponse->getStatusCode() != 200) {
             LOG_ERROR << "[上游删除] 删除上游账号失败. Result: " << (int)delResult
@@ -2354,7 +2375,6 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
 
         // ====== 第三步: 撤销 token (logout / invalidate) ======
         try {
-            auto invalidClient = HttpClient::newHttpClient("https://auth.tobit.com");
             auto invalidRequest = HttpRequest::newHttpRequest();
             invalidRequest->setMethod(HttpMethod::Post);
             invalidRequest->setPath("/v2/invalidToken");
@@ -2365,7 +2385,7 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
             invalidRequest->setBody(invalidBody.toStyledString());
 
             LOG_INFO << "[上游删除] 撤销 token...";
-            auto [invResult, invResponse] = invalidClient->sendRequest(invalidRequest, 30.0);
+            auto [invResult, invResponse] = sendHttpRequest("https://auth.tobit.com", invalidRequest, 30.0);
 
             if (invResult == ReqResult::Ok && invResponse && invResponse->getStatusCode() == 200) {
                 LOG_INFO << "[上游删除] token 撤销成功: " << account.userName;
@@ -2396,14 +2416,13 @@ bool AccountManager::getUserProAccess(const string& token, const string& personI
     string path = "/ai-proxy/v1/userSettings/personId/" + personId;
     
     try {
-        auto client = HttpClient::newHttpClient(baseUrl);
         auto request = HttpRequest::newHttpRequest();
         request->setMethod(HttpMethod::Get);
         request->setPath(path);
         request->addHeader("Content-Type", "application/json");
         request->addHeader("Authorization", "Bearer " + token);
         
-        auto [result, response] = client->sendRequest(request, 30.0);
+        auto [result, response] = sendHttpRequest(baseUrl, request, 30.0);
         
         if (result != ReqResult::Ok || !response) {
             LOG_ERROR << "[账户管理] 查询 Pro 权限请求失败";
@@ -2529,7 +2548,7 @@ void AccountManager::updateAllAccountTypes()
     for (auto& account : accountsToUpdate) {
         updateAccountType(account);
         // 添加短暂延迟，避免请求过于频繁
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        clock_->sleepFor(std::chrono::milliseconds(500));
     }
     
     LOG_INFO << "[账户管理] 全量刷新账号类型结束";

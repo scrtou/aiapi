@@ -715,7 +715,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         // 如果 tool_choice=required 但上游未返回工具调用，
         // 尝试根据用户输入自动生成一个工具调用
         if (toolCalls.empty()) {
-            generateForcedToolCall(session, toolCalls, textContent);
+            toolcall::generateForcedToolCall(session, toolCalls, textContent);
         }
     }
 
@@ -796,7 +796,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     }
 
     if (toolCalls.empty() && toolChoiceRequired) {
-        generateForcedToolCall(session, toolCalls, textContent);
+        toolcall::generateForcedToolCall(session, toolCalls, textContent);
     }
 
     // ==================== 步骤 4: 参数形状规范化 ====================
@@ -806,7 +806,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // - 填充缺失的可选字段默认值
     // - 规范化 ask_followup_question 的 字段
     annotateToolCallIdentities(session, toolCalls);
-    normalizeToolCallArguments(session, toolCalls);
+    toolcall::normalizeToolCallArguments(session, toolCalls);
 
     // ==================== 步骤 4： 校验与无效调用过滤 ====================
     // 【这是防止“缺少 nativeArgs”错误的关键步骤】
@@ -906,7 +906,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
         size_t toolCallsBeforeStrict = toolCalls.size();
         bool hadTextBeforeStrict = !textContent.empty();
         
-        applyStrictClientRules(clientType, textContent, toolCalls);
+        toolcall::applyStrictClientRules(clientType, textContent, toolCalls);
         
         // 如果规则导致了变化，记录统计
         if (toolCallsBeforeStrict != toolCalls.size() ||
@@ -1149,7 +1149,7 @@ void GenerationService::parseXmlToolCalls(
     }
 }
 
-void GenerationService::generateForcedToolCall(
+void toolcall::generateForcedToolCall(
     const session_st& session,
     std::vector<generation::ToolCallDone>& outToolCalls,
     std::string& outTextContent
@@ -1383,7 +1383,7 @@ void GenerationService::generateForcedToolCall(
  * @param session 会话状态，包含工具定义
  * @param toolCalls [输入/输出] 待规范化的工具调用列表
  */
-void GenerationService::normalizeToolCallArguments(
+void toolcall::normalizeToolCallArguments(
     const session_st& session,
     std::vector<generation::ToolCallDone>& toolCalls
 ) {
@@ -1542,15 +1542,28 @@ void GenerationService::normalizeToolCallArguments(
     };
 
     for (auto& tc : toolCalls) {
-        if (tc.arguments.empty()) continue;
-
         Json::Value args;
         Json::CharReaderBuilder builder;
         std::string errors;
-        std::istringstream iss(tc.arguments);
-        if (!Json::parseFromStream(builder, iss, &args, &errors) || !args.isObject()) {
-            continue;
+        if (tc.arguments.empty()) {
+            args = Json::Value(Json::objectValue);
+        } else {
+            std::istringstream iss(tc.arguments);
+            if (!Json::parseFromStream(builder, iss, &args, &errors)) {
+                // Tool arguments are a JSON object at the public event boundary.
+                // Do not forward malformed provider output to clients that parse
+                // this field unconditionally.
+                args = Json::Value(Json::objectValue);
+            } else if (!args.isObject()) {
+                Json::Value wrapped(Json::objectValue);
+                wrapped["value"] = args;
+                args = std::move(wrapped);
+            }
         }
+
+        // Apply the safe base contract even when the request did not carry a
+        // matching schema. Schema-aware repairs below are optional refinements.
+        tc.arguments = toCompactJson(args);
 
         const Json::Value* toolObj = findToolObj(tc.name);
         if (!toolObj) {
@@ -1641,14 +1654,6 @@ void GenerationService::normalizeToolCallArguments(
  * @param textContent [输入/输出] 文本内容，处理后可能被清空
  * @param toolCalls [输入/输出] 工具调用列表，可能被修改
  */
-void GenerationService::applyStrictClientRules(
-    const std::string& clientType,
-    std::string& textContent,
-    std::vector<generation::ToolCallDone>& toolCalls
-) {
-    toolcall::applyStrictClientRules(clientType, textContent, toolCalls);
-}
-
 /**
  * @brief 将不支持原生工具调用的请求转换为“工具桥接模式”
  *
@@ -1658,7 +1663,7 @@ void GenerationService::applyStrictClientRules(
  * 3. 写入 request.message 供上游模型遵循。
  * 4. 保留 rawMessage/toolsRaw 以便响应阶段解析与兜底。
  */
-void GenerationService::transformRequestForToolBridge(session_st& session) {
+void toolcall::transformRequestForToolBridge(session_st& session) {
     const std::string clientType = safeJsonAsString(session.provider.clientInfo.get("client_type", ""), "");
     // 请求改写侧同样以能力 IR 为唯一判据，确保与响应侧（emitResultEvents）
     // 对同一请求得出完全一致的结论——两侧若不一致，会出现

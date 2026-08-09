@@ -67,6 +67,7 @@ set(TEST_SOURCES
     test_sinks.cpp
     test_io_loop_response_stream.cpp
     test_generation_service_emit.cpp
+    test_generation_service_bridge_fixture.cpp
     test_chayns_model_catalog.cpp
     test_chayns_message_correlation.cpp
     test_chayns_fixtures.cpp
@@ -80,6 +81,7 @@ set(TEST_SOURCES
     test_retool_provider_fixture.cpp
     test_channel_store_port.cpp
     test_account_store_port.cpp
+    test_account_lifecycle_fixture.cpp
     test_account_reload_ghost_index.cpp
     test_account_pool_heap_order.cpp
     test_retool_provision_health.cpp
@@ -112,9 +114,6 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/XmlTagToolCallCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/StrictClientRules.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ForcedToolCallGenerator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallNormalizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolDefinitionEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeHelpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
     # 步骤 181：为 /ready 库探针补测试，需真身编译进来（符号缺口实测为 0）。
@@ -143,6 +142,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/channel/channelDbManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/accountManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountHttpTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountClock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/RetoolProvisionHealth.cpp
 )
 

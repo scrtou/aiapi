@@ -16,7 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P1（阶段 1，行为安全网）**，正在执行 P1-W4 Generation/Account 权威实现 characterization。P0 已在 clean commit
+当前是 **P1（阶段 1，行为安全网）**，正在执行 P1-W5 SIGTERM、队列、断连 harness。P0 已在 clean commit
 `544bf44` 上生成发布基线，P1-W1/W2/W3 已完成 coverage 基线、Chayns 和 Retool 离线假上游。P1 全部退出门禁通过前，不能开始
 P2 Provider 退役或 P3 production target 重构。
 
@@ -28,8 +28,8 @@ P2 Provider 退役或 P3 production target 重构。
 | P1-W1 | 阶段 1 | gcov/llvm-cov 运行时覆盖基线 | [`P01-runtime-coverage.md`](../work-products/P01-runtime-coverage.md) | DONE |
 | P1-W2 | 阶段 1 | Chayns 脱敏 fixture 与假上游 | [`P01-chayns-fixtures.md`](../work-products/P01-chayns-fixtures.md) | DONE |
 | P1-W3 | 阶段 1 | Retool workflow/agent characterization | [`P01-retool-characterization.md`](../work-products/P01-retool-characterization.md) | DONE |
-| P1-W4 | 阶段 1 | Generation/Account 权威实现 characterization | 生产调用入口、变异验证、分支覆盖 | TODO |
-| P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | 空闲/阻塞/积压/断连当前行为报告 | TODO |
+| P1-W4 | 阶段 1 | Generation/Account 权威实现 characterization | [`P01-generation-account-characterization.md`](../work-products/P01-generation-account-characterization.md) | DONE |
+| P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | 空闲/阻塞/积压/断连当前行为报告 | DOING |
 | P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | SQL、对账和往返演练报告 | TODO |
 | P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | 410、配置/指标清理、精确门禁 | TODO |
 | P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | TODO |

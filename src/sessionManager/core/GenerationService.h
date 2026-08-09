@@ -148,18 +148,6 @@ private:
      */
     static bool getChannelSupportsToolCalls(const std::string& channelName);
     
-    /**
-     * @brief 为 ToolCallBridge 转换请求
-     *
-     * 当通道不支持 tool calls 时，将工具定义注入到 currentInput 前面
-     * 使用 XmlTagToolCallCodec::encodeToolDefinitions() 生成文本格式的工具定义
-     *
-     * @param session 会话状态（会被修改）
-     */
-    static void transformRequestForToolBridge(session_st& session);
-    
-
-     
      /**
       * @brief 解析 XML 格式的 tool calls（Toolify-style）
       *
@@ -174,46 +162,6 @@ private:
          const std::string& sentinel
      );
     
-    /**
-     * @brief 生成 tool_choice=required 时的兜底 tool call
-     *
-     * @param session 会话状态
-     * @param outToolCalls 输出的 tool calls 列表
-     * @param outTextContent 输出的文本内容（会被清空）
-     */
-    static void generateForcedToolCall(
-        const session_st& session,
-        std::vector<generation::ToolCallDone>& outToolCalls,
-        std::string& outTextContent
-    );
-    
-    /**
-     * @brief 规范化 tool call 参数形状
-     *
-     * 根据客户端提供的 JSONSchema 规范化参数
-     *
-     * @param session 会话状态
-     * @param toolCalls tool calls 列表（会被修改）
-     */
-    static void normalizeToolCallArguments(
-        const session_st& session,
-        std::vector<generation::ToolCallDone>& toolCalls
-    );
-    
-    /**
-     * @brief 应用严格客户端规则
-     *
-     * 包括：包装为 attempt_completion、限制单个 tool call
-     *
-     * @param clientType 客户端类型
-     * @param textContent 文本内容（会被修改）
-     * @param toolCalls tool calls 列表（会被修改）
-     */
-    static void applyStrictClientRules(
-        const std::string& clientType,
-        std::string& textContent,
-        std::vector<generation::ToolCallDone>& toolCalls
-    );
 };
 
 #endif // 头文件保护结束

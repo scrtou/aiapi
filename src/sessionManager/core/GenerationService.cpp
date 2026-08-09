@@ -201,7 +201,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
 	            if (session.request.tools.isNull() || !session.request.tools.isArray() || session.request.tools.size() == 0) {
 	                session.request.tools = toolsForBridge;
 	            }
-	            transformRequestForToolBridge(session);
+	            toolcall::transformRequestForToolBridge(session);
 	        }
         
         // 1. Responses 协议：生成 响应Id 并尽早绑定到 响应Index（用于 previous_响应_id 续接）

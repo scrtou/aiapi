@@ -21,6 +21,8 @@ using namespace std;
 #include "domain/model/AccountData.h"
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
+#include "AccountHttpTransport.h"
+#include "AccountClock.h"
 
 
 class AccountManager
@@ -67,6 +69,11 @@ class AccountManager
     // 同名会让 main.cc 意图含糊，也让启动接线门禁难以分辨。
     shared_ptr<IChannelStore> channelStore;
     IChannelStore* requireChannelStore();
+    std::shared_ptr<account::IAccountHttpTransport> httpTransport_;
+    std::shared_ptr<account::IAccountClock> clock_;
+    account::HttpResult sendHttpRequest(const std::string& baseUrl,
+                                        const drogon::HttpRequestPtr& request,
+                                        double timeoutSeconds) const;
      AccountManager();
     ~AccountManager();
 
@@ -74,6 +81,8 @@ class AccountManager
     // R4 试点 C 注入点：必须在 init() 之前调用（init() 会立刻建表/迁移账号）。
     void setStore(std::shared_ptr<IAccountStore> store);
     void setChannelStore(std::shared_ptr<IChannelStore> store);
+    void setHttpTransport(std::shared_ptr<account::IAccountHttpTransport> transport);
+    void setClock(std::shared_ptr<account::IAccountClock> clock);
 
     static AccountManager& getInstance()
     {

@@ -35,8 +35,10 @@ TARGETS = [
         "name": "Generation ToolBridge transform/emit",
         "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
         "functions": [
-            "GenerationService::transformRequestForToolBridge(",
+            "toolcall::transformRequestForToolBridge(",
             "GenerationService::emitResultEvents(",
+            "toolcall::generateForcedToolCall(",
+            "toolcall::normalizeToolCallArguments(",
         ],
     },
     {
@@ -57,6 +59,11 @@ TARGETS = [
             "AccountManager::rollbackWaitingAccount(",
             "AccountManager::rebuildPoolLocked(",
             "AccountManager::loadAccount(",
+            "AccountManager::addAccountbyPost(",
+            "AccountManager::updateAccount(",
+            "AccountManager::deleteAccountbyPost(",
+            "AccountManager::checkToken(",
+            "AccountManager::autoRegisterAccount(",
         ],
     },
     {
@@ -257,7 +264,12 @@ def target_result(target, records):
         matches = [
             function
             for function in functions
-            if requested in function["name"] and "::{lambda" not in function["name"]
+            if requested in function["name"]
+            and "::{lambda" not in function["name"]
+            # GCC also emits local-class methods under the enclosing function
+            # name (for example ``foo(...)::Guard::~Guard``). They are not an
+            # additional match for the requested production entry point.
+            and ")::" not in function["name"]
         ]
         if not matches:
             result["functions"].append(
