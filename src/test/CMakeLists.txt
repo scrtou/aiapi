@@ -69,6 +69,8 @@ set(TEST_SOURCES
     test_generation_service_emit.cpp
     test_chayns_model_catalog.cpp
     test_chayns_message_correlation.cpp
+    test_chayns_fixtures.cpp
+    test_chayns_provider_fixture.cpp
     test_nexos_user_agent.cpp
     test_chayns_browser_impersonation.cpp
     test_nexos_registration_mail_policy.cpp
@@ -122,6 +124,9 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsModelCatalog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsHttpTransport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsClock.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/chaynsapi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../retoolWorkspace/RetoolWorkspaceManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp

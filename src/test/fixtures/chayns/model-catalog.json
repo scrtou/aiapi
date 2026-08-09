@@ -1,0 +1,105 @@
+{
+  "name": "model-catalog",
+  "request": {
+    "method": "GET",
+    "path": "/chayns-ai-chatbot/nativeModelChatbot"
+  },
+  "response": {
+    "body": [
+      {
+        "canHandleFunctionCalling": true,
+        "canHandleGoogleSearch": true,
+        "canHandleImages": true,
+        "canUseThinking": true,
+        "costIndicator": 38,
+        "developer": "fixture-developer",
+        "developerCountry": "ZZ",
+        "hostingCountry": "ZZ",
+        "hostingProvider": "fixture-host",
+        "knowledge": "2026-01-01T00:00:00.000Z",
+        "personId": "<model-person-1>",
+        "showName": "fixture-free-model",
+        "skills": {
+          "agentSkills": 40,
+          "coding": 32,
+          "creativity": 98,
+          "factualKnowledge": 80,
+          "general": 54,
+          "linguistics": 97,
+          "logicalThinking": 29,
+          "math": 84,
+          "speed": 85,
+          "speedThinking": 33
+        },
+        "supportedMimeTypes": [
+          "text/html",
+          "text/csv",
+          "text/x-python",
+          "application/json",
+          "text/*",
+          "text/markdown",
+          "image/*",
+          "image/jpeg",
+          "image/webp",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "text/css",
+          "text/plain",
+          "image/png",
+          "application/pdf",
+          "text/rtf",
+          "text/xml"
+        ],
+        "tobitId": 2001,
+        "usedModel": 77
+      },
+      {
+        "canHandleFunctionCalling": true,
+        "canHandleGoogleSearch": true,
+        "canHandleImages": true,
+        "canUseThinking": true,
+        "costIndicator": 84,
+        "developer": "fixture-developer",
+        "developerCountry": "ZZ",
+        "hostingCountry": "ZZ",
+        "hostingProvider": "fixture-host",
+        "knowledge": "2026-01-01T00:00:00.000Z",
+        "needSidekickPro": true,
+        "personId": "<model-person-2>",
+        "showName": "fixture-pro-model",
+        "skills": {
+          "agentSkills": 81,
+          "coding": 62,
+          "general": 60,
+          "logicalThinking": 57,
+          "speedThinking": 4
+        },
+        "supportedMimeTypes": [
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "text/plain",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "image/*",
+          "text/css",
+          "text/markdown",
+          "text/*",
+          "application/json",
+          "text/x-python",
+          "text/csv",
+          "text/html",
+          "text/xml",
+          "text/rtf"
+        ],
+        "tobitId": 2002,
+        "usedModel": 130
+      }
+    ],
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 200
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "login-mein.sidekick.ki.har"
+}

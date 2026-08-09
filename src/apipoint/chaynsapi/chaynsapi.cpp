@@ -10,6 +10,7 @@
 #include <sessionManager/continuity/HistoryReplayBudget.h>
 #include <sessionManager/continuity/OutboundBudget.h>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utils/chaynsBrowserImpersonation.h>
@@ -118,8 +119,25 @@ std::string summarizeUpstreamResponse(const HttpResponsePtr& response)
 }  // namespace
 
 chaynsapi::chaynsapi()
+    : chaynsapi(chayns::makeDrogonChaynsHttpTransport(), chayns::makeRealChaynsClock())
 {
-   
+}
+
+chaynsapi::chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport)
+    : chaynsapi(std::move(transport), chayns::makeRealChaynsClock())
+{
+}
+
+chaynsapi::chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport,
+                     std::shared_ptr<chayns::IChaynsClock> clock)
+    : m_transport(std::move(transport)), m_clock(std::move(clock))
+{
+    if (!m_transport) {
+        throw std::invalid_argument("chaynsapi requires a non-null HTTP transport");
+    }
+    if (!m_clock) {
+        throw std::invalid_argument("chaynsapi requires a non-null clock");
+    }
 }
 
 chaynsapi::~chaynsapi()
@@ -168,8 +186,6 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image,
         return "";
     }
     
-    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
-    
     // 构建上传请求
 
     std::string uploadPath = "/image-service/v3/Images/" + personId;
@@ -215,7 +231,8 @@ std::string chaynsapi::uploadImageToService(const ImageInfo& image,
     
     request->setBody(body);
     
-    auto [result, response] = client->sendRequest(request, chayns::kUpstreamUploadTimeoutSeconds);
+    auto [result, response] = m_transport->send(
+        "https://cube.tobit.cloud", request, chayns::kUpstreamUploadTimeoutSeconds);
     
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[chaynsAPI] 上传图片失败： 网络错误";
@@ -374,7 +391,7 @@ void chaynsapi::postChatMessage(session_st& session)
     
     std::unique_lock<std::mutex> accountExecutionLock;
     while (totalAttempts < MAX_UPSTREAM_RETRIES && !upstreamSuccess &&
-           (!requestDeadlineStarted || std::chrono::steady_clock::now() < requestDeadline)) {
+           (!requestDeadlineStarted || m_clock->now() < requestDeadline)) {
         totalAttempts++;
         final_threadId.clear();
         final_userAuthorId.clear();
@@ -463,13 +480,13 @@ void chaynsapi::postChatMessage(session_st& session)
             accountExecutionLock.unlock();
         }
         const auto accountGate = accountExecutionGate(accountinfo->userName);
-        const auto accountWaitStartedAt = std::chrono::steady_clock::now();
+        const auto accountWaitStartedAt = m_clock->now();
         accountExecutionLock = std::unique_lock<std::mutex>(*accountGate);
         const auto accountWaitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - accountWaitStartedAt).count();
+            m_clock->now() - accountWaitStartedAt).count();
         LOG_INFO << "[chaynsAPI] 已获取账号单飞租约: waitMs=" << accountWaitMs;
         if (!requestDeadlineStarted) {
-            requestDeadline = std::chrono::steady_clock::now() +
+            requestDeadline = m_clock->now() +
                               chayns::kRequestPollingDeadline;
             requestDeadlineStarted = true;
         }
@@ -477,13 +494,13 @@ void chaynsapi::postChatMessage(session_st& session)
 
         if (accountinfo->personId.empty()) {
             LOG_INFO << "[chaynsAPI] personId为空，正在尝试获取";
-            auto authClient = HttpClient::newHttpClient("https://auth.chayns.net");
             auto request = HttpRequest::newHttpRequest();
             request->setMethod(HttpMethod::Get);
             request->setPath("/v2/userSettings");
             request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
             applyChaynsRouteHeaders(request, *accountinfo, requestRoute);
-            auto [result, response] = authClient->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
+            auto [result, response] = m_transport->send(
+                "https://auth.chayns.net", request, chayns::kUpstreamRequestTimeoutSeconds);
             if (result == ReqResult::Ok && response && response->statusCode() == k200OK) {
                 auto jsonResp = response->getJsonObject();
                 if (jsonResp) {
@@ -512,7 +529,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 session.response.message["statusCode"] = 500;
                 return;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 5));
+            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 5));
             continue;
         }
         
@@ -537,7 +554,6 @@ void chaynsapi::postChatMessage(session_st& session)
         }
         
         // ---- 4. 发送请求（首次发送） ----
-        auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
         string threadId;
         string userAuthorId;
         string agentAuthorId;
@@ -609,7 +625,8 @@ void chaynsapi::postChatMessage(session_st& session)
             
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
             
-            auto sendResult = client->sendRequest(reqSend, chayns::kUpstreamRequestTimeoutSeconds);
+            auto sendResult = m_transport->send(
+                "https://cube.tobit.cloud", reqSend, chayns::kUpstreamRequestTimeoutSeconds);
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
                 LOG_ERROR << "[chaynsAPI] 发送后续消息失败(网络错误)";
                 sendFailed = true;
@@ -785,8 +802,10 @@ void chaynsapi::postChatMessage(session_st& session)
                 applyNewThreadText(reduced);
             }
 
-            auto sendResult = client->sendRequest(
-                buildNewThreadRequest(), chayns::kUpstreamRequestTimeoutSeconds);
+            auto sendResult = m_transport->send(
+                "https://cube.tobit.cloud",
+                buildNewThreadRequest(),
+                chayns::kUpstreamRequestTimeoutSeconds);
 
             // 413 fallback: upstream hard limit may be lower than configured value
             while (sendResult.first == ReqResult::Ok && sendResult.second &&
@@ -800,8 +819,10 @@ void chaynsapi::postChatMessage(session_st& session)
                          << ", originalBytes=" << full_message.size()
                          << ", retryBytes=" << reduced.size();
                 applyNewThreadText(reduced);
-                sendResult = client->sendRequest(
-                    buildNewThreadRequest(), chayns::kUpstreamRequestTimeoutSeconds);
+                sendResult = m_transport->send(
+                    "https://cube.tobit.cloud",
+                    buildNewThreadRequest(),
+                    chayns::kUpstreamRequestTimeoutSeconds);
             }
 
             if (sendResult.first != ReqResult::Ok || !sendResult.second) {
@@ -865,7 +886,7 @@ void chaynsapi::postChatMessage(session_st& session)
             if (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH) {
                 LOG_WARN << "[chaynsAPI] 连续失败" << consecutiveFails << " 次, 下次将切换账号";
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 5));
+            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 5));
             continue;
         }
         
@@ -890,14 +911,14 @@ void chaynsapi::postChatMessage(session_st& session)
         bool pollFound = false;
 
         const string pollPath = "/intercom-backend/v2/thread/" + threadId + "/message";
-        const auto pollingStartedAt = std::chrono::steady_clock::now();
+        const auto pollingStartedAt = m_clock->now();
         LOG_INFO << "[chaynsAPI] 开始轮询锚定消息，请求总截止时间: "
                  << std::chrono::duration_cast<std::chrono::seconds>(
                         chayns::kRequestPollingDeadline).count()
                  << " 秒";
         LOG_INFO << "[chaynsAPI] 轮询路径: " << pollPath+"&take=1000&viewMode=user&afterDate="+lastMessageTime;
 
-        while (std::chrono::steady_clock::now() < requestDeadline) {
+        while (m_clock->now() < requestDeadline) {
             pollCount++;
             auto reqGet = HttpRequest::newHttpRequest();
             reqGet->setMethod(HttpMethod::Get);
@@ -908,7 +929,8 @@ void chaynsapi::postChatMessage(session_st& session)
             reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
             applyChaynsRouteHeaders(reqGet, *accountinfo, requestRoute);
 
-            auto getResult = client->sendRequest(reqGet, chayns::kUpstreamRequestTimeoutSeconds);
+            auto getResult = m_transport->send(
+                "https://cube.tobit.cloud", reqGet, chayns::kUpstreamRequestTimeoutSeconds);
             if (getResult.first == ReqResult::Ok && getResult.second) {
                 auto responseGet = getResult.second;
                 if (responseGet->statusCode() == k200OK) {
@@ -948,7 +970,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 }
             }
 
-            const auto now = std::chrono::steady_clock::now();
+            const auto now = m_clock->now();
             if (now >= requestDeadline) {
                 break;
             }
@@ -956,7 +978,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 now - pollingStartedAt);
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
                 requestDeadline - now);
-            std::this_thread::sleep_for(
+            m_clock->sleepFor(
                 std::min(chayns::pollingDelayForElapsed(elapsed), remaining));
         }
 
@@ -1025,13 +1047,13 @@ void chaynsapi::postChatMessage(session_st& session)
         }
         
         // 添加延迟避免过于频繁的重试
-        if (std::chrono::steady_clock::now() < requestDeadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(BASE_DELAY * 10));
+        if (m_clock->now() < requestDeadline) {
+            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 10));
         }
         
     } // 外层重试循环结束（totalAttempts < MAX_UPSTREAM_RETRIES）
 
-    if (!upstreamSuccess && std::chrono::steady_clock::now() >= requestDeadline) {
+    if (!upstreamSuccess && m_clock->now() >= requestDeadline) {
         LOG_WARN << "[chaynsAPI] 请求已达到 "
                  << std::chrono::duration_cast<std::chrono::seconds>(
                         chayns::kRequestPollingDeadline).count()
@@ -1154,13 +1176,13 @@ void chaynsapi::checkAlivableTokens()
 }
 bool chaynsapi::checkAlivableToken(string token)
 {
-    auto client = HttpClient::newHttpClient("https://auth.chayns.net");
     auto request = HttpRequest::newHttpRequest();
     request->setMethod(HttpMethod::Get);
     request->setPath("/v2/userSettings");
     request->addHeader("Authorization", "Bearer " + token);
     chayns_browser::applyBrowserHeaders(request);
-    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
+    auto [result, response] = m_transport->send(
+        "https://auth.chayns.net", request, chayns::kUpstreamRequestTimeoutSeconds);
     if (result != ReqResult::Ok || !response) {
         LOG_ERROR << "[chaynsAPI] 验证Token失败：网络错误";
         return false;
@@ -1193,7 +1215,7 @@ bool chaynsapi::loadModels(bool forceRefresh)
         std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
         if (!m_modelCatalog.byName.empty() &&
             m_modelsLoadedAt.time_since_epoch().count() != 0 &&
-            std::chrono::steady_clock::now() - m_modelsLoadedAt < MODEL_CACHE_TTL) {
+            m_clock->now() - m_modelsLoadedAt < MODEL_CACHE_TTL) {
             return true;
         }
     }
@@ -1205,12 +1227,12 @@ bool chaynsapi::loadModels(bool forceRefresh)
         std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
         if (!m_modelCatalog.byName.empty() &&
             m_modelsLoadedAt.time_since_epoch().count() != 0 &&
-            std::chrono::steady_clock::now() - m_modelsLoadedAt < MODEL_CACHE_TTL) {
+            m_clock->now() - m_modelsLoadedAt < MODEL_CACHE_TTL) {
             return true;
         }
     }
 
-    const auto refreshStartedAt = std::chrono::steady_clock::now();
+    const auto refreshStartedAt = m_clock->now();
     if (m_lastModelRefreshAttempt.time_since_epoch().count() != 0 &&
         refreshStartedAt - m_lastModelRefreshAttempt < MODEL_REFRESH_MIN_INTERVAL) {
         std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
@@ -1219,14 +1241,14 @@ bool chaynsapi::loadModels(bool forceRefresh)
     }
     m_lastModelRefreshAttempt = refreshStartedAt;
 
-    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
     auto request = HttpRequest::newHttpRequest();
     
     request->setMethod(HttpMethod::Get);
     request->setPath("/chayns-ai-chatbot/nativeModelChatbot");
     chayns_browser::applyBrowserHeaders(request);
     
-    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
+    auto [result, response] = m_transport->send(
+        "https://cube.tobit.cloud", request, chayns::kUpstreamRequestTimeoutSeconds);
     
     if (result != ReqResult::Ok || !response || response->statusCode() != k200OK) {
         LOG_ERROR << "[chaynsAPI] 从API获取模型列表失败, result=" << static_cast<int>(result)
@@ -1284,7 +1306,7 @@ bool chaynsapi::loadModels(bool forceRefresh)
     {
         std::unique_lock<std::shared_mutex> lock(m_modelCatalogMutex);
         m_modelCatalog = std::move(parsed.catalog);
-        m_modelsLoadedAt = std::chrono::steady_clock::now();
+        m_modelsLoadedAt = m_clock->now();
 
         ModelInfoMap.clear();
         for (const auto& entry : m_modelCatalog.byName) {
@@ -1399,7 +1421,6 @@ bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
     body["threadIds"] = threadIds;
     body["personId"] = account->personId;
 
-    auto client = HttpClient::newHttpClient("https://cube.tobit.cloud");
     auto request = HttpRequest::newHttpJsonRequest(body);
     request->setMethod(HttpMethod::Delete);
     request->setPath("/intercom-backend/v2/thread/member/delete");
@@ -1411,7 +1432,8 @@ bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
         origin.empty() ? CHAYNS_FREE_ORIGIN : origin,
         referer.empty() ? CHAYNS_FREE_REFERER : referer);
 
-    auto [result, response] = client->sendRequest(request, chayns::kUpstreamRequestTimeoutSeconds);
+    auto [result, response] = m_transport->send(
+        "https://cube.tobit.cloud", request, chayns::kUpstreamRequestTimeoutSeconds);
     if (result != ReqResult::Ok || !response ||
         (response->statusCode() != k200OK && response->statusCode() != k204NoContent)) {
         LOG_WARN << "[chaynsAPI] 删除上游线程失败, result=" << static_cast<int>(result)

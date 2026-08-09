@@ -1,0 +1,79 @@
+{
+  "name": "thread-create-pro",
+  "request": {
+    "body": {
+      "members": [
+        {
+          "isAdmin": true,
+          "personId": "<user-person>"
+        },
+        {
+          "personId": "<agent-person>"
+        }
+      ],
+      "messages": [
+        {
+          "text": "synthetic user question"
+        }
+      ],
+      "nerMode": "None",
+      "priority": 0,
+      "typeId": 9,
+      "workspaceUacId": 9001
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "method": "POST",
+    "path": "/intercom-backend/v2/thread?forceCreate=true"
+  },
+  "response": {
+    "body": {
+      "anonymizationForAI": false,
+      "creationTime": "2026-01-01T00:00:00.000Z",
+      "id": "<thread-1>",
+      "members": [
+        {
+          "id": "<user-author>",
+          "isAdmin": true,
+          "isAgent": false,
+          "isCreator": true,
+          "personId": "<user-person>",
+          "tobitId": 1001
+        },
+        {
+          "id": "<agent-author>",
+          "isAdmin": false,
+          "isAgent": true,
+          "isCreator": false,
+          "personId": "<agent-person>",
+          "tobitId": 1002
+        }
+      ],
+      "messages": [
+        {
+          "author": {
+            "id": "<user-author>"
+          },
+          "creationTime": "2026-01-01T00:00:00.000Z",
+          "id": "<request-message>",
+          "modifiedTime": "2026-01-01T00:00:00.000Z",
+          "text": "synthetic user question",
+          "threadId": "<thread-1>",
+          "typeId": 1
+        }
+      ],
+      "modifiedTime": "2026-01-01T00:00:00.000Z",
+      "nerMode": "None",
+      "typeId": 9,
+      "workspaceUacId": 9001
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 201
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "mein.sidekick.ki.har"
+}

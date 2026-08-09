@@ -15,6 +15,8 @@
 #include "ChaynsModelCatalog.h"
 #include "ChaynsMessageCorrelation.h"
 #include "ChaynsPollingPolicy.h"
+#include "ChaynsHttpTransport.h"
+#include "ChaynsClock.h"
 
 using std::list;
 using std::map;
@@ -31,6 +33,9 @@ class chaynsapi:public APIinterface
 {
     public:
         static void* createApi();
+        explicit chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport);
+        chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport,
+                  std::shared_ptr<chayns::IChaynsClock> clock);
         provider::ProviderResult generate(session_st& session) override;
         void postChatMessage(session_st& session);
         void checkAlivableTokens();
@@ -70,6 +75,8 @@ class chaynsapi:public APIinterface
                                          const std::string& referer);
 
         chaynsapi();
+        std::shared_ptr<chayns::IChaynsHttpTransport> m_transport;
+        std::shared_ptr<chayns::IChaynsClock> m_clock;
     
     // 定义一个结构体保存线程上下文信息
     struct ThreadContext {

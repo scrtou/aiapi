@@ -52,6 +52,8 @@ add_executable(${PROJECT_NAME}
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
+    apipoint/chaynsapi/ChaynsHttpTransport.cpp
+    apipoint/chaynsapi/ChaynsClock.cpp
     apipoint/chaynsapi/ChaynsModelCatalog.cpp
     apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
     apipoint/chaynsapi/chaynsThreadReaper.cpp

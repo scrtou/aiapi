@@ -1,0 +1,22 @@
+{
+  "name": "thread-delete",
+  "request": {
+    "body": {
+      "personId": "<user-person>",
+      "threadIds": [
+        "<thread-1>"
+      ]
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "method": "DELETE",
+    "path": "/intercom-backend/v2/thread/member/delete"
+  },
+  "response": {
+    "status": 200
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "delete.sidekick.ki.har"
+}

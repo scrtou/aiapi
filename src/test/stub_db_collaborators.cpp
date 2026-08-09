@@ -13,6 +13,7 @@
 // 缺口清单来自实测（步骤 79）而非推测，共 10 个符号。
 #include <dbManager/config/ConfigDbManager.h>
 #include <dbManager/account/accountBackupDbManager.h>
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <retoolWorkspace/RetoolWorkspaceService.h>
 
 #include <map>
@@ -50,3 +51,16 @@ RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value
 {
     return RetoolWorkspaceInfo{};
 }
+
+// ---- ChaynsThreadDbManager ----
+// Chayns provider characterization compiles the real provider but keeps its
+// asynchronous ledger collaborator disabled.  The upstream HTTP transport is
+// faked separately; neither database nor network is touched.
+std::shared_ptr<chaynsThreadDbManager> chaynsThreadDbManager::getInstance()
+{
+    static auto instance = std::make_shared<chaynsThreadDbManager>();
+    return instance;
+}
+void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow&) {}
+void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string&) {}
+void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string&, const std::string&) {}

@@ -1,0 +1,51 @@
+{
+  "name": "poll-messages",
+  "request": {
+    "method": "GET",
+    "path": "/intercom-backend/v2/thread/{threadId}/message?take=25&viewMode=user&beforeDate={timestamp}"
+  },
+  "response": {
+    "body": [
+      {
+        "author": {
+          "id": "<user-author>"
+        },
+        "creationTime": "2026-01-01T00:00:01.000Z",
+        "id": "<request-message>",
+        "modifiedTime": "2026-01-01T00:00:01.000Z",
+        "text": "synthetic user question",
+        "threadId": "<thread-1>",
+        "typeId": 1
+      },
+      {
+        "author": {
+          "id": "<agent-author>"
+        },
+        "creationTime": "2026-01-01T00:00:02.000Z",
+        "id": "<message-2>",
+        "modifiedTime": "2026-01-01T00:00:02.000Z",
+        "text": "synthetic reasoning delta",
+        "threadId": "<thread-1>",
+        "typeId": 18
+      },
+      {
+        "author": {
+          "id": "<agent-author>"
+        },
+        "creationTime": "2026-01-01T00:00:03.000Z",
+        "id": "<message-3>",
+        "modifiedTime": "2026-01-01T00:00:03.000Z",
+        "text": "synthetic final answer",
+        "threadId": "<thread-1>",
+        "typeId": 1
+      }
+    ],
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 200
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "sidekick.ki.har"
+}

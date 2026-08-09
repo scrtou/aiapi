@@ -1,0 +1,22 @@
+{
+  "name": "thread-read",
+  "request": {
+    "body": {
+      "isRead": true,
+      "threadIds": [
+        "<thread-1>"
+      ]
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "method": "PATCH",
+    "path": "/intercom-backend/v2/thread/read"
+  },
+  "response": {
+    "status": 200
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "sidekick.ki.har"
+}

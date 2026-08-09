@@ -1,0 +1,368 @@
+#include <drogon/drogon_test.h>
+
+#include <accountManager/accountManager.h>
+#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
+#include <apipoint/chaynsapi/ChaynsClock.h>
+#include <apipoint/chaynsapi/chaynsapi.h>
+#include <domain/port/IAccountStore.h>
+
+#include <algorithm>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <list>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+Json::Value loadChaynsFixture(const std::string& name)
+{
+    const auto path = std::filesystem::path(__FILE__).parent_path() /
+                      "fixtures" / "chayns" / name;
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("cannot open fixture: " + path.string());
+    }
+    Json::CharReaderBuilder builder;
+    Json::Value value;
+    std::string errors;
+    if (!Json::parseFromStream(builder, input, &value, &errors)) {
+        throw std::runtime_error("invalid fixture: " + errors);
+    }
+    return value;
+}
+
+drogon::HttpMethod methodFromString(const std::string& method)
+{
+    if (method == "GET") return drogon::HttpMethod::Get;
+    if (method == "POST") return drogon::HttpMethod::Post;
+    if (method == "PATCH") return drogon::HttpMethod::Patch;
+    if (method == "DELETE") return drogon::HttpMethod::Delete;
+    throw std::runtime_error("unsupported fixture method: " + method);
+}
+
+struct ExpectedExchange
+{
+    drogon::HttpMethod method;
+    std::string path;
+    Json::Value request;
+    Json::Value response;
+};
+
+class FixtureChaynsTransport final : public chayns::IChaynsHttpTransport
+{
+  public:
+    void enqueue(const std::string& fixtureName)
+    {
+        const auto fixture = loadChaynsFixture(fixtureName);
+        std::string path = fixture["request"]["path"].asString();
+        const auto query = path.find('?');
+        if (query != std::string::npos && path.find("forceCreate=true") == std::string::npos) {
+            path.erase(query);
+        }
+        // The recorded path carries a template; the production request carries
+        // the synthetic thread ID returned by the create response.
+        const std::string marker = "{threadId}";
+        const auto markerAt = path.find(marker);
+        if (markerAt != std::string::npos) {
+            path.replace(markerAt, marker.size(), "<thread-1>");
+        }
+        exchanges_.push_back(
+            {methodFromString(fixture["request"]["method"].asString()),
+             path,
+             fixture["request"],
+             fixture["response"]});
+    }
+
+    chayns::HttpResult send(const std::string& baseUrl,
+                            const drogon::HttpRequestPtr& request,
+                            double timeoutSeconds) override
+    {
+        calledBaseUrls.push_back(baseUrl);
+        calledPaths.push_back(request ? request->getPath() : "<null>");
+        if (!request) {
+            errors.push_back("null request");
+            return {drogon::ReqResult::BadResponse, nullptr};
+        }
+        if (timeoutSeconds <= 0.0) errors.push_back("non-positive timeout");
+        if (exchanges_.empty()) {
+            errors.push_back("unexpected request: " + request->getPath());
+            return {drogon::ReqResult::BadResponse, nullptr};
+        }
+
+        const auto exchange = exchanges_.front();
+        exchanges_.pop_front();
+        if (request->method() != exchange.method) {
+            errors.push_back("method mismatch for " + request->getPath());
+        }
+        if (request->getPath() != exchange.path) {
+            errors.push_back("path mismatch: " + request->getPath() + " != " + exchange.path);
+        }
+        checkRequestBody(exchange, request);
+
+        drogon::HttpResponsePtr response;
+        if (exchange.response.isMember("body")) {
+            response = drogon::HttpResponse::newHttpJsonResponse(exchange.response["body"]);
+        } else {
+            response = drogon::HttpResponse::newHttpResponse();
+        }
+        response->setStatusCode(
+            static_cast<drogon::HttpStatusCode>(exchange.response["status"].asInt()));
+        return {drogon::ReqResult::Ok, response};
+    }
+
+    std::size_t remaining() const { return exchanges_.size(); }
+
+    std::vector<std::string> errors;
+    std::vector<std::string> calledBaseUrls;
+    std::vector<std::string> calledPaths;
+
+  private:
+    void checkRequestBody(const ExpectedExchange& exchange,
+                          const drogon::HttpRequestPtr& request)
+    {
+        if (!exchange.request.isMember("body")) return;
+        const auto actual = request->getJsonObject();
+        if (!actual || !actual->isObject()) {
+            errors.push_back("missing JSON request body for " + request->getPath());
+            return;
+        }
+        const auto& expected = exchange.request["body"];
+        for (const char* key : {"typeId", "workspaceUacId", "isRead", "personId"}) {
+            if (expected.isMember(key) && (*actual)[key] != expected[key]) {
+                errors.push_back(std::string("request field mismatch: ") + key);
+            }
+            if (!expected.isMember(key) && actual->isMember(key) &&
+                std::string(key) == "workspaceUacId") {
+                errors.push_back("free request unexpectedly contains workspaceUacId");
+            }
+        }
+        if (expected.isMember("members")) {
+            if (!actual->isMember("members") || (*actual)["members"].size() != 2) {
+                errors.push_back("thread create members mismatch");
+            } else if ((*actual)["members"][0]["personId"].asString() != "<user-person>" ||
+                       (*actual)["members"][1]["personId"].asString().find("<model-person-") != 0) {
+                errors.push_back("thread create synthetic member IDs mismatch");
+            }
+        }
+        if (expected.isMember("messages")) {
+            if (!actual->isMember("messages") || (*actual)["messages"].empty() ||
+                !(*actual)["messages"][0]["text"].isString() ||
+                (*actual)["messages"][0]["text"].asString().empty()) {
+                errors.push_back("thread create message missing");
+            }
+        }
+        if (expected.isMember("text") && (*actual)["text"] != expected["text"]) {
+            errors.push_back("follow-up text mismatch");
+        }
+        if (expected.isMember("cursorPosition") &&
+            (*actual)["cursorPosition"] != expected["cursorPosition"]) {
+            errors.push_back("follow-up cursorPosition mismatch");
+        }
+    }
+
+    std::deque<ExpectedExchange> exchanges_;
+};
+
+class ChaynsFixtureAccountStore final : public IAccountStore
+{
+  public:
+    std::list<Accountinfo_st> rows;
+
+    bool addAccount(Accountinfo_st) override { return true; }
+    bool updateAccount(Accountinfo_st) override { return true; }
+    bool deleteAccount(std::string, std::string) override { return true; }
+    bool isTableExist() override { return true; }
+    void createTable() override {}
+    void checkAndUpgradeTable() override {}
+    std::list<Accountinfo_st> getAccountDBList() override { return rows; }
+    int createWaitingAccount(std::string) override { return 0; }
+    bool activateAccount(int, Accountinfo_st) override { return true; }
+    bool deleteWaitingAccount(int) override { return true; }
+    int countAccountsByChannel(std::string, bool) override { return 0; }
+    bool updateAccountStatusById(int, std::string) override { return true; }
+    std::string getAccountStatusByUsername(std::string, std::string) override
+    {
+        return AccountStatus::ACTIVE;
+    }
+};
+
+class DeadlineJumpClock final : public chayns::IChaynsClock
+{
+  public:
+    Clock::time_point now() const override { return now_; }
+
+    void sleepFor(std::chrono::milliseconds duration) override
+    {
+        ++sleepCalls;
+        requestedSleeps.push_back(duration);
+        now_ += std::max(duration, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      chayns::kRequestPollingDeadline));
+    }
+
+    int sleepCalls = 0;
+    std::vector<std::chrono::milliseconds> requestedSleeps;
+
+  private:
+    Clock::time_point now_{std::chrono::hours(1)};
+};
+
+Accountinfo_st chaynsAccount(const std::string& type)
+{
+    Accountinfo_st account;
+    account.apiName = "chaynsapi";
+    account.userName = "fixture-" + type + "-account";
+    account.passwd = "unused";
+    account.authToken = "fixture-token";
+    account.useCount = 0;
+    account.tokenStatus = true;
+    account.accountStatus = true;
+    account.userTobitId = 1001;
+    account.personId = "<user-person>";
+    account.createTime = "2026-01-01 00:00:00";
+    account.accountType = type;
+    account.status = AccountStatus::ACTIVE;
+    account.workspaceUacId = type == "pro" ? 9001 : 0;
+    return account;
+}
+
+void installAccount(const std::string& type)
+{
+    auto accountStore = std::make_shared<ChaynsFixtureAccountStore>();
+    accountStore->rows = {chaynsAccount(type)};
+    auto& accountManager = AccountManager::getInstance();
+    accountManager.setStore(accountStore);
+    accountManager.loadAccount();
+}
+
+session_st makeRequest(const std::string& model,
+                       const std::string& conversationId,
+                       const std::string& message)
+{
+    session_st session;
+    session.request.api = "chaynsapi";
+    session.request.model = model;
+    session.request.message = message;
+    session.request.rawMessage = message;
+    session.state.conversationId = conversationId;
+    return session;
+}
+
+}  // namespace
+
+DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
+{
+    installAccount("free");
+
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("thread-create-free.json");
+    transport->enqueue("poll-empty.json");
+    transport->enqueue("poll-messages.json");
+
+    chaynsapi provider(transport);
+    provider.init();
+
+    auto session = makeRequest(
+        "fixture-free-model", "fixture-conversation", "synthetic user question");
+
+    const auto result = provider.generate(session);
+    CHECK(result.isSuccess());
+    CHECK(result.statusCode == 200);
+    CHECK(result.text == "synthetic final answer");
+    CHECK(session.response.message["_meta"]["chayns"]["request_message_id"].asString() ==
+          "<request-message>");
+    CHECK(session.response.message["_meta"]["chayns"]["assistant_message_id"].asString() ==
+          "<message-3>");
+    CHECK(session.response.message["_meta"]["chayns"]["reasoning_messages"].size() == 1);
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+    CHECK(transport->calledPaths.size() == 4);
+}
+
+DROGON_TEST(ChaynsProvider_ProFixturePreservesWorkspaceRouteOffline)
+{
+    installAccount("pro");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("thread-create-pro.json");
+    transport->enqueue("poll-messages.json");
+
+    chaynsapi provider(transport);
+    provider.init();
+    auto session = makeRequest(
+        "fixture-pro-model", "fixture-pro-conversation", "synthetic user question");
+    const auto result = provider.generate(session);
+
+    CHECK(result.isSuccess());
+    CHECK(result.text == "synthetic final answer");
+    CHECK(session.response.message["_meta"]["chayns"]["account_type"].asString() == "pro");
+    CHECK(session.response.message["_meta"]["chayns"]["thread_type_id"].asInt() == 9);
+    CHECK(session.response.message["_meta"]["chayns"]["workspace_uac_id"].asInt64() ==
+          9001);
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
+{
+    installAccount("free");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("thread-create-free.json");
+    transport->enqueue("poll-messages.json");
+    transport->enqueue("message-create.json");
+    transport->enqueue("poll-messages.json");
+
+    chaynsapi provider(transport);
+    provider.init();
+    auto first = makeRequest(
+        "fixture-free-model", "fixture-first", "synthetic user question");
+    REQUIRE(provider.generate(first).isSuccess());
+
+    auto followup = makeRequest(
+        "fixture-free-model", "fixture-second", "synthetic follow-up question");
+    followup.state.isContinuation = true;
+    followup.provider.prevProviderKey = "fixture-first";
+    const auto result = provider.generate(followup);
+
+    CHECK(result.isSuccess());
+    CHECK(result.text == "synthetic final answer");
+    CHECK(followup.response.message["_meta"]["chayns"]["request_message_id"].asString() ==
+          "<followup-request-message>");
+    REQUIRE(transport->calledPaths.size() == 5);
+    CHECK(transport->calledPaths[3] ==
+          "/intercom-backend/v2/thread/<thread-1>/message");
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_FakeClockReachesPollingDeadlineWithoutWallClockWait)
+{
+    installAccount("free");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("thread-create-free.json");
+    transport->enqueue("poll-empty.json");
+    auto clock = std::make_shared<DeadlineJumpClock>();
+
+    chaynsapi provider(transport, clock);
+    provider.init();
+    auto session = makeRequest(
+        "fixture-free-model", "fixture-timeout", "synthetic user question");
+    const auto result = provider.generate(session);
+
+    CHECK(!result.isSuccess());
+    CHECK(result.statusCode == 504);
+    CHECK(result.error.code == provider::ProviderErrorCode::Timeout);
+    CHECK(session.response.message["errorCode"].asString() ==
+          "upstream_response_timeout");
+    CHECK(clock->sleepCalls == 1);
+    REQUIRE(clock->requestedSleeps.size() == 1);
+    CHECK(clock->requestedSleeps[0] == std::chrono::milliseconds(200));
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+}

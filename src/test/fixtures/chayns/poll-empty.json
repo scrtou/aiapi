@@ -1,0 +1,13 @@
+{
+  "name": "poll-empty",
+  "request": {
+    "method": "GET",
+    "path": "/intercom-backend/v2/thread/{threadId}/message?take=1000&viewMode=user&afterDate={timestamp}"
+  },
+  "response": {
+    "status": 204
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "sidekick.ki.har"
+}

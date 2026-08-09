@@ -1,0 +1,34 @@
+{
+  "name": "message-create",
+  "request": {
+    "body": {
+      "cursorPosition": 28,
+      "text": "synthetic follow-up question"
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "method": "POST",
+    "path": "/intercom-backend/v2/thread/{threadId}/message"
+  },
+  "response": {
+    "body": {
+      "author": {
+        "id": "<user-author>"
+      },
+      "creationTime": "2026-01-01T00:00:01.000Z",
+      "id": "<followup-request-message>",
+      "modifiedTime": "2026-01-01T00:00:01.000Z",
+      "text": "synthetic user question",
+      "threadId": "<thread-1>",
+      "typeId": 1
+    },
+    "headers": {
+      "content-type": "application/json"
+    },
+    "status": 201
+  },
+  "sanitization": "explicit-allowlist-v1",
+  "schemaVersion": 1,
+  "source": "sidekick.ki.har"
+}
