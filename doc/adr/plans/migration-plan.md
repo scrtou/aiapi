@@ -28,15 +28,15 @@
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
 | 独立 CMake libraries | 🔄 | 六个正式 target 已建立；29 个实现已迁入，legacy ceiling 39，最终删除在 P8 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
-| domain 去 JsonCpp | ⬜ | 当前为已登记迁移债务 |
+| domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
 | Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W4（domain 模型与 JSON codec 分离）。**
+**当前执行阶段：阶段 4（AppContext、队列和停机），当前工作项 P4-W1（有界 executor 与四态队列）。**
 
-P3-W1～W3 已完成：69/69 生产源 owner/compile count 为 1；103 个自有头 basename 冲突为 0，428/428 自有 include 使用 `<path/from/src>`，CMake 只有一个 `src/` 根。六个正式 target 已建立，29 个实现已迁入，legacy 从 67 降至 39；`RetoolProvisionHealth` 已通过 domain clock port 成为首个真实 application implementation，系统时间/持久化 timestamp codec 留在 infrastructure。正式 DAG、source owner、legacy ceiling、startup clock wiring 均有门禁，normal/coverage/ASan 均 262/262 PASS。P3-W3 审计证明剩余源码受 P3-W4 JsonCpp、P5 service locator、P6 Provider session 副作用阻断；在这些前置消除前强制清空只会伪造边界，因此 ADR-11 v2 将最终 `--require-no-legacy` 门禁放到 P8，完整目标不变。当前只允许执行 P3-W4。
+P3-W1～W3 已完成：69/69 生产源 owner/compile count 为 1；103 个自有头 basename 冲突为 0，428/428 自有 include 使用 `<path/from/src>`，CMake 只有一个 `src/` 根。六个正式 target 已建立，29 个实现已迁入，legacy 从 67 降至 39；`RetoolProvisionHealth` 已通过 domain clock port 成为首个真实 application implementation，系统时间/持久化 timestamp codec 留在 infrastructure。正式 DAG、source owner、legacy ceiling、startup clock wiring 均有门禁，normal/coverage/ASan 均 262/262 PASS。P3-W3 审计证明剩余源码受 P3-W4 JsonCpp、P5 service locator、P6 Provider session 副作用阻断；在这些前置消除前强制清空只会伪造边界，因此 ADR-11 v2 将最终 `--require-no-legacy` 门禁放到 P8，完整目标不变。阶段 3 全部退出门禁已通过，P3-W4 于本次收口标记 DONE，阶段推进至阶段 4。当前只允许执行 P4-W1。
 
 ---
 
