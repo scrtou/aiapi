@@ -1,4 +1,5 @@
 #include <controllers/AiApiController.h>
+#include <controllers/codecs/ProviderModelCatalogJsonCodec.h>
 #include <drogon/HttpResponse.h>
 #include <json/json.h>
 #include <drogon/drogon.h>
@@ -274,7 +275,7 @@ void AiApiController::chaynsapimodels(const HttpRequestPtr &req, std::function<v
         ctl::sendError(callback, k500InternalServerError, "provider_not_found", "Provider not found: " + providerName);
         return;
     }
-    Json::Value response= provider->getModels();
+    Json::Value response = providermodelcodec::toJson(provider->getModels());
     ctl::sendJson(callback, response);
 }
 

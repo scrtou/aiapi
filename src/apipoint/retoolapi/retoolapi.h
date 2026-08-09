@@ -2,6 +2,7 @@
 #define RETOOLAPI_H
 
 #include <domain/port/APIinterface.h>
+#include <domain/model/SessionData.h>
 #include <apipoint/retoolapi/RetoolClock.h>
 #include <apipoint/retoolapi/RetoolHttpTransport.h>
 #include <apiManager/ApiFactory.h>
@@ -26,7 +27,7 @@ class retoolapi : public APIinterface
     provider::ProviderResult generate(session_st& session) override;
     void checkAlivableTokens() override;
     void checkModels() override;
-    Json::Value getModels() override;
+    ProviderModelCatalog getModels() override;
     void init() override;
     void afterResponseProcess(session_st& session) override;
     void eraseChatinfoMap(std::string conversationId) override;
@@ -70,7 +71,6 @@ class retoolapi : public APIinterface
     Json::Value patchWorkflowTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& prompt, const std::string& model) const;
     Json::Value patchAgentTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& model) const;
 
-    Json::Value modelListOpenAiFormat_{Json::objectValue};
     std::mutex threadMutex_;
     std::unordered_map<std::string, std::string> agentThreadMap_;
     std::unordered_map<std::string, std::string> conversationWorkspaceMap_;

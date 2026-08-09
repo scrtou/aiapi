@@ -64,7 +64,7 @@ class CapturingProvider final : public APIinterface
     }
     void checkAlivableTokens() override {}
     void checkModels() override {}
-    Json::Value getModels() override { return Json::Value(Json::objectValue); }
+    ProviderModelCatalog getModels() override { return {}; }
     void init() override {}
     void afterResponseProcess(session_st&) override {}
     void eraseChatinfoMap(std::string) override {}

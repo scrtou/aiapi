@@ -1443,19 +1443,41 @@ bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
     LOG_INFO << "[chaynsAPI] 已删除上游线程";
     return true;
 }
-Json::Value chaynsapi::getModels()
+ProviderModelCatalog chaynsapi::getModels()
 {
     loadModels(false);
     std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
-    if (m_modelCatalog.openAiResponse.isObject() &&
-        m_modelCatalog.openAiResponse.isMember("data")) {
-        return m_modelCatalog.openAiResponse;
+    ProviderModelCatalog catalog;
+    for (const auto& entry : m_modelCatalog.byName)
+    {
+        const auto& descriptor = entry.second;
+        ProviderModel model;
+        model.id = descriptor.id;
+        model.created = 0;
+        model.ownedBy = descriptor.developer.empty() ? "chayns" : descriptor.developer;
+        ChaynsModelExtension extension;
+        extension.personId = descriptor.personId;
+        if (descriptor.usedModel > 0) extension.usedModel = descriptor.usedModel;
+        if (descriptor.tobitId > 0) extension.tobitId = descriptor.tobitId;
+        extension.requiresSidekickPro = descriptor.requiresPro;
+        extension.capabilities.images = chayns::supportsImageInput(descriptor);
+        extension.capabilities.imagesDeclared = descriptor.canHandleImages;
+        extension.capabilities.functionCalling = descriptor.canHandleFunctionCalling;
+        extension.capabilities.googleSearch = descriptor.canHandleGoogleSearch;
+        extension.capabilities.thinking = descriptor.canUseThinking;
+        extension.capabilities.supportedMimeTypes = descriptor.supportedMimeTypes;
+        extension.skills = descriptor.skills;
+        extension.knowledge = descriptor.knowledge;
+        extension.developerName = descriptor.developer;
+        extension.developerCountry = descriptor.developerCountry;
+        extension.hostingProvider = descriptor.hostingProvider;
+        extension.hostingCountry = descriptor.hostingCountry;
+        extension.hostingInEurope = descriptor.hostingInEurope;
+        if (descriptor.costIndicator >= 0) extension.costIndicator = descriptor.costIndicator;
+        model.chayns = std::move(extension);
+        catalog.models.push_back(std::move(model));
     }
-
-    Json::Value emptyResponse(Json::objectValue);
-    emptyResponse["object"] = "list";
-    emptyResponse["data"] = Json::Value(Json::arrayValue);
-    return emptyResponse;
+    return catalog;
 }
 void* chaynsapi::createApi()
 {

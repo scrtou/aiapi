@@ -159,15 +159,7 @@ void* retoolapi::createApi()
 
 void retoolapi::init()
 {
-    modelListOpenAiFormat_ = Json::Value(Json::objectValue);
-    modelListOpenAiFormat_["object"] = "list";
-    modelListOpenAiFormat_["data"] = Json::Value(Json::arrayValue);
-
     auto appendModel = [this](const std::string& id) {
-        Json::Value model(Json::objectValue);
-        model["id"] = id;
-        model["object"] = "model";
-        modelListOpenAiFormat_["data"].append(model);
         modelInfo info;
         info.modelName = id;
         info.status = true;
@@ -199,9 +191,17 @@ void retoolapi::checkModels()
 {
 }
 
-Json::Value retoolapi::getModels()
+ProviderModelCatalog retoolapi::getModels()
 {
-    return modelListOpenAiFormat_;
+    ProviderModelCatalog catalog;
+    for (const auto& entry : ModelInfoMap)
+    {
+        if (!entry.second.status) continue;
+        ProviderModel model;
+        model.id = entry.second.modelName;
+        catalog.models.push_back(std::move(model));
+    }
+    return catalog;
 }
 
 std::string retoolapi::requireWorkspaceId(const session_st& session) const

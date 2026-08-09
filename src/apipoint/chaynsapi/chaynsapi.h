@@ -1,6 +1,7 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
 #include <accountManager/accountManager.h>
+#include <domain/port/APIinterface.h>
 #include <domain/model/SessionData.h>
 #include <apiManager/ApiFactory.h>
 #include <list>
@@ -40,7 +41,7 @@ class chaynsapi:public APIinterface
         void postChatMessage(session_st& session);
         void checkAlivableTokens();
         void checkModels();
-        Json::Value getModels();
+        ProviderModelCatalog getModels() override;
         void init();
         ~chaynsapi();
         void afterResponseProcess(session_st& session);
