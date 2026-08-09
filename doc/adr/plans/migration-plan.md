@@ -23,8 +23,8 @@
 | 模块依赖环 | ✅ | `check_cycles.py` 当前为 0 环 |
 | layer rules 基础门禁 | ✅ | 当前检查通过 |
 | 架构审计 v3 口径 | ✅ | 已改为直接/显式 test owner，并覆盖 `.cc` |
-| 可复现架构基线 | 🔄 | 文档整理完成后重新生成 |
-| 运行时行/分支覆盖基线 | ⬜ | 不能由 R2 替代 |
+| 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
+| 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ⬜ | 必须先完成阶段 1 安全网和可恢复数据迁移 |
 | 独立 CMake libraries | ⬜ | 当前仍为单 executable |
 | domain 去 JsonCpp | ⬜ | 当前为已登记迁移债务 |
@@ -33,7 +33,7 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | 🔄 | 审计已完成，四条集成测试和假上游尚未建立 |
 
-**当前执行阶段：阶段 0 审计已完成，等待干净提交重新生成发布基线；下一施工阶段为阶段 1（行为安全网）。**
+**当前执行阶段：阶段 1（行为安全网），当前工作项 P1-W2（Chayns 脱敏 fixture 与假上游）。**
 
 ---
 
@@ -51,7 +51,7 @@
 - [x] RFC、ADR、接口草案和执行计划只保留当前有效结论；
 - [x] 从同一审计 payload 生成 `audit-baseline.json` 和 `architecture-baseline.md`；
 - [x] CI 运行 audit selftest、ratchet、cycle、layer、startup wiring 和 test registration；
-- [ ] 建立“发布基线必须来自干净 commit”的 CI 规则。
+- [x] 建立“发布基线必须来自干净 commit”的 CI 规则；baseline 模式拒绝 `git.dirty != false`。
 
 ### 退出门禁
 

@@ -16,17 +16,17 @@
 
 ## 当前下一步
 
-当前仍是 **P0（阶段 0）**：源码审计已完成，但发布基线必须来自干净 commit。工作区仍有两项
-用户 Chayns 修改，因此下一动作是处理这两个修改并重生成 clean baseline。完成 P0 后进入
-**P1 行为安全网**；当前不能直接执行 P3 的 production target 重构。
+当前是 **P1（阶段 1，行为安全网）**，正在执行 P1-W2 Chayns 脱敏 fixture 与假上游。P0 已在 clean commit
+`544bf44` 上生成发布基线，P1-W1 已建立真实 gcov 行/分支基线。P1 全部退出门禁通过前，不能开始
+P2 Provider 退役或 P3 production target 重构。
 
 ## 按 migration-plan 排列的工作项
 
 | ID | migration 阶段 | 工作项 | 必交产物 | 状态 |
 |---|---|---|---|---|
-| P0-W1 | 阶段 0 | 当前真值与 clean baseline | [`P00-current-baseline.md`](../work-products/P00-current-baseline.md) | DOING |
-| P1-W1 | 阶段 1 | gcov/llvm-cov 运行时覆盖基线 | 覆盖命令、报告、被改文件棘轮 | TODO |
-| P1-W2 | 阶段 1 | Chayns 脱敏 fixture 与假上游 | create/message/poll/delete/model contract | TODO |
+| P0-W1 | 阶段 0 | 当前真值与 clean baseline | [`P00-current-baseline.md`](../work-products/P00-current-baseline.md) | DONE |
+| P1-W1 | 阶段 1 | gcov/llvm-cov 运行时覆盖基线 | [`P01-runtime-coverage.md`](../work-products/P01-runtime-coverage.md) | DONE |
+| P1-W2 | 阶段 1 | Chayns 脱敏 fixture 与假上游 | create/message/poll/delete/model contract | DOING |
 | P1-W3 | 阶段 1 | Retool workflow/agent characterization | 两条模式的 request/response fixture | TODO |
 | P1-W4 | 阶段 1 | Generation/Account 权威实现 characterization | 生产调用入口、变异验证、分支覆盖 | TODO |
 | P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | 空闲/阻塞/积压/断连当前行为报告 | TODO |
