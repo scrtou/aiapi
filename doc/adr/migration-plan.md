@@ -5,6 +5,10 @@
 > 源码事实以 [`source-audit-2026-08.md`](./source-audit-2026-08.md) 为准。该审计确认当前实现仍是
 > 单 executable、宽 `APIinterface`、JsonCpp domain、多个业务 singleton 和无界队列；因此下面的
 > “已落地”只表示安全修复或门禁，不表示目标架构已经实现。
+>
+> 目标文件树、类方法目录和流程调用链分别见 [`target-architecture.md`](./target-architecture.md)、
+> [`module-catalog.md`](./module-catalog.md) 和 [`flow-contracts.md`](./flow-contracts.md)。每个工作包
+> 的设计/测试/回滚产物登记在 [`refactor-workbook.md`](./refactor-workbook.md)。
 
 ## 0. 当前状态
 
@@ -450,3 +454,4 @@ characterization 通过后允许整体替换，但必须保持同一 port contra
 5. 失败回滚必须说明是代码回滚、配置回滚还是数据恢复；
 6. 基线只能由工具生成；
 7. 任一阶段发现前置假设不成立，先更新 ADR/计划再继续编码。
+8. 每个工作包开始前将 `refactor-workbook.md` 标记为 `DOING`，完成后附上调用图、测试结果和回滚说明，再标记 `DONE`。

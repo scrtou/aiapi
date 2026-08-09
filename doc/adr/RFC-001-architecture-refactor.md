@@ -17,6 +17,10 @@
 | [`migration-plan.md`](./migration-plan.md) | 当前阶段、任务顺序、进入/退出门禁 |
 | [`architecture-baseline.md`](./architecture-baseline.md) | 当前机器审计快照及指标定义 |
 | [`source-audit-2026-08.md`](./source-audit-2026-08.md) | 当前 `src/` 文件、流程、线程和重写边界的事实审计 |
+| [`target-architecture.md`](./target-architecture.md) | 目标文件树、target DAG 和对象所有权 |
+| [`module-catalog.md`](./module-catalog.md) | 目标模块、类、方法和直接调用者 |
+| [`flow-contracts.md`](./flow-contracts.md) | 启动/生成/账号/回收/停机调用契约 |
+| [`refactor-workbook.md`](./refactor-workbook.md) | 工作包、阶段产物和状态 |
 | [`interface-drafts.md`](./interface-drafts.md) | 非契约性的接口示例 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 历史纠错和版本演进 |
 

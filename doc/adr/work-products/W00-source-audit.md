@@ -1,0 +1,27 @@
+# W00 · 源码审计与基线产物
+
+| 项 | 值 |
+|---|---|
+| 状态 | DOING（审计完成；等待干净提交后重生成发布基线） |
+| 输入 | `src/` 生产头/源文件、`src/test/CMakeLists.txt`、架构门禁脚本 |
+| 输出 | `source-audit-2026-08.md`、目标结构/模块/流程文档 |
+
+## 已完成
+
+- 统计 160 个生产头/源文件、模块行数和最大复杂函数；
+- 逐模块检查 domain、session、Provider、Controller、DB、账号、队列和 runtime；
+- 登记启动、Chat/Responses、账号、thread reaper、停机五条调用链；
+- 识别 P0/P1/P2 风险，并确定必须整体重写的组件；
+- 新增 ADR-09/10/11，明确 IO、codec 和生产 target 边界；
+- `architecture_audit --selftest`、baseline、cycle、layer、223 测试通过。
+
+## 剩余动作
+
+1. 不纳入用户未提交的 Chayns 源码改动；
+2. 代码提交后生成 clean baseline；
+3. 开启 W01（生产 library 化）前建立真实运行时覆盖报告；
+4. 将假上游 fixture 和 SIGTERM harness 保存到 `doc/adr/work-products/` 对应工作包。
+
+## 回滚
+
+本工作包只有文档和审计产物；回滚为恢复文档提交，不触碰业务数据和用户源码修改。

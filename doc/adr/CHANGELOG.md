@@ -29,6 +29,13 @@
 4. migration-plan 增加 Provider 方法拆分表、正式 target 闭包、流程级覆盖清单及按调用图的 Service Locator 迁移顺序。
 5. 明确 `chatSession`、`GenerationService`、`AccountManager`、`ApiManager` 和 `BackgroundTaskQueue` 必要时整体重写，禁止永久 Legacy facade 双轨。
 
+## v3.2 目标结构、类目录与流程契约（2026-08-09）
+
+1. 新增 `target-architecture.md`：完整目标文件树、CMake target DAG 和对象所有权。
+2. 新增 `module-catalog.md`：目标模块主要类、方法和直接调用者。
+3. 新增 `flow-contracts.md`：启动、Chat/Responses、Provider、账号、thread 回收和停机调用链。
+4. 新增 `refactor-workbook.md` 及 W00 产物，要求每个工作包及时记录设计、测试、调用图和回滚方式。
+
 ---
 
 ## P10 外部评审响应：文档冻结与范围收敛（本轮）
