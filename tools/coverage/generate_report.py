@@ -40,6 +40,14 @@ TARGETS = [
         ],
     },
     {
+        "name": "Chat/Responses four GenerationService output modes",
+        "file": "src/sessionManager/core/GenerationService.cpp",
+        "functions": [
+            "GenerationService::runGuarded(",
+            "GenerationService::executeProvider(",
+        ],
+    },
+    {
         "name": "Account selection/invalidation/rollback/pool rebuild",
         "file": "src/accountManager/accountManager.cpp",
         "functions": [
@@ -61,7 +69,7 @@ TARGETS = [
         ],
     },
     {
-        "name": "Chat/Responses streaming and JSON entry paths",
+        "name": "HTTP Controller Chat/Responses route edge",
         "file": "src/controllers/AiApiController.cc",
         "functions": [
             "AiApiController::chaynsapichat(",

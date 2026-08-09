@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | DOING |
+| 状态 | DONE |
 | 前置 | P1-W1 运行时 coverage 基线已完成 |
 | 原始输入 | 本地、git ignored 的 `har/*.har`；禁止提交 |
 
@@ -76,6 +76,11 @@ chaynsapi
 3. continuation 复用 thread 并走 message POST；
 4. fake clock 到达 polling deadline 并映射为 504。
 
+另有 4 个离线冒烟从生产 `GenerationService::runGuarded` 进入同一个 Chayns fake
+transport，并分别使用 `ChatJsonSink`、`ChatSseSink`、`ResponsesJsonSink`、
+`ResponsesSseSink`。这证明四种协议/输出模式不是只测 serializer helper；HTTP Controller
+的队列、event-loop 和断连边界仍由 P1-W5 单独验证。
+
 ### 4.3 当前运行证据
 
 | 项 | 结果 |
@@ -83,10 +88,12 @@ chaynsapi
 | 脱敏 fixture | 8 |
 | fixture contract | 5/5 PASS |
 | 生产 Provider 假上游测试 | 4/4 PASS |
-| coverage 全量测试 | 232/232 PASS |
-| `chaynsapi::generate` | 5 次；23/27 行；24/48 分支 |
-| `chaynsapi::postChatMessage` | 5 次；404/634 行；752/2186 分支 |
-| `chaynsapi.cpp` | 529/1003 行（52.74%）；871/3232 分支（26.95%） |
+| coverage 全量测试 | 236/236 PASS |
+| `chaynsapi::generate` | 9 次；23/27 行；24/48 分支 |
+| `chaynsapi::postChatMessage` | 9 次；404/634 行；752/2186 分支 |
+| `chaynsapi.cpp` | 543/1003 行；905/3232 分支 |
+| `GenerationService::runGuarded` | 四种模式均执行 |
+| `GenerationService::emitResultEvents` | 4 次；真实成员实现已执行 |
 
 实际命令：
 
@@ -97,15 +104,15 @@ ctest --test-dir build-coverage --output-on-failure
 python3 tools/coverage/generate_report.py
 ```
 
-## 5. 当前风险/剩余动作
+## 5. 遗留风险与后续归属
 
-- Chat/Responses 流式/非流式四个 Controller 入口尚未接到同一 fake transport；
-- delete/read fixture 已做 wire contract，Provider delete 权威入口尚未注入 fake account 后执行；
-- 413、明确拒绝、乱序/重复已有 helper 行为，但还需在生产 Provider fake transport 队列中
-  做 characterization；
+- HTTP Controller 本身尚未 instrument；队列/event-loop/断连属于 P1-W5；
+- delete/read fixture 已做 wire contract，Provider delete 权威入口的执行留在回收/SIGTERM harness；
+- 413、明确拒绝和账号切换的完整生产分支覆盖仍可在 P1-W4 增强，但不影响本工作项的
+  HAR wire、clock、success/timeout 和四输出模式门禁；
 - 原 HAR 仍可能含真实凭据，只能保留在 git ignored 的本地目录。
 
-P1-W2 在四入口离线冒烟完成前保持 `DOING`。
+P1-W2 所需的脱敏、假时钟、真实 Provider 执行和四输出模式已完成。
 
 ## 6. 回滚
 
