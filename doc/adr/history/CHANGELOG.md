@@ -6,6 +6,31 @@
 
 ---
 
+## P3-W4 收口 · domain 模型与 JSON codec 分离（2026-08-09）
+
+- 七个 domain 模型/端口逐个迁出 JSON 职责：ProviderResult、AccountData、ChannelInfo、
+  RetoolWorkspaceInfo、APIinterface::getModels、ErrorEvent、SessionData。
+- `src/domain/` 的 `Json::`/`json/json.h` 命中从开工清单降到 0，Drogon/PostgreSQL/OpenSSL
+  同样为 0；domain 可脱离序列化库编译。
+- codec 一律落在 edge owner：accountManager、controllers/codecs、retoolWorkspace、
+  dbManager/metrics、sessionManager/core 与 contracts。
+- `session_st` 拆为 domain `SessionState` 与 `contracts/LegacySessionData.h` 过渡聚合；
+  `getModels()` 改为 `ProviderModelCatalog`，宽端口删除仍留在 P6。
+- 门禁：ctest 273/273 PASS（净增 12 条契约用例），六项架构门禁 PASS，legacy ceiling 仍为 39。
+
+## P3-W3 收口 · target strangler 顺序纠错（2026-08-09）
+
+- 六个正式 target 已建立；29 个 implementation 已有正式 owner，legacy 从 67 降到 39。
+- 逐文件闭包证明剩余源码分别被 domain JsonCpp、service locator、Provider/session contract
+  阻断。若在 P3-W4/P5/P6 之前强制清空，只能产生 infrastructure → application、
+  transport → infrastructure 等反向边，或把业务代码伪装成 runtime。
+- ADR-11 升级 v2：采用 machine-ceiling strangler。每消除一个阻断边立即迁出并降低 ceiling；
+  P8 仍必须运行两个 `--require-no-legacy` 门禁，删除目标未取消。
+- `RetoolProvisionHealth` 通过 `IRetoolProvisionClock` 成为首个真实 application implementation；
+  system clock/local timestamp codec 归 infrastructure，main 显式注入，fake clock 无真实时间依赖。
+- P3-W3 门禁为 69/69 owner/compile、103 headers、428 canonical includes、legacy ceiling 39、
+  normal/coverage/ASan 262/262 PASS；当前进入 P3-W4。
+
 ## v3.0 当前方案收口（2026-08-09）
 
 本版不是继续追加勘误，而是重写当前执行面；旧版本仍由本文件后续章节和 git 历史保存。

@@ -26,7 +26,7 @@
 | 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
-| 独立 CMake libraries | ⬜ | P3-W1 仅建立临时 `aiapi_legacy`；正式分层 libraries 待 P3-W3 |
+| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；29 个实现已迁入，legacy ceiling 39，最终删除在 P8 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ⬜ | 当前为已登记迁移债务 |
 | AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
@@ -34,9 +34,9 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W3（正式分层 target carve-out）。**
+**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W4（domain 模型与 JSON codec 分离）。**
 
-P3-W1/W2 已完成：68/68 生产源的 owner/compile count 为 1，测试只链接生产库；101 个自有头 basename 冲突为 0，422/422 自有 include 现均使用 `<path/from/src>`，relative/basename/`..` 为 0，CMake 只保留 1 个 `src/` 根且子目录 root 为 0。P3-W3 已建立六个正式 target，并把 27 个闭包迁至 platform/infrastructure/transport/runtime，legacy 从 67 降至 40；正式 target DAG 由 `check_target_layers.py` 强制，domain/application 的 INTERFACE 状态和剩余反向边已如实登记，不能冒充分层完成。当前批次 normal/coverage/ASan 均 260/260 PASS，include/source ownership/test registration/architecture/cycle/layer/startup/provider-retirement 门禁通过。当前仍只允许执行 P3-W3，逐闭包清空并最终删除 `aiapi_legacy`；不得提前进入 domain codec，也不得把剩余源码整批改名为 runtime 来伪造完成。
+P3-W1～W3 已完成：69/69 生产源 owner/compile count 为 1；103 个自有头 basename 冲突为 0，428/428 自有 include 使用 `<path/from/src>`，CMake 只有一个 `src/` 根。六个正式 target 已建立，29 个实现已迁入，legacy 从 67 降至 39；`RetoolProvisionHealth` 已通过 domain clock port 成为首个真实 application implementation，系统时间/持久化 timestamp codec 留在 infrastructure。正式 DAG、source owner、legacy ceiling、startup clock wiring 均有门禁，normal/coverage/ASan 均 262/262 PASS。P3-W3 审计证明剩余源码受 P3-W4 JsonCpp、P5 service locator、P6 Provider session 副作用阻断；在这些前置消除前强制清空只会伪造边界，因此 ADR-11 v2 将最终 `--require-no-legacy` 门禁放到 P8，完整目标不变。当前只允许执行 P3-W4。
 
 ---
 
@@ -211,7 +211,7 @@ tools/migrations/restore_retired_providers_v1.sql
 3. 删除测试侧 `PROJECT_SOURCES`；
 4. CI 检查每个生产源只属于一个生产 target。
 
-`aiapi_legacy` 是迁移脚手架，最终必须删除。
+`aiapi_legacy` 是有上限的迁移脚手架，最终必须在 P8 删除；每个中间阶段只能降低 ceiling。
 
 ### 3.2 include 收敛
 
@@ -223,9 +223,13 @@ tools/migrations/restore_retired_providers_v1.sql
 `refactor-workbook.md` 将 3.2、3.3、3.4 分别映射为 P3-W2、P3-W3、
 P3-W4；正式 target carve-out 是独立工作项，不得从计划中跳过。
 
-### 3.3 建正式 target
+### 3.3 建正式 target 与 strangler 边界
 
-依次从 legacy 中 carve out：platform → domain → application → infrastructure → transport。每次移动一个可编译闭包并立即从 legacy 删除。
+建立 platform/domain/application/infrastructure/transport/runtime 六个正式 target；依次从 legacy
+carve out 依赖方向已经合法的闭包，每次立即从 legacy 删除并降低 ceiling。不得为了在 domain
+codec、service locator、Provider port 迁移之前清空 legacy，而制造反向 link 或把业务源码塞入 runtime。
+P3-W3 验收正式 DAG、首批闭包、唯一 owner 和有上限脚手架；后续阶段每完成一个阻断边继续迁出，
+P8 执行 `--require-no-legacy` 最终删除。
 
 ### 3.4 domain 去 JsonCpp
 
@@ -242,7 +246,8 @@ P3-W4；正式 target carve-out 是独立工作项，不得从计划中跳过。
 
 ### 退出门禁
 
-- 六个正式 library target（platform/domain/application/infrastructure/transport/runtime）建立，legacy target 为空并删除；
+- 六个正式 library target（platform/domain/application/infrastructure/transport/runtime）建立并符合 ADR-02；
+- legacy source ceiling 不高于 39，且不存在可在不违反目标 DAG 的情况下直接迁出的未登记闭包；
 - 测试只链接生产 library；
 - domain 不含 `Json::` 和第三方 IO 头；
 - include 根唯一；
@@ -443,7 +448,9 @@ characterization 通过后允许整体替换，但必须保持同一 port contra
 
 ## 阶段 8 · 收口
 
-- 删除 legacy target、旧 APIinterface、重复 ErrorCode、无效配置和过渡 allowlist；
+- 运行 `check_target_layers.py --require-no-legacy` 和
+  `check_source_ownership.py --require-no-legacy`，删除 legacy target/source list；
+- 删除旧 APIinterface、重复 ErrorCode、无效配置和过渡 allowlist；
 - 删除所有已归零 layer debt；
 - 重新生成干净发布基线；
 - clean build、全量测试、coverage、ASan/TSan、架构门禁、SIGTERM 集成测试通过；
