@@ -1,7 +1,7 @@
 #ifndef IRESPONSE_SINK_H
 #define IRESPONSE_SINK_H
 
-#include "sessionManager/contracts/GenerationEvent.h"
+#include <sessionManager/contracts/GenerationEvent.h>
 /**
  * @brief 输出通道接口
  * 

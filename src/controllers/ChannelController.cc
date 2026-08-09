@@ -1,8 +1,8 @@
-#include "ChannelController.h"
-#include "ControllerUtils.h"
-#include "channelManager.h"
-#include "accountManager.h"
-#include "BackgroundTaskQueue.h"
+#include <controllers/ChannelController.h>
+#include <controllers/ControllerUtils.h>
+#include <channelManager/channelManager.h>
+#include <accountManager/accountManager.h>
+#include <utils/BackgroundTaskQueue.h>
 #include <domain/policy/RetiredProviderPolicy.h>
 
 using namespace drogon;

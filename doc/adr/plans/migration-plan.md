@@ -27,15 +27,16 @@
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
 | 独立 CMake libraries | ⬜ | P3-W1 仅建立临时 `aiapi_legacy`；正式分层 libraries 待 P3-W3 |
+| 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ⬜ | 当前为已登记迁移债务 |
 | AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
 | Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W2（单一 include 根和完整路径）。**
+**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W3（正式分层 target carve-out）。**
 
-P3-W1 已完成：除 `main.cc` 外的 67 个生产实现由临时 `aiapi_legacy` 唯一持有，测试已删除 54 项 `PROJECT_SOURCES` 复制清单，68/68 生产源的 owner/compile count 均为 1。production executable 使用 whole-archive 保留 Provider 静态注册，测试使用普通 archive 链接保留离线 stub 边界。normal/coverage/ASan 均 260/260 PASS，source ownership、test registration、architecture/cycle/layer/startup/provider-retirement 门禁通过。`aiapi_legacy` 是必须在 P3-W3 删除的迁移脚手架，不是最终分层架构。当前只允许执行 P3-W2。
+P3-W1/W2 已完成：68/68 生产源的 owner/compile count 为 1，测试只链接生产库；101 个自有头 basename 冲突为 0，422/422 自有 include 现均使用 `<path/from/src>`，relative/basename/`..` 为 0，CMake 只保留 1 个 `src/` 根且子目录 root 为 0。normal/coverage/ASan 均 260/260 PASS，include/source ownership/test registration/architecture/cycle/layer/startup/provider-retirement 门禁通过。当前只允许执行 P3-W3，按可编译闭包建立正式 target 并最终删除 `aiapi_legacy`；不得提前进入 domain codec。
 
 ---
 
@@ -241,7 +242,7 @@ P3-W4；正式 target carve-out 是独立工作项，不得从计划中跳过。
 
 ### 退出门禁
 
-- 五个正式 library target 建立，legacy target 为空并删除；
+- 六个正式 library target（platform/domain/application/infrastructure/transport/runtime）建立，legacy target 为空并删除；
 - 测试只链接生产 library；
 - domain 不含 `Json::` 和第三方 IO 头；
 - include 根唯一；

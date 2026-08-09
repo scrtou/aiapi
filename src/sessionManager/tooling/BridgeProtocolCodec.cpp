@@ -1,9 +1,9 @@
-#include "sessionManager/tooling/BridgeProtocolCodec.h"
+#include <sessionManager/tooling/BridgeProtocolCodec.h>
 
-#include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
-#include "sessionManager/tooling/BridgeHelpers.h"
-#include "sessionManager/tooling/ToolCallBridge.h"
-#include "sessionManager/tooling/XmlTagToolCallCodec.h"
+#include <sessionManager/actionProtocol/ActionProtocolAdapter.h>
+#include <sessionManager/tooling/BridgeHelpers.h>
+#include <sessionManager/tooling/ToolCallBridge.h>
+#include <sessionManager/tooling/XmlTagToolCallCodec.h>
 
 #include <algorithm>
 #include <cctype>

@@ -1,7 +1,7 @@
 #ifndef TOOL_DEFINITION_ENCODER_H
 #define TOOL_DEFINITION_ENCODER_H
 
-#include "domain/model/SessionData.h"
+#include <domain/model/SessionData.h>
 #include <string>
 
 namespace toolcall {

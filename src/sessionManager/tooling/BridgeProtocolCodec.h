@@ -1,10 +1,10 @@
 #ifndef AIAPI_BRIDGE_PROTOCOL_CODEC_H
 #define AIAPI_BRIDGE_PROTOCOL_CODEC_H
 
-#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
-#include "sessionManager/contracts/GenerationEvent.h"
+#include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
+#include <sessionManager/contracts/GenerationEvent.h>
 
-#include "domain/model/BridgeWireFormat.h"
+#include <domain/model/BridgeWireFormat.h>
 #include <json/json.h>
 #include <memory>
 #include <string>

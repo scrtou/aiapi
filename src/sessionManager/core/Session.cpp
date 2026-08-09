@@ -1,5 +1,5 @@
-#include "sessionManager/core/Session.h"
-#include "sessionManager/continuity/ResponseIndex.h"
+#include <sessionManager/core/Session.h>
+#include <sessionManager/continuity/ResponseIndex.h>
 #include <time.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
@@ -8,8 +8,8 @@
 #include <tools/ZeroWidthEncoder.h>
 #include <random>
 #include <chrono>
-#include "dbManager/session/SessionDbManager.h"
-#include "sessionManager/core/SessionCodec.h"
+#include <dbManager/session/SessionDbManager.h>
+#include <sessionManager/core/SessionCodec.h>
 using namespace drogon;
 chatSession *chatSession::instance = nullptr;
 

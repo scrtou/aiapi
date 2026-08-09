@@ -13,16 +13,16 @@
 #include <list>
 #include <set>
 #include <cstdint>
-#include "domain/port/APIinterface.h"
+#include <domain/port/APIinterface.h>
 using namespace std;
 
 // 纯数据类型（Accountinfo_st / AccountCompare / AccountAutomationSettings /
 // AccountRequirement / AccountStatus）已下沉至中立层，见该文件头注释。
-#include "domain/model/AccountData.h"
+#include <domain/model/AccountData.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
-#include "AccountHttpTransport.h"
-#include "AccountClock.h"
+#include <accountManager/AccountHttpTransport.h>
+#include <accountManager/AccountClock.h>
 
 
 class AccountManager

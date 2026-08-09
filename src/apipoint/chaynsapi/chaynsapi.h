@@ -1,8 +1,8 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
 #include <accountManager/accountManager.h>
-#include "domain/model/SessionData.h"
-#include "../../apiManager/ApiFactory.h"
+#include <domain/model/SessionData.h>
+#include <apiManager/ApiFactory.h>
 #include <list>
 #include <map>
 #include <random>
@@ -12,11 +12,11 @@
 #include <chrono>
 #include <cstdint>
 #include <shared_mutex>
-#include "ChaynsModelCatalog.h"
-#include "ChaynsMessageCorrelation.h"
-#include "ChaynsPollingPolicy.h"
-#include "ChaynsHttpTransport.h"
-#include "ChaynsClock.h"
+#include <apipoint/chaynsapi/ChaynsModelCatalog.h>
+#include <apipoint/chaynsapi/ChaynsMessageCorrelation.h>
+#include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
+#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
+#include <apipoint/chaynsapi/ChaynsClock.h>
 
 using std::list;
 using std::map;

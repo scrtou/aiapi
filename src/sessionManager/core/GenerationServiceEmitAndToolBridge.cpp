@@ -1,21 +1,21 @@
-#include "sessionManager/core/GenerationService.h"
-#include "sessionManager/core/ClientOutputSanitizer.h"
-#include "sessionManager/continuity/ContinuityResolver.h"
-#include "sessionManager/continuity/ResponseIndex.h"
-#include "sessionManager/tooling/ToolCallBridge.h"
-#include "sessionManager/tooling/BridgeProtocolCodec.h"
-#include "sessionManager/tooling/ToolCallValidator.h"
-#include "sessionManager/tooling/XmlTagToolCallCodec.h"
-#include "sessionManager/tooling/StrictClientRules.h"
-#include "sessionManager/tooling/BridgeHelpers.h"
-#include "sessionManager/tooling/ForcedToolCallGenerator.h"
-#include "sessionManager/tooling/ToolCallNormalizer.h"
-#include "sessionManager/tooling/ToolDefinitionEncoder.h"
-#include "sessionManager/tooling/ToolDefinitionResolver.h"
-#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
-#include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
+#include <sessionManager/core/GenerationService.h>
+#include <sessionManager/core/ClientOutputSanitizer.h>
+#include <sessionManager/continuity/ContinuityResolver.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/tooling/ToolCallBridge.h>
+#include <sessionManager/tooling/BridgeProtocolCodec.h>
+#include <sessionManager/tooling/ToolCallValidator.h>
+#include <sessionManager/tooling/XmlTagToolCallCodec.h>
+#include <sessionManager/tooling/StrictClientRules.h>
+#include <sessionManager/tooling/BridgeHelpers.h>
+#include <sessionManager/tooling/ForcedToolCallGenerator.h>
+#include <sessionManager/tooling/ToolCallNormalizer.h>
+#include <sessionManager/tooling/ToolDefinitionEncoder.h>
+#include <sessionManager/tooling/ToolDefinitionResolver.h>
+#include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
+#include <sessionManager/actionProtocol/ActionProtocolAdapter.h>
 #include <apiManager/ApiManager.h>
-#include "domain/model/ProviderResult.h"
+#include <domain/model/ProviderResult.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <channelManager/channelManager.h>
 #include <metrics/ErrorStatsService.h>
@@ -29,7 +29,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_set>
-#include "sessionManager/core/Session.h"
+#include <sessionManager/core/Session.h>
 
 using namespace drogon;
 using namespace provider;

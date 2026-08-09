@@ -1,5 +1,5 @@
-#include "ApiManager.h"
-#include <ApiFactory.h>
+#include <apiManager/ApiManager.h>
+#include <apiManager/ApiFactory.h>
 #include <drogon/drogon.h>
 
 using namespace drogon;

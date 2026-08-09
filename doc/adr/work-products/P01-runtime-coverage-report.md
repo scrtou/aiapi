@@ -16,8 +16,8 @@
 | production 实现文件 | 68 |
 | 已编入并 instrument 的实现文件 | 53 |
 | 未进入测试链接对象图的实现文件 | 15 |
-| 行覆盖（仅已 instrument 实现） | 6028/11713 (51.46%) |
-| 分支覆盖（仅已 instrument 实现） | 9210/34851 (26.43%) |
+| 行覆盖（仅已 instrument 实现） | 6036/11713 (51.53%) |
+| 分支覆盖（仅已 instrument 实现） | 9218/34851 (26.45%) |
 | gcda 文件 | 94 |
 | 工具 | `gcov (Debian 12.2.0-14+deb12u1) 12.2.0` |
 
@@ -28,9 +28,9 @@
 | Chayns generate/postChatMessage | `src/apipoint/chaynsapi/chaynsapi.cpp` | `instrumented` | 543/1003 (54.14%) | 905/3232 (28.00%) |
 | Generation ToolBridge transform/emit | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `instrumented` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | Chat/Responses four GenerationService output modes | `src/sessionManager/core/GenerationService.cpp` | `instrumented` | 141/265 (53.21%) | 305/965 (31.61%) |
-| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
-| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 70/77 (90.91%) | 129/230 (56.09%) |
-| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
+| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
+| BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 70/77 (90.91%) | 130/230 (56.52%) |
+| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
 | Session cleaner interrupt/join | `src/sessionManager/core/Session.cpp` | `instrumented` | 218/701 (31.10%) | 283/2084 (13.58%) |
 | Chayns reaper interrupt/join | `src/apipoint/chaynsapi/chaynsThreadReaper.cpp` | `instrumented` | 40/109 (36.70%) | 35/234 (14.96%) |
 | Streaming disconnect boundary | `src/utils/IoLoopResponseStream.h` | `instrumented` | 47/55 (85.45%) | 35/66 (53.03%) |
@@ -63,7 +63,7 @@
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::autoRegisterAccount(` | `executed` | 3 | 133/229 (58.08%) | 335/960 (34.90%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::enqueue(` | `executed` | 35 | 17/17 (100.00%) | 37/60 (61.67%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::shutdown(` | `executed` | 8 | 13/13 (100.00%) | 18/26 (69.23%) |
-| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 11 | 16/23 (69.57%) | 48/98 (48.98%) |
+| BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 11 | 16/23 (69.57%) | 49/98 (50.00%) |
 | Account worker interrupt/join | `AccountManager::stopBackgroundThreads(` | `executed` | 43 | 18/18 (100.00%) | 21/32 (65.62%) |
 | Session cleaner interrupt/join | `chatSession::stopClearExpiredSession(` | `executed` | 2 | 8/8 (100.00%) | 3/4 (75.00%) |
 | Chayns reaper interrupt/join | `chaynsThreadReaper::stop(` | `executed` | 3 | 8/8 (100.00%) | 3/4 (75.00%) |
@@ -103,7 +103,7 @@
 | `src/accountManager/AccountClock.cpp` | `executed` | 2/5 (40.00%) | 1/2 (50.00%) |
 | `src/accountManager/AccountHttpTransport.cpp` | `executed` | 2/6 (33.33%) | 1/6 (16.67%) |
 | `src/accountManager/RetoolProvisionHealth.cpp` | `executed` | 49/50 (98.00%) | 50/86 (58.14%) |
-| `src/accountManager/accountManager.cpp` | `executed` | 549/1489 (36.87%) | 1027/5735 (17.91%) |
+| `src/accountManager/accountManager.cpp` | `executed` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
 | `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 3/10 (30.00%) |
 | `src/apiManager/ApiManager.cpp` | `executed` | 18/63 (28.57%) | 15/174 (8.62%) |
 | `src/apipoint/chaynsapi/ChaynsClock.cpp` | `executed` | 6/6 (100.00%) | 1/2 (50.00%) |

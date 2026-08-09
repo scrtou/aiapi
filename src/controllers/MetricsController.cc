@@ -1,7 +1,7 @@
-#include "MetricsController.h"
-#include "ControllerUtils.h"
-#include "ErrorStatsDbManager.h"
-#include "StatusDbManager.h"
+#include <controllers/MetricsController.h>
+#include <controllers/ControllerUtils.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/metrics/StatusDbManager.h>
 
 using namespace drogon;
 

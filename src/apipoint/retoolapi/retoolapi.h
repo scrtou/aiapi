@@ -1,9 +1,9 @@
 #ifndef RETOOLAPI_H
 #define RETOOLAPI_H
 
-#include "domain/port/APIinterface.h"
-#include "RetoolClock.h"
-#include "RetoolHttpTransport.h"
+#include <domain/port/APIinterface.h>
+#include <apipoint/retoolapi/RetoolClock.h>
+#include <apipoint/retoolapi/RetoolHttpTransport.h>
 #include <apiManager/ApiFactory.h>
 #include <drogon/HttpResponse.h>
 #include <memory>

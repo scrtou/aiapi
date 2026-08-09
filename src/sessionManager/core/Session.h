@@ -26,7 +26,7 @@ namespace drogon {
 }
 
 // session_st / SessionTrackingMode / ApiType 已迁至 domain/model/SessionData.h
-#include "domain/model/SessionData.h"
+#include <domain/model/SessionData.h>
 class chatSession
 {
   private:

@@ -1,14 +1,14 @@
 #ifndef GENERATION_SERVICE_H
 #define GENERATION_SERVICE_H
 
-#include "sessionManager/contracts/GenerationRequest.h"
-#include "sessionManager/contracts/GenerationEvent.h"
-#include "sessionManager/contracts/IResponseSink.h"
-#include "domain/model/SessionData.h"
-#include "sessionManager/core/SessionExecutionGate.h"
-#include "sessionManager/core/Errors.h"
-#include "sessionManager/tooling/ToolCallBridge.h"
-#include "sessionManager/tooling/XmlTagToolCallCodec.h"
+#include <sessionManager/contracts/GenerationRequest.h>
+#include <sessionManager/contracts/GenerationEvent.h>
+#include <sessionManager/contracts/IResponseSink.h>
+#include <domain/model/SessionData.h>
+#include <sessionManager/core/SessionExecutionGate.h>
+#include <sessionManager/core/Errors.h>
+#include <sessionManager/tooling/ToolCallBridge.h>
+#include <sessionManager/tooling/XmlTagToolCallCodec.h>
 /**
  * @brief 生成服务
  *

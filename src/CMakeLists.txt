@@ -174,34 +174,7 @@ drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
 
 target_include_directories(aiapi_legacy
                            PUBLIC
-                           ${CMAKE_CURRENT_SOURCE_DIR}
-                           ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apiManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/retoolapi
-                           ${CMAKE_CURRENT_SOURCE_DIR}/channelManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount
-                           ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount/backends
-                           ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount/contracts
-                           ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount/service
-                           ${CMAKE_CURRENT_SOURCE_DIR}/controllers
-                           ${CMAKE_CURRENT_SOURCE_DIR}/controllers/sinks
-                           ${CMAKE_CURRENT_SOURCE_DIR}/domain
-                           ${CMAKE_CURRENT_SOURCE_DIR}/domain/model
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/account
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/channel
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/chaynsThread
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/config
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/metrics
-                           ${CMAKE_CURRENT_SOURCE_DIR}/dbManager/retoolWorkspace
-                           ${CMAKE_CURRENT_SOURCE_DIR}/metrics
-                           ${CMAKE_CURRENT_SOURCE_DIR}/models
-                           ${CMAKE_CURRENT_SOURCE_DIR}/retoolWorkspace
-                           ${CMAKE_CURRENT_SOURCE_DIR}/sessionManager
-                           ${CMAKE_CURRENT_SOURCE_DIR}/tools
-                           ${CMAKE_CURRENT_SOURCE_DIR}/utils)
+                           ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ##############################################################################
 # uncomment the following line for dynamically loading views 

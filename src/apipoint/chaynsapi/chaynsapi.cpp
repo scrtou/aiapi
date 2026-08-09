@@ -1,7 +1,7 @@
 #include <drogon/drogon.h>
-#include <chaynsapi.h>
+#include <apipoint/chaynsapi/chaynsapi.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include <../../apiManager/Apicomn.h>
+#include <apiManager/Apicomn.h>
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utils/chaynsBrowserImpersonation.h>
-#include "sessionManager/core/Session.h"
+#include <sessionManager/core/Session.h>
 IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 

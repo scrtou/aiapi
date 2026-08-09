@@ -1,8 +1,8 @@
 #ifndef REQUEST_ADAPTERS_H
 #define REQUEST_ADAPTERS_H
 
-#include "sessionManager/contracts/GenerationRequest.h"
-#include "domain/model/SessionData.h"
+#include <sessionManager/contracts/GenerationRequest.h>
+#include <domain/model/SessionData.h>
 #include <drogon/HttpRequest.h>
 #include <json/json.h>
 

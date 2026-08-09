@@ -4,9 +4,9 @@
  */
 
 #include <drogon/drogon_test.h>
-#include "sessionManager/continuity/ContinuityResolver.h"
-#include "sessionManager/continuity/ResponseIndex.h"
-#include "sessionManager/core/Session.h"
+#include <sessionManager/continuity/ContinuityResolver.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/core/Session.h>
 #include <tools/ZeroWidthEncoder.h>
 
 namespace {

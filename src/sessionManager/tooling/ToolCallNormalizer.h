@@ -1,8 +1,8 @@
 #ifndef TOOL_CALL_NORMALIZER_H
 #define TOOL_CALL_NORMALIZER_H
 
-#include "domain/model/SessionData.h"
-#include "sessionManager/contracts/GenerationEvent.h"
+#include <domain/model/SessionData.h>
+#include <sessionManager/contracts/GenerationEvent.h>
 #include <string>
 #include <vector>
 

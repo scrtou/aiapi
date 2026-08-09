@@ -1,4 +1,4 @@
-#include "ChatJsonSink.h"
+#include <controllers/sinks/ChatJsonSink.h>
 #include <chrono>
 #include <random>
 

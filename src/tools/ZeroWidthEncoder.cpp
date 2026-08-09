@@ -1,4 +1,4 @@
-#include "ZeroWidthEncoder.h"
+#include <tools/ZeroWidthEncoder.h>
 #include <sstream>
 #include <cstring>
 

@@ -1,4 +1,4 @@
-#include "ChaynsHttpTransport.h"
+#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
 
 namespace chayns {
 namespace {

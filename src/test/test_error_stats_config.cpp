@@ -9,7 +9,7 @@
  */
 
 #include <drogon/drogon_test.h>
-#include "../metrics/ErrorStatsConfig.h"
+#include <metrics/ErrorStatsConfig.h>
 
 using namespace metrics;
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RateLimitFilter.h"
+#include <controllers/RateLimitFilter.h>
 #include <drogon/HttpController.h>
 
 class AiApiController : public drogon::HttpController<AiApiController>

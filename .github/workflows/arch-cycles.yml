@@ -83,9 +83,14 @@ jobs:
       - name: P3 - production source ownership
         run: python3 tools/arch/check_source_ownership.py
 
+      # P3-W2：自有头只能从 src/ 单一根以完整路径引用；
+      # 同时拒绝 CMake 再暴露子目录 include root。
+      - name: P3 - canonical include paths
+        run: python3 tools/arch/check_include_paths.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
-      # 若脚本哪天被改成永远返回 0，上面四道会全绿，只有这一步能发现。
+      # 若脚本哪天被改成永远返回 0，上面各道会全绿，只有这一步能发现。
       - name: R4 - gate selftest (gates must actually fail)
         # 本步硬依赖 bash：restore check 用了进程替换 diff <(...) <(...)，
         # 在 dash 下是语法错误（实测 dash -n 报 "(" unexpected）。
@@ -123,7 +128,7 @@ jobs:
             [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/main.cc
             [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
             rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp \
-              src/__source_owner_selftest_probe.cpp
+              src/__source_owner_selftest_probe.cpp src/__include_path_selftest_probe.cpp
             rm -rf "$PROBE_TMP"
             return 0
           }
@@ -133,6 +138,8 @@ jobs:
           probe_snapshot() {
             md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc 2>&1
             find src/domain src/test -type f 2>/dev/null | sort | xargs -r md5sum 2>&1
+            find src -maxdepth 1 -type f -name '*selftest_probe*' 2>/dev/null | \
+              sort | xargs -r md5sum 2>&1
           }
           snapshot_before=$(probe_snapshot)
 
@@ -207,6 +214,16 @@ jobs:
             > src/__source_owner_selftest_probe.cpp
           expect_rc 1 python3 tools/arch/check_source_ownership.py
           rm -f src/__source_owner_selftest_probe.cpp
+
+          echo '--- probe G1: basename self include -> expect rc=1 ---'
+          printf '#include "AccountData.h"\n' > src/__include_path_selftest_probe.cpp
+          expect_rc 1 python3 tools/arch/check_include_paths.py
+          rm -f src/__include_path_selftest_probe.cpp
+
+          echo '--- probe G2: parent-relative include -> expect rc=1 ---'
+          printf '#include "../outside.h"\n' > src/__include_path_selftest_probe.cpp
+          expect_rc 1 python3 tools/arch/check_include_paths.py
+          rm -f src/__include_path_selftest_probe.cpp
 
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。

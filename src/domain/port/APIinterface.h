@@ -2,8 +2,8 @@
 #define APIINTERFACE_H
 #include <string>
 #include <map>
-#include "domain/model/SessionData.h"
-#include "domain/model/ProviderResult.h"
+#include <domain/model/SessionData.h>
+#include <domain/model/ProviderResult.h>
 
 using std::map;
 using std::string;

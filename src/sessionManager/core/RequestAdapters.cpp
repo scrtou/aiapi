@@ -1,4 +1,4 @@
-#include "sessionManager/core/RequestAdapters.h"
+#include <sessionManager/core/RequestAdapters.h>
 #include <accountManager/accountManager.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <drogon/drogon.h>
@@ -8,7 +8,7 @@
 #include <iterator>
 #include <sstream>
 #include <unordered_set>
-#include "sessionManager/core/Session.h"
+#include <sessionManager/core/Session.h>
 
 using namespace drogon;
 

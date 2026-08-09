@@ -1,4 +1,4 @@
-#include "AiApiController.h"
+#include <controllers/AiApiController.h>
 #include <drogon/HttpResponse.h>
 #include <json/json.h>
 #include <drogon/drogon.h>
@@ -6,7 +6,7 @@
 #include <random>
 #include <unordered_map>
 #include <apiManager/ApiManager.h>
-#include "RetiredProviderTombstone.h"
+#include <controllers/RetiredProviderTombstone.h>
 #include <sessionManager/core/Session.h>
 #include <sessionManager/core/ClientOutputSanitizer.h>
 #include <sessionManager/core/GenerationService.h>
@@ -18,7 +18,7 @@
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <utils/BackgroundTaskQueue.h>
 #include <utils/IoLoopResponseStream.h>
-#include "ControllerUtils.h"
+#include <controllers/ControllerUtils.h>
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ChatJsonSink.h>
 #include <controllers/sinks/ResponsesSseSink.h>

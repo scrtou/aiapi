@@ -1,8 +1,8 @@
 #ifndef AIAPI_ACTION_PROTOCOL_ADAPTER_H
 #define AIAPI_ACTION_PROTOCOL_ADAPTER_H
 
-#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
-#include "sessionManager/contracts/GenerationEvent.h"
+#include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
+#include <sessionManager/contracts/GenerationEvent.h>
 #include <string>
 #include <vector>
 

@@ -102,18 +102,6 @@ endif()
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 aiapi_enable_coverage(${PROJECT_NAME})
 
-# 包含目录
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tools
-)
-
 # ##############################################################################
 # If you include the drogon source code locally in your project, use this method
 # to add drogon
@@ -128,8 +116,6 @@ if (UNIX)
     add_executable(aiapi_shutdown_signal_fixture
         support/shutdown_signal_fixture.cpp)
     aiapi_enable_coverage(aiapi_shutdown_signal_fixture)
-    target_include_directories(aiapi_shutdown_signal_fixture PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/..)
     target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE aiapi_legacy Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
 endif()

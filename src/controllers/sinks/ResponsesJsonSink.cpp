@@ -1,4 +1,4 @@
-#include "ResponsesJsonSink.h"
+#include <controllers/sinks/ResponsesJsonSink.h>
 #include <chrono>
 #include <sstream>
 

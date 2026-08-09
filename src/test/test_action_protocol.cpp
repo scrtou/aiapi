@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
-#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
-#include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
+#include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
+#include <sessionManager/actionProtocol/ActionProtocolAdapter.h>
 #include <sstream>
 
 using namespace actionproto;

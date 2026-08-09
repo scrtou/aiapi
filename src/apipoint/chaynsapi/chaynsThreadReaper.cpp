@@ -1,4 +1,4 @@
-#include "chaynsThreadReaper.h"
+#include <apipoint/chaynsapi/chaynsThreadReaper.h>
 
 #include <drogon/drogon.h>
 
@@ -8,7 +8,7 @@
 
 #include <apiManager/ApiManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include "chaynsapi.h"
+#include <apipoint/chaynsapi/chaynsapi.h>
 
 chaynsThreadReaper& chaynsThreadReaper::getInstance()
 {

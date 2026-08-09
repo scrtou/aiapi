@@ -1,6 +1,6 @@
-#include "sessionManager/core/SessionCodec.h"
+#include <sessionManager/core/SessionCodec.h>
 
-#include "sessionManager/tooling/BridgeProtocolCodec.h"
+#include <sessionManager/tooling/BridgeProtocolCodec.h>
 
 namespace sessioncodec {
 namespace {

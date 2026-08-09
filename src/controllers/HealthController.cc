@@ -1,4 +1,4 @@
-#include "HealthController.h"
+#include <controllers/HealthController.h>
 #include <apiManager/ApiManager.h>
 #include <accountManager/accountManager.h>
 #include <drogon/drogon.h>

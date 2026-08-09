@@ -3,7 +3,7 @@
 
 #include <string>
 #include <vector>
-#include "sessionManager/contracts/GenerationRequest.h"
+#include <sessionManager/contracts/GenerationRequest.h>
 /**
  * @brief TextExtractor
  *

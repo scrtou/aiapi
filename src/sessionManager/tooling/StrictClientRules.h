@@ -1,8 +1,8 @@
 #ifndef STRICT_CLIENT_RULES_H
 #define STRICT_CLIENT_RULES_H
 
-#include "sessionManager/actionProtocol/ActionProtocolCompiler.h"
-#include "sessionManager/contracts/GenerationEvent.h"
+#include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
+#include <sessionManager/contracts/GenerationEvent.h>
 #include <json/json.h>
 #include <string>
 #include <vector>

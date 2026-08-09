@@ -1,4 +1,4 @@
-#include "ChaynsMessageCorrelation.h"
+#include <apipoint/chaynsapi/ChaynsMessageCorrelation.h>
 
 #include <algorithm>
 #include <vector>

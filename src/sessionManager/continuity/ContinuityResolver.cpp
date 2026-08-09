@@ -1,11 +1,11 @@
-#include "sessionManager/continuity/ContinuityResolver.h"
-#include "sessionManager/continuity/ResponseIndex.h"
-#include "sessionManager/continuity/TextExtractor.h"
+#include <sessionManager/continuity/ContinuityResolver.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/continuity/TextExtractor.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <chrono>
 #include <random>
 #include <sstream>
-#include "sessionManager/core/Session.h"
+#include <sessionManager/core/Session.h>
 
 namespace {
 

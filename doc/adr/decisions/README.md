@@ -6,7 +6,7 @@
 |---|---|---|
 | [ADR-01](./ADR-01-layered-architecture.md) | 端口与适配器；domain 最终移除 JsonCpp | 迁移中 |
 | [ADR-02](./ADR-02-cmake-enforced-layering.md) | CMake target DAG + 架构规则共同强制边界 | 部分落地 |
-| [ADR-03](./ADR-03-single-include-root.md) | 单一 include 根与完整路径 | 待实施 |
+| [ADR-03](./ADR-03-single-include-root.md) | 单一 include 根与完整路径 | 已实施 |
 | [ADR-04](./ADR-04-cxx17-fixed.md) | 固定 C++17 | 已实施 |
 | [ADR-05](./ADR-05-result-type.md) | 跨层失败使用 Result，按垂直切片迁移 | 待实施 |
 | [ADR-06](./ADR-06-composition-root.md) | 组合根替代业务 Service Locator | 迁移中 |

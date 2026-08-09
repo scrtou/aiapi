@@ -1,4 +1,4 @@
-#include "sessionManager/continuity/TextExtractor.h"
+#include <sessionManager/continuity/TextExtractor.h>
 std::vector<std::string> TextExtractor::extractForContinuity(const GenerationRequest& req) {
     if (!req.continuityTexts.empty()) {
         return req.continuityTexts;

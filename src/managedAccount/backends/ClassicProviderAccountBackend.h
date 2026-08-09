@@ -1,6 +1,6 @@
 #pragma once
 
-#include "IManagedAccountBackend.h"
+#include <managedAccount/backends/IManagedAccountBackend.h>
 
 class ClassicProviderAccountBackend : public IManagedAccountBackend
 {

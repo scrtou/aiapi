@@ -1,4 +1,4 @@
-#include "sessionManager/actionProtocol/ActionProtocolAdapter.h"
+#include <sessionManager/actionProtocol/ActionProtocolAdapter.h>
 
 #include <json/json.h>
 #include <sstream>

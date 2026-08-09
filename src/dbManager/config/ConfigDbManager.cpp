@@ -1,4 +1,4 @@
-#include "ConfigDbManager.h"
+#include <dbManager/config/ConfigDbManager.h>
 #include <algorithm>
 
 void ConfigDbManager::detectDbType()

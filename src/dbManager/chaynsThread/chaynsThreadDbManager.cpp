@@ -1,5 +1,5 @@
-#include "chaynsThreadDbManager.h"
-#include "utils/BackgroundTaskQueue.h"
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <utils/BackgroundTaskQueue.h>
 #include <algorithm>
 #include <sstream>
 

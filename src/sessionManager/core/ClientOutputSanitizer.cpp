@@ -1,4 +1,4 @@
-#include "sessionManager/core/ClientOutputSanitizer.h"
+#include <sessionManager/core/ClientOutputSanitizer.h>
 #include <drogon/drogon.h>
 
 using namespace drogon;

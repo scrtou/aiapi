@@ -6,8 +6,8 @@
 #include <vector>
 #include <json/json.h>
 
-#include "domain/model/ImageInfo.h"
-#include "domain/model/BridgeWireFormat.h"
+#include <domain/model/ImageInfo.h>
+#include <domain/model/BridgeWireFormat.h>
 
 /**
  * @file SessionData.h

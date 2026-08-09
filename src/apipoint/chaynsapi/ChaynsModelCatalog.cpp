@@ -1,4 +1,4 @@
-#include "ChaynsModelCatalog.h"
+#include <apipoint/chaynsapi/ChaynsModelCatalog.h>
 
 #include <algorithm>
 #include <cctype>

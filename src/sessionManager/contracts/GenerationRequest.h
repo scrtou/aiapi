@@ -5,7 +5,7 @@
 #include <vector>
 #include <optional>
 #include <json/json.h>
-#include "domain/model/ImageInfo.h"
+#include <domain/model/ImageInfo.h>
 
 /**
  * @brief 请求入口类型（API endpoint）

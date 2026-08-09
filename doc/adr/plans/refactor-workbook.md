@@ -16,7 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W2 单一 include 根和完整路径。P3-W1 已建立 68/68 生产实现唯一 owner/compile 门禁，测试已删除 `PROJECT_SOURCES` 并链接临时 `aiapi_legacy`；normal/coverage/ASan 均 260/260 PASS。`aiapi_legacy` 仅是 P3 迁移脚手架，必须在 P3-W3 被正式分层 target 逐步替代。当前只允许执行 P3-W2。
+当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W3 正式分层 target carve-out。P3-W1 已建立 68/68 生产实现唯一 owner/compile；P3-W2 已把 422/422 自有 include 收敛为从 `src/` 起的完整路径，CMake 子目录 include root 为 0；normal/coverage/ASan 均 260/260 PASS。当前只允许执行 P3-W3，逐闭包替代并最终删除 `aiapi_legacy`。
 
 ## 按 migration-plan 排列的工作项
 
@@ -31,8 +31,8 @@
 | P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | [`P02-provider-data-retirement.md`](../work-products/P02-provider-data-retirement.md) | DONE |
 | P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | [`P02-provider-code-retirement.md`](../work-products/P02-provider-code-retirement.md) | DONE |
 | P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | DONE |
-| P3-W2 | 阶段 3 | 单一 include 根和完整路径 | [`P03-include-root.md`](../work-products/P03-include-root.md) | DOING |
-| P3-W3 | 阶段 3 | 正式分层 target carve-out，删除 legacy | [`P03-layered-targets.md`](../work-products/P03-layered-targets.md) | TODO |
+| P3-W2 | 阶段 3 | 单一 include 根和完整路径 | [`P03-include-root.md`](../work-products/P03-include-root.md) | DONE |
+| P3-W3 | 阶段 3 | 正式分层 target carve-out，删除 legacy | [`P03-layered-targets.md`](../work-products/P03-layered-targets.md) | DOING |
 | P3-W4 | 阶段 3 | domain 模型与 JSON codec 分离 | [`P03-domain-codecs.md`](../work-products/P03-domain-codecs.md) | TODO |
 | P4-W1 | 阶段 4 | 有界 executor 和四态队列 | 背压、drain、不可复活测试 | TODO |
 | P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | 启动失败回滚、显式 ownership | TODO |

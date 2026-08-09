@@ -5,7 +5,7 @@
 #include <vector>
 #include <memory>
 #include <json/json.h>
-#include "sessionManager/contracts/GenerationRequest.h"
+#include <sessionManager/contracts/GenerationRequest.h>
 namespace toolcall {
 
 /**

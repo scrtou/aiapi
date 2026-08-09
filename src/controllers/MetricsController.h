@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AdminAuthFilter.h"
+#include <controllers/AdminAuthFilter.h>
 #include <drogon/HttpController.h>
 
 /**

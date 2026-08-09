@@ -1,4 +1,4 @@
-#include "ClassicProviderAccountBackend.h"
+#include <managedAccount/backends/ClassicProviderAccountBackend.h>
 
 #include <accountManager/accountManager.h>
 
