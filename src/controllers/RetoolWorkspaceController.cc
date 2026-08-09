@@ -1,4 +1,5 @@
 #include <controllers/RetoolWorkspaceController.h>
+#include <controllers/codecs/ChannelJsonCodec.h>
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <controllers/ControllerUtils.h>
@@ -208,7 +209,7 @@ void RetoolWorkspaceController::workspacePoolStatus(
     {
         if (channel.channelName == "retoolapi")
         {
-            channelJson = channel.toJson();
+            channelJson = channelcodec::toJson(channel, true);
             break;
         }
     }

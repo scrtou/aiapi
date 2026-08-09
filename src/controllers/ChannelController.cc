@@ -1,4 +1,5 @@
 #include <controllers/ChannelController.h>
+#include <controllers/codecs/ChannelJsonCodec.h>
 #include <controllers/ControllerUtils.h>
 #include <channelManager/channelManager.h>
 #include <accountManager/accountManager.h>
@@ -25,7 +26,7 @@ void ChannelController::channelList(const HttpRequestPtr &req, std::function<voi
         Json::Value response(Json::arrayValue);
 
         for (auto &channel : channelList) {
-            response.append(channel.toJson());
+            response.append(channelcodec::toJson(channel, true));
         }
 
         ctl::sendJson(callback, response);
@@ -56,7 +57,7 @@ void ChannelController::channelAdd(const HttpRequestPtr &req, std::function<void
 
         for (const auto &reqBody : reqItems)
         {
-            Channelinfo_st channelInfo = Channelinfo_st::fromJson(reqBody);
+            Channelinfo_st channelInfo = channelcodec::fromJson(reqBody);
 
             Json::Value responseItem;
             responseItem["channelname"] = channelInfo.channelName;
@@ -106,7 +107,7 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
         Json::Value response;
 
         // 解析渠道信息
-        Channelinfo_st channelInfo = Channelinfo_st::fromJson(reqBody);
+        Channelinfo_st channelInfo = channelcodec::fromJson(reqBody);
 
         if (retired_provider::isRetiredProviderKey(channelInfo.channelName) ||
             retired_provider::isRetiredProviderKey(channelInfo.channelType)) {
