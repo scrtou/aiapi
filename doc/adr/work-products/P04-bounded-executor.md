@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | DOING |
+| 状态 | DOING（C1/C2 完成，进行中：C3） |
 | 前置 | P3-W4 domain JsonCpp 归零；P1-W5 SIGTERM/积压/断连 harness |
 | 目标 | `BackgroundTaskQueue` 三 bool → 四态状态机；无界队列 → 容量上限；`bool` → `EnqueueResult`；所有调用点处理失败 |
 | 计划依据 | migration-plan 阶段 4.2 与 4.5 阶段边界 |
@@ -66,15 +66,25 @@ state: Fresh --start()--> Running --shutdown()--> Draining --(queue empty)--> St
 
 ## 4. 分片计划
 
-| 切片 | 内容 |
-|---:|---|
-| C1 | 引入 `EnqueueResult` 与四态 `State`，`enqueue` 返回新类型，保留 `bool` 兼容 shim |
-| C2 | 加入 capacity 上限与 `QueueFull`；Draining 拒绝递归入队 |
-| C3 | 加入完成通知（`waitUntilIdle(deadline)`），供 P4-W2 AppContext 使用 |
-| C4 | transport 层 11 处调用点处理结果：503 + Retry-After |
-| C5 | infrastructure 层 10 处调用点处理结果：失败计入 metrics，不静默 |
-| C6 | `main.cc` 与 RetoolWorkspaceService 2 处；移除隐式自动启动 |
-| C7 | 删除 `bool` 兼容 shim；契约测试补齐；文档与 workbook 收口 |
+| 切片 | 内容 | 状态 |
+|---:|---|---|
+| C1 | 引入 `EnqueueResult` 与四态 `State`，`enqueue` 返回新类型，保留 `bool` 兼容 shim | DONE |
+| C2 | 加入 capacity 上限与 `QueueFull`；Draining 拒绝递归入队 | DONE |
+| C3 | 加入完成通知（`waitUntilIdle(deadline)`），供 P4-W2 AppContext 使用 | DOING |
+| C4 | transport 层 11 处调用点处理结果：503 + Retry-After | TODO |
+| C5 | infrastructure 层 10 处调用点处理结果：失败计入 metrics，不静默 | TODO |
+| C6 | `main.cc` 与 RetoolWorkspaceService 2 处；移除隐式自动启动 | TODO |
+| C7 | 删除 `bool` 兼容 shim；契约测试补齐；文档与 workbook 收口 | TODO |
+
+### 分片进度证据
+
+- C1/C2：三 bool 已删除，状态由单一 `State` 表示；`kDefaultCapacity = 1024` 背压上限生效；
+  `createForTesting()` 使每个用例持有独立实例（状态机不可逆，共享单例会污染后续用例）。
+  TSan 全量 276 用例 / 1417 断言 PASS，data race 为 0；停机专项与信号夹具各 5/5；
+  P1-W5 既有 harness 无回归。回归入口固定为 `tools/run-tsan.sh`（裸跑二进制缺 `TSAN_OPTIONS`
+  会把第三方已知告警升级为非零退出码，产生假阳性）。
+- C3～C7：未完成。23 处生产调用点仍全部经由 `enqueueLegacy` 兼容 shim，
+  退出门禁「23/23 调用点显式处理 `EnqueueResult`」尚未达成。
 
 ## 5. 退出门禁
 
