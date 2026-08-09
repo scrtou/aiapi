@@ -10,9 +10,8 @@
 // Regressionstest fuer den Ghost-Index-Defekt in AccountManager::loadAccount().
 //
 // Defekt (Schritte 232-237): loadAccount() leerte nur accountPoolMap, nie accountList.
-// loadAccountFromDatebase() ueberspringt trial-budget-exceeded Datensaetze per continue
-// (Backup + Loeschen in der Hauptdatenbank), ruft also kein addAccount(). Ein bereits
-// indizierter Account blieb dadurch dauerhaft in accountList, obwohl die DB-Zeile weg war.
+// Verschwand ein zuvor geladener Datensatz aus der Datenbank, blieb er deshalb dauerhaft
+// in accountList, obwohl der neue Ladezyklus kein addAccount() mehr fuer ihn aufrief.
 // getAccountList() lieferte den Geistereintrag an alle Konsumenten (u. a. account_count
 // der Health-Probe) aus.
 //
@@ -20,9 +19,8 @@
 // test_account_store_port.cpp ueber getInstance(). Jeder Testfall setzt seinen eigenen
 // Store und startet mit einem vollen loadAccount(), ist also nicht von Vorlaeufern abhaengig.
 //
-// Der Test injiziert ueber setStore() und faehrt zwei Ladezyklen: erst ein normaler
-// Account, dann derselbe Account als trial_budget_exceeded. Vor dem Fix ist die zweite
-// Assertion rot.
+// Der Test injiziert ueber setStore() und faehrt zwei Ladezyklen: erst mit einem Account,
+// dann mit leerer Datenbank. Vor dem Fix ist die zweite Assertion rot.
 
 namespace
 {
@@ -30,7 +28,7 @@ namespace
 Accountinfo_st makeAccount(const std::string& accountType)
 {
     Accountinfo_st account;
-    account.apiName = "nexosapi";
+    account.apiName = "test-provider";
     account.userName = "ghost@example.com";
     account.passwd = "pw";
     account.authToken = "tok";
@@ -78,7 +76,7 @@ class ReloadFakeAccountStore : public IAccountStore
 }  // namespace
 
 // Erster Ladezyklus indiziert, zweiter Ladezyklus muss den Eintrag wieder entfernen.
-DROGON_TEST(AccountReloadDropsArchivedGhostIndexEntry)
+DROGON_TEST(AccountReloadDropsRemovedDatabaseRowFromIndex)
 {
     auto store = std::make_shared<ReloadFakeAccountStore>();
     auto& manager = AccountManager::getInstance();
@@ -88,17 +86,16 @@ DROGON_TEST(AccountReloadDropsArchivedGhostIndexEntry)
     manager.loadAccount();
 
     auto afterFirstLoad = manager.getAccountList();
-    REQUIRE(afterFirstLoad.find("nexosapi") != afterFirstLoad.end());
-    CHECK(afterFirstLoad["nexosapi"].find("ghost@example.com") != afterFirstLoad["nexosapi"].end());
+    REQUIRE(afterFirstLoad.find("test-provider") != afterFirstLoad.end());
+    CHECK(afterFirstLoad["test-provider"].find("ghost@example.com") != afterFirstLoad["test-provider"].end());
 
-    store->rows = {makeAccount("trial_budget_exceeded")};
+    store->rows.clear();
     manager.loadAccount();
 
-    CHECK(store->deleteCalls == 1);
-    CHECK(store->lastDeletedUserName == "ghost@example.com");
+    CHECK(store->deleteCalls == 0);
 
     auto afterReload = manager.getAccountList();
-    auto apiIt = afterReload.find("nexosapi");
+    auto apiIt = afterReload.find("test-provider");
     const bool ghostGone = apiIt == afterReload.end() ||
                            apiIt->second.find("ghost@example.com") == apiIt->second.end();
     CHECK(ghostGone);
@@ -119,7 +116,7 @@ DROGON_TEST(AccountReloadWithEmptyDatabaseClearsIndex)
     manager.loadAccount();
 
     auto afterReload = manager.getAccountList();
-    auto apiIt = afterReload.find("nexosapi");
+    auto apiIt = afterReload.find("test-provider");
     const bool indexEmpty = apiIt == afterReload.end() || apiIt->second.empty();
     CHECK(indexEmpty);
 }

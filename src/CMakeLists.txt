@@ -59,8 +59,6 @@ add_executable(${PROJECT_NAME}
     apipoint/chaynsapi/ChaynsModelCatalog.cpp
     apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
     apipoint/chaynsapi/chaynsThreadReaper.cpp
-    apipoint/nexosapi/nexosapi.cpp
-    apipoint/openai/OpenAiProvider.cpp
     apipoint/retoolapi/retoolapi.cpp
     apipoint/retoolapi/RetoolHttpTransport.cpp
     apipoint/retoolapi/RetoolClock.cpp
@@ -75,6 +73,7 @@ add_executable(${PROJECT_NAME}
     controllers/LogController.cc
     controllers/HealthController.cc
     controllers/RetoolWorkspaceController.cc
+    controllers/RetiredProviderTombstone.cc
     controllers/sinks/ChatSseSink.cpp
     controllers/sinks/ChatJsonSink.cpp
     controllers/sinks/ResponsesSseSink.cpp
@@ -97,6 +96,7 @@ add_executable(${PROJECT_NAME}
     sessionManager/core/ClientOutputSanitizer.cpp
     sessionManager/core/GenerationService.cpp
     sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
+    sessionManager/core/RetiredProviderTelemetry.cpp
     sessionManager/tooling/BridgeHelpers.cpp
     sessionManager/tooling/BridgeProtocolCodec.cpp
     sessionManager/tooling/StrictClientRules.cpp
@@ -140,9 +140,7 @@ target_include_directories(${PROJECT_NAME}
                            ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/apiManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/openai
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/chaynsapi
-                           ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/nexosapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/apipoint/retoolapi
                            ${CMAKE_CURRENT_SOURCE_DIR}/channelManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/managedAccount

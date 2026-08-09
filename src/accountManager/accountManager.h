@@ -44,16 +44,13 @@ class AccountManager
     std::condition_variable accountListNeedUpdateCondition;
     AccountAutomationSettings accountAutomationSettings_;
     mutable std::mutex accountAutomationSettingsMutex_;
-    void normalizeNexosAccountsInDatabase();
-     // 
+     //
     map<string, void (AccountManager::*)(shared_ptr<Accountinfo_st>)> updateTokenMap = {
-        {"chaynsapi", &AccountManager::updateChaynsToken},
-        {"nexosapi", &AccountManager::updateNexosToken}
+        {"chaynsapi", &AccountManager::updateChaynsToken}
     };
 
     map<string, bool (AccountManager::*)(string)> checkTokenMap = {
-        {"chaynsapi", &AccountManager::checkChaynsToken},
-        {"nexosapi", &AccountManager::checkNexosToken}
+        {"chaynsapi", &AccountManager::checkChaynsToken}
     };
     // 旧字段保留：历史版本用于缓存 API 名称列表
     // R4 试点 C：只持端口，不持 AccountDbManager 具体实现。
@@ -110,10 +107,7 @@ class AccountManager
     void updateToken();
     void updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo);
     bool checkChaynsToken(string token);
-    void updateNexosToken(shared_ptr<Accountinfo_st> accountinfo);
-    bool checkNexosToken(string token);
     Json::Value getChaynsToken(string username,string passwd);
-    Json::Value getNexosToken(string username,string passwd);
     void registerAPIinterface(string apiName,shared_ptr<APIinterface> apiInterface);
     void refreshAccountQueue(string apiName);
     void printAccountPoolMap();

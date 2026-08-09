@@ -72,9 +72,7 @@ set(TEST_SOURCES
     test_chayns_message_correlation.cpp
     test_chayns_fixtures.cpp
     test_chayns_provider_fixture.cpp
-    test_nexos_user_agent.cpp
     test_chayns_browser_impersonation.cpp
-    test_nexos_registration_mail_policy.cpp
     test_login_response_log_summary.cpp
     test_background_task_queue_shutdown.cpp
     test_application_shutdown_harness.cpp
@@ -89,6 +87,7 @@ set(TEST_SOURCES
     test_retool_provision_health.cpp
     test_health_ready_probe.cpp
     test_controller_utils.cpp
+    test_provider_retirement.cpp
     stub_db_collaborators.cpp
 )
 
@@ -120,6 +119,8 @@ set(PROJECT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
     # 步骤 181：为 /ready 库探针补测试，需真身编译进来（符号缺口实测为 0）。
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/HealthController.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/RetiredProviderTombstone.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RetiredProviderTelemetry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatJsonSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatSseSink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesJsonSink.cpp

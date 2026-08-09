@@ -3,6 +3,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <domain/policy/RetiredProviderPolicy.h>
 
 namespace metrics {
 
@@ -96,11 +97,15 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
             FROM request_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND provider IS NOT NULL AND provider != ''
+              AND provider NOT IN ($3, $4)
             GROUP BY provider, bucket_start
             ORDER BY provider, bucket_start
         )";
         
-        auto reqResult = dbClient_->execSqlSync(reqBucketSql, from, to);
+        auto reqResult = dbClient_->execSqlSync(
+            reqBucketSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 一次性查询所有上游的错误时间序列
         std::string errBucketSql = R"(
@@ -111,11 +116,15 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllChanne
             FROM error_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND provider IS NOT NULL AND provider != ''
+              AND provider NOT IN ($3, $4)
             GROUP BY provider, bucket_start
             ORDER BY provider, bucket_start
         )";
         
-        auto errResult = dbClient_->execSqlSync(errBucketSql, from, to);
+        auto errResult = dbClient_->execSqlSync(
+            errBucketSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 在内存中组织数据：上游 -> bucket_start -> StatusBucket
         std::map<std::string, std::map<std::string, StatusBucket>> providerBucketMap;
@@ -181,6 +190,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
                 FROM request_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND model IS NOT NULL AND model != ''
+                  AND (provider IS NULL OR provider NOT IN ($3, $4))
                 GROUP BY model, provider, bucket_start
                 ORDER BY model, provider, bucket_start
             )";
@@ -194,6 +204,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
                 FROM error_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND model IS NOT NULL AND model != ''
+                  AND (provider IS NULL OR provider NOT IN ($3, $4))
                 GROUP BY model, provider, bucket_start
                 ORDER BY model, provider, bucket_start
             )";
@@ -208,6 +219,7 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
                 FROM request_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND model IS NOT NULL AND model != ''
+                  AND (provider IS NULL OR provider NOT IN ($3, $4))
                 GROUP BY model, provider, bucket_start
                 ORDER BY model, provider, bucket_start
             )";
@@ -221,13 +233,20 @@ std::map<std::string, std::vector<StatusBucket>> StatusDbManager::fetchAllModelB
                 FROM error_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND model IS NOT NULL AND model != ''
+                  AND (provider IS NULL OR provider NOT IN ($3, $4))
                 GROUP BY model, provider, bucket_start
                 ORDER BY model, provider, bucket_start
             )";
         }
         
-        auto reqResult = dbClient_->execSqlSync(reqBucketSql, from, to);
-        auto errResult = dbClient_->execSqlSync(errBucketSql, from, to);
+        auto reqResult = dbClient_->execSqlSync(
+            reqBucketSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
+        auto errResult = dbClient_->execSqlSync(
+            errBucketSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 在内存中组织数据：(模型：上游) -> bucket_start -> StatusBucket
         std::map<std::string, std::map<std::string, StatusBucket>> modelBucketMap;
@@ -293,14 +312,19 @@ ChannelStatusCounts StatusDbManager::getChannelStatusCounts(const std::string& f
                 FROM error_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND provider IS NOT NULL AND provider != ''
+                  AND provider NOT IN ($3, $4)
                 GROUP BY provider
             ) e ON r.provider = e.provider
             WHERE r.bucket_start >= $1 AND r.bucket_start < $2
               AND r.provider IS NOT NULL AND r.provider != ''
+              AND r.provider NOT IN ($3, $4)
             GROUP BY r.provider
         )";
         
-        auto result = dbClient_->execSqlSync(sql, from, to);
+        auto result = dbClient_->execSqlSync(
+            sql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         for (const auto& row : result) {
             int64_t requests = row["total_requests"].as<int64_t>();
@@ -384,9 +408,13 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             FROM request_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND provider IS NOT NULL AND provider != ''
+              AND provider NOT IN ($3, $4)
         )";
         
-        auto channelResult = dbClient_->execSqlSync(channelSql, from, to);
+        auto channelResult = dbClient_->execSqlSync(
+            channelSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         if (!channelResult.empty()) {
             summary.channelCount = channelResult[0]["channel_count"].as<int>();
         }
@@ -397,6 +425,7 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
             FROM request_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND model IS NOT NULL AND model != ''
+              AND (provider IS NULL OR provider NOT IN ($3, $4))
         )";
         
         // SQLite 不支持 CONCAT，使用 || 替代
@@ -406,10 +435,14 @@ StatusSummaryData StatusDbManager::getStatusSummary(const StatusQueryParams& par
                 FROM request_agg_hour
                 WHERE bucket_start >= $1 AND bucket_start < $2
                   AND model IS NOT NULL AND model != ''
+                  AND (provider IS NULL OR provider NOT IN ($3, $4))
             )";
         }
         
-        auto modelResult = dbClient_->execSqlSync(modelSql, from, to);
+        auto modelResult = dbClient_->execSqlSync(
+            modelSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         if (!modelResult.empty()) {
             summary.modelCount = modelResult[0]["model_count"].as<int>();
         }
@@ -510,11 +543,15 @@ std::vector<ChannelStatusData> StatusDbManager::getChannelStatusList(const Statu
             FROM request_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND provider IS NOT NULL AND provider != ''
+              AND provider NOT IN ($3, $4)
             GROUP BY provider
             ORDER BY total_requests DESC
         )";
         
-        auto result = dbClient_->execSqlSync(sql, from, to);
+        auto result = dbClient_->execSqlSync(
+            sql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 查询每个渠道的错误统计
         std::string errSql = R"(
@@ -524,10 +561,14 @@ std::vector<ChannelStatusData> StatusDbManager::getChannelStatusList(const Statu
             FROM error_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND provider IS NOT NULL AND provider != ''
+              AND provider NOT IN ($3, $4)
             GROUP BY provider
         )";
         
-        auto errResult = dbClient_->execSqlSync(errSql, from, to);
+        auto errResult = dbClient_->execSqlSync(
+            errSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 构建错误数映射
         std::map<std::string, int64_t> errorMap;
@@ -606,11 +647,15 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
             FROM request_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND model IS NOT NULL AND model != ''
+              AND (provider IS NULL OR provider NOT IN ($3, $4))
             GROUP BY model, provider
             ORDER BY total_requests DESC
         )";
         
-        auto result = dbClient_->execSqlSync(sql, from, to);
+        auto result = dbClient_->execSqlSync(
+            sql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 查询每个 模型×上游 的错误统计
         std::string errSql = R"(
@@ -621,10 +666,14 @@ std::vector<ModelStatusData> StatusDbManager::getModelStatusList(const StatusQue
             FROM error_agg_hour
             WHERE bucket_start >= $1 AND bucket_start < $2
               AND model IS NOT NULL AND model != ''
+              AND (provider IS NULL OR provider NOT IN ($3, $4))
             GROUP BY model, provider
         )";
         
-        auto errResult = dbClient_->execSqlSync(errSql, from, to);
+        auto errResult = dbClient_->execSqlSync(
+            errSql, from, to,
+            std::string(retired_provider::kNexosProviderKey),
+            std::string(retired_provider::kDirectOpenAiKey));
         
         // 构建错误数映射（键：模型:上游）
         std::map<std::string, int64_t> errorMap;

@@ -18,7 +18,7 @@
 // liefert top() weiterhin A, obwohl B mit useCount 5 und gueltigem Token vorne stehen muesste.
 //
 // Folgen: setStatusTokenStatus() entwertet ein Konto, die Queue sortiert es aber nicht um.
-// getAccount() nimmt top() ohne jede Gueltigkeitspruefung - nexosapi bekommt dadurch ein
+// getAccount() nimmt top() ohne jede Gueltigkeitspruefung - ein beliebiger Provider bekommt dadurch ein
 // entwertetes Konto und liefert nullptr, obwohl weiter unten im Heap ein gueltiges liegt.
 
 namespace
@@ -27,7 +27,7 @@ namespace
 Accountinfo_st makeAccount(const std::string& userName, int useCount)
 {
     Accountinfo_st account;
-    account.apiName = "nexosapi";
+    account.apiName = "test-provider";
     account.userName = userName;
     account.passwd = "pw";
     account.authToken = "tok-" + userName;
@@ -85,15 +85,15 @@ DROGON_TEST(AccountPoolReordersAfterTokenStatusInvalidation)
     manager.loadAccount();
 
     std::shared_ptr<Accountinfo_st> first;
-    manager.getAccount("nexosapi", first, "");
+    manager.getAccount("test-provider", first, "");
     REQUIRE(first != nullptr);
     CHECK(first->userName == "low@example.com");
 
     // Spitzenkonto entwerten: der Heap muss danach high@ ausliefern.
-    manager.setStatusTokenStatus("nexosapi", "low@example.com", false);
+    manager.setStatusTokenStatus("test-provider", "low@example.com", false);
 
     std::shared_ptr<Accountinfo_st> second;
-    manager.getAccount("nexosapi", second, "");
+    manager.getAccount("test-provider", second, "");
     REQUIRE(second != nullptr);
     CHECK(second->tokenStatus == true);
     CHECK(second->userName == "high@example.com");
@@ -114,7 +114,7 @@ DROGON_TEST(AccountPoolReordersAfterUseCountUpdate)
     REQUIRE(manager.updateAccount(bumped));
 
     std::shared_ptr<Accountinfo_st> selected;
-    manager.getAccount("nexosapi", selected, "");
+    manager.getAccount("test-provider", selected, "");
     REQUIRE(selected != nullptr);
     CHECK(selected->userName == "high@example.com");
 }
@@ -144,14 +144,14 @@ DROGON_TEST(AccountPoolTypeFilterUnderMultipleInvalidations)
                    makeTypedAccount("pro-x@example.com", 0, "pro")};
     manager.loadAccount();
 
-    manager.setStatusTokenStatus("nexosapi", "free-0@example.com", false);
-    manager.setStatusTokenStatus("nexosapi", "free-1@example.com", false);
-    manager.setStatusTokenStatus("nexosapi", "free-2@example.com", false);
+    manager.setStatusTokenStatus("test-provider", "free-0@example.com", false);
+    manager.setStatusTokenStatus("test-provider", "free-1@example.com", false);
+    manager.setStatusTokenStatus("test-provider", "free-2@example.com", false);
 
     for (int i = 0; i < 3; ++i)
     {
         std::shared_ptr<Accountinfo_st> picked;
-        manager.getAccount("nexosapi", picked, "free");
+        manager.getAccount("test-provider", picked, "free");
         REQUIRE(picked != nullptr);
         CHECK(picked->tokenStatus == true);
     }

@@ -37,10 +37,9 @@
 
 - ✅ OpenAI Chat Completions API 兼容（流式/非流式）
 - ✅ OpenAI Responses API 兼容（流式/非流式，含 previous_response_id 续聊）
-- ✅ 多 Provider 支持（可扩展工厂模式：chaynsapi / nexosapi / retoolapi / openai）
-- ✅ Nexos Web Provider（对外 HTTP：`/nexosapi/v1/*`）
+- ✅ 活跃 Provider：chaynsapi / retoolapi（可扩展工厂模式）
 - ✅ Retool Workspace Provider（对外 HTTP：`/retoolapi/v1/*`）
-- ✅ OpenAI 兼容上游 Provider（`OpenAiProvider`，通过 `custom_config.providers.openai` 配置，非独立 `/openai/v1/*` 路由）
+- ✅ 退役兼容边界：历史 `/nexosapi/v1/*` 路由稳定返回 HTTP 410；具体 Nexos/OpenAiProvider 实现已删除
 - ✅ 工具调用（Tool Calls）完整支持
 - ✅ 工具调用桥接（XML Bridge）— 为不原生支持工具调用的通道提供桥接
 - ✅ 工具调用验证（ToolCallValidator）— 支持 None/Relaxed/Strict 三种校验模式
@@ -134,9 +133,7 @@
 │  └─────────────┘     └─────────────────────────────────────┘   │
 │        │                                                        │
 │        ├── chaynsapi (Chayns AI Provider)                       │
-│        ├── nexosapi  (Nexos Web Provider)                       │
-│        ├── retoolapi (Retool Workspace Provider)                │
-│        └── openai    (OpenAI 兼容 Provider)                     │
+│        └── retoolapi (Retool Workspace Provider)                │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -266,12 +263,8 @@ aiapi/
     │   ├── ProviderResult.h        # Provider 结果结构
     │   ├── chaynsapi/              # Chayns Provider 实现
     │   │   └── chaynsapi.h/cpp
-    │   ├── nexosapi/               # Nexos Web Provider 实现
-    │   │   └── nexosapi.h/cpp
-    │   ├── retoolapi/              # Retool Workspace Provider 实现
-    │   │   └── retoolapi.h/cpp
-    │   └── openai/                 # OpenAI 兼容 Provider 实现
-    │       └── OpenAiProvider.h/cpp
+    │   └── retoolapi/              # Retool Workspace Provider 实现
+    │       └── retoolapi.h/cpp
     │
     ├── apiManager/                 # Provider 管理
     │   ├── Apicomn.h               # API 公共定义
@@ -336,8 +329,7 @@ aiapi/
     │   ├── ConfigValidator.h/cpp   # 配置校验器
     │   ├── IoLoopResponseStream.h  # IO 循环响应流
     │   ├── LoginResponseLogSummary.h # 登录响应日志摘要
-    │   ├── NexosRegistrationMailPolicy.h # Nexos 注册邮件策略
-    │   └── NexosUserAgent.h        # Nexos User-Agent 工具
+    │   └── RetiredProviderPolicy.h # 已退役 Provider 键策略
     │
     └── test/                       # 单元测试
         ├── CMakeLists.txt          # 测试构建配置
@@ -351,8 +343,7 @@ aiapi/
         ├── test_history_replay_budget.cpp           # HistoryReplayBudget 测试
         ├── test_io_loop_response_stream.cpp         # IoLoopResponseStream 测试
         ├── test_login_response_log_summary.cpp      # LoginResponseLogSummary 测试
-        ├── test_nexos_registration_mail_policy.cpp  # Nexos 注册邮件策略测试
-        ├── test_nexos_user_agent.cpp                 # NexosUserAgent 测试
+        ├── test_provider_retirement.cpp             # Provider 退役边界测试
         ├── test_normalize_tool_args.cpp             # ToolCallNormalizer 测试
         ├── test_request_adapters.cpp                # RequestAdapters 测试
         ├── test_response_index.cpp                  # ResponseIndex 测试
@@ -373,25 +364,24 @@ aiapi/
 | GET | `/chaynsapi/v1/responses/{id}` | 获取已创建的响应 |
 | DELETE | `/chaynsapi/v1/responses/{id}` | 删除已创建的响应 |
 | GET | `/chaynsapi/v1/models` | 获取可用模型列表 |
-| POST | `/nexosapi/v1/chat/completions` | Nexos Web Chat → OpenAI Chat Completions |
-| POST | `/nexosapi/v1/responses` | Nexos Web Chat → OpenAI Responses |
-| GET | `/nexosapi/v1/responses/{id}` | 获取已创建的 Nexos 响应 |
-| DELETE | `/nexosapi/v1/responses/{id}` | 删除已创建的 Nexos 响应 |
-| GET | `/nexosapi/v1/models` | 获取 Nexos 可用模型列表 |
-| GET | `/nexosapi/v1/account/quota` | 获取 Nexos 账号订阅/额度信息 |
+| POST | `/nexosapi/v1/chat/completions` | 已退役；稳定返回 HTTP 410 `provider_retired` |
+| POST | `/nexosapi/v1/responses` | 已退役；稳定返回 HTTP 410 `provider_retired` |
+| GET | `/nexosapi/v1/responses/{id}` | 已退役；稳定返回 HTTP 410 `provider_retired` |
+| DELETE | `/nexosapi/v1/responses/{id}` | 已退役；稳定返回 HTTP 410 `provider_retired` |
+| GET | `/nexosapi/v1/models` | 已退役；稳定返回 HTTP 410 `provider_retired` |
+| GET | `/nexosapi/v1/account/quota` | 已退役；稳定返回 HTTP 410 `provider_retired` |
 | POST | `/retoolapi/v1/chat/completions` | Retool Workspace Chat Completions |
 | POST | `/retoolapi/v1/responses` | Retool Workspace Responses |
 | GET | `/retoolapi/v1/responses/{id}` | 获取已创建的 Retool 响应 |
 | DELETE | `/retoolapi/v1/responses/{id}` | 删除已创建的 Retool 响应 |
 | GET | `/retoolapi/v1/models` | 获取 Retool 可用模型列表 |
 
-### Nexos Provider 说明
+### Nexos 退役兼容说明
 
-- `nexosapi` 不再从配置文件读取 `cookies/default_model/default_handler_id/model_mapping/models`
-- **账号 cookies 来自账号管理**：请通过 `/aichat/account/add` 添加 `apiName=nexosapi` 的账号，并把完整 cookies 放到 `authToken`
-- **模型列表实时获取**：每次调用 `/nexosapi/v1/models` 或聊天请求时，都会从 Nexos `chat.data` 实时解析当前账号可用模型
-
-- **额度查询**：`GET /nexosapi/v1/account/quota` 返回当前 Nexos 账号订阅/额度信息
+- Nexos 和具体 `OpenAiProvider` 已退役，不能再配置、创建渠道或新增账号。
+- 六条历史 `/nexosapi/v1/*` 路由保留 tombstone，统一返回 HTTP 410、`provider_retired` 和 `X-AIAPI-Retirement-Id`。
+- 公开的 OpenAI Chat Completions/Responses **协议兼容能力仍保留**，由 `chaynsapi` 与 `retoolapi` 路由提供；这与删除具体 OpenAI 上游 Provider 是两个不同概念。
+- 数据归档/恢复和发布步骤见 `doc/adr/work-products/P02-provider-data-retirement.md`。
 
 ### Retool Provider 说明
 
@@ -549,7 +539,7 @@ runGuarded(req, sink, policy)
 | ResponseIndex | 响应存储索引，支持 Responses API 的 GET/DELETE 操作 |
 | TextExtractor | 从复杂消息结构中提取纯文本内容 |
 
-`HistoryReplayBudget` 已接入 `chaynsapi` / `nexosapi` / `retoolapi` / `openai` 各 Provider 的历史组装路径。可通过 `custom_config.history_replay` 调整预算（单位：字节）：
+`HistoryReplayBudget` 已接入当前活跃的 `chaynsapi` / `retoolapi` Provider 历史组装路径。可通过 `custom_config.history_replay` 调整预算（单位：字节）：
 
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
@@ -875,8 +865,6 @@ Docker 入口脚本支持：
 | `custom_config.response_index.max_entries` | Responses 索引最大内存条目数 | 正整数 |
 | `custom_config.response_index.max_age_hours` | Responses 索引过期时间（小时） | 正整数 |
 | `custom_config.response_index.cleanup_interval_minutes` | 索引清理周期（分钟） | 正整数 |
-| `custom_config.providers.openai` | OpenAI 兼容 Provider 配置 | `api_key` / `base_url` / `default_model` |
-| `custom_config.providers.nexos` | Nexos Provider 配置 | `base_url` |
 | `custom_config.upstream_error_texts` | 上游错误文本匹配列表 | 字符串数组 |
 | `custom_config.cors.allowed_origins` | CORS 白名单 | 字符串数组 |
 
@@ -977,8 +965,7 @@ Docker 入口脚本支持：
 | `test_chayns_model_catalog.cpp` | chayns 模型目录 |
 | `test_io_loop_response_stream.cpp` | IO 循环响应流 |
 | `test_login_response_log_summary.cpp` | 登录响应日志摘要 |
-| `test_nexos_registration_mail_policy.cpp` | Nexos 注册邮件策略 |
-| `test_nexos_user_agent.cpp` | Nexos User-Agent |
+| `test_provider_retirement.cpp` | Provider 退役配置与 410 tombstone |
 | `test_history_replay_budget.cpp` | HistoryReplayBudget 历史回放预算 |
 
 ## 开发路线
@@ -1004,7 +991,8 @@ Docker 入口脚本支持：
 - [x] 日志查看 API（文件列表 + 尾部读取 + 过滤）
 - [x] 服务状态/错误统计 Metrics API（JSON；非 Prometheus exposition 格式）
 - [x] 增量流式响应（AsyncStreamResponse + SSE 实时推送）
-- [x] 多 Provider（chaynsapi + nexosapi + retoolapi + OpenAI 兼容）
+- [x] 活跃 Provider（chaynsapi + retoolapi）与 OpenAI 兼容公开协议
+- [x] Nexos/OpenAiProvider 可恢复退役与 410 tombstone
 - [x] HTTP 过滤器（AdminAuthFilter + RateLimitFilter）
 - [x] 健康检查端点（/health + /ready）
 - [x] 配置校验（ConfigValidator）

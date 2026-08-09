@@ -3,16 +3,15 @@
 // 定位必须说清，否则后人会误用：
 // 本文件桩掉的是「被测单元的协作者」，不是被测单元本身。
 // aiapi_test 现在链接真实的 accountManager.cpp（被测逻辑是真身编译出来的那份），
-// 但 AccountManager 内部还会触达 ConfigDbManager / AccountBackupDbManager /
-// ChannelDbManager / RetoolWorkspaceService 这四个真实数据库协作者。
+// 但 AccountManager 内部还会触达 ConfigDbManager / ChannelDbManager /
+// RetoolWorkspaceService 等真实数据库协作者。
 // 单元测试不应连真实数据库，故在链接期用空实现顶掉它们。
 //
 // 与「桩掉被测对象」的本质区别：若 AccountManager 的 store 注入逻辑被改坏，
 // 测试会红；而旧的 stub_account_manager.cpp 做法下改坏真身测试照样绿。
 //
-// 缺口清单来自实测（步骤 79）而非推测，共 10 个符号。
+// 缺口清单来自链接实测而非推测；Provider 退役后已同步删除不再需要的 backup 桩。
 #include <dbManager/config/ConfigDbManager.h>
-#include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <retoolWorkspace/RetoolWorkspaceService.h>
 
@@ -28,14 +27,6 @@ std::optional<std::string> ConfigDbManager::getValue(const std::string&, std::st
     return std::nullopt;  // 测试里一律视为「配置项不存在」，走默认值分支
 }
 bool ConfigDbManager::setValues(const std::map<std::string, std::string>&, std::string*)
-{
-    return true;
-}
-
-// ---- AccountBackupDbManager（3 个）----
-AccountBackupDbManager::AccountBackupDbManager() {}
-bool AccountBackupDbManager::ensureTable() { return true; }
-bool AccountBackupDbManager::backupAccount(const Accountinfo_st&, const std::string&)
 {
     return true;
 }

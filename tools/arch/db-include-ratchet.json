@@ -4,7 +4,6 @@
     "accountManager/accountManager.cpp",
     "apipoint/chaynsapi/chaynsThreadReaper.cpp",
     "apipoint/chaynsapi/chaynsapi.cpp",
-    "apipoint/nexosapi/nexosapi.cpp",
     "controllers/AccountController.cc",
     "controllers/MetricsController.cc",
     "controllers/RetoolWorkspaceController.cc",

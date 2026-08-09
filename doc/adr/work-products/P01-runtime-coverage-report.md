@@ -14,11 +14,11 @@
 | 项 | 值 |
 |---|---:|
 | production 实现文件 | 69 |
-| 已编入并 instrument 的实现文件 | 52 |
-| 未编入测试 target 的实现文件 | 17 |
-| 行覆盖（仅已 instrument 实现） | 5913/12084 (48.93%) |
-| 分支覆盖（仅已 instrument 实现） | 8987/36357 (24.72%) |
-| gcda 文件 | 94 |
+| 已编入并 instrument 的实现文件 | 54 |
+| 未编入测试 target 的实现文件 | 15 |
+| 行覆盖（仅已 instrument 实现） | 6036/11909 (50.68%) |
+| 分支覆盖（仅已 instrument 实现） | 9218/35499 (25.97%) |
+| gcda 文件 | 95 |
 | 工具 | `gcov (Debian 12.2.0-14+deb12u1) 12.2.0` |
 
 ## 3. 高风险路径
@@ -28,9 +28,9 @@
 | Chayns generate/postChatMessage | `src/apipoint/chaynsapi/chaynsapi.cpp` | `instrumented` | 543/1003 (54.14%) | 905/3232 (28.00%) |
 | Generation ToolBridge transform/emit | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `instrumented` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | Chat/Responses four GenerationService output modes | `src/sessionManager/core/GenerationService.cpp` | `instrumented` | 141/265 (53.21%) | 305/965 (31.61%) |
-| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
+| Account selection/invalidation/rollback/pool rebuild | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
 | BackgroundTaskQueue shutdown/drain | `src/utils/BackgroundTaskQueue.h` | `instrumented` | 70/77 (90.91%) | 130/230 (56.52%) |
-| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
+| Account worker interrupt/join | `src/accountManager/accountManager.cpp` | `instrumented` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
 | Session cleaner interrupt/join | `src/sessionManager/core/Session.cpp` | `instrumented` | 218/701 (31.10%) | 283/2084 (13.58%) |
 | Chayns reaper interrupt/join | `src/apipoint/chaynsapi/chaynsThreadReaper.cpp` | `instrumented` | 40/109 (36.70%) | 35/234 (14.96%) |
 | Streaming disconnect boundary | `src/utils/IoLoopResponseStream.h` | `instrumented` | 47/55 (85.45%) | 35/66 (53.03%) |
@@ -52,19 +52,19 @@
 | Chat/Responses four GenerationService output modes | `GenerationService::executeProvider(` | `executed` | 8 | 22/30 (73.33%) | 40/106 (37.74%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::getAccount(` | `executed` | 6 | 33/36 (91.67%) | 83/168 (49.40%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::getEligibleAccount(` | `executed` | 9 | 55/68 (80.88%) | 69/140 (49.29%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::setStatusTokenStatus(` | `executed` | 5 | 11/11 (100.00%) | 21/42 (50.00%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::setStatusTokenStatus(` | `executed` | 5 | 11/11 (100.00%) | 20/40 (50.00%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::rollbackWaitingAccount(` | `executed` | 1 | 4/4 (100.00%) | 2/4 (50.00%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::rebuildPoolLocked(` | `executed` | 11 | 11/12 (91.67%) | 17/28 (60.71%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::loadAccount(` | `executed` | 18 | 12/13 (92.31%) | 32/50 (64.00%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::addAccountbyPost(` | `executed` | 2 | 16/17 (94.12%) | 16/52 (30.77%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::updateAccount(` | `executed` | 2 | 18/19 (94.74%) | 16/32 (50.00%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::rebuildPoolLocked(` | `executed` | 11 | 11/12 (91.67%) | 16/26 (61.54%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::loadAccount(` | `executed` | 19 | 12/13 (92.31%) | 32/50 (64.00%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::addAccountbyPost(` | `executed` | 3 | 19/20 (95.00%) | 22/62 (35.48%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::updateAccount(` | `executed` | 3 | 21/22 (95.45%) | 22/42 (52.38%) |
 | Account selection/invalidation/rollback/pool rebuild | `AccountManager::deleteAccountbyPost(` | `executed` | 2 | 10/10 (100.00%) | 17/30 (56.67%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::checkToken(` | `executed` | 1 | 18/23 (78.26%) | 69/138 (50.00%) |
-| Account selection/invalidation/rollback/pool rebuild | `AccountManager::autoRegisterAccount(` | `executed` | 2 | 133/236 (56.36%) | 332/986 (33.67%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::checkToken(` | `executed` | 1 | 18/23 (78.26%) | 68/136 (50.00%) |
+| Account selection/invalidation/rollback/pool rebuild | `AccountManager::autoRegisterAccount(` | `executed` | 3 | 133/229 (58.08%) | 335/960 (34.90%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::enqueue(` | `executed` | 35 | 17/17 (100.00%) | 37/60 (61.67%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::shutdown(` | `executed` | 8 | 13/13 (100.00%) | 18/26 (69.23%) |
 | BackgroundTaskQueue shutdown/drain | `BackgroundTaskQueue::workerLoop(` | `executed` | 11 | 16/23 (69.57%) | 49/98 (50.00%) |
-| Account worker interrupt/join | `AccountManager::stopBackgroundThreads(` | `executed` | 42 | 18/18 (100.00%) | 21/32 (65.62%) |
+| Account worker interrupt/join | `AccountManager::stopBackgroundThreads(` | `executed` | 43 | 18/18 (100.00%) | 21/32 (65.62%) |
 | Session cleaner interrupt/join | `chatSession::stopClearExpiredSession(` | `executed` | 2 | 8/8 (100.00%) | 3/4 (75.00%) |
 | Chayns reaper interrupt/join | `chaynsThreadReaper::stop(` | `executed` | 3 | 8/8 (100.00%) | 3/4 (75.00%) |
 | Streaming disconnect boundary | `IoLoopResponseStream::send(` | `executed` | 4 | 11/12 (91.67%) | 6/12 (50.00%) |
@@ -80,8 +80,6 @@
 
 这些文件没有运行时覆盖证据，是 P1 后续 fixture/characterization 的输入：
 
-- `src/apipoint/nexosapi/nexosapi.cpp`
-- `src/apipoint/openai/OpenAiProvider.cpp`
 - `src/controllers/AccountController.cc`
 - `src/controllers/AiApiController.cc`
 - `src/controllers/ChannelController.cc`
@@ -105,7 +103,7 @@
 | `src/accountManager/AccountClock.cpp` | `executed` | 2/5 (40.00%) | 1/2 (50.00%) |
 | `src/accountManager/AccountHttpTransport.cpp` | `executed` | 2/6 (33.33%) | 1/6 (16.67%) |
 | `src/accountManager/RetoolProvisionHealth.cpp` | `executed` | 49/50 (98.00%) | 50/86 (58.14%) |
-| `src/accountManager/accountManager.cpp` | `executed` | 559/1767 (31.64%) | 1047/6945 (15.08%) |
+| `src/accountManager/accountManager.cpp` | `executed` | 557/1489 (37.41%) | 1035/5735 (18.05%) |
 | `src/apiManager/ApiFactory.cpp` | `executed` | 6/13 (46.15%) | 3/10 (30.00%) |
 | `src/apiManager/ApiManager.cpp` | `executed` | 18/63 (28.57%) | 15/174 (8.62%) |
 | `src/apipoint/chaynsapi/ChaynsClock.cpp` | `executed` | 6/6 (100.00%) | 1/2 (50.00%) |
@@ -117,8 +115,9 @@
 | `src/apipoint/retoolapi/RetoolClock.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/2 (0.00%) |
 | `src/apipoint/retoolapi/RetoolHttpTransport.cpp` | `instrumented_not_executed` | 0/6 (0.00%) | 0/6 (0.00%) |
 | `src/apipoint/retoolapi/retoolapi.cpp` | `executed` | 406/889 (45.67%) | 677/3140 (21.56%) |
-| `src/channelManager/channelManager.cpp` | `executed` | 58/98 (59.18%) | 83/208 (39.90%) |
+| `src/channelManager/channelManager.cpp` | `executed` | 75/116 (64.66%) | 100/248 (40.32%) |
 | `src/controllers/HealthController.cc` | `executed` | 31/52 (59.62%) | 35/96 (36.46%) |
+| `src/controllers/RetiredProviderTombstone.cc` | `executed` | 41/43 (95.35%) | 58/118 (49.15%) |
 | `src/controllers/sinks/ChatJsonSink.cpp` | `executed` | 94/109 (86.24%) | 111/222 (50.00%) |
 | `src/controllers/sinks/ChatSseSink.cpp` | `executed` | 95/186 (51.08%) | 138/520 (26.54%) |
 | `src/controllers/sinks/ResponsesJsonSink.cpp` | `executed` | 101/132 (76.52%) | 132/334 (39.52%) |
@@ -136,13 +135,14 @@
 | `src/sessionManager/actionProtocol/ActionProtocolCompiler.cpp` | `executed` | 245/285 (85.96%) | 284/596 (47.65%) |
 | `src/sessionManager/continuity/ContinuityResolver.cpp` | `executed` | 88/97 (90.72%) | 102/201 (50.75%) |
 | `src/sessionManager/continuity/HistoryReplayBudget.cpp` | `executed` | 147/181 (81.22%) | 166/332 (50.00%) |
-| `src/sessionManager/continuity/OutboundBudget.cpp` | `executed` | 49/72 (68.06%) | 41/120 (34.17%) |
+| `src/sessionManager/continuity/OutboundBudget.cpp` | `executed` | 46/68 (67.65%) | 34/112 (30.36%) |
 | `src/sessionManager/continuity/ResponseIndex.cpp` | `executed` | 87/125 (69.60%) | 74/204 (36.27%) |
 | `src/sessionManager/continuity/TextExtractor.cpp` | `executed` | 3/13 (23.08%) | 2/18 (11.11%) |
 | `src/sessionManager/core/ClientOutputSanitizer.cpp` | `executed` | 7/46 (15.22%) | 6/168 (3.57%) |
 | `src/sessionManager/core/GenerationService.cpp` | `executed` | 141/265 (53.21%) | 305/965 (31.61%) |
 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp` | `executed` | 478/1102 (43.38%) | 743/3241 (22.93%) |
 | `src/sessionManager/core/RequestAdapters.cpp` | `executed` | 540/792 (68.18%) | 1129/2996 (37.68%) |
+| `src/sessionManager/core/RetiredProviderTelemetry.cpp` | `executed` | 3/3 (100.00%) | 9/18 (50.00%) |
 | `src/sessionManager/core/Session.cpp` | `executed` | 218/701 (31.10%) | 283/2084 (13.58%) |
 | `src/sessionManager/core/SessionCodec.cpp` | `instrumented_not_executed` | 0/137 (0.00%) | 0/382 (0.00%) |
 | `src/sessionManager/tooling/BridgeHelpers.cpp` | `executed` | 98/103 (95.15%) | 118/200 (59.00%) |
@@ -153,4 +153,4 @@
 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp` | `executed` | 333/601 (55.41%) | 392/1309 (29.95%) |
 | `src/tools/ZeroWidthEncoder.cpp` | `executed` | 58/117 (49.57%) | 42/115 (36.52%) |
 | `src/utils/ApplicationShutdown.cpp` | `executed` | 17/17 (100.00%) | 65/98 (66.33%) |
-| `src/utils/ConfigValidator.cpp` | `instrumented_not_executed` | 0/110 (0.00%) | 0/462 (0.00%) |
+| `src/utils/ConfigValidator.cpp` | `executed` | 67/153 (43.79%) | 166/646 (25.70%) |

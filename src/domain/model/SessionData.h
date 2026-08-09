@@ -49,7 +49,7 @@ static const int SESSION_CLEANUP_INTERVAL = 3600; // 1小时，单位秒数，�
 struct session_st
 {
   struct RequestData {
-    /// 本次请求选择的上游通道标识（例如 chaynsapi / openai），用于路由到具体 provider。
+    /// 本次请求选择的上游通道标识（例如 chaynsapi / retoolapi），用于路由到具体 provider。
     std::string api="";
     /// 本次请求目标模型名（如 GPT-4o、gpt-4o-mini），用于上游请求体构建。
     std::string model="";

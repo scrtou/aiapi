@@ -1,10 +1,11 @@
 #include "channelManager.h"
+#include <domain/policy/RetiredProviderPolicy.h>
 
 namespace {
 
 bool isBuiltInChannelName(const std::string& name)
 {
-    return name == "chaynsapi" || name == "nexosapi" || name == "retoolapi";
+    return name == "chaynsapi" || name == "retoolapi";
 }
 
 std::list<Channelinfo_st> buildDefaultChannels()
@@ -20,20 +21,6 @@ std::list<Channelinfo_st> buildDefaultChannels()
             30,
             0,
             "Built-in channel: chaynsapi",
-            0,
-            0,
-            false
-        ),
-        Channelinfo_st(
-            "nexosapi",
-            "nexosapi",
-            "",
-            "",
-            true,
-            10,
-            30,
-            0,
-            "Built-in channel: nexosapi",
             0,
             0,
             false
@@ -123,6 +110,16 @@ void ChannelManager::reloadCache()
 {
     // 调用方必须持有 unique_lock(cacheMutex_)
     channelCache_ = requireStore()->getChannelList();
+    channelCache_.remove_if([](const Channelinfo_st& channel) {
+        const bool retired =
+            retired_provider::isRetiredProviderKey(channel.channelName) ||
+            retired_provider::isRetiredProviderKey(channel.channelType);
+        if (retired) {
+            LOG_ERROR << "[渠道管理] 数据库仍含已退役 Provider 渠道，已拒绝加载: "
+                      << channel.channelName << "；请先执行 retire_providers_v1.sql";
+        }
+        return retired;
+    });
 }
 
 void ChannelManager::init()
@@ -159,6 +156,11 @@ void ChannelManager::init()
 
 bool ChannelManager::addChannel(struct Channelinfo_st channelinfo)
 {
+    if (retired_provider::isRetiredProviderKey(channelinfo.channelName) ||
+        retired_provider::isRetiredProviderKey(channelinfo.channelType)) {
+        LOG_ERROR << "[渠道管理] 拒绝新增已退役 Provider 渠道: " << channelinfo.channelName;
+        return false;
+    }
     bool ok = requireStore()->addChannel(channelinfo);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
@@ -169,6 +171,11 @@ bool ChannelManager::addChannel(struct Channelinfo_st channelinfo)
 
 bool ChannelManager::updateChannel(struct Channelinfo_st channelinfo)
 {
+    if (retired_provider::isRetiredProviderKey(channelinfo.channelName) ||
+        retired_provider::isRetiredProviderKey(channelinfo.channelType)) {
+        LOG_ERROR << "[渠道管理] 拒绝更新已退役 Provider 渠道: " << channelinfo.channelName;
+        return false;
+    }
     bool ok = requireStore()->updateChannel(channelinfo);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);
@@ -206,6 +213,10 @@ list<Channelinfo_st> ChannelManager::getChannelList()
 
 bool ChannelManager::updateChannelStatus(string channelName, bool status)
 {
+    if (retired_provider::isRetiredProviderKey(channelName)) {
+        LOG_ERROR << "[渠道管理] 拒绝更新已退役 Provider 渠道状态: " << channelName;
+        return false;
+    }
     bool ok = requireStore()->updateChannelStatus(channelName, status);
     if (ok) {
         std::unique_lock<std::shared_mutex> lock(cacheMutex_);

@@ -8,15 +8,11 @@ namespace {
 
 // 每个上游的实测硬限不同，这里的兜底值互相独立，不共用一个常量。
 constexpr size_t kFallbackChayns   = 768 * 1024;
-constexpr size_t kFallbackNexos    = 512 * 1024;
 constexpr size_t kFallbackRetool   = 256 * 1024;
-constexpr size_t kFallbackOpenAi   = 4 * 1024 * 1024;
 constexpr size_t kFallbackGeneric  = 512 * 1024;
 
 constexpr size_t kFallbackMsgChayns  = 384 * 1024;
-constexpr size_t kFallbackMsgNexos   = 256 * 1024;
 constexpr size_t kFallbackMsgRetool  = 128 * 1024;
-constexpr size_t kFallbackMsgOpenAi  = 1024 * 1024;
 constexpr size_t kFallbackMsgGeneric = 256 * 1024;
 
 constexpr size_t kMaximumConfiguredBytes = 32 * 1024 * 1024;
@@ -24,18 +20,14 @@ constexpr size_t kMaximumConfiguredBytes = 32 * 1024 * 1024;
 size_t builtinRequestFallback(const std::string& providerKey)
 {
     if (providerKey == "chaynsapi") return kFallbackChayns;
-    if (providerKey == "nexosapi")  return kFallbackNexos;
     if (providerKey == "retoolapi") return kFallbackRetool;
-    if (providerKey == "openai")    return kFallbackOpenAi;
     return kFallbackGeneric;
 }
 
 size_t builtinMessageFallback(const std::string& providerKey)
 {
     if (providerKey == "chaynsapi") return kFallbackMsgChayns;
-    if (providerKey == "nexosapi")  return kFallbackMsgNexos;
     if (providerKey == "retoolapi") return kFallbackMsgRetool;
-    if (providerKey == "openai")    return kFallbackMsgOpenAi;
     return kFallbackMsgGeneric;
 }
 

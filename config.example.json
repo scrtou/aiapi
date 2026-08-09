@@ -153,16 +153,8 @@
                 "max_request_bytes": 1048576,
                 "max_message_bytes": 1048576
             },
-            "nexosapi": {
-                "max_request_bytes": 1048576,
-                "max_message_bytes": 1048576
-            },
             "retoolapi": {
                 "max_request_bytes": 1048576,
-                "max_message_bytes": 1048576
-            },
-            "openai": {
-                "max_request_bytes": 4194304,
                 "max_message_bytes": 1048576
             }
         },
@@ -197,16 +189,13 @@
             "rewrite_user_input_conflicts": false,
             "strict_sentinel": true,
             "strict_sentinel_by_channel": {
-                "openai": true,
                 "chaynsapi": false
             },
             "strict_sentinel_by_model": {
                 "gpt-4o-mini": true,
                 "legacy-compat-model": false
             },
-            "strict_sentinel_enabled_channels": [
-                "openai"
-            ],
+            "strict_sentinel_enabled_channels": [],
             "strict_sentinel_disabled_channels": [
                 "chaynsapi"
             ],
@@ -234,21 +223,9 @@
             {
                 "name": "chaynsapi",
                 "api_key": "tool_web_demo_key"
-            },
-            {
-                "name": "nexosapi",
-                "api_key": "tool_web_demo_key"
             }
         ],
         "providers": {
-            "openai": {
-                "api_key": "",
-                "base_url": "https://api.openai.com",
-                "default_model": "gpt-4o-mini"
-            },
-            "nexos": {
-                "base_url": "https://workspace.nexos.ai"
-            },
             "chaynsapi": {
                 "browser_impersonation": {
                     "enabled": true,

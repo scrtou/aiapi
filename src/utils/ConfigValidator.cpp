@@ -1,8 +1,78 @@
 #include "ConfigValidator.h"
-#include "NexosRegistrationMailPolicy.h"
 #include <algorithm>
+#include <string_view>
 
 namespace {
+
+bool isRetiredProviderKey(std::string_view key)
+{
+    return key == "nexosapi" || key == "openai";
+}
+
+bool isRetiredProviderConfigKey(std::string_view key)
+{
+    return isRetiredProviderKey(key) || key == "nexos";
+}
+
+void validateRetiredProviderReferences(
+    const Json::Value& custom,
+    ConfigValidator::ValidationResult& result)
+{
+    const auto reject = [&result](const std::string& path) {
+        result.valid = false;
+        result.errors.emplace_back(
+            path + " 引用了已退役 Provider；请删除该键并迁移到 chaynsapi 或 retoolapi");
+    };
+
+    for (const auto& key : custom["providers"].getMemberNames()) {
+        if (isRetiredProviderConfigKey(key)) reject("custom_config.providers." + key);
+    }
+    for (const auto& key : custom["outbound_limits"].getMemberNames()) {
+        if (isRetiredProviderKey(key)) reject("custom_config.outbound_limits." + key);
+    }
+    for (const char* arrayKey : {"login_service_urls", "regist_service_urls",
+                                 "downstream_service_api_keys"}) {
+        const auto& values = custom[arrayKey];
+        if (!values.isArray()) continue;
+        for (Json::ArrayIndex i = 0; i < values.size(); ++i) {
+            if (values[i]["name"].isString() &&
+                isRetiredProviderKey(values[i]["name"].asString())) {
+                reject("custom_config." + std::string(arrayKey) + "[" +
+                       std::to_string(i) + "].name");
+            }
+        }
+    }
+    const auto& accounts = custom["account"];
+    if (accounts.isArray()) {
+        for (Json::ArrayIndex i = 0; i < accounts.size(); ++i) {
+            if (accounts[i]["apiname"].isString() &&
+                isRetiredProviderKey(accounts[i]["apiname"].asString())) {
+                reject("custom_config.account[" + std::to_string(i) + "].apiname");
+            }
+        }
+    }
+
+    const auto& toolBridge = custom["tool_bridge"];
+    if (!toolBridge.isObject()) return;
+    for (const char* mapKey : {"format_by_channel", "strict_sentinel_by_channel"}) {
+        for (const auto& key : toolBridge[mapKey].getMemberNames()) {
+            if (isRetiredProviderKey(key)) {
+                reject("custom_config.tool_bridge." + std::string(mapKey) + "." + key);
+            }
+        }
+    }
+    for (const char* listKey : {"strict_sentinel_enabled_channels",
+                                "strict_sentinel_disabled_channels"}) {
+        const auto& values = toolBridge[listKey];
+        if (!values.isArray()) continue;
+        for (Json::ArrayIndex i = 0; i < values.size(); ++i) {
+            if (values[i].isString() && isRetiredProviderKey(values[i].asString())) {
+                reject("custom_config.tool_bridge." + std::string(listKey) +
+                       "[" + std::to_string(i) + "]");
+            }
+        }
+    }
+}
 
 bool isPositiveInt(const Json::Value& value) {
     return value.isInt() && value.asInt() > 0;
@@ -48,6 +118,7 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
     }
 
     const auto& custom = config["custom_config"];
+    validateRetiredProviderReferences(custom, result);
 
     if (custom.isMember("session_tracking") && custom["session_tracking"].isObject()) {
         const auto mode = custom["session_tracking"].get("mode", "hash").asString();
@@ -162,12 +233,6 @@ ConfigValidator::ValidationResult ConfigValidator::validate(const Json::Value& c
             result.valid = false;
             result.errors.emplace_back("tool_bridge.namespace_enabled 必须为布尔值");
         }
-    }
-
-    std::string nexosMailPolicyError;
-    if (!nexos::validateRegistrationMailPolicy(custom, &nexosMailPolicyError)) {
-        result.valid = false;
-        result.errors.emplace_back(nexosMailPolicyError);
     }
 
     if (custom.isMember("error_stats") && custom["error_stats"].isObject()) {

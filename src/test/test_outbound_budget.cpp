@@ -6,14 +6,14 @@ using namespace continuity;
 DROGON_TEST(OutboundBudget_ProvidersHaveIndependentLimits)
 {
     const size_t chaynsLimit = outboundMaxRequestBytes("chaynsapi");
-    const size_t nexosLimit  = outboundMaxRequestBytes("nexosapi");
     const size_t retoolLimit = outboundMaxRequestBytes("retoolapi");
+    const size_t genericLimit = outboundMaxRequestBytes("test-provider");
 
     CHECK(chaynsLimit > 0);
-    CHECK(nexosLimit > 0);
     CHECK(retoolLimit > 0);
-    CHECK(chaynsLimit != nexosLimit);
-    CHECK(nexosLimit != retoolLimit);
+    CHECK(genericLimit > 0);
+    CHECK(chaynsLimit != genericLimit);
+    CHECK(genericLimit != retoolLimit);
 }
 
 DROGON_TEST(OutboundBudget_UnknownProviderUsesGenericFallback)
@@ -26,7 +26,7 @@ DROGON_TEST(OutboundBudget_UnknownProviderUsesGenericFallback)
 
 DROGON_TEST(OutboundBudget_MessageLimitBelowRequestLimit)
 {
-    for (const char* provider : {"chaynsapi", "nexosapi", "retoolapi", "openai"}) {
+    for (const char* provider : {"chaynsapi", "retoolapi", "test-provider"}) {
         CHECK(outboundMaxMessageBytes(provider) <= outboundMaxRequestBytes(provider));
     }
 }

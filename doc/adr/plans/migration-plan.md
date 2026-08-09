@@ -33,9 +33,9 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 2（可恢复地退役 nexos/OpenAiProvider），当前工作项 P2-W2（tombstone 与代码退役）。**
+**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W1（production target 唯一 source owner）。**
 
-P2-W1 已完成：`P02-provider-data-retirement.md` 交付 SQLite 只读 preflight、事务归档/恢复脚本和离线 fixture；本地升级 schema 副本已完成 archive/delete/restore 对账，幂等、schema 漂移、snapshot 不一致、主键/唯一键冲突均能 rollback。当前没有运行中的目标部署数据库，不能把 fixture/`build/data` 证据称为生产 dry-run；上线时仍须按报告执行只读预检和停服副本演练。当前只允许执行 P2-W2，不得提前进入 P3。
+阶段 2 已完成：P2-W1 交付 SQLite 只读 preflight、事务归档/恢复脚本和离线 fixture；P2-W2 交付六路由 410 tombstone、具体 Nexos/OpenAiProvider 删除、账号/渠道写入保护、旧配置精确报错、active status 维度清理和精确门禁。normal/coverage/ASan 均 260/260 PASS，架构/循环/启动接线门禁通过。当前没有运行中的目标部署数据库，不能把本地 fixture 称为生产 dry-run；上线时仍须按 P02 报告执行只读预检、停服副本演练及外部 Dashboard/告警清理。当前只允许执行 P3-W1。
 
 ---
 

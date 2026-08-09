@@ -6,7 +6,7 @@
 #include <random>
 #include <unordered_map>
 #include <apiManager/ApiManager.h>
-#include <apipoint/nexosapi/nexosapi.h>
+#include "RetiredProviderTombstone.h"
 #include <sessionManager/core/Session.h>
 #include <sessionManager/core/ClientOutputSanitizer.h>
 #include <sessionManager/core/GenerationService.h>
@@ -35,9 +35,6 @@ namespace {
 std::string inferProviderFromPath(const HttpRequestPtr& req)
 {
     const auto path = req ? req->path() : "";
-    if (path.rfind("/nexosapi/", 0) == 0) {
-        return "nexosapi";
-    }
     if (path.rfind("/retoolapi/", 0) == 0) {
         return "retoolapi";
     }
@@ -281,23 +278,19 @@ void AiApiController::chaynsapimodels(const HttpRequestPtr &req, std::function<v
     ctl::sendJson(callback, response);
 }
 
-void AiApiController::nexosAccountQuota(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+void AiApiController::retiredNexos(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    auto provider = ApiManager::getInstance().getApiByApiName("nexosapi");
-    if (!provider) {
-        ctl::sendError(callback, k500InternalServerError, "provider_not_found", "Provider not found: nexosapi");
-        return;
-    }
+    retired_provider::respondNexosTombstone(req, std::move(callback));
+}
 
-    auto nexosProvider = std::dynamic_pointer_cast<nexosapi>(provider);
-    if (!nexosProvider) {
-        ctl::sendError(callback, k500InternalServerError, "provider_type_error", "Provider cast failed: nexosapi");
-        return;
-    }
-
-    const auto userName = req->getParameter("userName");
-    Json::Value response = nexosProvider->getAccountQuota(userName);
-    ctl::sendJson(callback, response, response.get("available", false).asBool() ? k200OK : k503ServiceUnavailable);
+void AiApiController::retiredNexosWithId(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback,
+    std::string)
+{
+    retired_provider::respondNexosTombstone(req, std::move(callback));
 }
 
 // ===========================================================

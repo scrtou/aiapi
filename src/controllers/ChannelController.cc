@@ -3,6 +3,7 @@
 #include "channelManager.h"
 #include "accountManager.h"
 #include "BackgroundTaskQueue.h"
+#include <domain/policy/RetiredProviderPolicy.h>
 
 using namespace drogon;
 
@@ -10,7 +11,7 @@ namespace {
 
 bool isBuiltInChannelName(const std::string& name)
 {
-    return name == "chaynsapi" || name == "nexosapi" || name == "retoolapi";
+    return name == "chaynsapi" || name == "retoolapi";
 }
 
 }  // namespace
@@ -60,7 +61,12 @@ void ChannelController::channelAdd(const HttpRequestPtr &req, std::function<void
             Json::Value responseItem;
             responseItem["channelname"] = channelInfo.channelName;
 
-            if (ChannelManager::getInstance().addChannel(channelInfo)) {
+            if (retired_provider::isRetiredProviderKey(channelInfo.channelName) ||
+                retired_provider::isRetiredProviderKey(channelInfo.channelType)) {
+                responseItem["status"] = "failed";
+                responseItem["code"] = "provider_retired";
+                responseItem["message"] = "Retired provider channels cannot be created";
+            } else if (ChannelManager::getInstance().addChannel(channelInfo)) {
                 responseItem["status"] = "success";
                 responseItem["message"] = "Channel added successfully";
             } else {
@@ -101,6 +107,13 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
 
         // 解析渠道信息
         Channelinfo_st channelInfo = Channelinfo_st::fromJson(reqBody);
+
+        if (retired_provider::isRetiredProviderKey(channelInfo.channelName) ||
+            retired_provider::isRetiredProviderKey(channelInfo.channelType)) {
+            ctl::sendError(callback, k410Gone, "provider_retired",
+                           "Retired provider channels cannot be updated");
+            return;
+        }
 
         if (isBuiltInChannelName(channelInfo.channelName)) {
             Channelinfo_st existing;
@@ -199,6 +212,12 @@ void ChannelController::channelUpdateStatus(const HttpRequestPtr &req, std::func
     try {
         std::string channelName = (*jsonPtr)["channelname"].asString();
         bool status = (*jsonPtr)["status"].asBool();
+
+        if (retired_provider::isRetiredProviderKey(channelName)) {
+            ctl::sendError(callback, k410Gone, "provider_retired",
+                           "Retired provider channel status cannot be updated");
+            return;
+        }
 
         Json::Value response;
         if (ChannelManager::getInstance().updateChannelStatus(channelName, status)) {
