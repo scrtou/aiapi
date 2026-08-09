@@ -91,68 +91,15 @@ set(TEST_SOURCES
     stub_db_collaborators.cpp
 )
 
-# 需要链接的项目源文件（用于测试）
-set(PROJECT_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsConfig.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ConfigValidator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../metrics/ErrorStatsService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/metrics/ErrorStatsDbManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/session/SessionDbManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ResponseIndex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/HistoryReplayBudget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/OutboundBudget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/TextExtractor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/continuity/ContinuityResolver.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/SessionCodec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RequestAdapters.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/GenerationService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/ClientOutputSanitizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolCompiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/actionProtocol/ActionProtocolAdapter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallBridge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/XmlTagToolCallCodec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/ToolCallValidator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/StrictClientRules.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeHelpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/tooling/BridgeProtocolCodec.cpp
-    # 步骤 181：为 /ready 库探针补测试，需真身编译进来（符号缺口实测为 0）。
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/HealthController.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/RetiredProviderTombstone.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/../sessionManager/core/RetiredProviderTelemetry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatJsonSink.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ChatSseSink.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesJsonSink.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../controllers/sinks/ResponsesSseSink.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../domain
-    ${CMAKE_CURRENT_SOURCE_DIR}/../domain/model
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiFactory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apiManager/ApiManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsModelCatalog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsMessageCorrelation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsHttpTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/ChaynsClock.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/chaynsapi.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/RetoolHttpTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/RetoolClock.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/retoolapi/retoolapi.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tools/ZeroWidthEncoder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../retoolWorkspace/RetoolWorkspaceManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/backends/ClassicProviderAccountBackend.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/backends/RetoolWorkspaceBackend.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../managedAccount/service/ManagedAccountService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../channelManager/channelManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../dbManager/channel/channelDbManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/accountManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountHttpTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/AccountClock.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../accountManager/RetoolProvisionHealth.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../apipoint/chaynsapi/chaynsThreadReaper.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ApplicationShutdown.cpp
-)
+# P3-W1: tests no longer compile production .cpp files.  The canonical target
+# is created by src/CMakeLists.txt; standalone configuration is intentionally
+# rejected so source ownership cannot silently fork again.
+if (NOT TARGET aiapi_legacy)
+    message(FATAL_ERROR
+        "Configure tests from the repository root: aiapi_test must link aiapi_legacy")
+endif()
 
-add_executable(${PROJECT_NAME} ${TEST_SOURCES} ${PROJECT_SOURCES})
+add_executable(${PROJECT_NAME} ${TEST_SOURCES})
 aiapi_enable_coverage(${PROJECT_NAME})
 
 # 包含目录
@@ -173,17 +120,17 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 # target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
 #
 # and comment out the following lines
-target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
+target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy Drogon::Drogon)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 if (UNIX)
     add_executable(aiapi_shutdown_signal_fixture
-        support/shutdown_signal_fixture.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../utils/ApplicationShutdown.cpp)
+        support/shutdown_signal_fixture.cpp)
+    aiapi_enable_coverage(aiapi_shutdown_signal_fixture)
     target_include_directories(aiapi_shutdown_signal_fixture PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..)
-    target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE Drogon::Drogon)
+    target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE aiapi_legacy Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
 endif()
 

@@ -22,20 +22,20 @@
 | Reaper stop 接入 | ✅ | N3 已落地 |
 | 模块依赖环 | ✅ | `check_cycles.py` 当前为 0 环 |
 | layer rules 基础门禁 | ✅ | 当前检查通过 |
-| 架构审计 v3 口径 | ✅ | 已改为直接/显式 test owner，并覆盖 `.cc` |
+| 架构审计 v4 口径 | ✅ | 直接/显式 test owner；覆盖 `.cc`；不再把 production owner 误称为 test-linked |
 | 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
-| Provider 下线 | ⬜ | 必须先完成阶段 1 安全网和可恢复数据迁移 |
-| 独立 CMake libraries | ⬜ | 当前仍为单 executable |
+| Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
+| 独立 CMake libraries | ⬜ | P3-W1 仅建立临时 `aiapi_legacy`；正式分层 libraries 待 P3-W3 |
 | domain 去 JsonCpp | ⬜ | 当前为已登记迁移债务 |
 | AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
 | Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W1（production target 唯一 source owner）。**
+**当前执行阶段：阶段 3（构建边界、include 与 domain 净化），当前工作项 P3-W2（单一 include 根和完整路径）。**
 
-阶段 2 已完成：P2-W1 交付 SQLite 只读 preflight、事务归档/恢复脚本和离线 fixture；P2-W2 交付六路由 410 tombstone、具体 Nexos/OpenAiProvider 删除、账号/渠道写入保护、旧配置精确报错、active status 维度清理和精确门禁。normal/coverage/ASan 均 260/260 PASS，架构/循环/启动接线门禁通过。当前没有运行中的目标部署数据库，不能把本地 fixture 称为生产 dry-run；上线时仍须按 P02 报告执行只读预检、停服副本演练及外部 Dashboard/告警清理。当前只允许执行 P3-W1。
+P3-W1 已完成：除 `main.cc` 外的 67 个生产实现由临时 `aiapi_legacy` 唯一持有，测试已删除 54 项 `PROJECT_SOURCES` 复制清单，68/68 生产源的 owner/compile count 均为 1。production executable 使用 whole-archive 保留 Provider 静态注册，测试使用普通 archive 链接保留离线 stub 边界。normal/coverage/ASan 均 260/260 PASS，source ownership、test registration、architecture/cycle/layer/startup/provider-retirement 门禁通过。`aiapi_legacy` 是必须在 P3-W3 删除的迁移脚手架，不是最终分层架构。当前只允许执行 P3-W2。
 
 ---
 
@@ -218,6 +218,9 @@ tools/migrations/restore_retired_providers_v1.sql
 - 脚本改写 basename/`../` include 为从 `src/` 起的完整路径；
 - 只保留单一 include 根；
 - 添加 CI 防回归。
+
+`refactor-workbook.md` 将 3.2、3.3、3.4 分别映射为 P3-W2、P3-W3、
+P3-W4；正式 target carve-out 是独立工作项，不得从计划中跳过。
 
 ### 3.3 建正式 target
 

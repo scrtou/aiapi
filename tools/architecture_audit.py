@@ -30,6 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 TEST = os.path.join(SRC, "test")
 TEST_CMAKE = os.path.join(TEST, "CMakeLists.txt")
+SRC_CMAKE = os.path.join(SRC, "CMakeLists.txt")
 
 HEADER_EXTS = (".h", ".hpp")
 SOURCE_EXTS = (".cpp", ".cc")
@@ -84,6 +85,22 @@ def cmake_block(name):
         path = os.path.normpath(path)
         if path.endswith(SOURCE_EXTS):
             output.append(path)
+    return output
+
+
+def production_cmake_sources():
+    """Return sources owned by registered production-library source lists."""
+    body = read(SRC_CMAKE)
+    output = []
+    for match in re.finditer(r"set\(\s*(AIAPI_[A-Z0-9_]+_SOURCES)\s(.*?)\)", body, re.S):
+        for line in match.group(2).splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or "${" in line:
+                continue
+            path = line if os.path.isabs(line) else os.path.join(SRC, line)
+            path = os.path.normpath(path)
+            if path.endswith(SOURCE_EXTS):
+                output.append(path)
     return output
 
 
@@ -174,7 +191,7 @@ def implementation_for(header):
 
 def rule_r2():
     owners, diagnostics = test_owners()
-    linked = set(cmake_block("PROJECT_SOURCES"))
+    production_owned = set(production_cmake_sources())
     fanin = {}
     for consumer in walk(SRC, PRODUCTION_EXTS):
         if consumer.startswith(TEST + os.sep):
@@ -194,7 +211,11 @@ def rule_r2():
                 "header": rel(header),
                 "fanin": len(consumers),
                 "test_owners": 0,
-                "linked": bool(impl and impl in linked),
+                # This means the implementation has a registered production
+                # owner.  A static archive member is extracted only when the
+                # linker needs it, so a source list cannot prove that the
+                # object entered aiapi_test; runtime evidence belongs to gcov.
+                "production_owned": bool(impl and impl in production_owned),
                 "impl_lines": nlines(impl) if impl else 0,
             }
         )
@@ -241,9 +262,9 @@ def collect():
         path for path in walk(SRC, SOURCE_EXTS) if not path.startswith(TEST + os.sep)
     ]
     test_sources = [path for path in cmake_block("TEST_SOURCES") if os.path.isfile(path)]
-    linked_sources = [path for path in cmake_block("PROJECT_SOURCES") if os.path.isfile(path)]
+    owned_sources = [path for path in production_cmake_sources() if os.path.isfile(path)]
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "git": git_metadata(),
         "definitions": {
@@ -257,7 +278,7 @@ def collect():
             "R3": len(rules["R3"]),
             "R3_lines": sum(item["lines"] for item in rules["R3"]),
             "production_sources": len(production_sources),
-            "linked_production_sources": len(linked_sources),
+            "owned_library_sources": len(owned_sources),
             "test_sources": len(test_sources),
             "test_cases": sum(item["cases"] for item in tests),
             "assertions": sum(item["assertions"] for item in tests),
@@ -335,7 +356,7 @@ def selftest(payload):
     if not baseline_metadata_errors({}):
         errors.append("missing baseline metadata was accepted")
 
-    print("architecture_audit selftest v3")
+    print("architecture_audit selftest v%d" % payload["schema_version"])
     print("  extensions: .h .hpp .cpp .cc")
     print("  registered tests: %d, cases: %d" % (counts["test_sources"], counts["test_cases"]))
     print("  direct/explicit owned headers: %d" % payload["diagnostics"]["owned_headers"])
@@ -349,7 +370,7 @@ def selftest(payload):
 
 def print_report(payload):
     counts = payload["counts"]
-    print("architecture_audit v3")
+    print("architecture_audit v%d" % payload["schema_version"])
     print("  R1 name competition: %d" % counts["R1"])
     print("  R2 high-fan-in headers without test owner: %d" % counts["R2"])
     print("  R3 functions > %d lines: %d (%d lines)" % (R3_LIMIT, counts["R3"], counts["R3_lines"]))
@@ -402,7 +423,7 @@ def render_markdown(payload):
         "| 规模项 | 当前值 |",
         "|---|---:|",
         "| 生产翻译单元 | %d |" % counts["production_sources"],
-        "| 测试直接编译的生产源 | %d |" % counts["linked_production_sources"],
+        "| 已登记 production library owner 的生产源 | %d |" % counts["owned_library_sources"],
         "| 测试源 | %d |" % counts["test_sources"],
         "| 测试用例 | %d |" % counts["test_cases"],
         "| 静态断言宏计数 | %d |" % counts["assertions"],
@@ -413,17 +434,17 @@ def render_markdown(payload):
         "",
         "owner 只来自有用例和断言的测试源直接 include，或 `// ARCH_TESTS: path/from/src/Header.h`。传递 include 不产生 owner。即使有 owner，也不能证明运行时执行；真实覆盖使用 gcov/llvm-cov。",
         "",
-        "v3 口径与旧版不可比较，当前值是新棘轮起点。无行为头可以通过规则修正或 ADR 排除，不应为清零写无意义断言。",
+        "v4 不再把 production source list 称为‘已进测试链接’：普通链接静态库时，源属于库不能证明该 object 已被 linker 提取。运行时真值使用 gcov。无行为头可以通过规则修正或 ADR 排除，不应为清零写无意义断言。",
         "",
         "## 4. R2 明细",
         "",
-        "| fan-in | impl 行 | 已进测试链接 | 头文件 |",
+        "| fan-in | impl 行 | 已登记 production owner | 头文件 |",
         "|---:|---:|:---:|---|",
     ]
     for item in payload["rules"]["R2"]:
         lines.append(
             "| %d | %d | %s | `%s` |"
-            % (item["fanin"], item["impl_lines"], "是" if item["linked"] else "否", item["header"])
+            % (item["fanin"], item["impl_lines"], "是" if item["production_owned"] else "否", item["header"])
         )
     lines.extend(
         [

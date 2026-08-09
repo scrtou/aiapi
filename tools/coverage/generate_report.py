@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Generate an aiapi production coverage baseline from GCC gcov JSON.
+"""Generate the aiapi production coverage baseline from GCC gcov JSON.
 
-The current test executable compiles a selected set of production sources
-directly.  This tool deliberately reads only aiapi_test's gcda files: executing
-the production binary during start-up is not part of the unit-test baseline.
-Files which are absent from the test target are reported as ``not_instrumented``
-instead of being silently omitted or assigned a made-up denominator.
+Production implementations are compiled once by ``aiapi_legacy`` and reused by
+the test executables.  The collector reads that library's gcda files plus the
+``aiapi_test`` gcda files (needed for production inline/header code instantiated
+by tests).  It deliberately excludes the unexecuted production ``aiapi`` target.
+Files absent from the test-linked object graph are reported as
+``not_instrumented`` instead of being silently omitted or assigned a made-up
+denominator.
 """
 
 import argparse
@@ -185,14 +187,19 @@ def merge_gcov_file(records, item):
 
 
 def collect(build_dir, gcov):
-    target_marker = os.sep + "aiapi_test.dir" + os.sep
+    target_markers = (
+        os.sep + "aiapi_legacy.dir" + os.sep,
+        os.sep + "aiapi_test.dir" + os.sep,
+    )
     data_files = sorted(
-        path for path in build_dir.rglob("*.gcda") if target_marker in str(path)
+        path
+        for path in build_dir.rglob("*.gcda")
+        if any(marker in str(path) for marker in target_markers)
     )
     if not data_files:
         raise RuntimeError(
-            "no aiapi_test gcda files found; build with AIAPI_ENABLE_COVERAGE=ON "
-            "and run ctest first"
+            "no aiapi_legacy/aiapi_test gcda files found; build with "
+            "AIAPI_ENABLE_COVERAGE=ON and run ctest first"
         )
 
     records = {}
@@ -278,7 +285,7 @@ def target_result(target, records):
     }
     if record is None:
         result["state"] = "not_instrumented"
-        result["reason"] = "production file is not compiled into aiapi_test"
+        result["reason"] = "production file is absent from the test-linked object graph"
         return result
 
     result["state"] = "instrumented"
@@ -340,15 +347,15 @@ def make_report(build_dir, gcov, data_files, records):
     ).stdout.splitlines()[0]
     return {
         "schema_version": 1,
-        "scope": "production code emitted by the aiapi_test target",
+        "scope": "production code exercised through test-linked production objects",
         "provenance": {
             "repository": str(ROOT),
             "build_dir": str(build_dir),
             "gcov": version,
             "gcda_files": len(data_files),
             "note": (
-                "The test target currently recompiles selected production sources. "
-                "This is a factual P1 baseline, not proof of production-target ownership."
+                "Production implementations are compiled once by aiapi_legacy; tests "
+                "link that archive and provide execution evidence for pulled objects."
             ),
         },
         "summary": {
@@ -376,9 +383,9 @@ def markdown(report):
         "",
         "## 1. 口径",
         "",
-        "- 数据源：`aiapi_test` 运行产生的 gcda；只统计仓库 `src/` 下生产文件。",
-        "- 当前测试 target 直接重复编译部分生产 `.cpp/.cc`；本报告不把它表述为 production target 覆盖。",
-        "- 未编入测试 target 的文件标为 `not_instrumented`，不伪造可执行行分母，也不算入百分比。",
+        "- 数据源：测试进程运行产生的 `aiapi_legacy`/`aiapi_test` gcda；只统计仓库 `src/` 下生产文件。",
+        "- 生产 `.cpp/.cc` 只由 `aiapi_legacy` 编译一次；测试链接该库，不维护第二份生产源清单。",
+        "- 未进入测试链接对象图的文件标为 `not_instrumented`，不伪造可执行行分母，也不算入百分比。",
         "- 分支采用 GCC gcov 分支口径，包含编译器生成的异常处理分支。",
         "",
         "## 2. 摘要",
@@ -387,7 +394,7 @@ def markdown(report):
         "|---|---:|",
         "| production 实现文件 | {} |".format(summary["production_implementation_files"]),
         "| 已编入并 instrument 的实现文件 | {} |".format(summary["instrumented_implementation_files"]),
-        "| 未编入测试 target 的实现文件 | {} |".format(summary["not_instrumented_implementation_files"]),
+        "| 未进入测试链接对象图的实现文件 | {} |".format(summary["not_instrumented_implementation_files"]),
         "| 行覆盖（仅已 instrument 实现） | {}/{} ({}) |".format(
             summary["lines_covered"], summary["lines"], pct(summary["line_percent"])
         ),
@@ -462,7 +469,7 @@ def markdown(report):
     lines.extend(
         [
             "",
-            "## 4. 未编入测试 target 的生产实现",
+            "## 4. 未进入测试链接对象图的生产实现",
             "",
             "这些文件没有运行时覆盖证据，是 P1 后续 fixture/characterization 的输入：",
             "",

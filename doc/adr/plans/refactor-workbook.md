@@ -16,7 +16,7 @@
 
 ## 当前下一步
 
-当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W1 production target 唯一 source owner。P2-W1/W2 已完成数据可恢复迁移、410 tombstone、具体 Provider 删除、配置/指标清理以及 normal/coverage/ASan/架构精确门禁。目标部署环境仍须按 P02 报告补只读 preflight 和外部 Dashboard/告警清理；本地 fixture 不冒充生产证据。当前只允许执行 P3-W1。
+当前是 **P3（阶段 3，构建边界、include 与 domain 净化）**，当前工作项 P3-W2 单一 include 根和完整路径。P3-W1 已建立 68/68 生产实现唯一 owner/compile 门禁，测试已删除 `PROJECT_SOURCES` 并链接临时 `aiapi_legacy`；normal/coverage/ASan 均 260/260 PASS。`aiapi_legacy` 仅是 P3 迁移脚手架，必须在 P3-W3 被正式分层 target 逐步替代。当前只允许执行 P3-W2。
 
 ## 按 migration-plan 排列的工作项
 
@@ -30,9 +30,10 @@
 | P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | [`P01-shutdown-characterization.md`](../work-products/P01-shutdown-characterization.md) | DONE |
 | P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | [`P02-provider-data-retirement.md`](../work-products/P02-provider-data-retirement.md) | DONE |
 | P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | [`P02-provider-code-retirement.md`](../work-products/P02-provider-code-retirement.md) | DONE |
-| P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | DOING |
-| P3-W2 | 阶段 3 | 单一 include 根和完整路径 | include 改写/防回归报告 | TODO |
-| P3-W3 | 阶段 3 | domain 模型与 JSON codec 分离 | 往返 fixture、domain 第三方依赖为 0 | TODO |
+| P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | DONE |
+| P3-W2 | 阶段 3 | 单一 include 根和完整路径 | [`P03-include-root.md`](../work-products/P03-include-root.md) | DOING |
+| P3-W3 | 阶段 3 | 正式分层 target carve-out，删除 legacy | [`P03-layered-targets.md`](../work-products/P03-layered-targets.md) | TODO |
+| P3-W4 | 阶段 3 | domain 模型与 JSON codec 分离 | [`P03-domain-codecs.md`](../work-products/P03-domain-codecs.md) | TODO |
 | P4-W1 | 阶段 4 | 有界 executor 和四态队列 | 背压、drain、不可复活测试 | TODO |
 | P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | 启动失败回滚、显式 ownership | TODO |
 | P4-W3 | 阶段 4 | deadline/cancellation/shutdown | 五类 SIGTERM 集成测试、ASan/TSan | TODO |

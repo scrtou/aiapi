@@ -34,8 +34,9 @@ bool ConfigDbManager::setValues(const std::map<std::string, std::string>&, std::
 // ---- ChannelDbManager ----
 // 不在此桩接。步骤 82 查明：accountManager.cpp 内联展开 ChannelDbManager::getInstance()
 // 时需要 vtable，而 vtable 只在 key function（第一个非内联虚函数）所在 TU 发射。
-// 用标准 C++ 无法伪造 vtable，因此改为把真实的 channelDbManager.cpp 编进测试目标。
-// 它仅提供符号；测试用例不调用其任何方法，故不会触达真实数据库。
+// 用标准 C++ 无法伪造 vtable，因此从生产库普通链接真实的
+// channelDbManager.cpp object。它仅提供符号；测试用例不调用其任何方法，
+// 故不会触达真实数据库。
 
 // ---- RetoolWorkspaceService（1 个）----
 RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value&, std::string*)

@@ -77,6 +77,12 @@ jobs:
       - name: R4 - test registration consistency (degraded on CI)
         run: python3 tools/arch/check_test_registration.py
 
+      # P3-W1：测试不得再次维护/编译生产 .cpp 清单；每个 production
+      # implementation 必须有且只有一个已登记 owner。CI 无构建产物时执行
+      # 静态口径，本地门禁额外传 --compile-commands 验证真实编译次数。
+      - name: P3 - production source ownership
+        run: python3 tools/arch/check_source_ownership.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面四道会全绿，只有这一步能发现。
@@ -116,7 +122,8 @@ jobs:
             [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
             [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/main.cc
             [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
-            rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp
+            rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp \
+              src/__source_owner_selftest_probe.cpp
             rm -rf "$PROBE_TMP"
             return 0
           }
@@ -194,6 +201,12 @@ jobs:
             > src/test/__selftest_probe.cpp
           expect_rc 4 python3 tools/arch/check_test_registration.py
           rm -f src/test/__selftest_probe.cpp
+
+          echo '--- probe F: production source without owner -> expect rc=1 ---'
+          printf 'int source_owner_selftest_probe() { return 0; }\n' \
+            > src/__source_owner_selftest_probe.cpp
+          expect_rc 1 python3 tools/arch/check_source_ownership.py
+          rm -f src/__source_owner_selftest_probe.cpp
 
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。

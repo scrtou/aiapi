@@ -21,6 +21,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # P1-W1: runtime line/branch coverage is opt-in and isolated from release builds.
 option(AIAPI_ENABLE_COVERAGE "enable gcov/llvm-cov instrumentation" OFF)
@@ -45,8 +46,28 @@ function(aiapi_enable_coverage target_name)
     endif()
 endfunction()
 
-add_executable(${PROJECT_NAME}
-    main.cc
+# P3-W1: every production implementation has one CMake owner.  This helper is
+# the configure-time duplicate-owner gate used while aiapi_legacy is carved into
+# the final layered libraries.
+function(aiapi_register_production_sources owner)
+    foreach(source_file ${ARGN})
+        get_filename_component(source_abs "${source_file}" ABSOLUTE
+                               BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if (NOT EXISTS "${source_abs}")
+            message(FATAL_ERROR "production source does not exist: ${source_file}")
+        endif()
+        string(MD5 source_key "${source_abs}")
+        get_property(previous_owner GLOBAL PROPERTY "AIAPI_SOURCE_OWNER_${source_key}")
+        if (previous_owner)
+            message(FATAL_ERROR
+                "production source has multiple owners: ${source_file} (${previous_owner}, ${owner})")
+        endif()
+        set_property(GLOBAL PROPERTY "AIAPI_SOURCE_OWNER_${source_key}" "${owner}")
+    endforeach()
+    target_sources(${owner} PRIVATE ${ARGN})
+endfunction()
+
+set(AIAPI_LEGACY_SOURCES
     accountManager/accountManager.cpp
     accountManager/AccountHttpTransport.cpp
     accountManager/AccountClock.cpp
@@ -116,6 +137,12 @@ add_executable(${PROJECT_NAME}
     utils/ApplicationShutdown.cpp
 )
 
+# Temporary P3 scaffold: main and tests link the same compiled production objects.
+# Subsequent P3 work items carve closed modules out, then delete aiapi_legacy.
+add_library(aiapi_legacy STATIC)
+aiapi_register_production_sources(aiapi_legacy ${AIAPI_LEGACY_SOURCES})
+add_executable(${PROJECT_NAME} main.cc)
+
 # ##############################################################################
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -123,9 +150,20 @@ find_package(PostgreSQL REQUIRED)
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 
-target_link_libraries(${PROJECT_NAME} PRIVATE Drogon::Drogon)
-target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-target_link_libraries(${PROJECT_NAME} PRIVATE PostgreSQL::PostgreSQL)
+target_link_libraries(aiapi_legacy PUBLIC Drogon::Drogon)
+target_link_libraries(aiapi_legacy PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(aiapi_legacy PUBLIC PostgreSQL::PostgreSQL)
+target_compile_features(aiapi_legacy PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_legacy)
+
+# Static registration objects (IMPLEMENT_RUNTIME) have no ordinary symbol edge
+# from main, so the production executable must retain the complete archive.
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "-Wl,--whole-archive" aiapi_legacy "-Wl,--no-whole-archive")
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy)
+endif()
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 aiapi_enable_coverage(${PROJECT_NAME})
 # ##############################################################################
@@ -134,8 +172,8 @@ aiapi_enable_coverage(${PROJECT_NAME})
 drogon_create_views(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/views
                     ${CMAKE_CURRENT_BINARY_DIR})
 
-target_include_directories(${PROJECT_NAME}
-                           PRIVATE
+target_include_directories(aiapi_legacy
+                           PUBLIC
                            ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}/accountManager
                            ${CMAKE_CURRENT_SOURCE_DIR}/apiManager

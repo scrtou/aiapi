@@ -199,6 +199,15 @@ aiapi/
 │       ├── session_continuity_refactor_design.md          # 重构设计
 │       └── session_continuity_refactor_development_plan.md # 重构开发计划
 │
+├── tools/                         # 不链入 production target 的独立运维/架构工具
+│   └── accountlogin/               # 账号登录运维脚本
+│       ├── README.md               # 用途、依赖与安全边界
+│       ├── login_client.cpp        # 独立 C++ 登录客户端示例
+│       ├── loginlocal.py           # 本地登录脚本
+│       ├── loginremote.py          # 远程登录脚本
+│       ├── chayns-login.service   # systemd 服务文件样例
+│       └── test.py                 # 手工调试脚本
+│
 └── src/
     ├── CMakeLists.txt              # CMake 构建配置（源码）
     ├── main.cc                     # 程序入口
@@ -315,14 +324,8 @@ aiapi/
     ├── models/                     # 数据模型
     │   └── model.json              # 模型定义文件
     │
-    ├── tools/                      # 工具类
-    │   ├── ZeroWidthEncoder.h/cpp  # 零宽字符编码/解码
-    │   └── accountlogin/           # 账号登录自动化
-    │       ├── login_client.cpp    # C++ 登录客户端
-    │       ├── loginlocal.py       # 本地登录脚本
-    │       ├── loginremote.py      # 远程登录脚本
-    │       ├── chayns-login.service # systemd 服务文件
-    │       └── test.py             # 登录测试脚本
+    ├── tools/                      # production 工具类
+    │   └── ZeroWidthEncoder.h/cpp  # 零宽字符编码/解码
     │
     ├── utils/                      # 通用工具
     │   ├── BackgroundTaskQueue.h   # 后台任务队列
