@@ -1,9 +1,9 @@
 #ifndef PROVIDER_RESULT_H
 #define PROVIDER_RESULT_H
 
-#include <json/json.h>
-#include <string>
+#include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 /**
@@ -88,6 +88,11 @@ struct ToolCall {
     std::string arguments;
 };
 
+// Provider metadata is deliberately a small, transport-neutral string map.
+// JSON materialization belongs to an edge codec; domain code must not carry
+// JsonCpp types across the provider/application boundary.
+using ProviderMetadata = std::map<std::string, std::string>;
+
 /**
  * @brief Provider 层返回结果
  * 
@@ -106,7 +111,7 @@ struct ProviderResult {
     // Provider 返回字段
     int statusCode = 200;               // HTTP 状态码
     std::string rawResponse;            // 原始响应（调试用）
-    Json::Value meta{Json::objectValue}; // 附加元信息（如实际路由到的 workspaceId）
+    ProviderMetadata meta;             // 附加元信息（如实际路由到的 workspaceId）
 
     /**
      * @brief 判断是否成功

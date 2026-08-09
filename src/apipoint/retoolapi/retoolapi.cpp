@@ -560,13 +560,13 @@ bool retoolapi::populateProviderResources(const std::string& workspaceId, Json::
     return true;
 }
 
-Json::Value retoolapi::buildRetoolMeta(const std::string& workspaceId,
-                                       const std::string& routeType,
-                                       const std::string& resourceId,
-                                       const Json::Value& binding,
-                                       const std::string& model) const
+provider::ProviderMetadata retoolapi::buildRetoolMeta(const std::string& workspaceId,
+                                                      const std::string& routeType,
+                                                      const std::string& resourceId,
+                                                      const Json::Value& binding,
+                                                      const std::string& model) const
 {
-    Json::Value meta(Json::objectValue);
+    provider::ProviderMetadata meta;
     meta["workspaceId"] = workspaceId;
     meta["workspace_id"] = workspaceId;
     meta["routeType"] = routeType;

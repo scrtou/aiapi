@@ -289,9 +289,9 @@ DROGON_TEST(RetoolProvider_WorkflowFixtureRunsRealRequestWorkflowOffline)
 
     CHECK(result.isSuccess());
     CHECK(result.text == "synthetic workflow answer");
-    CHECK(result.meta["routeType"] == "workflow");
-    CHECK(result.meta["workspaceId"] == "ws-1");
-    CHECK(result.meta["provider"] == "openAI");
+    CHECK(result.meta.at("routeType") == "workflow");
+    CHECK(result.meta.at("workspaceId") == "ws-1");
+    CHECK(result.meta.at("provider") == "openAI");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);
@@ -311,10 +311,10 @@ DROGON_TEST(RetoolProvider_AgentFixtureRunsRealRequestAgentOffline)
 
     CHECK(result.isSuccess());
     CHECK(result.text == "synthetic agent answer");
-    CHECK(result.meta["routeType"] == "agent");
-    CHECK(result.meta["resourceId"] == "agent-1");
-    CHECK(result.meta["model"] == "claude-sonnet-4-6");
-    CHECK(result.meta["provider"] == "anthropic");
+    CHECK(result.meta.at("routeType") == "agent");
+    CHECK(result.meta.at("resourceId") == "agent-1");
+    CHECK(result.meta.at("model") == "claude-sonnet-4-6");
+    CHECK(result.meta.at("provider") == "anthropic");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);

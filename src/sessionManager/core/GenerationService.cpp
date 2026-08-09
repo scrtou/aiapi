@@ -14,6 +14,7 @@
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
 #include <apiManager/ApiManager.h>
 #include <domain/model/ProviderResult.h>
+#include <sessionManager/core/ProviderResultCodec.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <channelManager/channelManager.h>
 #include <metrics/ErrorStatsService.h>
@@ -489,8 +490,8 @@ bool GenerationService::executeProvider(session_st& session) {
     // 将结果写回 会话.响应. 以保持旧链路兼容
     session.response.message["message"] = result.text;
     session.response.message["statusCode"] = result.statusCode;
-    if (result.meta.isObject() && !result.meta.empty()) {
-        session.response.message["_meta"] = result.meta;
+    if (!result.meta.empty()) {
+        session.response.message["_meta"] = providercodec::toJson(result.meta);
     }
     
     if (!result.isSuccess()) {

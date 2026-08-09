@@ -42,11 +42,11 @@ class retoolapi : public APIinterface
     std::string resolveWorkspaceId(session_st& session, bool requireAgent, std::string* errorMessage) const;
     Json::Value resolveRetoolProviderBinding(const Json::Value& workspaceJson, const std::string& model) const;
     bool populateProviderResources(const std::string& workspaceId, Json::Value& workspaceJson) const;
-    Json::Value buildRetoolMeta(const std::string& workspaceId,
-                                const std::string& routeType,
-                                const std::string& resourceId,
-                                const Json::Value& binding,
-                                const std::string& model) const;
+    provider::ProviderMetadata buildRetoolMeta(const std::string& workspaceId,
+                                               const std::string& routeType,
+                                               const std::string& resourceId,
+                                               const Json::Value& binding,
+                                               const std::string& model) const;
     std::string buildCookieHeader(const Json::Value& workspaceJson) const;
     Json::Value parseJsonResponse(const drogon::HttpResponsePtr& resp) const;
     provider::ProviderError classifyHttpError(int httpStatus, const std::string& message) const;

@@ -79,6 +79,7 @@ set(TEST_SOURCES
     test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
     test_retool_provider_fixture.cpp
+    test_provider_result_codec.cpp
     test_channel_store_port.cpp
     test_account_store_port.cpp
     test_account_lifecycle_fixture.cpp
