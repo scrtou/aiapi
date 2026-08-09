@@ -3,7 +3,7 @@
 > 本文定义重构完成后的**目标文件结构、target DAG 和对象所有权**。它不是要求一次性
 > 创建所有文件；每个文件只有在对应迁移工作包通过门禁后才落地。接口草案见
 > [`interface-drafts.md`](./interface-drafts.md)，当前源码事实见
-> [`source-audit-2026-08.md`](./source-audit-2026-08.md)。
+> [`source-audit-2026-08.md`](../audits/source-audit-2026-08.md)。
 
 ## 1. 顶层依赖图
 

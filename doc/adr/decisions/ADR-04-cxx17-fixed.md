@@ -4,8 +4,8 @@
 |---|---|
 | 状态 | 已落地（commit `efb4003`） |
 | 来源 | RFC-001 v2.5 §2（原行 230~271），P4 拆分外移 |
-| 迁移落点 | 见 [`migration-plan.md`](../migration-plan.md) |
-| 数字真值源 | [`architecture-baseline.md`](../architecture-baseline.md) |
+| 迁移落点 | 见 [`migration-plan.md`](../plans/migration-plan.md) |
+| 数字真值源 | [`architecture-baseline.md`](../audits/architecture-baseline.md) |
 
 ---
 

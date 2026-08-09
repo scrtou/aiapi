@@ -13,16 +13,16 @@
 | 文档 | 唯一职责 |
 |---|---|
 | 本 RFC | 目标、范围、目标架构和不可变原则 |
-| [`decisions/`](./decisions/) | 当前有效架构决策 |
-| [`migration-plan.md`](./migration-plan.md) | 当前阶段、任务顺序、进入/退出门禁 |
-| [`architecture-baseline.md`](./architecture-baseline.md) | 当前机器审计快照及指标定义 |
-| [`source-audit-2026-08.md`](./source-audit-2026-08.md) | 当前 `src/` 文件、流程、线程和重写边界的事实审计 |
-| [`target-architecture.md`](./target-architecture.md) | 目标文件树、target DAG 和对象所有权 |
-| [`module-catalog.md`](./module-catalog.md) | 目标模块、类、方法和直接调用者 |
-| [`flow-contracts.md`](./flow-contracts.md) | 启动/生成/账号/回收/停机调用契约 |
-| [`refactor-workbook.md`](./refactor-workbook.md) | migration 阶段内部的工作项、产物和状态；不定义独立顺序 |
-| [`interface-drafts.md`](./interface-drafts.md) | 非契约性的接口示例 |
-| [`CHANGELOG.md`](./CHANGELOG.md) | 历史纠错和版本演进 |
+| [`decisions/`](../decisions/) | 当前有效架构决策 |
+| [`migration-plan.md`](../plans/migration-plan.md) | 当前阶段、任务顺序、进入/退出门禁 |
+| [`architecture-baseline.md`](../audits/architecture-baseline.md) | 当前机器审计快照及指标定义 |
+| [`source-audit-2026-08.md`](../audits/source-audit-2026-08.md) | 当前 `src/` 文件、流程、线程和重写边界的事实审计 |
+| [`target-architecture.md`](../design/target-architecture.md) | 目标文件树、target DAG 和对象所有权 |
+| [`module-catalog.md`](../design/module-catalog.md) | 目标模块、类、方法和直接调用者 |
+| [`flow-contracts.md`](../design/flow-contracts.md) | 启动/生成/账号/回收/停机调用契约 |
+| [`refactor-workbook.md`](../plans/refactor-workbook.md) | migration 阶段内部的工作项、产物和状态；不定义独立顺序 |
+| [`interface-drafts.md`](../design/interface-drafts.md) | 非契约性的接口示例 |
+| [`CHANGELOG.md`](../history/CHANGELOG.md) | 历史纠错和版本演进 |
 
 当前执行文档不再保留“先写错误结论、再在末尾撤回”的叙事。历史由 git 和 CHANGELOG 保存。
 
@@ -112,7 +112,7 @@ src/
 9. **IO/codec 边界**：HTTP、DB、JSON codec 不进入 domain/application；见 ADR-09/10。
 10. **生产 target**：测试只链接生产库，禁止复制生产源；见 ADR-11。
 
-完整决策见 [`decisions/README.md`](./decisions/README.md)。
+完整决策见 [`decisions/README.md`](../decisions/README.md)。
 
 ## 6. Provider 下线边界
 
@@ -171,4 +171,4 @@ src/
 
 ## 9. 执行入口
 
-后续施工只从 [`migration-plan.md`](./migration-plan.md) 的“当前执行阶段”开始。该计划不包含工期，只表达严格依赖顺序、产出和门禁。
+后续施工只从 [`migration-plan.md`](../plans/migration-plan.md) 的“当前执行阶段”开始。该计划不包含工期，只表达严格依赖顺序、产出和门禁。

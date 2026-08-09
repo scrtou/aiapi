@@ -2,12 +2,12 @@
 
 > 本计划不包含工期。阶段按依赖关系推进；只有退出门禁全部满足后才进入下一阶段。
 >
-> 源码事实以 [`source-audit-2026-08.md`](./source-audit-2026-08.md) 为准。该审计确认当前实现仍是
+> 源码事实以 [`source-audit-2026-08.md`](../audits/source-audit-2026-08.md) 为准。该审计确认当前实现仍是
 > 单 executable、宽 `APIinterface`、JsonCpp domain、多个业务 singleton 和无界队列；因此下面的
 > “已落地”只表示安全修复或门禁，不表示目标架构已经实现。
 >
-> 目标文件树、类方法目录和流程调用链分别见 [`target-architecture.md`](./target-architecture.md)、
-> [`module-catalog.md`](./module-catalog.md) 和 [`flow-contracts.md`](./flow-contracts.md)。每个工作包
+> 目标文件树、类方法目录和流程调用链分别见 [`target-architecture.md`](../design/target-architecture.md)、
+> [`module-catalog.md`](../design/module-catalog.md) 和 [`flow-contracts.md`](../design/flow-contracts.md)。每个工作包
 > 的设计/测试/回滚产物登记在 [`refactor-workbook.md`](./refactor-workbook.md)。
 
 ## 0. 当前状态
@@ -57,7 +57,7 @@
 
 ```bash
 python3 tools/architecture_audit.py --selftest
-python3 tools/architecture_audit.py --baseline doc/adr/audit-baseline.json
+python3 tools/architecture_audit.py --baseline doc/adr/audits/audit-baseline.json
 python3 tools/arch/check_cycles.py \
   --baseline tools/arch/cycles-baseline.json \
   --layer-rules tools/arch/layer-rules.json

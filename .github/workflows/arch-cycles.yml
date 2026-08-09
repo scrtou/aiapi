@@ -6,14 +6,14 @@ on:
       - 'src/**'
       - 'tools/arch/**'
       - 'tools/architecture_audit.py'
-      - 'doc/adr/audit-baseline.json'
+      - 'doc/adr/audits/audit-baseline.json'
       - '.github/workflows/arch-cycles.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'tools/arch/**'
       - 'tools/architecture_audit.py'
-      - 'doc/adr/audit-baseline.json'
+      - 'doc/adr/audits/audit-baseline.json'
       - '.github/workflows/arch-cycles.yml'
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
         run: python3 tools/architecture_audit.py --selftest
 
       - name: Architecture audit - R1/R2/R3 ratchet
-        run: python3 tools/architecture_audit.py --baseline doc/adr/audit-baseline.json
+        run: python3 tools/architecture_audit.py --baseline doc/adr/audits/audit-baseline.json
 
       # 防回归：实测结果必须是基线的子集
       - name: R4 - no new dependency cycles

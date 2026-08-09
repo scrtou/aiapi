@@ -1,6 +1,6 @@
 # 当前架构决策
 
-本目录只表达当前有效决策。历史纠错在 `../CHANGELOG.md` 和 git 历史中查阅，执行进度以 `../migration-plan.md` 为准。
+本目录只表达当前有效决策。历史纠错在 `../history/CHANGELOG.md` 和 git 历史中查阅，执行进度以 `../plans/migration-plan.md` 为准。
 
 | ADR | 当前决策 | 状态 |
 |---|---|---|

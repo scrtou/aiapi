@@ -1,8 +1,8 @@
 # `src/` 全量架构审计（2026-08）
 
 > 本文是对当前工作区源码的事实审计，不是目标架构。目标架构和不可变决策见
-> [`RFC-001-architecture-refactor.md`](./RFC-001-architecture-refactor.md)，施工顺序见
-> [`migration-plan.md`](./migration-plan.md)。审计基于 2026-08-09 工作区；其中
+> [`RFC-001-architecture-refactor.md`](../rfc/RFC-001-architecture-refactor.md)，施工顺序见
+> [`migration-plan.md`](../plans/migration-plan.md)。审计基于 2026-08-09 工作区；其中
 > `ChaynsPollingPolicy.h` 和 `chaynsapi.cpp` 有用户未提交修改，审计不覆盖/回滚这些修改。
 
 ## 1. 审计方法与结论

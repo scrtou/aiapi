@@ -110,12 +110,12 @@ v3 口径与旧版不可比较，当前值是新棘轮起点。无行为头可�
 ```bash
 python3 tools/architecture_audit.py --selftest
 python3 tools/architecture_audit.py \
-  --write-baseline doc/adr/audit-baseline.json \
-  --write-markdown doc/adr/architecture-baseline.md
+  --write-baseline doc/adr/audits/audit-baseline.json \
+  --write-markdown doc/adr/audits/architecture-baseline.md
 ```
 
 回归检查：
 
 ```bash
-python3 tools/architecture_audit.py --baseline doc/adr/audit-baseline.json
+python3 tools/architecture_audit.py --baseline doc/adr/audits/audit-baseline.json
 ```

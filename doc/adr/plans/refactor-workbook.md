@@ -24,7 +24,7 @@
 
 | ID | migration 阶段 | 工作项 | 必交产物 | 状态 |
 |---|---|---|---|---|
-| P0-W1 | 阶段 0 | 当前真值与 clean baseline | [`P00-current-baseline.md`](./work-products/P00-current-baseline.md) | DOING |
+| P0-W1 | 阶段 0 | 当前真值与 clean baseline | [`P00-current-baseline.md`](../work-products/P00-current-baseline.md) | DOING |
 | P1-W1 | 阶段 1 | gcov/llvm-cov 运行时覆盖基线 | 覆盖命令、报告、被改文件棘轮 | TODO |
 | P1-W2 | 阶段 1 | Chayns 脱敏 fixture 与假上游 | create/message/poll/delete/model contract | TODO |
 | P1-W3 | 阶段 1 | Retool workflow/agent characterization | 两条模式的 request/response fixture | TODO |
@@ -32,7 +32,7 @@
 | P1-W5 | 阶段 1 | SIGTERM、队列、断连 harness | 空闲/阻塞/积压/断连当前行为报告 | TODO |
 | P2-W1 | 阶段 2 | Provider 数据 dry-run 和归档/恢复脚本 | SQL、对账和往返演练报告 | TODO |
 | P2-W2 | 阶段 2 | nexos/OpenAiProvider tombstone 与代码退役 | 410、配置/指标清理、精确门禁 | TODO |
-| P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](./work-products/P03-production-targets.md) | TODO |
+| P3-W1 | 阶段 3 | production target 唯一 source owner | [`P03-production-targets.md`](../work-products/P03-production-targets.md) | TODO |
 | P3-W2 | 阶段 3 | 单一 include 根和完整路径 | include 改写/防回归报告 | TODO |
 | P3-W3 | 阶段 3 | domain 模型与 JSON codec 分离 | 往返 fixture、domain 第三方依赖为 0 | TODO |
 | P4-W1 | 阶段 4 | 有界 executor 和四态队列 | 背压、drain、不可复活测试 | TODO |
