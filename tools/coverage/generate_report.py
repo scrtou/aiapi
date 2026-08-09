@@ -326,7 +326,7 @@ def pct(value):
 def markdown(report):
     summary = report["summary"]
     lines = [
-        "# P1-W1 · 运行时覆盖机器报告",
+        "# P1 · 运行时覆盖机器报告",
         "",
         "> 此文件由 `tools/coverage/generate_report.py` 生成。不要手工修改数字。",
         "",
