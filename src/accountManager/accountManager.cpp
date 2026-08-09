@@ -338,6 +338,12 @@ void AccountManager::setClock(std::shared_ptr<account::IAccountClock> clock)
     if (clock) clock_ = std::move(clock);
 }
 
+void AccountManager::setRetoolProvisionClock(
+    std::shared_ptr<retoolProvision::IRetoolProvisionClock> clock)
+{
+    if (clock) retoolProvisionClock_ = std::move(clock);
+}
+
 account::HttpResult AccountManager::sendHttpRequest(
     const std::string& baseUrl,
     const drogon::HttpRequestPtr& request,
@@ -1480,8 +1486,13 @@ void AccountManager::checkChannelAccountCount(string apiName)
 
     if (channel.channelName == "retoolapi")
     {
+        if (!retoolProvisionClock_)
+        {
+            LOG_ERROR << "[账户管理] Retool provision clock 未注入，跳过自动补注册";
+            return;
+        }
         const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
-        if (isRetoolProvisionCoolingDown(health))
+        if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
         {
             LOG_WARN << "[账户管理] Retool 渠道处于冷却期，跳过自动补注册。cooldownUntil="
                      << health.cooldownUntil << " reason=" << health.lastFailureReason;
@@ -1602,8 +1613,13 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
     if (apiName == "retoolapi")
     {
+        if (!retoolProvisionClock_)
+        {
+            LOG_ERROR << "[自动注册] Retool provision clock 未注入";
+            return false;
+        }
         const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
-        if (isRetoolProvisionCoolingDown(health))
+        if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
         {
             LOG_WARN << "[自动注册] Retool 渠道处于冷却期，跳过自动注册。cooldownUntil="
                      << health.cooldownUntil << " reason=" << health.lastFailureReason;
@@ -1624,7 +1640,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
             if (workspace.workspaceId.empty())
             {
                 const auto reason = error.empty() ? std::string("unknown error") : error;
-                markRetoolProvisionFailure(retoolConfigStore(), reason);
+                markRetoolProvisionFailure(
+                    retoolConfigStore(), reason, *retoolProvisionClock_);
                 LOG_ERROR << "[自动注册] Retool workspace 创建失败: " << reason;
                 return false;
             }
@@ -1634,7 +1651,8 @@ bool AccountManager::autoRegisterAccount(string apiName)
         }
         catch (const std::exception& ex)
         {
-            markRetoolProvisionFailure(retoolConfigStore(), ex.what());
+            markRetoolProvisionFailure(
+                retoolConfigStore(), ex.what(), *retoolProvisionClock_);
             LOG_ERROR << "[自动注册] Retool workspace 创建异常: " << ex.what();
             return false;
         }

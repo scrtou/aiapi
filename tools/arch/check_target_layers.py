@@ -42,6 +42,7 @@ ALLOWED_INTERNAL_LINKS = {
 
 SOURCE_LISTS = {
     "aiapi_platform": "AIAPI_PLATFORM_SOURCES",
+    "aiapi_application": "AIAPI_APPLICATION_SOURCES",
     "aiapi_infrastructure": "AIAPI_INFRASTRUCTURE_SOURCES",
     "aiapi_transport": "AIAPI_TRANSPORT_SOURCES",
     "aiapi_runtime": "AIAPI_RUNTIME_SOURCES",
@@ -171,9 +172,9 @@ def main() -> int:
         if legacy_values is None or not legacy_declared:
             failures.append(
                 "transitional gate expects both legacy list/target; use --require-no-legacy at exit")
-        elif len(legacy_values) > 40:
+        elif len(legacy_values) > 39:
             failures.append(
-                f"legacy source ceiling regressed: {len(legacy_values)} > 40")
+                f"legacy source ceiling regressed: {len(legacy_values)} > 39")
 
     if failures:
         fail(failures)

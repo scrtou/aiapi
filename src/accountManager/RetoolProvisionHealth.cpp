@@ -1,11 +1,7 @@
 #include <accountManager/RetoolProvisionHealth.h>
 
-#include <drogon/drogon.h>
 #include <algorithm>
 #include <chrono>
-#include <ctime>
-
-using namespace drogon;
 
 namespace retoolProvision {
 
@@ -47,18 +43,12 @@ bool persistRetoolProvisionHealth(IKeyValueConfigStore& store,
     }, errorMessage);
 }
 
-bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state)
+bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state,
+                                  const IRetoolProvisionClock& clock)
 {
     if (state.cooldownUntil.empty()) return false;
-    try
-    {
-        auto untilDate = trantor::Date::fromDbStringLocal(state.cooldownUntil);
-        return untilDate.secondsSinceEpoch() > trantor::Date::now().secondsSinceEpoch();
-    }
-    catch (...)
-    {
-        return false;
-    }
+    const auto until = clock.parseLocalTimestamp(state.cooldownUntil);
+    return until.has_value() && *until > clock.now();
 }
 
 void markRetoolProvisionSuccess(IKeyValueConfigStore& store)
@@ -69,16 +59,19 @@ void markRetoolProvisionSuccess(IKeyValueConfigStore& store)
     persistRetoolProvisionHealth(store, state, nullptr);
 }
 
-void markRetoolProvisionFailure(IKeyValueConfigStore& store, const std::string& reason)
+void markRetoolProvisionFailure(IKeyValueConfigStore& store,
+                                const std::string& reason,
+                                const IRetoolProvisionClock& clock)
 {
     auto state = loadRetoolProvisionHealth(store, nullptr);
     state.consecutiveFailures = std::max(0, state.consecutiveFailures) + 1;
-    state.lastFailureAt = trantor::Date::now().toDbStringLocal();
+    const auto now = clock.now();
+    state.lastFailureAt = clock.formatLocalTimestamp(now);
     state.lastFailureReason = reason;
     if (state.consecutiveFailures >= kRetoolFailureThreshold)
     {
-        auto cooldownUntil = trantor::Date::date().after(static_cast<double>(kRetoolCooldownMinutes) * 60.0);
-        state.cooldownUntil = cooldownUntil.toDbStringLocal();
+        state.cooldownUntil = clock.formatLocalTimestamp(
+            now + std::chrono::minutes(kRetoolCooldownMinutes));
     }
     persistRetoolProvisionHealth(store, state, nullptr);
 }

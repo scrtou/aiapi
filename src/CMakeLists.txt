@@ -71,9 +71,14 @@ set(AIAPI_PLATFORM_SOURCES
     tools/ZeroWidthEncoder.cpp
 )
 
+set(AIAPI_APPLICATION_SOURCES
+    accountManager/RetoolProvisionHealth.cpp
+)
+
 set(AIAPI_INFRASTRUCTURE_SOURCES
     accountManager/AccountHttpTransport.cpp
     accountManager/AccountClock.cpp
+    accountManager/RetoolProvisionClock.cpp
     apipoint/chaynsapi/ChaynsHttpTransport.cpp
     apipoint/chaynsapi/ChaynsClock.cpp
     apipoint/chaynsapi/ChaynsModelCatalog.cpp
@@ -108,7 +113,6 @@ set(AIAPI_RUNTIME_SOURCES
 
 set(AIAPI_LEGACY_SOURCES
     accountManager/accountManager.cpp
-    accountManager/RetoolProvisionHealth.cpp
     apiManager/ApiFactory.cpp
     apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
@@ -167,9 +171,11 @@ add_library(aiapi_domain INTERFACE)
 target_link_libraries(aiapi_domain INTERFACE aiapi_platform)
 target_compile_features(aiapi_domain INTERFACE cxx_std_17)
 
-add_library(aiapi_application INTERFACE)
-target_link_libraries(aiapi_application INTERFACE aiapi_domain aiapi_platform)
-target_compile_features(aiapi_application INTERFACE cxx_std_17)
+add_library(aiapi_application STATIC)
+aiapi_register_production_sources(aiapi_application ${AIAPI_APPLICATION_SOURCES})
+target_link_libraries(aiapi_application PUBLIC aiapi_domain aiapi_platform)
+target_compile_features(aiapi_application PUBLIC cxx_std_17)
+aiapi_enable_coverage(aiapi_application)
 
 add_library(aiapi_infrastructure STATIC)
 aiapi_register_production_sources(aiapi_infrastructure ${AIAPI_INFRASTRUCTURE_SOURCES})

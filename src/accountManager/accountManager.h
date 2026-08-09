@@ -21,6 +21,7 @@ using namespace std;
 #include <domain/model/AccountData.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
+#include <domain/port/IRetoolProvisionClock.h>
 #include <accountManager/AccountHttpTransport.h>
 #include <accountManager/AccountClock.h>
 
@@ -68,6 +69,7 @@ class AccountManager
     IChannelStore* requireChannelStore();
     std::shared_ptr<account::IAccountHttpTransport> httpTransport_;
     std::shared_ptr<account::IAccountClock> clock_;
+    std::shared_ptr<retoolProvision::IRetoolProvisionClock> retoolProvisionClock_;
     account::HttpResult sendHttpRequest(const std::string& baseUrl,
                                         const drogon::HttpRequestPtr& request,
                                         double timeoutSeconds) const;
@@ -80,6 +82,8 @@ class AccountManager
     void setChannelStore(std::shared_ptr<IChannelStore> store);
     void setHttpTransport(std::shared_ptr<account::IAccountHttpTransport> transport);
     void setClock(std::shared_ptr<account::IAccountClock> clock);
+    void setRetoolProvisionClock(
+        std::shared_ptr<retoolProvision::IRetoolProvisionClock> clock);
 
     static AccountManager& getInstance()
     {

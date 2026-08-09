@@ -15,6 +15,7 @@
 // extraction adds no new direct dbManager edge.
 
 #include <domain/port/IKeyValueConfigStore.h>
+#include <domain/port/IRetoolProvisionClock.h>
 #include <string>
 
 namespace retoolProvision {
@@ -32,9 +33,12 @@ RetoolProvisionHealth loadRetoolProvisionHealth(IKeyValueConfigStore& store,
 bool persistRetoolProvisionHealth(IKeyValueConfigStore& store,
                                   const RetoolProvisionHealth& state,
                                   std::string* errorMessage = nullptr);
-bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state);
+bool isRetoolProvisionCoolingDown(const RetoolProvisionHealth& state,
+                                  const IRetoolProvisionClock& clock);
 void markRetoolProvisionSuccess(IKeyValueConfigStore& store);
-void markRetoolProvisionFailure(IKeyValueConfigStore& store, const std::string& reason);
+void markRetoolProvisionFailure(IKeyValueConfigStore& store,
+                                const std::string& reason,
+                                const IRetoolProvisionClock& clock);
 
 }  // namespace retoolProvision
 

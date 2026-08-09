@@ -1,5 +1,6 @@
 #include <drogon/drogon.h>
 #include <accountManager/accountManager.h>
+#include <accountManager/RetoolProvisionClock.h>
 // R4 试点 C：main.cc 是组装根，需同时见到端口与实现才能接线。
 // accountManager.h 已不再 include 实现头，故这里必须显式引入（IWYU）。
 #include <dbManager/account/accountDbManager.h>
@@ -252,6 +253,8 @@ int main() {
             // checkChannelAccountCounts()。未注入则回退 Null 实现、渠道列表恒空，
             // 自动补注册静默失效（不崩溃，故必须由启动接线门禁守住）。
             AccountManager::getInstance().setChannelStore(ChannelDbManager::getInstance());
+            AccountManager::getInstance().setRetoolProvisionClock(
+                retoolProvision::makeSystemRetoolProvisionClock());
             AccountManager::getInstance().init();
             RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
             RetoolWorkspaceManager::getInstance().init();

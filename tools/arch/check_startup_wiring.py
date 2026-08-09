@@ -27,6 +27,7 @@ REQUIRED = [
     # 步骤 100：渠道列表来源倒置。漏注入不会崩溃，而是渠道列表恒空、
     # 自动补注册静默失效——正因为不崩溃，更需要门禁守。
     ('AccountManager', 'setChannelStore', 'R4 试点 C 续·渠道列表'),
+    ('AccountManager', 'setRetoolProvisionClock', 'P3-W3·Retool 冷却时钟端口'),
 ]
 
 # 步骤 176：静态 setter 形式的接线（无单例、无 init）。

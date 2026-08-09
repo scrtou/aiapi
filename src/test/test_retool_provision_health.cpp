@@ -1,7 +1,10 @@
 #include <drogon/drogon_test.h>
 
 #include <accountManager/RetoolProvisionHealth.h>
+#include <accountManager/RetoolProvisionClock.h>
+#include <domain/port/IRetoolProvisionClock.h>
 
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -42,6 +45,36 @@ class FakeKeyValueConfigStore : public IKeyValueConfigStore
     }
 };
 
+class FakeRetoolProvisionClock final : public retoolProvision::IRetoolProvisionClock
+{
+  public:
+    TimePoint current{std::chrono::seconds(1'000'000)};
+
+    TimePoint now() const override { return current; }
+
+    std::string formatLocalTimestamp(TimePoint value) const override
+    {
+        return "fake:" + std::to_string(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                value.time_since_epoch()).count());
+    }
+
+    std::optional<TimePoint> parseLocalTimestamp(const std::string& value) const override
+    {
+        constexpr const char* prefix = "fake:";
+        if (value.rfind(prefix, 0) != 0) return std::nullopt;
+        try
+        {
+            const auto seconds = std::stoll(value.substr(5));
+            return TimePoint(std::chrono::seconds(seconds));
+        }
+        catch (...)
+        {
+            return std::nullopt;
+        }
+    }
+};
+
 const char* kFailureCountKey = "retoolapi.provision.consecutive_failures";
 const char* kLastFailureReasonKey = "retoolapi.provision.last_failure_reason";
 const char* kCooldownUntilKey = "retoolapi.provision.cooldown_until";
@@ -70,40 +103,44 @@ DROGON_TEST(RetoolProvisionHealthLoadToleratesGarbageCounter)
 DROGON_TEST(RetoolProvisionHealthFailuresBelowThresholdDoNotCoolDown)
 {
     FakeKeyValueConfigStore store;
-    retoolProvision::markRetoolProvisionFailure(store, "boom-1");
+    FakeRetoolProvisionClock clock;
+    retoolProvision::markRetoolProvisionFailure(store, "boom-1", clock);
     CHECK(store.rows[kFailureCountKey] == "1");
     CHECK(store.rows[kCooldownUntilKey].empty());
 
-    retoolProvision::markRetoolProvisionFailure(store, "boom-2");
+    retoolProvision::markRetoolProvisionFailure(store, "boom-2", clock);
     CHECK(store.rows[kFailureCountKey] == "2");
     CHECK(store.rows[kCooldownUntilKey].empty());
 
     const auto state = retoolProvision::loadRetoolProvisionHealth(store, nullptr);
-    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state) == false);
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock) == false);
     CHECK(state.lastFailureReason == "boom-2");
 }
 
 DROGON_TEST(RetoolProvisionHealthThirdFailureOpensCooldown)
 {
     FakeKeyValueConfigStore store;
-    retoolProvision::markRetoolProvisionFailure(store, "a");
-    retoolProvision::markRetoolProvisionFailure(store, "b");
-    retoolProvision::markRetoolProvisionFailure(store, "c");
+    FakeRetoolProvisionClock clock;
+    retoolProvision::markRetoolProvisionFailure(store, "a", clock);
+    retoolProvision::markRetoolProvisionFailure(store, "b", clock);
+    retoolProvision::markRetoolProvisionFailure(store, "c", clock);
 
     CHECK(store.rows[kFailureCountKey] == "3");
-    CHECK(!store.rows[kCooldownUntilKey].empty());
+    CHECK(store.rows[kCooldownUntilKey] == "fake:1001800");
 
     const auto state = retoolProvision::loadRetoolProvisionHealth(store, nullptr);
-    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state) == true);
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock) == true);
     CHECK(store.rows[kLastFailureReasonKey] == "c");
+    CHECK(state.lastFailureAt == "fake:1000000");
 }
 
 DROGON_TEST(RetoolProvisionHealthSuccessClearsCounterAndCooldown)
 {
     FakeKeyValueConfigStore store;
-    retoolProvision::markRetoolProvisionFailure(store, "a");
-    retoolProvision::markRetoolProvisionFailure(store, "b");
-    retoolProvision::markRetoolProvisionFailure(store, "c");
+    FakeRetoolProvisionClock clock;
+    retoolProvision::markRetoolProvisionFailure(store, "a", clock);
+    retoolProvision::markRetoolProvisionFailure(store, "b", clock);
+    retoolProvision::markRetoolProvisionFailure(store, "c", clock);
     REQUIRE(!store.rows[kCooldownUntilKey].empty());
 
     retoolProvision::markRetoolProvisionSuccess(store);
@@ -111,19 +148,43 @@ DROGON_TEST(RetoolProvisionHealthSuccessClearsCounterAndCooldown)
     CHECK(store.rows[kFailureCountKey] == "0");
     CHECK(store.rows[kCooldownUntilKey].empty());
     const auto state = retoolProvision::loadRetoolProvisionHealth(store, nullptr);
-    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state) == false);
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock) == false);
 }
 
 DROGON_TEST(RetoolProvisionHealthPastCooldownStampIsNotCoolingDown)
 {
     retoolProvision::RetoolProvisionHealth state;
     state.cooldownUntil = "2000-01-01 00:00:00";
-    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state) == false);
+    FakeRetoolProvisionClock clock;
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock) == false);
 }
 
 DROGON_TEST(RetoolProvisionHealthUnparsableCooldownStampIsNotCoolingDown)
 {
     retoolProvision::RetoolProvisionHealth state;
     state.cooldownUntil = "garbage";
-    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state) == false);
+    FakeRetoolProvisionClock clock;
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock) == false);
+}
+
+DROGON_TEST(RetoolProvisionHealthCooldownBoundaryIsExclusive)
+{
+    FakeRetoolProvisionClock clock;
+    retoolProvision::RetoolProvisionHealth state;
+    state.cooldownUntil = clock.formatLocalTimestamp(clock.now());
+    CHECK(!retoolProvision::isRetoolProvisionCoolingDown(state, clock));
+
+    state.cooldownUntil = clock.formatLocalTimestamp(
+        clock.now() + std::chrono::seconds(1));
+    CHECK(retoolProvision::isRetoolProvisionCoolingDown(state, clock));
+}
+
+DROGON_TEST(RetoolProvisionSystemClockRoundTripsPersistedTimestamp)
+{
+    const auto clock = retoolProvision::makeSystemRetoolProvisionClock();
+    const auto timestamp = clock->formatLocalTimestamp(clock->now());
+    CHECK(!timestamp.empty());
+    CHECK(clock->parseLocalTimestamp(timestamp).has_value());
+    CHECK(!clock->parseLocalTimestamp("2026-99-99 25:61:61").has_value());
+    CHECK(!clock->parseLocalTimestamp(timestamp + " trailing").has_value());
 }
