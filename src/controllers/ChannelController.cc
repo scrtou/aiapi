@@ -82,9 +82,16 @@ void ChannelController::channelAdd(const HttpRequestPtr &req, std::function<void
             const auto channelName = reqBody.get("channelname", "").asString();
             if (!channelName.empty())
             {
-                BackgroundTaskQueue::instance().enqueue("channelAdd_checkCounts_" + channelName, [channelName](){
-                    AccountManager::getInstance().checkChannelAccountCount(channelName);
-                });
+                // 渠道已成功入库，账号数核算只是附带的后台修正；入队失败
+                // 不影响本次创建结果，故仅告警，不改写响应状态。
+                const auto counted = BackgroundTaskQueue::instance().enqueue(
+                    "channelAdd_checkCounts_" + channelName, [channelName](){
+                        AccountManager::getInstance().checkChannelAccountCount(channelName);
+                    });
+                if (counted != EnqueueResult::Accepted) {
+                    LOG_WARN << "[渠道Ctrl] 账号数核算任务入队被拒("
+                             << toString(counted) << ")，渠道已创建：" << channelName;
+                }
             }
         }
 
@@ -145,9 +152,16 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
             response["message"] = "Channel updated successfully";
             response["id"] = channelInfo.id;
 
-            BackgroundTaskQueue::instance().enqueue("channelUpdate_checkCounts_" + channelInfo.channelName, [channelName = channelInfo.channelName](){
-                AccountManager::getInstance().checkChannelAccountCount(channelName);
-            });
+            // 同上：更新已提交，核算任务被拒不改写响应。
+            const auto counted = BackgroundTaskQueue::instance().enqueue(
+                "channelUpdate_checkCounts_" + channelInfo.channelName,
+                [channelName = channelInfo.channelName](){
+                    AccountManager::getInstance().checkChannelAccountCount(channelName);
+                });
+            if (counted != EnqueueResult::Accepted) {
+                LOG_WARN << "[渠道Ctrl] 账号数核算任务入队被拒("
+                         << toString(counted) << ")，渠道已更新：" << channelInfo.channelName;
+            }
         } else {
             response["status"] = "failed";
             response["message"] = "Failed to update channel";

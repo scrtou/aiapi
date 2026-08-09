@@ -339,18 +339,28 @@ void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow& row)
 {
     if (!enabled_ || row.threadId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("chaynsThread.upsert", [self, row]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.upsert", [self, row]() {
         self->upsertThread(row);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：chaynsThread.upsert";
+    }
 }
 
 void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string& sessionId)
 {
     if (!enabled_ || sessionId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("chaynsThread.detach", [self, sessionId]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.detach", [self, sessionId]() {
         self->detachThreadBySessionId(sessionId);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：chaynsThread.detach";
+    }
 }
 
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string& oldSessionId,
@@ -358,25 +368,40 @@ void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string& oldSes
 {
     if (!enabled_ || oldSessionId.empty() || newSessionId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("chaynsThread.rotateSession", [self, oldSessionId, newSessionId]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.rotateSession", [self, oldSessionId, newSessionId]() {
         self->updateThreadSessionId(oldSessionId, newSessionId);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：chaynsThread.rotateSession";
+    }
 }
 
 void chaynsThreadDbManager::asyncTouchThreadBySessionId(const std::string& sessionId, int64_t nowEpochSeconds)
 {
     if (!enabled_ || sessionId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("chaynsThread.touch", [self, sessionId, nowEpochSeconds]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.touch", [self, sessionId, nowEpochSeconds]() {
         self->touchThreadBySessionId(sessionId, nowEpochSeconds);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：chaynsThread.touch";
+    }
 }
 
 void chaynsThreadDbManager::asyncDeleteThread(const std::string& threadId)
 {
     if (!enabled_ || threadId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("chaynsThread.delete", [self, threadId]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.delete", [self, threadId]() {
         self->deleteThread(threadId);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：chaynsThread.delete";
+    }
 }

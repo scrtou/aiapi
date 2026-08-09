@@ -164,7 +164,9 @@ RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value
 
 void RetoolWorkspaceService::provisionWorkspaceAsync(const Json::Value& requestBody, ProvisionCallback callback)
 {
-    BackgroundTaskQueue::instance().enqueue(
+    // lambda 会 move 走 callback，失败路径需提前留副本。
+    auto callbackCopy = callback;
+    const auto enqueued = BackgroundTaskQueue::instance().enqueue(
         "retool_workspace_create",
         [requestBody, callback = std::move(callback)]() mutable {
             try
@@ -178,4 +180,11 @@ void RetoolWorkspaceService::provisionWorkspaceAsync(const Json::Value& requestB
                 callback(std::nullopt, ex.what());
             }
         });
+    if (enqueued != EnqueueResult::Accepted) {
+        // 任务从未入队，callback 永远不会被 worker 调用；此处必须由调用线程
+        // 亲自兑现回调契约，否则请求方将永久挂起等待一个不存在的结果。
+        LOG_ERROR << "[Retool工作区] 异步开通任务入队被拒：" << toString(enqueued);
+        callbackCopy(std::nullopt,
+                     std::string("workspace provision rejected: ") + toString(enqueued));
+    }
 }

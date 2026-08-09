@@ -74,7 +74,15 @@ void ErrorStatsService::shutdown() {
     if (!running_) return;
     
     LOG_INFO << "[错误统计服务] 开始关闭服务";
-    running_ = false;
+    {
+        // 置位必须持 eventMutex_：workerLoop 的 wait_for 谓词读的就是
+        // running_，锁外置位会与「谓词已检查、尚未进入等待」的窗口交错，
+        // 使 notify 落空。这里最坏情况只多等一个 asyncFlushMs（不会像
+        // reaper 那样挂死），但停机延迟不应依赖调度巧合，统一按同一套
+        // 约束写，也避免以后把 wait_for 改成 wait 时退化成真死锁。
+        std::lock_guard<std::mutex> lock(eventMutex_);
+        running_ = false;
+    }
     cv_.notify_all();
     
     if (workerThread_.joinable()) {

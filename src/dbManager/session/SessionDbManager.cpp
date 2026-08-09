@@ -447,43 +447,68 @@ void SessionDbManager::asyncUpsertSession(const SessionRow& row)
 {
     if (!enabled_ || row.sessionId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("session.upsert", [self, row]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("session.upsert", [self, row]() {
         self->upsertSession(row);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：session.upsert";
+    }
 }
 
 void SessionDbManager::asyncUpsertResponse(const ResponseRow& row)
 {
     if (!enabled_ || row.responseId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("responseIndex.upsert", [self, row]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("responseIndex.upsert", [self, row]() {
         self->upsertResponse(row);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：responseIndex.upsert";
+    }
 }
 
 void SessionDbManager::asyncDeleteSession(const std::string& sessionId)
 {
     if (!enabled_ || sessionId.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("session.delete", [self, sessionId]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("session.delete", [self, sessionId]() {
         self->deleteSession(sessionId);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：session.delete";
+    }
 }
 
 void SessionDbManager::asyncDeleteSessions(const std::vector<std::string>& sessionIds)
 {
     if (!enabled_ || sessionIds.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("session.deleteBatch", [self, sessionIds]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("session.deleteBatch", [self, sessionIds]() {
         self->deleteSessions(sessionIds);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：session.deleteBatch";
+    }
 }
 
 void SessionDbManager::asyncDeleteResponses(const std::vector<std::string>& responseIds)
 {
     if (!enabled_ || responseIds.empty()) return;
     auto self = getInstance();
-    BackgroundTaskQueue::instance().enqueue("responseIndex.deleteBatch", [self, responseIds]() {
+    const auto r = BackgroundTaskQueue::instance().enqueue("responseIndex.deleteBatch", [self, responseIds]() {
         self->deleteResponses(responseIds);
     });
+    if (r != EnqueueResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
+                  << ")，数据未落盘：responseIndex.deleteBatch";
+    }
 }

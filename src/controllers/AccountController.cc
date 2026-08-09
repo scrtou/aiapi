@@ -172,7 +172,7 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
         }
         response.append(responseitem);
     }
-    BackgroundTaskQueue::instance().enqueue("accountAdd", [accountList](){
+    const auto addEnqueued = BackgroundTaskQueue::instance().enqueue("accountAdd", [accountList](){
         for (auto &account : accountList) {
             AccountDbManager::getInstance()->addAccount(account);
         }
@@ -186,6 +186,13 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
             }
         }
     });
+    if (auto rejection = ctl::makeEnqueueRejection(addEnqueued)) {
+        // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
+        LOG_WARN << "[账号Ctrl] 添加账号 后台任务入队被拒：" << toString(addEnqueued);
+        callback(rejection);
+        return;
+    }
+
     ctl::sendJson(callback, response);
     LOG_INFO << "[账号Ctrl] 添加账号完成";
 }
@@ -294,7 +301,7 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
         }
         response.append(responseitem);
     }
-    BackgroundTaskQueue::instance().enqueue("accountDelete", [accountList](){
+    const auto deleteEnqueued = BackgroundTaskQueue::instance().enqueue("accountDelete", [accountList](){
         for (auto &account : accountList) {
             // 先从上游删除账号
             bool upstreamDeleted = AccountManager::getInstance().deleteUpstreamAccount(account);
@@ -310,6 +317,13 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
         // 账号删除后，检查渠道账号数量（可能需要补充账号）
         AccountManager::getInstance().checkChannelAccountCounts();
     });
+    if (auto rejection = ctl::makeEnqueueRejection(deleteEnqueued)) {
+        // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
+        LOG_WARN << "[账号Ctrl] 删除账号 后台任务入队被拒：" << toString(deleteEnqueued);
+        callback(rejection);
+        return;
+    }
+
     ctl::sendJson(callback, response);
 }
 
@@ -371,7 +385,7 @@ void AccountController::accountUpdate(const HttpRequestPtr &req, std::function<v
         response.append(responseitem);
     }
 
-    BackgroundTaskQueue::instance().enqueue("accountUpdate", [accountList](){
+    const auto updateEnqueued = BackgroundTaskQueue::instance().enqueue("accountUpdate", [accountList](){
         for (auto &account : accountList) {
             AccountDbManager::getInstance()->updateAccount(account);
         }
@@ -384,6 +398,13 @@ void AccountController::accountUpdate(const HttpRequestPtr &req, std::function<v
             }
         }
     });
+    if (auto rejection = ctl::makeEnqueueRejection(updateEnqueued)) {
+        // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
+        LOG_WARN << "[账号Ctrl] 更新账号 后台任务入队被拒：" << toString(updateEnqueued);
+        callback(rejection);
+        return;
+    }
+
 
     ctl::sendJson(callback, response);
     LOG_INFO << "[账号Ctrl] 更新账号完成";
@@ -398,13 +419,20 @@ void AccountController::accountRefresh(const HttpRequestPtr &req, std::function<
     response["message"] = "Account status refresh started in background";
 
     // 异步执行刷新操作
-    BackgroundTaskQueue::instance().enqueue("accountRefresh", [](){
+    const auto refreshEnqueued = BackgroundTaskQueue::instance().enqueue("accountRefresh", [](){
         LOG_INFO << "[账号Ctrl] 后台刷新：开始检查 有效性";
         AccountManager::getInstance().checkToken();
         LOG_INFO << "[账号Ctrl] 后台刷新：开始更新账号类型";
         AccountManager::getInstance().updateAllAccountTypes();
         LOG_INFO << "[账号Ctrl] 后台刷新：刷新完成";
     });
+    if (auto rejection = ctl::makeEnqueueRejection(refreshEnqueued)) {
+        // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
+        LOG_WARN << "[账号Ctrl] 刷新状态 后台任务入队被拒：" << toString(refreshEnqueued);
+        callback(rejection);
+        return;
+    }
+
 
     ctl::sendJson(callback, response);
 }
@@ -454,7 +482,7 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
     response["count"] = count;
 
     // 异步执行注册操作
-    BackgroundTaskQueue::instance().enqueue("accountAutoRegister", [apiName, count](){
+    const auto registerEnqueued = BackgroundTaskQueue::instance().enqueue("accountAutoRegister", [apiName, count](){
         LOG_INFO << "[账号Ctrl] 后台注册：开始为" << apiName << " 注册 " << count << " 个账号";
         for (int i = 0; i < count; ++i) {
             LOG_INFO << "[账号Ctrl] 后台注册：正在注册第" << (i + 1) << "/" << count << " 个账号";
@@ -469,6 +497,13 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
         }
         LOG_INFO << "[账号Ctrl] 后台注册：注册完成";
     });
+    if (auto rejection = ctl::makeEnqueueRejection(registerEnqueued)) {
+        // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
+        LOG_WARN << "[账号Ctrl] 自动注册 后台任务入队被拒：" << toString(registerEnqueued);
+        callback(rejection);
+        return;
+    }
+
 
     ctl::sendJson(callback, response);
 }

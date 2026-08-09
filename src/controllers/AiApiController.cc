@@ -167,7 +167,7 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
         auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
             std::move(callback));
 
-        const bool accepted = BackgroundTaskQueue::instance().enqueue(
+        const auto enqueued = BackgroundTaskQueue::instance().enqueue(
             "chat_nonstream_generation",
             [genReq, cb]() mutable {
                 auto jsonResp   = std::make_shared<HttpResponsePtr>();
@@ -205,10 +205,8 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
                 }
             });
 
-        if (!accepted) {
-            ctl::respondInLoop(cb, ctl::makeError(
-                k503ServiceUnavailable, "service_unavailable",
-                "Server is shutting down", "shutting_down"));
+        if (auto rejection = ctl::makeEnqueueRejection(enqueued)) {
+            ctl::respondInLoop(cb, rejection);
         }
         return;
     }
@@ -230,7 +228,7 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
                 LOG_WARN << "[AI接口控制器] 无法绑定聊天流到当前 IO 事件循环";
                 return;
             }
-            BackgroundTaskQueue::instance().enqueue("chat_stream_generation", [streamBridge, genReq]() mutable {
+            const auto streamEnqueued = BackgroundTaskQueue::instance().enqueue("chat_stream_generation", [streamBridge, genReq]() mutable {
                 ChatSseSink sseSink(
                     [streamBridge](const std::string& chunk) {
                         return streamBridge->send(chunk);
@@ -253,6 +251,16 @@ void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<voi
                     sseSink.onClose();
                 }
             });
+
+            // SSE 响应头与 200 状态码在 newAsyncStreamResponse 返回时即已提交，
+            // 此刻再改状态码为时已晚。入队被拒时唯一诚实的处置是立即关流，
+            // 让客户端拿到一个干净结束的空流，而不是无限等待永不到来的 token。
+            if (streamEnqueued != EnqueueResult::Accepted) {
+                LOG_WARN << "[AI接口控制器] 聊天流入队被拒("
+                         << toString(streamEnqueued) << ")，立即关闭流";
+                streamBridge->close();
+                return;
+            }
         },
         true
     );
@@ -328,7 +336,7 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
             std::move(callback));
         const int inputTokensEstimated = static_cast<int>(genReq.currentInput.length() / 4);
 
-        const bool accepted = BackgroundTaskQueue::instance().enqueue(
+        const auto enqueued = BackgroundTaskQueue::instance().enqueue(
             "responses_nonstream_generation",
             [genReq, cb, nativeResponsesToolItems, inputTokensEstimated]() mutable {
                 auto jsonResp   = std::make_shared<HttpResponsePtr>();
@@ -374,10 +382,8 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
                 }
             });
 
-        if (!accepted) {
-            ctl::respondInLoop(cb, ctl::makeError(
-                k503ServiceUnavailable, "service_unavailable",
-                "Server is shutting down", "shutting_down"));
+        if (auto rejection = ctl::makeEnqueueRejection(enqueued)) {
+            ctl::respondInLoop(cb, rejection);
         }
         return;
     }
@@ -397,7 +403,7 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
                 LOG_WARN << "[AI接口控制器] 无法绑定 Responses 流到当前 IO 事件循环";
                 return;
             }
-            BackgroundTaskQueue::instance().enqueue(
+            const auto streamEnqueued = BackgroundTaskQueue::instance().enqueue(
                 "responses_stream_generation",
                 [streamBridge, genReq, nativeResponsesToolItems]() mutable {
                     CollectorSink collector;
@@ -450,6 +456,16 @@ void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<v
                     }
                 }
             );
+
+            // SSE 响应头与 200 状态码在 newAsyncStreamResponse 返回时即已提交，
+            // 此刻再改状态码为时已晚。入队被拒时唯一诚实的处置是立即关流，
+            // 让客户端拿到一个干净结束的空流，而不是无限等待永不到来的 token。
+            if (streamEnqueued != EnqueueResult::Accepted) {
+                LOG_WARN << "[AI接口控制器] Responses 流入队被拒("
+                         << toString(streamEnqueued) << ")，立即关闭流";
+                streamBridge->close();
+                return;
+            }
         },
         true
     );

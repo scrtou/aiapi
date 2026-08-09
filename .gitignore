@@ -574,3 +574,4 @@ src/build/
 build-review/
 build-coverage/
 build-asan/
+build-tsan/

@@ -62,7 +62,15 @@ void chaynsThreadReaper::stop()
     if (!running_.load()) {
         return;
     }
-    stopRequested_ = true;
+    {
+        // 置位必须与 loop() 的 wait_for 共用 wakeMutex_：谓词读的是同一个
+        // stopRequested_，若在锁外置位，worker 可能已检查完谓词但尚未真正
+        // 进入等待，此时 notify 落空，停机退化成等满一个 scanIntervalSeconds
+        // （默认 15 分钟，测试里是 1 小时），表现为 join 永久挂起。
+        // 同样的约束已在 AccountManager 与 chatSession 的停机路径上落实。
+        std::lock_guard<std::mutex> lock(wakeMutex_);
+        stopRequested_.store(true);
+    }
     wakeCv_.notify_all();
     if (worker_.joinable()) {
         worker_.join();

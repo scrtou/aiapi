@@ -1,0 +1,6 @@
+# trantor/Drogon 自有的 eventfd 生命周期模式：EventLoop 在析构时 close(wakeupFd)，
+# 而 loop 线程可能仍在 wakeupRead()；以及 queueInLoop 对 eventfd 的写。
+# 属于第三方库既有实现，不在本仓库范围内，且与 BackgroundTaskQueue 停机路径无关。
+race:trantor::EventLoop::
+race:trantor::EventLoopThread::
+called_from_lib:libtrantor

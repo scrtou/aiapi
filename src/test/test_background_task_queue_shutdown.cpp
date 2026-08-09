@@ -20,9 +20,9 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownIsIrreversible)
     // 阶段一：停机前，enqueue 必须被接受并真正执行
     std::atomic<int> executed{0};
     for (int i = 0; i < 4; ++i) {
-        const bool accepted =
-            q.enqueueLegacy("pre-shutdown", [&executed]() { executed.fetch_add(1); });
-        CHECK(accepted);
+        const auto accepted =
+            q.enqueue("pre-shutdown", [&executed]() { executed.fetch_add(1); });
+        CHECK(accepted == EnqueueResult::Accepted);
     }
 
     // 阶段二：shutdown() 语义是 drain + join，返回后队列必须已排空，
@@ -36,9 +36,9 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownIsIrreversible)
     // 迟到的 enqueue 命中 `if (!started_)` 分支重新 spawn 8 条线程并把
     // stopping_ 复位，导致进程永不退出。
     std::atomic<bool> zombieRan{false};
-    const bool rejected =
-        q.enqueueLegacy("post-shutdown", [&zombieRan]() { zombieRan.store(true); });
-    CHECK(rejected == false);
+    const auto rejected =
+        q.enqueue("post-shutdown", [&zombieRan]() { zombieRan.store(true); });
+    CHECK(rejected == EnqueueResult::Stopped);
 
     // 被拒的任务绝不能被执行。给一个宽限窗口，
     // 若线程池真的复活了，这里足以捕获到。
@@ -49,7 +49,7 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownIsIrreversible)
     // 阶段四：shutdown() 幂等，重复调用不得挂起或崩溃
     q.shutdown();
     q.shutdown();
-    CHECK(q.enqueueLegacy("after-double-shutdown", []() {}) == false);
+    CHECK(q.enqueue("after-double-shutdown", []() {}) == EnqueueResult::Stopped);
 }
 
 DROGON_TEST(BackgroundTaskQueue_ShutdownWaitsForRunningTask)
@@ -63,10 +63,10 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownWaitsForRunningTask)
     auto enteredFuture = entered.get_future();
     std::promise<void> release;
     auto releaseFuture = release.get_future().share();
-    REQUIRE(q.enqueueLegacy("blocking-task", [&entered, releaseFuture]() mutable {
+    REQUIRE(q.enqueue("blocking-task", [&entered, releaseFuture]() mutable {
         entered.set_value();
         releaseFuture.wait();
-    }));
+    }) == EnqueueResult::Accepted);
     REQUIRE(enteredFuture.wait_for(2s) == std::future_status::ready);
 
     auto stopped = std::async(std::launch::async, [&q] { q.shutdown(); });
@@ -89,11 +89,11 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownDrainsBacklogAndRejectsLateWork)
     std::promise<void> release;
     auto releaseFuture = release.get_future().share();
     for (int i = 0; i < 2; ++i) {
-        REQUIRE(q.enqueueLegacy("occupied-worker", [&entered, &executed, releaseFuture]() mutable {
+        REQUIRE(q.enqueue("occupied-worker", [&entered, &executed, releaseFuture]() mutable {
             entered.fetch_add(1);
             releaseFuture.wait();
             executed.fetch_add(1);
-        }));
+        }) == EnqueueResult::Accepted);
     }
     for (int i = 0; i < 100 && entered.load() != 2; ++i) {
         std::this_thread::sleep_for(5ms);
@@ -103,7 +103,8 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownDrainsBacklogAndRejectsLateWork)
     int accepted = 2;
     constexpr int kBacklog = 24;
     for (int i = 0; i < kBacklog; ++i) {
-        REQUIRE(q.enqueueLegacy("backlog", [&executed] { executed.fetch_add(1); }));
+        REQUIRE(q.enqueue("backlog", [&executed] { executed.fetch_add(1); })
+                == EnqueueResult::Accepted);
         ++accepted;
     }
 
@@ -114,14 +115,15 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownDrainsBacklogAndRejectsLateWork)
         std::this_thread::sleep_for(1ms);
     }
     REQUIRE(!q.acceptingTasks());
-    CHECK(!q.enqueueLegacy("late-work", [&executed] { executed.fetch_add(1); }));
+    CHECK(q.enqueue("late-work", [&executed] { executed.fetch_add(1); })
+          == EnqueueResult::ShuttingDown);
     CHECK(stopped.wait_for(100ms) == std::future_status::timeout);
     release.set_value();
     REQUIRE(stopped.wait_for(3s) == std::future_status::ready);
     stopped.get();
     CHECK(executed.load() == accepted);
     CHECK(q.pendingCount() == 0);
-    CHECK(!q.enqueueLegacy("after-drain", [] {}));
+    CHECK(q.enqueue("after-drain", [] {}) == EnqueueResult::Stopped);
 }
 
 // ---------------------------------------------------------------------------

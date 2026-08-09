@@ -132,15 +132,6 @@ public:
         return EnqueueResult::Accepted;
     }
 
-    /**
-     * 过渡兼容 shim：语义与旧 bool 接口一致（Accepted 为 true）。
-     * C4-C6 逐层迁移调用点期间存在，C7 删除。新代码不得使用。
-     */
-    bool enqueueLegacy(const std::string& name, std::function<void()> task)
-    {
-        return enqueue(name, std::move(task)) == EnqueueResult::Accepted;
-    }
-
     /// 优雅停机：拒绝新任务，等待队列排空，然后 join 所有线程
     void shutdown()
     {

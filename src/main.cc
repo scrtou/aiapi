@@ -222,7 +222,7 @@ int main() {
         }
         BackgroundTaskQueue::instance().start(static_cast<size_t>(workerThreads));
 
-        BackgroundTaskQueue::instance().enqueue("init", []{
+        const auto initEnqueued = BackgroundTaskQueue::instance().enqueue("init", []{
             LOG_INFO << "[启动] 后台初始化任务开始";
 
             auto customConfig = drogon::app().getCustomConfig();
@@ -392,6 +392,13 @@ int main() {
                 );
             }
         });
+    if (initEnqueued != EnqueueResult::Accepted) {
+        // 启动期队列必为空且刚 start()，被拒即代表生命周期被破坏；
+        // 继续运行会得到一个未初始化 Store/未建表的“半启动”进程。
+        LOG_FATAL << "[启动] 后台初始化任务入队失败(" << toString(initEnqueued)
+                  << ")，进程无法进入可用状态，终止启动";
+        return 1;
+    }
     });
 
     drogon::app().run();
