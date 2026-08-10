@@ -1,7 +1,7 @@
 # P04-W2 · AppContext / Builder / runtime lifecycle
 
-> 状态：DOING（C1~C7 已完成，C8 收口中）
-> 最近更新：2026-08-10 —— C7 门禁落地，并顺带修复了 gate selftest 中因本步迁移而失效的 probe C/D。
+> 状态：DONE（C1~C8 全部完成）
+> 最近更新：2026-08-10 —— C8 收口：三构建（Debug / ASan+UBSan / TSan）与 13 项架构门禁全绿，证据见第 7 节。
 > 计划锚点：`migration-plan.md` 4.1 AppContext 骨架 / 4.4 生命周期迁移
 > 退出门禁（本工作项）：启动失败回滚、显式 ownership
 
@@ -116,7 +116,7 @@ config → AppContext::build(config) → 失败即 return 1（真实生效）
 | C5 | 失败逆序 teardown；G1/G8 显式化 | ✅ 逆序 teardown 单测通过；G8 两处保留为显式 `Degraded` |
 | C6 | shutdown 绝对 deadline + 幂等 | ✅ 二次调用 no-op 单测通过；见偏离 D-2 |
 | C7 | `tools/arch/check_app_context.py`（第 11 个门禁 step） | ✅ A1~A4 四条判据；probe J1/J2 实测 rc=4 |
-| C8 | 全量三构建 + 全门禁 + 文档收口 | 🔄 gate selftest 13 探针全绿；三构建回归待跑 |
+| C8 | 全量三构建 + 全门禁 + 文档收口 | ✅ 三构建各 301 用例全过；13 项门禁 rc=0；TSan data race=0（第 7 节） |
 
 ---
 
@@ -154,3 +154,41 @@ probe C/D 是门禁 5 的自检探针，靠「破坏 `src/main.cc` 再断言 rc=
 处置：两个探针改钉 `src/runtime/AppWiring.cpp`；probe C 另加空改判定
 （grep 后文件若与原文件逐字节相同则直接 FAIL 并提示同步更新），
 避免将来再次退化成「什么都没破坏」的探针。
+
+---
+
+## 7. C8 收口证据（2026-08-10）
+
+### 7.1 三构建回归
+
+| 构建 | 配置 | 单测 | 结果 |
+|------|------|------|------|
+| Debug | `build/`，无 sanitizer | 301 cases / 1645 assertions | ✅ build rc=0，test rc=0 |
+| ASan+UBSan | `build-asan/`，`-fsanitize=address,undefined`；`ASAN_OPTIONS=detect_leaks=0:halt_on_error=1` | 301 cases / 1645 assertions | ✅ 无 AddressSanitizer / runtime error |
+| TSan | `tools/run-tsan.sh`（含停机专项 x5、信号夹具 x5） | 301 cases / 1645 assertions | ✅ 告警合计 2，**data race=0**；夹具 5/5 标记齐全 |
+
+TSan 的 2 条告警均为 Drogon 信号路径固有的 signal-unsafe（`queueInLoop` 中的 `operator new`），
+非数据竞争，脚本按既定判据只对 data race 计失败——见 `tools/run-tsan.sh` 判据说明。
+
+### 7.2 架构门禁（按 CI `arch-cycles.yml` 顺序全量本地复跑）
+
+13 项全部 rc=0：`architecture_audit --selftest` / `--baseline`、`check_cycles`
+（`--evidence` / `--baseline target` / `--layer-rules` / `--db-ratchet`）、
+`check_startup_wiring`、`check_test_registration`、`check_source_ownership`、
+`check_include_paths`、`check_target_layers`、`check_enqueue_result`、`check_app_context`。
+
+### 7.3 退出门禁对照
+
+| 本工作项退出门禁 | 兑现处 |
+|------------------|--------|
+| 启动失败回滚 | C5 逆序 teardown 单测；G1/G8 显式化为 `Failed` / `Degraded` |
+| 显式 ownership | C3/C7 `AppContext` owner 列表 + `check_app_context.py` A1~A4 判据 |
+
+### D-4 · TSan 只认 `tools/run-tsan.sh` 这一个入口（收口时再次踩到）
+
+本轮收口一度直接裸跑 `build-tsan/src/test/aiapi_test`，得到非零退出码并险些记成用例失败。
+实际原因是缺少 `TSAN_OPTIONS`：没有 `exitcode=0`，TSan 会用自己的退出码覆盖测试结果；
+没有 `suppressions=tsan.supp`，trantor 既有告警也会一并冒出来。
+
+> 教训：**判据脚本本身就是判据的一部分**。TSan 结论只在 `tools/run-tsan.sh` 下成立，
+> 裸跑二进制得到的红/绿都不作数；文档与 README 引用 TSan 结果时一律指向该脚本。
