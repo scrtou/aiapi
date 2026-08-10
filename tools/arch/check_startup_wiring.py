@@ -19,22 +19,28 @@ MAIN = 'src/main.cc'
 # AccountManager 有两条独立接线(setStore/setChannelStore)，
 # 按类名检查时，只要其中一条存在就整体判 OK，另一条被删也不会报警。
 REQUIRED = [
-    ('ChannelManager', 'setStore', 'R4 试点 B'),
-    ('RetoolWorkspaceManager', 'setStore', 'R4 试点 A'),
-    # 试点 C 补登记（步骤 92）。此前漏登记，main.cc 接线正确纯属偶然而非保障。
-    # 该缺口的现实后果在步骤 86 已实测：未注入时 AccountManager 会空指针解引用而崩溃。
-    ('AccountManager', 'setStore', 'R4 试点 C'),
-    # 步骤 100：渠道列表来源倒置。漏注入不会崩溃，而是渠道列表恒空、
-    # 自动补注册静默失效——正因为不崩溃，更需要门禁守。
-    ('AccountManager', 'setChannelStore', 'R4 试点 C 续·渠道列表'),
-    ('AccountManager', 'setRetoolProvisionClock', 'P3-W3·Retool 冷却时钟端口'),
+    ('ChannelManager', 'setStore', 'R4 试点 B',
+     '退化为 Null 实现：init 期间的建表与内置渠道写入全部丢失'),
+    ('RetoolWorkspaceManager', 'setStore', 'R4 试点 A',
+     '退化为 Null 实现：建表与默认数据静默丢失'),
+    ('AccountManager', 'setStore', 'R4 试点 C',
+     '空指针解引用而崩溃（步骤 86 实测）'),
+    ('AccountManager', 'setChannelStore', 'R4 试点 C 续·渠道列表',
+     '不崩溃：渠道列表恒空、自动补注册静默失效'),
+    ('AccountManager', 'setRetoolProvisionClock', 'P3-W3·Retool 冷却时钟端口',
+     '冷却时钟缺失，Retool 开通节流失效'),
+    # P04：ErrorStatsService::init() 内有 if(!dbManager_) 回退分支，
+    # 故漏注入既不崩溃也不是 Null，而是静默绕开端口回落到具体单例。
+    ('metrics::ErrorStatsService', 'setSink', 'P04·错误统计落库端口',
+     '不崩溃：静默绕开端口，回落到 ErrorStatsDbManager 具体单例'),
 ]
 
 # 步骤 176：静态 setter 形式的接线（无单例、无 init）。
 # HealthController 复用 IAccountStore 端口做 /ready 的库探针；漏注入不崩溃，
 # 只会让 /ready 恒报 not_ready —— 正因为静默，更需要门禁守。
 REQUIRED_STATIC = [
-    ('HealthController', 'setDbProbe', 'R4·/ready 库探针'),
+    ('HealthController', 'setDbProbe', 'R4·/ready 库探针',
+     '探针为空，/ready 恒判 not_ready'),
 ]
 
 
@@ -50,11 +56,11 @@ def main():
         lines = f.read().splitlines()
 
     failed = False
-    for cls, setter, note in REQUIRED:
+    for cls, setter, note, impact in REQUIRED:
         set_ln = line_of(lines, re.escape(cls) + r'::getInstance\(\)\.' + re.escape(setter) + r'\(')
         init_ln = line_of(lines, re.escape(cls) + r'::getInstance\(\)\.init\(')
         if set_ln is None:
-            print('FAIL %s.%s(%s): main.cc 缺少注入，运行期将退化为 Null 实现' % (cls, setter, note))
+            print('FAIL %s.%s(%s): main.cc 缺少注入 -> %s' % (cls, setter, note, impact))
             failed = True
             continue
         if init_ln is None:
@@ -62,16 +68,16 @@ def main():
             continue
         if set_ln >= init_ln:
             print('FAIL %s.%s(%s): 注入在第 %d 行，晚于 init 的第 %d 行；'
-                  'init 期间的建表与默认数据写入会走 Null 实现'
-                  % (cls, setter, note, set_ln, init_ln))
+                  'init 期间的行为 -> %s'
+                  % (cls, setter, note, set_ln, init_ln, impact))
             failed = True
         else:
             print('OK   %s.%s(%s): 注入(第 %d 行) 早于 init(第 %d 行)' % (cls, setter, note, set_ln, init_ln))
 
-    for cls, setter, note in REQUIRED_STATIC:
+    for cls, setter, note, impact in REQUIRED_STATIC:
         set_ln = line_of(lines, re.escape(cls) + r'::' + re.escape(setter) + r'\(')
         if set_ln is None:
-            print('FAIL %s::%s(%s): main.cc 缺少注入，探针为空将恒判 not_ready' % (cls, setter, note))
+            print('FAIL %s::%s(%s): main.cc 缺少注入 -> %s' % (cls, setter, note, impact))
             failed = True
         else:
             print('OK   %s::%s(%s): 已注入(第 %d 行)' % (cls, setter, note, set_ln))

@@ -94,7 +94,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(mu_);
 
-            // N2 修复保留：停机判断必须【前置】于自动启动分支。
+            // N2 修复保留：停机判断必须【前置】于其余一切分支。
             // 旧实现把 `if (!started_)` 放在前面，而 shutdown() 结尾会置
             // started_=false，于是一个迟到的 enqueue 会重新 spawn 8 条线程
             // 并把 stopping_ 复位，导致线程池复活、进程永不退出。
@@ -108,21 +108,26 @@ public:
                 return EnqueueResult::Stopped;
             }
 
-            // 容量上限先于自动启动分支判断：一个注定被拒的任务不应该
-            // 反过来触发 8 条工作线程的 spawn。
+            // C6：不再隐式 spawn 工作线程。启动时机归 composition root 所有
+            // （main.cc 读取 background_task_threads 后显式 start()）。隐式启动
+            // 会让任意一次早到的 enqueue 抢先用 kDefaultWorkerThreads 建池，
+            // 使配置项静默失效，且线程池生命周期的起点无法被 AppContext 观测。
+            //
+            // 本分支必须【先于】容量判断：Fresh 队列没有 worker，永远不会
+            // 自行排空；若返回 QueueFull，调用方会把「忘记 start()」这个编程
+            // 错误误读为可重试的背压而无限重试。Stopped 是终态，才能
+            // 正确表达「不要再试了，去修启动顺序」。
+            if (state_ == State::Fresh) {
+                LOG_ERROR << "[后台任务队列] 尚未 start()，拒绝任务：" << name;
+                return EnqueueResult::Stopped;
+            }
+
+            // 背压：只在 Running 下有意义——此时 worker 正在消费，QueueFull
+            // 确实是「稍后可重试」的瞬态拒绝。
             if (tasks_.size() >= capacity_) {
                 LOG_WARN << "[后台任务队列] 队列已满(" << capacity_
                          << ")，背压拒绝任务：" << name;
                 return EnqueueResult::QueueFull;
-            }
-
-            if (state_ == State::Fresh) {
-                state_ = State::Running;
-                for (size_t i = 0; i < kDefaultWorkerThreads; ++i) {
-                    workers_.emplace_back([this, i]() { workerLoop(i); });
-                }
-                LOG_INFO << "[后台任务队列] 自动启动 "
-                         << kDefaultWorkerThreads << " 个工作线程";
             }
 
             tasks_.push({name, std::move(task)});

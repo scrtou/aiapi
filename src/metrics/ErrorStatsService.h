@@ -4,7 +4,8 @@
 #include <domain/model/ErrorEvent.h>
 #include <json/json.h>
 #include <metrics/ErrorStatsConfig.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <domain/model/RequestAggData.h>
+#include <domain/port/IErrorStatsSink.h>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
@@ -45,6 +46,15 @@ public:
     ErrorStatsService(const ErrorStatsService&) = delete;
     ErrorStatsService& operator=(const ErrorStatsService&) = delete;
     
+    /**
+     * @brief 注入落库端口（依赖倒置）
+     *
+     * 必须在 init() 之前调用；未注入时 init() 会回退到
+     * ErrorStatsDbManager 默认实现，以兼容既有生产路径。
+     * 测试可注入 Fake 实现，从而不触碰真实数据库。
+     */
+    void setSink(std::shared_ptr<IErrorStatsSink> sink);
+
     /**
      * @brief 初始化服务
      * @param config 配置
@@ -148,7 +158,7 @@ private:
     std::atomic<uint64_t> droppedCount_{0};
     
 
-    std::shared_ptr<ErrorStatsDbManager> dbManager_;
+    std::shared_ptr<IErrorStatsSink> dbManager_;
     
     // 队列大小上限
     static constexpr size_t MAX_QUEUE_SIZE = 10000;

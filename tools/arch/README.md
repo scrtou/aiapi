@@ -1,4 +1,4 @@
-# tools/arch —— 架构门禁（C4 / R4，共五道）
+# tools/arch —— 架构门禁（C4 / R4，8 个脚本 / CI 共 10 个 step）
 
 ## 为什么需要它
 
@@ -34,8 +34,11 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现出边） |
 | 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 dbManager 直连 |
 | 4 | check_startup_wiring | 注入缺失，或注入晚于 `init()` |
+| 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或 legacy 棘轮回升 |
+| 4 | check_test_registration | 测试文件未在 CMake 注册 |
+| 4 | check_enqueue_result | `enqueue()` 丢属性，或调用点绑定后不读结果 |
 
-> 码 4 在两个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
+> 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
 
 ## 判据说明（重要）
@@ -101,15 +104,27 @@ python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.js
 python3 tools/arch/check_startup_wiring.py
 ```
 
-校验 `src/main.cc` 中每个已完成依赖倒置的 Manager：`setStore` 注入**存在**，且**早于** `init()`。
+校验 `src/main.cc` 中每条已登记的组合根接线：注入**存在**，且**早于** `init()`。
+规则表 `REQUIRED` 为四元组 `(类, setter, 说明, 漏接后果)`，FAIL 时打印该条各自的后果；
+另有 `REQUIRED_STATIC` 只校验存在性（无对应 `init()` 时序）。截至 2026-08-10 共 7 条：
+`ChannelManager.setStore`、`RetoolWorkspaceManager.setStore`、`AccountManager.setStore`、
+`AccountManager.setChannelStore`、`AccountManager.setRetoolProvisionClock`、
+`metrics::ErrorStatsService.setSink`（端口 `IErrorStatsSink`）、`HealthController::setDbProbe`（静态）。
 
-**为什么需要第五道**：这道守的是单元测试在结构上覆盖不到的地方。
+**为什么需要这一道**：这道守的是单元测试在结构上覆盖不到的地方。
 倒置后实现由组合根注入，注入语句漏写时**编译通过、全部单元测试通过**
 （R4 试点 B 期间真实发生过，183 项测试全绿），运行期却静默退化为 Null 实现。
 单元测试自行注入 Fake，不经过启动路径，因此再多的单元测试也堵不住这个洞。
 
 **为什么要校验顺序而非仅校验存在**：`init()` 内部会建表并写入默认数据。
 注入若晚于 `init()`，这些写操作全部落到 Null 实现上，症状与漏注入相同。
+
+**漏接后果并非只有一种**（这也是规则表升为四元组的由来）：`AccountManager.setStore`
+漏注入会空指针崩溃（步骤 86 实测）；`setChannelStore` 漏注入不崩溃，但渠道列表恒空、
+自动补注册静默失效；`metrics::ErrorStatsService.setSink` 既不崩溃也不是 Null——其
+`init()` 内有 `if (!dbManager_)` 回退分支，漏注入会**静默绕开端口**回落到
+`ErrorStatsDbManager` 具体单例，倒置在运行期等于没做。早期版本对所有规则统一打印
+「退化为 Null 实现」，退出码正确但描述失真，会把排障者引向错误方向，现已按规则分列。
 
 **已知局限**：判据是正则文本匹配，只认 `X::getInstance().setStore(` 这一种写法。
 若注入被包进辅助函数（如 `wireDependencies()`），检查会**误报 FAIL**。
@@ -118,3 +133,35 @@ python3 tools/arch/check_startup_wiring.py
 **自检探针**：workflow 的 gate selftest 中，probe C 删除注入断言 rc=4，
 probe D 把注入移到 `init()` 之后断言 rc=4。缺 probe D 的话，
 「只搜字符串不看顺序」的退化改法会全绿通过。
+
+## 门禁 10：入队结果处理（check_enqueue_result，退出码 4）
+
+```bash
+python3 tools/arch/check_enqueue_result.py
+```
+
+校验 `BackgroundTaskQueue::enqueue()` 的返回值在 **23 处生产调用点**全部被真正读取，
+且声明处仍带 `[[nodiscard]]`。
+
+**为什么需要这一道**：`[[nodiscard]]` 只拦得住「整体丢弃返回值」一种写法。
+写成 `const auto ignored = ...enqueue(...);` 之后再不读 `ignored`，
+编译器最多给一条 `-Wunused-variable`，而本项目未开 `-Werror` —— 绿色照旧，
+队列满 / 停机中的入队失败重新变成「已受理」的假象。P4-W1 的 C4~C6 刚把 23 处
+从 bool shim 逐层改成显式处理，这条退路必须堵死，否则成果会被悄悄退回原状。
+
+**两条判据**（都必须过）：
+- 声明处保留 `[[nodiscard]] EnqueueResult enqueue(`；防止有人为消警告删属性。
+- 每个调用点：要么就地判断（`if (...enqueue(...) != Accepted)`），
+  要么绑定局部变量且该变量在**同一函数体内**被读取。
+
+**为什么作用域限定在函数体内**：23 处里有多个结果变量都叫 `r` / `counted`。
+若判据放宽到全文搜索变量名，任意别处的同名变量都会让本处误判为「已读取」。
+
+**已知局限**：文本作用域近似，不做数据流分析。把结果存进成员变量、跨函数再读的写法
+会**误报 FAIL**。当前 23 处均为局部变量就地判断；写法一旦分化必须改判据，
+不要靠加白名单绕过 —— 白名单会让这道门禁退化成一张过期清单。
+
+**自检探针**（本轮实测，两条都断言 rc=4）：
+- probe A：删除 `[[nodiscard]]` → FAIL，指向头文件；
+- probe B：把调用点改成绑定后从不读取 → FAIL，指向 `ChannelController.cc:87`。
+  缺 probe B 的话，「只检查头文件属性」的退化改法会全绿通过。

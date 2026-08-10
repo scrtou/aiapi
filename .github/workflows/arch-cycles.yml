@@ -93,6 +93,16 @@ jobs:
       - name: P3 - layered target DAG and legacy ratchet
         run: python3 tools/arch/check_target_layers.py
 
+      # P4-W1：入队结果必须被真正处理（退出码 4）。
+      # [[nodiscard]] 只拦得住「整体丢弃返回值」一种写法；写成
+      # `const auto ignored = ...enqueue(...)` 后再不读它，编译器至多给一条
+      # -Wunused-variable，而本项目未开 -Werror —— 绿色照旧，队列满/停机中的
+      # 入队失败重新退化成「已受理」的假象。C4~C6 刚把 23 处调用点从 bool shim
+      # 逐层改成显式处理，这道门禁堵的就是「悄悄改回去」这条退路。
+      # 前六道全都看不见它：不成环、不跨层、不改 CMake、不动注入、不加测试文件。
+      - name: P4 - enqueue result must be handled
+        run: python3 tools/arch/check_enqueue_result.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面各道会全绿，只有这一步能发现。
@@ -129,6 +139,8 @@ jobs:
           # 备份 cp 回源文件，把开发者当前的改动直接覆盖掉（已实测复现）。
           PROBE_TMP="$(mktemp -d)"
           restore_probes() {
+            [ -f "$PROBE_TMP"/probe_i.bak ] && cp "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h
+            [ -f "$PROBE_TMP"/probe_i2.bak ] && cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
             [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
             [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/main.cc
             [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
@@ -236,6 +248,35 @@ jobs:
           sed -i '/target_link_libraries(aiapi_transport PUBLIC/a\    aiapi_infrastructure' src/CMakeLists.txt
           expect_rc 1 python3 tools/arch/check_target_layers.py
           cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
+
+          echo '--- probe I1: enqueue loses [[nodiscard]] -> expect rc=4 ---'
+          # 属性被删是最省事的「消警告」改法，且不影响编译与测试。
+          cp src/utils/BackgroundTaskQueue.h "$PROBE_TMP"/probe_i.bak
+          sed -i 's/\[\[nodiscard\]\] EnqueueResult enqueue(/EnqueueResult enqueue(/' \
+            src/utils/BackgroundTaskQueue.h
+          expect_rc 4 python3 tools/arch/check_enqueue_result.py
+          cp "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h
+
+          echo '--- probe I2: result bound but never read -> expect rc=4 ---'
+          # 仅校验头文件属性是不够的：真正的退化发生在调用点。
+          # 缺这一条，「只看 [[nodiscard]] 存不存在」的退化判据会全绿通过。
+          cp src/controllers/ChannelController.cc "$PROBE_TMP"/probe_i2.bak
+          python3 - <<'PROBE_I2'
+          import io, re
+          p = 'src/controllers/ChannelController.cc'
+          lines = io.open(p, encoding='utf-8').read().splitlines(True)
+          idx = next((i for i, l in enumerate(lines)
+                      if re.search(r'auto\s+\w+\s*=.*\.enqueue\s*\(', l)), -1)
+          if idx < 0:
+              print('probe I2 无法进行：找不到绑定式 enqueue 调用点。')
+              print('若调用写法已重构，请同步更新本探针与 check_enqueue_result.py。')
+              raise SystemExit(1)
+          lines[idx] = re.sub(r'(?:const\s+)?auto\s+\w+\s*=',
+                              'const auto ignoredProbe =', lines[idx])
+          io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
+          PROBE_I2
+          expect_rc 4 python3 tools/arch/check_enqueue_result.py
+          cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
 
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。

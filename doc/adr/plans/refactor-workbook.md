@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P4（阶段 4，AppContext、队列和停机）**，当前工作项 P4-W1 有界 executor 与四态队列。P3 全部退出门禁已通过：P3-W1～W3 建立 69/69 production owner/compile、单一 include 根和六个正式 target，29 个 implementation 已迁入，legacy ceiling 为 39；P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层 JsonCpp 归零。剩余 target 迁移由后续 service-locator/Provider port 工作逐步解锁，P8 最终执行 no-legacy 门禁。
-P4-W1 按 C1～C7 分片推进：C1（`EnqueueResult` 与四态 `State`，保留 `bool` 兼容 shim）与 C2（capacity 上限与 `QueueFull`、Draining 拒绝递归入队）已完成，TSan 全量 276 用例 / 1417 断言 PASS 且 data race 为 0，P1-W5 停机 harness 无回归；C3～C7 未开始，23 处生产调用点仍全部经由 `bool` 兼容 shim，退出门禁「23/23 调用点显式处理 `EnqueueResult`」尚未达成。当前只允许执行 P4-W1。
+当前是 **P4（阶段 4，AppContext、队列和停机）**，P4-W1 已 DONE，当前工作项 P4-W2 AppContext/Builder/runtime lifecycle。P3 全部退出门禁已通过：P3-W1～W3 建立 69/69 production owner/compile、单一 include 根和六个正式 target，29 个 implementation 已迁入，legacy ceiling 为 39；P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层 JsonCpp 归零。剩余 target 迁移由后续 service-locator/Provider port 工作逐步解锁，P8 最终执行 no-legacy 门禁。
+P4-W1 已于 2026-08-09 收口：C1～C7 全部 DONE。三 bool 状态位由单一四态 `State` 取代，`kDefaultCapacity = 1024` 背压上限与 Draining 拒绝递归入队生效，`waitUntilIdle(deadline)` 提供 drain 完成信号；transport 11 处按 QueueFull/终态区分 503 与 `Retry-After`，infrastructure 10 处失败打 ERROR 不静默，`main.cc` 显式 `start()` 且隐式 spawn 已移除；`enqueueLegacy` 兼容 shim 删除，生产调用点命中 0。退出门禁「23/23 调用点显式处理 `EnqueueResult`」已达成，并固化为 `tools/arch/check_enqueue_result.py`（CI 第 10 个门禁 step）。全量 282 用例 / 1513 断言在 normal、coverage、ASan 三构建下一致 PASS，ASan+UBSan 零报告，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。当前只允许执行 P4-W2，完成后进入下一项。
 
 
 ## 按 migration-plan 排列的工作项
@@ -36,8 +36,8 @@ P4-W1 按 C1～C7 分片推进：C1（`EnqueueResult` 与四态 `State`，保留
 | P3-W2 | 阶段 3 | 单一 include 根和完整路径 | [`P03-include-root.md`](../work-products/P03-include-root.md) | DONE |
 | P3-W3 | 阶段 3 | 正式 target、首批闭包与 legacy ceiling | [`P03-layered-targets.md`](../work-products/P03-layered-targets.md) | DONE |
 | P3-W4 | 阶段 3 | domain 模型与 JSON codec 分离 | [`P03-domain-codecs.md`](../work-products/P03-domain-codecs.md) | DONE |
-| P4-W1 | 阶段 4 | 有界 executor 和四态队列 | [`P04-bounded-executor.md`](../work-products/P04-bounded-executor.md) | DOING |
-| P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | 启动失败回滚、显式 ownership | TODO |
+| P4-W1 | 阶段 4 | 有界 executor 和四态队列 | [`P04-bounded-executor.md`](../work-products/P04-bounded-executor.md) | DONE |
+| P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | 启动失败回滚、显式 ownership | DOING |
 | P4-W3 | 阶段 4 | deadline/cancellation/shutdown | 五类 SIGTERM 集成测试、ASan/TSan | TODO |
 | P5-W1 | 阶段 5 | ProviderRegistry/Router 注入 | 删除 ApiFactory/ApiManager service locator | TODO |
 | P5-W2 | 阶段 5 | SessionStore/ResponseIndex/Gate 注入 | 删除 application 单例访问 | TODO |

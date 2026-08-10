@@ -9,6 +9,8 @@
 #include <memory>
 #include <chrono>
 #include <domain/model/ErrorEvent.h>
+#include <domain/model/RequestAggData.h>
+#include <domain/port/IErrorStatsSink.h>
 
 namespace metrics {
 
@@ -68,25 +70,12 @@ struct ErrorEventRecord {
 };
 
 /**
- * @brief 请求聚合数据结构体
- */
-struct RequestAggData {
-    std::chrono::system_clock::time_point ts;
-    std::string provider;
-    std::string model;
-    std::string clientType;
-    std::string apiKind;
-    bool stream = false;
-    int httpStatus = 0;
-};
-
-/**
  * @brief 错误统计数据库管理器
  *
  * 负责 error_event、error_agg_hour、request_agg_hour 三张表的
  * 创建、升级、批量写入、聚合 upsert、查询等操作
  */
-class ErrorStatsDbManager {
+class ErrorStatsDbManager : public IErrorStatsSink {
 public:
     /**
      * @brief 获取单例实例
@@ -98,7 +87,7 @@ public:
      *
      * 检测数据库类型，创建表（如果不存在），检查并升级表结构
      */
-    void init();
+    void init() override;
     
     // ========== 批量写入 ==========
     
@@ -106,19 +95,19 @@ public:
      * @brief 批量插入错误事件到 error_event 表
      * @return 成功返回 true，失败返回 false
      */
-    bool insertEvents(const std::vector<ErrorEvent>& events);
+    bool insertEvents(const std::vector<ErrorEvent>& events) override;
     
     /**
      * @brief 批量 upsert 错误聚合到 error_agg_hour 表
      * @return 成功返回 true，失败返回 false
      */
-    bool upsertErrorAggHour(const std::vector<ErrorEvent>& events);
+    bool upsertErrorAggHour(const std::vector<ErrorEvent>& events) override;
     
     /**
      * @brief upsert 单条请求聚合到 request_agg_hour 表
      * @return 成功返回 true，失败返回 false
      */
-    bool upsertRequestAggHour(const RequestAggData& data);
+    bool upsertRequestAggHour(const RequestAggData& data) override;
     
     // ========== 查询接口 ==========
     
@@ -159,13 +148,13 @@ public:
      * @brief 删除过期的错误事件明细
      * @return 删除的记录数
      */
-    int cleanupOldEvents(int retentionDays);
+    int cleanupOldEvents(int retentionDays) override;
     
     /**
      * @brief 删除过期的聚合数据（error_agg_hour 和 request_agg_hour）
      * @return 删除的记录数
      */
-    int cleanupOldAgg(int retentionDays);
+    int cleanupOldAgg(int retentionDays) override;
     
     /**
      * @brief 获取数据库类型

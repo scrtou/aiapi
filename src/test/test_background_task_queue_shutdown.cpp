@@ -16,6 +16,7 @@ DROGON_TEST(BackgroundTaskQueue_ShutdownIsIrreversible)
 {
     auto qOwned = BackgroundTaskQueue::createForTesting();
     auto& q = *qOwned;
+    q.start(4);
 
     // 阶段一：停机前，enqueue 必须被接受并真正执行
     std::atomic<int> executed{0};
@@ -167,28 +168,69 @@ DROGON_TEST(BackgroundTaskQueue_QueueFullAppliesBackpressure)
     CHECK(q.pendingCount() == 0);
 }
 
-DROGON_TEST(BackgroundTaskQueue_QueueFullDoesNotAutoStartWorkers)
+// C6 后的新契约：Fresh 队列不再隐式启动，且拒绝理由必须是终态。
+//
+// 旧版本用 capacity=0 让 Fresh 队列返回 QueueFull 来验证「容量判断先于
+// 自动启动分支」。自动启动分支已删除，该断言失去对象；更重要的是
+// QueueFull 对 Fresh 队列是个谎言：没有 worker 就永远不会有位置释放。
+DROGON_TEST(BackgroundTaskQueue_FreshQueueRejectsWithStoppedNotQueueFull)
 {
-    // 容量判断必须【先于】自动启动分支：一个注定被拒的任务不应该反过来
-    // spawn 8 条工作线程。
-    //
-    // 上一版用 capacity=1 + 先塞一个阻塞任务来构造「队列已满」，但那个任务
-    // 会被自动启动的 worker 立刻取走，pendingCount 归零，第二次入队自然是
-    // Accepted —— 测的是调度时序而不是分支顺序。这里改用 capacity=0：
-    // Fresh 状态下第一次 enqueue 就必然撞上容量上限，不依赖任何时序。
-    auto qOwned = BackgroundTaskQueue::createForTesting(/*capacity=*/0);
+    auto qOwned = BackgroundTaskQueue::createForTesting();
     auto& q = *qOwned;
 
     REQUIRE(q.workerCount() == 0);
-    CHECK(q.enqueue("rejected-before-spawn", [] {}) == EnqueueResult::QueueFull);
 
-    // 核心断言：被拒之后线程池仍未启动，队列也没留下残留任务。
+    // 即使容量充足，未 start() 的队列也必须拒收——否则任务会堆在一个
+    // 永远不会被消费的队列里，表现为「接受了但从不执行」。
+    CHECK(q.enqueue("before-start", [] {}) == EnqueueResult::Stopped);
+
     CHECK(q.workerCount() == 0);
     CHECK(q.pendingCount() == 0);
 
-    // 状态未被污染：仍是 Fresh，显式 start() 之后可正常工作。
+    // 状态未被污染：仍是 Fresh，显式 start() 后可正常工作。
+    CHECK(q.acceptingTasks());
+    q.start(1);
+    CHECK(q.enqueue("after-start", [] {}) == EnqueueResult::Accepted);
+
+    q.shutdown();
+}
+
+// 背压防回归：队列满时必须是 QueueFull（可重试），而不能退化成
+// ShuttingDown/Stopped。两类拒绝对调用方的含义相反：一个该退避重试，
+// 另一个该立即放弃。之前 capacity_ 分支没有独立用例覆盖。
+DROGON_TEST(BackgroundTaskQueue_CapacityRejectsWithQueueFullWhileRunning)
+{
+    auto qOwned = BackgroundTaskQueue::createForTesting(/*capacity=*/2);
+    auto& q = *qOwned;
+    q.start(1);
+
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+
+    // 唯一的 worker 被占住，之后的任务只能堆在队列里，使容量分支可确
+    // 定地被触发，不依赖调度时序。
+    REQUIRE(q.enqueue("occupier", [&entered, releaseFuture]() mutable {
+                entered.set_value();
+                releaseFuture.wait();
+            }) == EnqueueResult::Accepted);
+    enteredFuture.wait();
+
+    CHECK(q.enqueue("pending-1", [] {}) == EnqueueResult::Accepted);
+    CHECK(q.enqueue("pending-2", [] {}) == EnqueueResult::Accepted);
+
+    // 第三个撞上上限：必须是 QueueFull，不得是任何停机类终态。
+    const auto rejected = q.enqueue("overflow", [] {});
+    CHECK(rejected == EnqueueResult::QueueFull);
+    CHECK(rejected != EnqueueResult::ShuttingDown);
+    CHECK(rejected != EnqueueResult::Stopped);
+
+    // 拒绝后队列无残留，且仍处于可收任务状态（背压不推进状态机）。
+    CHECK(q.pendingCount() == 2);
     CHECK(q.acceptingTasks());
 
+    release.set_value();
     q.shutdown();
 }
 

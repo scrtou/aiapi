@@ -7,6 +7,7 @@
 #include <apiManager/ApiManager.h>
 #include <channelManager/channelManager.h>
 #include <sessionManager/core/Session.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
 #include <metrics/ErrorStatsService.h>
 #include <dbManager/channel/channelDbManager.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
@@ -260,6 +261,12 @@ int main() {
             RetoolWorkspaceManager::getInstance().init();
             ApiManager::getInstance().init();
 
+            // P04·错误统计落库倒置：注入 IErrorStatsSink 实现。
+            // 必须早于 init()——init() 会立刻调 sink->init() 建表，
+            // 并启动后台 flush 线程。漏注入不会崩溃，只会让统计
+            // 全部落到默认单例（绕开端口），故由启动接线门禁守住。
+            metrics::ErrorStatsService::getInstance().setSink(
+                metrics::ErrorStatsDbManager::getInstance());
             metrics::ErrorStatsConfig statsConfig;
             metrics::ErrorStatsService::getInstance().init(statsConfig);
 

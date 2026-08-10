@@ -90,6 +90,7 @@ set(TEST_SOURCES
     test_health_ready_probe.cpp
     test_controller_utils.cpp
     test_provider_retirement.cpp
+    test_error_stats_sink_port.cpp
     stub_db_collaborators.cpp
 )
 

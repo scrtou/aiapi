@@ -29,14 +29,16 @@
 | 独立 CMake libraries | 🔄 | 六个正式 target 已建立；29 个实现已迁入，legacy ceiling 39，最终删除在 P8 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
-| AppContext/业务单例清理 | ⬜ | 已有部分 port 试点，不代表完成 |
+| AppContext/业务单例清理 | 🔄 | P4-W1 已将队列启动权收回 composition root（显式 `start()`）；AppContext 本体仍在 P4-W2 |
 | Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 4（AppContext、队列和停机），当前工作项 P4-W1（有界 executor 与四态队列）。**
+**当前执行阶段：阶段 4（AppContext、队列和停机），P4-W1 已 DONE，当前工作项 P4-W2（AppContext/Builder/runtime lifecycle）。**
 
-P3-W1～W3 已完成：69/69 生产源 owner/compile count 为 1；103 个自有头 basename 冲突为 0，428/428 自有 include 使用 `<path/from/src>`，CMake 只有一个 `src/` 根。六个正式 target 已建立，29 个实现已迁入，legacy 从 67 降至 39；`RetoolProvisionHealth` 已通过 domain clock port 成为首个真实 application implementation，系统时间/持久化 timestamp codec 留在 infrastructure。正式 DAG、source owner、legacy ceiling、startup clock wiring 均有门禁，normal/coverage/ASan 均 262/262 PASS。P3-W3 审计证明剩余源码受 P3-W4 JsonCpp、P5 service locator、P6 Provider session 副作用阻断；在这些前置消除前强制清空只会伪造边界，因此 ADR-11 v2 将最终 `--require-no-legacy` 门禁放到 P8，完整目标不变。阶段 3 全部退出门禁已通过，P3-W4 于本次收口标记 DONE，阶段推进至阶段 4。当前只允许执行 P4-W1。
+P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。当前只允许执行 P4-W2，完成后继续下一项。
+
+P3-W1～W3 已完成：69/69 生产源 owner/compile count 为 1；103 个自有头 basename 冲突为 0，428/428 自有 include 使用 `<path/from/src>`，CMake 只有一个 `src/` 根。六个正式 target 已建立，29 个实现已迁入，legacy 从 67 降至 39；`RetoolProvisionHealth` 已通过 domain clock port 成为首个真实 application implementation，系统时间/持久化 timestamp codec 留在 infrastructure。正式 DAG、source owner、legacy ceiling、startup clock wiring 均有门禁，normal/coverage/ASan 均 262/262 PASS。P3-W3 审计证明剩余源码受 P3-W4 JsonCpp、P5 service locator、P6 Provider session 副作用阻断；在这些前置消除前强制清空只会伪造边界，因此 ADR-11 v2 将最终 `--require-no-legacy` 门禁放到 P8，完整目标不变。阶段 3 全部退出门禁已通过，P3-W4 于本次收口标记 DONE，阶段推进至阶段 4。
 
 ---
 

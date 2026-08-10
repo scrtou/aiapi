@@ -1,5 +1,6 @@
 #include <metrics/ErrorStatsService.h>
-#include <dbManager/metrics/ErrorEventJsonCodec.h>
+#include <metrics/ErrorEventJsonDecoder.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
 #include <drogon/drogon.h>
 
 namespace metrics {
@@ -7,6 +8,10 @@ namespace metrics {
 ErrorStatsService& ErrorStatsService::getInstance() {
     static ErrorStatsService instance;
     return instance;
+}
+
+void ErrorStatsService::setSink(std::shared_ptr<IErrorStatsSink> sink) {
+    dbManager_ = std::move(sink);
 }
 
 ErrorStatsService::~ErrorStatsService() {
@@ -30,7 +35,9 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
     }
     
 
-    dbManager_ = ErrorStatsDbManager::getInstance();
+    if (!dbManager_) {
+        dbManager_ = ErrorStatsDbManager::getInstance();
+    }
     dbManager_->init();
     
     // 启动后台线程

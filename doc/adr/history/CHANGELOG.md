@@ -6,6 +6,44 @@
 
 ---
 
+## P04 续 · ErrorStats 落库端口倒置与启动接线门禁（2026-08-10）
+
+- `ErrorStatsService` 不再自取 `ErrorStatsDbManager`，改为依赖 `IErrorStatsSink` 端口，
+  由 `main.cc` 在 `init()` 之前注入具体实现；`init()` 会立刻调 `sink->init()` 建表并
+  拉起后台 flush 线程，故注入顺序是硬约束而非风格问题。
+- `tools/arch/check_startup_wiring.py` 新增第 6 条 `REQUIRED` 规则
+  `metrics::ErrorStatsService.setSink`，覆盖「漏注入」与「注入晚于 init」两个分支，
+  两条变异探针均实测 rc=4，回滚后 rc=0。
+- 规则表由三元组升为四元组，新增 `impact` 字段承载每条接线各自的漏接后果，
+  FAIL 文案改为按规则打印。
+- 门禁：全量 283 用例 PASS（10.18s），`check_startup_wiring.py` 7 条规则 rc=0，
+  `check_test_registration.py` rc=0。
+- **自我纠错（一）**：原 FAIL 文案对所有规则硬编码「退化为 Null 实现」。该描述对
+  `ErrorStatsService` 不成立——其 `init()` 内有 `if (!dbManager_)` 回退分支，漏注入的
+  真实后果是静默绕开端口、回落到具体单例，既不崩溃也不是 Null。错误文案不影响
+  退出码，但会把排障者引向错误方向，故做四元组改造。
+- **自我纠错（二）**：首次写 `main.cc` 注入语句时假定 `ErrorStatsDbManager` 在全局
+  命名空间，实际位于 `namespace metrics`，编译失败
+  （`error: ‘ErrorStatsDbManager’ has not been declared`）。`ErrorStatsService.cpp`
+  内可裸写是因该文件本身处于 `metrics` 命名空间。已限定为
+  `metrics::ErrorStatsDbManager::getInstance()`。此错佐证：未跑编译就报「已接线」，
+  交付的会是编不过的 composition root。
+
+---
+
+## P4-W1 收口 · 有界 executor 与四态队列（2026-08-09）
+
+- `BackgroundTaskQueue` 的三个 bool 状态位合并为单一四态 `State`（Fresh / Running / Draining / Stopped，单向无回边），非法组合不可构造。
+- 新增 `kDefaultCapacity = 1024` 背压上限与 `QueueFull`；Draining 拒绝递归入队；`waitUntilIdle(deadline)` 以 `tasks_.empty() && running_ == 0` 为判据提供 drain 完成信号。
+- `enqueue` 改返 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处回 503（仅瞬时背压 QueueFull 带 `Retry-After`，终态不带，避免把客户端引回正在消失的实例），infrastructure 10 处写穿失败打 ERROR 保证可观测，composition root 2 处显式 `start()`。
+- `enqueueLegacy` 兼容 shim 删除（生产命中 0），`enqueue` 内隐式自动 spawn 移除：否则「忘记 start()」会被静默兜住，直到停机窗口才以丢任务的形式暴露。
+- 新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step，第 8 个脚本）：除 `[[nodiscard]]` 存在性外，还要求绑定变量在同一函数体内被读取，堆断 `const auto ignored = ...enqueue(...)` 这条退路；两条自检探针均断言 rc=4。
+- 门禁：282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，ASan+UBSan 零报告，10 个门禁 step rc=0，P1-W5 停机 harness 无回归，legacy ceiling 仍为 39。
+- **自我纠错**：文档批量改写脚本曾以 `w` 模式打开后才编码失败，将 `migration-plan.md` 截断为 0 字节；已从 HEAD 恢复，仅丢失一句未提交文字。改正：先在内存完成 encode，再写临时文件并 `os.replace` 原子替换。
+- **作废记录**：曾将 `tools/arch/README.md` 标题写作「共八道」、小节编为「门禁 7」，与实际（CI 10 个 step / 8 个脚本）不符，已改为按 step 序号编号并补全退出码表。
+
+---
+
 ## P3-W4 收口 · domain 模型与 JSON codec 分离（2026-08-09）
 
 - 七个 domain 模型/端口逐个迁出 JSON 职责：ProviderResult、AccountData、ChannelInfo、

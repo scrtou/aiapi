@@ -1,5 +1,5 @@
 #include <dbManager/metrics/ErrorStatsDbManager.h>
-#include <dbManager/metrics/ErrorEventJsonCodec.h>
+#include <dbManager/metrics/ErrorEventJsonEncoder.h>
 #include <algorithm>
 #include <sstream>
 
@@ -233,7 +233,7 @@ bool ErrorStatsDbManager::insertEvents(const std::vector<ErrorEvent>& events) {
             char tsBuf[32];
             std::strftime(tsBuf, sizeof(tsBuf), "%Y-%m-%d %H:%M:%S", std::gmtime(&tt));
             const std::string detailStr =
-                erroreventcodec::compactJson(erroreventcodec::detailsToJson(ev.details));
+                dbmanager::erroreventcodec::compactJson(dbmanager::erroreventcodec::detailsToJson(ev.details));
             trans->execSqlSync(
                 "INSERT INTO error_event (ts, severity, domain, type, provider, model, client_type, "
                 "api_kind, stream, http_status, request_id, response_id, tool_name, message, detail_json, raw_snippet) "

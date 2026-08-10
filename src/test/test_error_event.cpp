@@ -10,7 +10,8 @@
 
 #include <drogon/drogon_test.h>
 #include <domain/model/ErrorEvent.h>
-#include <dbManager/metrics/ErrorEventJsonCodec.h>
+#include <dbManager/metrics/ErrorEventJsonEncoder.h>
+#include <metrics/ErrorEventJsonDecoder.h>
 
 using namespace metrics;
 
@@ -76,7 +77,7 @@ DROGON_TEST(ErrorEvent_ToJson)
     event.details["timeout_ms"] = std::int64_t{30000};
     event.rawSnippet = "";
     
-    Json::Value json = erroreventcodec::toJson(event);
+    Json::Value json = dbmanager::erroreventcodec::toJson(event);
     
     CHECK(json["id"].asInt64() == 123);
     CHECK(json["severity"].asString() == "ERROR");
@@ -102,19 +103,19 @@ DROGON_TEST(ErrorEventJsonCodec_PreservesScalarDetailTypes)
     input["ratio"] = 1.5;
     input["enabled"] = true;
 
-    const auto details = erroreventcodec::detailsFromJson(input);
-    const Json::Value output = erroreventcodec::detailsToJson(details);
+    const auto details = metrics::erroreventcodec::detailsFromJson(input);
+    const Json::Value output = dbmanager::erroreventcodec::detailsToJson(details);
     CHECK(output == input);
 }
 
 DROGON_TEST(ErrorEventJsonCodec_DefaultsAndMakesNestedValuesExplicitStrings)
 {
-    CHECK(erroreventcodec::detailsFromJson(Json::Value(Json::nullValue)).empty());
+    CHECK(metrics::erroreventcodec::detailsFromJson(Json::Value(Json::nullValue)).empty());
 
     Json::Value input(Json::objectValue);
     input["future"]["nested"] = true;
-    const auto details = erroreventcodec::detailsFromJson(input);
-    const Json::Value output = erroreventcodec::detailsToJson(details);
+    const auto details = metrics::erroreventcodec::detailsFromJson(input);
+    const Json::Value output = dbmanager::erroreventcodec::detailsToJson(details);
     CHECK(output["future"].isString());
     CHECK(output["future"].asString() == "{\"nested\":true}");
 }
