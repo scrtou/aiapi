@@ -101,12 +101,25 @@ StartupResult stepInjectStores()
     return StartupResult::ok();
 }
 
-StartupResult stepErrorStats()
+// G7 第一处收口：init() 内部会拉起 workerThread_，所以本步骤必须自登记 owner。
+// 此前它没有登记——停机完全依赖 ~ErrorStatsService() 里的兜底 shutdown()，
+// 而单例析构发生在 main 返回之后的静态析构阶段，此时 ErrorStatsDbManager
+// 与 drogon 的 DB 客户端可能已先被销毁，shutdown() 尾部的 flushEvents()/
+// flushRequestAgg() 就变成对已析构对象的调用；且那一刻已在 deadline 之外，
+// 停机日志也不会提到它。登记为 owner 后，join 与最后一次 flush 都被拉回
+// shutdown(deadline) 的确定性时序内。
+StartupResult stepErrorStats(AppContext& ctx)
 {
     metrics::ErrorStatsService::getInstance().setSink(
         metrics::ErrorStatsDbManager::getInstance());
     metrics::ErrorStatsConfig statsConfig;
     metrics::ErrorStatsService::getInstance().init(statsConfig);
+    // 只在真起了线程时登记：配置禁用时 init() 直接返回，没有可停的东西，
+    // 登记一个实际空转的 stop 只会让停机日志谎报「已停错误统计服务」。
+    if (statsConfig.enabled) {
+        ctx.addOwner("error stats service",
+                     [] { metrics::ErrorStatsService::getInstance().shutdown(); });
+    }
     return StartupResult::ok();
 }
 
@@ -244,7 +257,7 @@ void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig)
         ctx.addOwner("account workers", [] { AccountManager::getInstance().stopBackgroundThreads(); });
         return StartupResult::ok();
     });
-    ctx.addStep("error stats",           [] { return stepErrorStats(); });
+    ctx.addStep("error stats",           [&ctx] { return stepErrorStats(ctx); });
     ctx.addStep("session persistence",   [] { return stepSessionPersistence(); });
     ctx.addStep("chayns thread ledger",  [&customConfig, &ctx] { return stepchaynsThreadLedger(customConfig, ctx); });
     ctx.addStep("session tuning",        [&customConfig] { return stepSessionTuning(customConfig); });

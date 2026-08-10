@@ -21,6 +21,14 @@ AppContext + AppWiring。搬完之后，四条关键性质全部只由「代码�
       不能是裸时长。G5 的整个修法建立在「绝对 deadline 可跨 owner 累减」上，
       改回相对时长不会有任何编译错误，但宽限期会被逐段突破。
 
+  A5  每个「会拉起后台线程的单例」都必须在 AppWiring 里登记为 owner。
+      G7 的实质不是「有单例」，而是「单例的线程靠静态析构收尾」。静态析构在
+      main 返回之后发生，此时它依赖的 DbManager / drogon DB 客户端可能已先被
+      销毁，析构里的兜底 shutdown() 于是变成对已析构对象的调用；而且那一刻
+      早已在 shutdown(deadline) 的宽限期之外，停机日志对此只字不提。
+      ErrorStatsService 就是这样漏掉的：init() 起了 workerThread_，却没有任何
+      addOwner，全靠 ~ErrorStatsService() 兜底——编译、单测、既有四条判据全绿。
+
   A4  main.cc 不得再直接注入单例 Store（setStore / setSink / setDbProbe 等）。
       接线的唯一真相是 AppWiring；main.cc 里出现第二处注入，
       check_startup_wiring.py 反而会因为「在候选文件里找到了」而通过，
@@ -42,6 +50,20 @@ FAIL = 4
 
 # main.cc 里禁止出现的注入形状。与 check_startup_wiring.py 的 REQUIRED 表
 # 互补：那张表管「AppWiring 里必须有」，这张管「main.cc 里必须没有」。
+# A5 的登记册：值是「该 owner 的 stop 闭包里必须出现的调用形状」。
+#
+# 为什么是白名单而不是自动发现：正则级脚本无法判定 `std::thread` 成员是否
+# 真的会被 start，自动发现只会制造噪音。这张表是**人工审过一次**的结论，
+# 新增持线程单例时必须手工进表——进表这个动作本身就是 review 的钩子。
+# 表若与代码脱节，A5 会失败而不是静默放行（见 check_thread_owners_registered）。
+THREAD_OWNING_SINGLETONS = [
+    ('BackgroundTaskQueue', r'BackgroundTaskQueue::instance\(\)\s*\.\s*shutdown\s*\('),
+    ('AccountManager',      r'AccountManager::getInstance\(\)\s*\.\s*stopBackgroundThreads\s*\('),
+    ('chaynsThreadReaper',  r'chaynsThreadReaper::getInstance\(\)\s*\.\s*stop\s*\('),
+    ('chatSession',         r'chatSession::getInstance\(\)\s*->\s*stopClearExpiredSession\s*\('),
+    ('ErrorStatsService',   r'ErrorStatsService::getInstance\(\)\s*\.\s*shutdown\s*\('),
+]
+
 FORBIDDEN_IN_MAIN = [
     (r'\.\s*setStore\s*\(',            'setStore'),
     (r'\.\s*setChannelStore\s*\(',     'setChannelStore'),
@@ -154,6 +176,26 @@ def check_main_has_no_injection(src, problems):
                                 % (MAIN, i, name, WIRING))
 
 
+def check_thread_owners_registered(src, problems):
+    """A5：登记册里的每个持线程单例，都要能在 AppWiring 中找到对应的 stop 调用。
+
+    只认「出现在某个 addOwner 之后的同一区段内」过于脆弱（闭包可跨行、可提取成
+    具名函数），故判据放宽为：该 stop 形状必须在 AppWiring.cpp 中出现，且文件里
+    addOwner 的总数不少于登记册条目数。前者防漏登，后者防「把 stop 写在别处
+    （例如某个步骤体里直接调用）却没真正交给 AppContext 编排」。
+    """
+    for name, pattern in THREAD_OWNING_SINGLETONS:
+        if not re.search(pattern, src):
+            problems.append('A5 %s 的停机调用在 %s 中找不到：'
+                            '它的后台线程将退回由静态析构收尾（G7 复发）'
+                            % (name, WIRING))
+    owner_count = len(re.findall(r'\.\s*addOwner\s*\(', src))
+    if owner_count < len(THREAD_OWNING_SINGLETONS):
+        problems.append('A5 %s 中 addOwner 仅 %d 处，少于登记册的 %d 个持线程单例：'
+                        '至少有一个的 stop 没有交给 AppContext 编排'
+                        % (WIRING, owner_count, len(THREAD_OWNING_SINGLETONS)))
+
+
 def main():
     problems = []
     try:
@@ -170,6 +212,7 @@ def main():
     check_owner_inside_step(wiring_src, problems)
     check_absolute_deadline(main_src, problems)
     check_main_has_no_injection(main_src, problems)
+    check_thread_owners_registered(wiring_src, problems)
 
     if problems:
         print('composition root 结构检查未通过：')
@@ -181,6 +224,7 @@ def main():
     print('OK A2 全部 addOwner 均位于步骤内部')
     print('OK A3 shutdown() 使用绝对 deadline')
     print('OK A4 main.cc 未直接注入任何 Store')
+    print('OK A5 %d 个持线程单例均已登记为 owner' % len(THREAD_OWNING_SINGLETONS))
     return 0
 
 
