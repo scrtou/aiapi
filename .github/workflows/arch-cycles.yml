@@ -146,6 +146,24 @@ jobs:
             fi
           }
 
+          # 探针有效性前置断言：探针必须真的改动了目标文件。
+          # 门禁 rc=0 有两种成因，修复方向相反，expect_rc 的报错无法区分：
+          #   (a) 门禁坏了 —— 该报的没报；
+          #   (b) 探针失效 —— 匹配模式已与源码脱节，压根没造出缺陷。
+          # D-5 踩的是 (b)：addOwner 实参换行书写，probe J3 的正则失配，
+          # 表现却是「expect_rc 4 失败」，看起来像门禁坏了。
+          # 这里把 (b) 摘出来单独报，把误诊成本一次性消掉。
+          assert_mutated() {
+            local label="$1" bak="$2" path="$3"
+            if cmp -s "$bak" "$path"; then
+              echo "::error::$label 失效：$path 未被改动，探针没能造出缺陷"
+              echo "    这不是门禁失败。通常是实参换行/重命名导致匹配模式脱节，请同步更新该探针。"
+              fail=1
+              return 1
+            fi
+            return 0
+          }
+
           # 无论本步如何退出（正常、探针断言失败、内联脚本崩溃、被中断），
           # 都必须把探针改写过的源文件还原。CI 上容器即弃看似无所谓，
           # 但同一段脚本也会被人在本地跑，崩在半路会留下被改坏的工作区。
@@ -184,7 +202,8 @@ jobs:
           cp src/retoolWorkspace/RetoolWorkspaceManager.cpp "$PROBE_TMP"/probe_a.bak
           sed -i '2i #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>' \
             src/retoolWorkspace/RetoolWorkspaceManager.cpp
-          expect_rc 4 python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
+          assert_mutated probe_a "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp && \
+            expect_rc 4 python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
           cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
 
           echo '--- probe B: domain/ gains an outgoing edge -> expect rc=3 ---'
@@ -239,7 +258,8 @@ jobs:
           lines.insert(init_idx + 1, set_line)
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_D
-          expect_rc 4 python3 tools/arch/check_startup_wiring.py
+          assert_mutated probe_d "$PROBE_TMP"/probe_d.bak src/runtime/AppWiring.cpp && \
+            expect_rc 4 python3 tools/arch/check_startup_wiring.py
           cp "$PROBE_TMP"/probe_d.bak src/runtime/AppWiring.cpp
 
           echo '--- probe E: unregistered test -> expect rc=4 (both modes) ---'
@@ -276,7 +296,8 @@ jobs:
           echo '--- probe H: transport links infrastructure -> expect rc=1 ---'
           cp src/CMakeLists.txt "$PROBE_TMP"/probe_target_cmake.bak
           sed -i '/target_link_libraries(aiapi_transport PUBLIC/a\    aiapi_infrastructure' src/CMakeLists.txt
-          expect_rc 1 python3 tools/arch/check_target_layers.py
+          assert_mutated probe_target_cmake "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt && \
+            expect_rc 1 python3 tools/arch/check_target_layers.py
           cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
 
           echo '--- probe I1: enqueue loses [[nodiscard]] -> expect rc=4 ---'
@@ -284,7 +305,8 @@ jobs:
           cp src/utils/BackgroundTaskQueue.h "$PROBE_TMP"/probe_i.bak
           sed -i 's/\[\[nodiscard\]\] EnqueueResult enqueue(/EnqueueResult enqueue(/' \
             src/utils/BackgroundTaskQueue.h
-          expect_rc 4 python3 tools/arch/check_enqueue_result.py
+          assert_mutated probe_i "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h && \
+            expect_rc 4 python3 tools/arch/check_enqueue_result.py
           cp "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h
 
           echo '--- probe I2: result bound but never read -> expect rc=4 ---'
@@ -305,7 +327,8 @@ jobs:
                               'const auto ignoredProbe =', lines[idx])
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_I2
-          expect_rc 4 python3 tools/arch/check_enqueue_result.py
+          assert_mutated probe_i2 "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc && \
+            expect_rc 4 python3 tools/arch/check_enqueue_result.py
           cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
 
           echo '--- probe J1: build() result discarded -> expect rc=4 ---'
@@ -327,7 +350,8 @@ jobs:
                               r'\1appContext.build();', lines[idx])
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_J1
-          expect_rc 4 python3 tools/arch/check_app_context.py
+          assert_mutated probe_j1 "$PROBE_TMP"/probe_j1.bak src/main.cc && \
+            expect_rc 4 python3 tools/arch/check_app_context.py
           cp "$PROBE_TMP"/probe_j1.bak src/main.cc
 
           echo '--- probe J2: addOwner escapes its step -> expect rc=4 ---'
@@ -348,7 +372,8 @@ jobs:
           lines.insert(fs + 2, '    ctx.addOwner("__selftest_probe_owner", []{});\n')
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_J2
-          expect_rc 4 python3 tools/arch/check_app_context.py
+          assert_mutated probe_j2 "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp && \
+            expect_rc 4 python3 tools/arch/check_app_context.py
           cp "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp
 
           echo '--- probe J3: thread-owning singleton loses its addOwner -> expect rc=4 ---'
@@ -373,7 +398,8 @@ jobs:
               raise SystemExit(1)
           io.open(p, 'w', encoding='utf-8', newline='').write(pat.sub('', src, count=1))
           PROBE_J3
-          expect_rc 4 python3 tools/arch/check_app_context.py
+          assert_mutated probe_j3 "$PROBE_TMP"/probe_j3.bak src/runtime/AppWiring.cpp && \
+            expect_rc 4 python3 tools/arch/check_app_context.py
           cp "$PROBE_TMP"/probe_j3.bak src/runtime/AppWiring.cpp
 
           echo '--- restore check: before/after snapshot ---'
