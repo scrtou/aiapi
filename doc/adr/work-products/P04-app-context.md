@@ -1,6 +1,7 @@
 # P04-W2 · AppContext / Builder / runtime lifecycle
 
-> 状态：DOING（C1 刻画基线已完成，C2 起为改动步骤）
+> 状态：DOING（C1~C7 已完成，C8 收口中）
+> 最近更新：2026-08-10 —— C7 门禁落地，并顺带修复了 gate selftest 中因本步迁移而失效的 probe C/D。
 > 计划锚点：`migration-plan.md` 4.1 AppContext 骨架 / 4.4 生命周期迁移
 > 退出门禁（本工作项）：启动失败回滚、显式 ownership
 
@@ -109,10 +110,47 @@ config → AppContext::build(config) → 失败即 return 1（真实生效）
 | 步 | 内容 | 验收 |
 |----|------|------|
 | C1 | 本文档：启动 27 步 + 停机 4 步基线，8 个缺口定名 | ✅ 已完成 |
-| C2 | `StartupResult` / 原因码 + `toString` | 单测覆盖每个原因码 |
-| C3 | `AppContext` 骨架进 `aiapi_runtime`，`src/runtime/` 建立 | target 编译通过，层级门禁 rc=0 |
-| C4 | init 闭包整体迁入 `build()`，顺序逐行保持 | `check_startup_wiring.py` 仍 rc=0 |
-| C5 | 失败逆序 teardown；G1/G8 显式化 | 「第 N 步失败 → 前 N-1 步已 stop」单测 |
-| C6 | shutdown 绝对 deadline + 幂等 | 二次调用 no-op 单测；harness 无回归 |
-| C7 | `tools/arch/check_app_context.py`（第 11 个门禁 step） | 变异探针 rc≠0 |
-| C8 | 全量三构建 + 全门禁 + 文档收口 | 全部 PASS / rc=0 |
+| C2 | `StartupResult` / 原因码 + `toString` | ✅ 单测覆盖每个原因码 |
+| C3 | `AppContext` 骨架进 `aiapi_runtime`，`src/runtime/` 建立 | ✅ 三构建通过，`check_target_layers.py` rc=0 |
+| C4 | init 闭包整体迁入 `build()`，顺序逐行保持 | ✅ rc=0，但**判据本身被迫同步改造**，见下方偏离 D-1 |
+| C5 | 失败逆序 teardown；G1/G8 显式化 | ✅ 逆序 teardown 单测通过；G8 两处保留为显式 `Degraded` |
+| C6 | shutdown 绝对 deadline + 幂等 | ✅ 二次调用 no-op 单测通过；见偏离 D-2 |
+| C7 | `tools/arch/check_app_context.py`（第 11 个门禁 step） | ✅ A1~A4 四条判据；probe J1/J2 实测 rc=4 |
+| C8 | 全量三构建 + 全门禁 + 文档收口 | 🔄 gate selftest 13 探针全绿；三构建回归待跑 |
+
+---
+
+## 6. 与计划的偏离（实施中产生，需留痕）
+
+### D-1 · `check_startup_wiring.py` 判据被迫改造（影响 C4 验收的成立条件）
+
+C4 的验收写的是「`check_startup_wiring.py` 仍 rc=0」。实施后它确实 rc=0，
+**但这个 0 一度不成立**：该脚本原本硬编码 `src/main.cc`，接线迁到 `AppWiring.cpp` 之后，
+它在 `main.cc` 里一条规则都找不到，走的是「无事可查」的分支，照样返回 0。
+也就是说，如果照字面签收 C4，签下的会是一个已经瞎掉的门禁。
+
+处置：脚本改为在 `WIRING_SOURCES = ['src/runtime/AppWiring.cpp', 'src/main.cc']`
+中按序取第一个存在的文件，并要求注入与 `init()` 落在同一文件内以便比较行号；
+候选清单里一个都不存在时直接判失败，而不是静默通过。
+
+> 教训：**「门禁 rc=0」不等于「门禁在看着它该看的东西」。**
+> 凡是把被检查对象搬家的步骤，都必须同时回答「门禁现在指向哪儿」。
+
+### D-2 · `ApplicationShutdown.*` 未按目标形态保留为独立文件
+
+第 4 节把 `ApplicationShutdown.*` 列为 `src/runtime/` 下的独立单元。实际实施中，
+owner 列表与幂等标志已经是 `AppContext` 的成员，独立文件只剩一个转发函数，
+G6（非幂等）在 `AppContext::shutdown()` 里就地解决更直接。故删除该文件，
+职责并入 `AppContext`；新增的 `AppWiring.cpp` 承接原 `main.cc` 的接线段。
+目标形态一节保留原样不改，以便对照——这里记录差异本身。
+
+### D-3 · gate selftest 的 probe C/D 随本步一起失效（本轮修复）
+
+probe C/D 是门禁 5 的自检探针，靠「破坏 `src/main.cc` 再断言 rc=4」工作。
+本步把接线搬走后，它们删除的是一个已不在 `main.cc` 的字符串——文件没变，
+门禁返回 0，`expect_rc 4` 失败。这是 selftest 第一次抓到「探针自身过期」，
+也印证了它的价值：**没有 selftest，这两个探针会静默变成永远通过的摆设。**
+
+处置：两个探针改钉 `src/runtime/AppWiring.cpp`；probe C 另加空改判定
+（grep 后文件若与原文件逐字节相同则直接 FAIL 并提示同步更新），
+避免将来再次退化成「什么都没破坏」的探针。

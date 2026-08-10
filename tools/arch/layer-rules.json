@@ -2,23 +2,131 @@
   "_comment": "v3 当前模块出边棘轮。它冻结现状、防止新增方向，不表示所有允许边都是目标架构；迁移完成一条边后立即收紧。",
   "modules": {
     "<root>": {
-      "allow_out": ["accountManager", "apiManager", "apipoint", "channelManager", "controllers", "dbManager", "metrics", "retoolWorkspace", "sessionManager", "utils"],
-      "role": "composition root; may know concrete modules"
+      "allow_out": [
+        "accountManager",
+        "apiManager",
+        "apipoint",
+        "channelManager",
+        "controllers",
+        "dbManager",
+        "metrics",
+        "retoolWorkspace",
+        "runtime",
+        "sessionManager",
+        "utils"
+      ],
+      "role": "entry point。C8 后仅剩 config 装配 + AppContext 调用；组装特权已下沉到 runtime/。allow_out 为实测出边，随 main.cc 瘦身逐步收紧"
     },
-    "domain": {"allow_out": []},
-    "utils": {"allow_out": []},
-    "tools": {"allow_out": []},
-    "models": {"allow_out": []},
-    "apiManager": {"allow_out": ["domain"]},
-    "channelManager": {"allow_out": ["domain"]},
-    "dbManager": {"allow_out": ["domain", "utils"]},
-    "retoolWorkspace": {"allow_out": ["domain", "utils"]},
-    "metrics": {"allow_out": ["dbManager", "domain"]},
-    "managedAccount": {"allow_out": ["accountManager", "retoolWorkspace"]},
-    "accountManager": {"allow_out": ["apiManager", "channelManager", "dbManager", "domain", "retoolWorkspace", "utils"]},
-    "apipoint": {"allow_out": ["accountManager", "apiManager", "channelManager", "dbManager", "domain", "managedAccount", "retoolWorkspace", "sessionManager", "utils"]},
-    "controllers": {"allow_out": ["accountManager", "apiManager", "apipoint", "channelManager", "dbManager", "domain", "managedAccount", "retoolWorkspace", "sessionManager", "utils"]},
-    "sessionManager": {"allow_out": ["accountManager", "apiManager", "channelManager", "dbManager", "domain", "metrics", "tools"]}
+    "domain": {
+      "allow_out": []
+    },
+    "utils": {
+      "allow_out": []
+    },
+    "tools": {
+      "allow_out": []
+    },
+    "models": {
+      "allow_out": []
+    },
+    "apiManager": {
+      "allow_out": [
+        "domain"
+      ]
+    },
+    "channelManager": {
+      "allow_out": [
+        "domain"
+      ]
+    },
+    "dbManager": {
+      "allow_out": [
+        "domain",
+        "utils"
+      ]
+    },
+    "retoolWorkspace": {
+      "allow_out": [
+        "domain",
+        "utils"
+      ]
+    },
+    "metrics": {
+      "allow_out": [
+        "dbManager",
+        "domain"
+      ]
+    },
+    "managedAccount": {
+      "allow_out": [
+        "accountManager",
+        "retoolWorkspace"
+      ]
+    },
+    "accountManager": {
+      "allow_out": [
+        "apiManager",
+        "channelManager",
+        "dbManager",
+        "domain",
+        "retoolWorkspace",
+        "utils"
+      ]
+    },
+    "apipoint": {
+      "allow_out": [
+        "accountManager",
+        "apiManager",
+        "channelManager",
+        "dbManager",
+        "domain",
+        "managedAccount",
+        "retoolWorkspace",
+        "sessionManager",
+        "utils"
+      ]
+    },
+    "controllers": {
+      "allow_out": [
+        "accountManager",
+        "apiManager",
+        "apipoint",
+        "channelManager",
+        "dbManager",
+        "domain",
+        "managedAccount",
+        "retoolWorkspace",
+        "sessionManager",
+        "utils"
+      ]
+    },
+    "sessionManager": {
+      "allow_out": [
+        "accountManager",
+        "apiManager",
+        "channelManager",
+        "dbManager",
+        "domain",
+        "metrics",
+        "tools"
+      ]
+    },
+    "runtime": {
+      "allow_out": [
+        "accountManager",
+        "apiManager",
+        "apipoint",
+        "channelManager",
+        "controllers",
+        "dbManager",
+        "metrics",
+        "retoolWorkspace",
+        "runtime",
+        "sessionManager",
+        "utils"
+      ],
+      "role": "composition root; may know concrete modules（原 main.cc 的特权已迁移至此）"
+    }
   },
   "_target": "最终由 platform/domain/application/infrastructure/transport target 规则替代；当前业务模块白名单只能收紧。"
 }

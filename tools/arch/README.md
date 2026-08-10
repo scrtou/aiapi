@@ -1,4 +1,4 @@
-# tools/arch —— 架构门禁（C4 / R4，8 个脚本 / CI 共 10 个 step）
+# tools/arch —— 架构门禁（C4 / R4，9 个脚本 / CI 中 11 个门禁调用，workflow 共 14 个 step）
 
 ## 为什么需要它
 
@@ -37,6 +37,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或 legacy 棘轮回升 |
 | 4 | check_test_registration | 测试文件未在 CMake 注册 |
 | 4 | check_enqueue_result | `enqueue()` 丢属性，或调用点绑定后不读结果 |
+| 4 | check_app_context | 组装根形状被破坏：build() 结果被丢弃、addOwner 逃出步骤、shutdown 收相对时长、main.cc 直接注入 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -104,7 +105,8 @@ python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.js
 python3 tools/arch/check_startup_wiring.py
 ```
 
-校验 `src/main.cc` 中每条已登记的组合根接线：注入**存在**，且**早于** `init()`。
+校验**组装根**中每条已登记的接线：注入**存在**，且**早于** `init()`。
+组装根候选由脚本内 `WIRING_SOURCES` 列出，当前为 `src/runtime/AppWiring.cpp`、`src/main.cc`，按序取第一个存在的文件。P4-W2 把接线从 `main.cc` 搬进 `AppWiring.cpp` 后，原先钉死 `src/main.cc` 的判据会在**新文件里一条规则都找不到**却仍返回 0（假绿），故改为多候选 + 同文件内比较行号。
 规则表 `REQUIRED` 为四元组 `(类, setter, 说明, 漏接后果)`，FAIL 时打印该条各自的后果；
 另有 `REQUIRED_STATIC` 只校验存在性（无对应 `init()` 时序）。截至 2026-08-10 共 7 条：
 `ChannelManager.setStore`、`RetoolWorkspaceManager.setStore`、`AccountManager.setStore`、
@@ -126,13 +128,19 @@ python3 tools/arch/check_startup_wiring.py
 `ErrorStatsDbManager` 具体单例，倒置在运行期等于没做。早期版本对所有规则统一打印
 「退化为 Null 实现」，退出码正确但描述失真，会把排障者引向错误方向，现已按规则分列。
 
-**已知局限**：判据是正则文本匹配，只认 `X::getInstance().setStore(` 这一种写法。
+**已知局限**：判据是正则文本匹配，只认 `X::getInstance().setStore(` 这一种写法，且注入与 `init()` 必须落在**同一个**组装根文件里（跨文件顺序无法比较行号）。
 若注入被包进辅助函数（如 `wireDependencies()`），检查会**误报 FAIL**。
-当前两个 Manager 写法一致，尚可接受；写法一旦分化就必须改判据。
+当前各 Manager 写法一致，尚可接受；写法一旦分化就必须改判据。
 
 **自检探针**：workflow 的 gate selftest 中，probe C 删除注入断言 rc=4，
 probe D 把注入移到 `init()` 之后断言 rc=4。缺 probe D 的话，
 「只搜字符串不看顺序」的退化改法会全绿通过。
+
+> **探针必须随组装根一起迁移。** P4-W2 迁移后 probe C/D 一度仍在改 `src/main.cc`——
+> 它们删的是一个已不在那儿的东西，门禁自然 rc=0，`expect_rc 4` 随即失败。
+> 这次是 selftest 自己把这处失效抓了出来（也正是它存在的理由）；
+> 两个探针已改钉 `src/runtime/AppWiring.cpp`，probe C 另加了「没删掉任何行就直接 FAIL」
+> 的空改判定，避免将来再次静默变成一个什么都没破坏的探针。
 
 ## 门禁 10：入队结果处理（check_enqueue_result，退出码 4）
 
@@ -165,3 +173,34 @@ python3 tools/arch/check_enqueue_result.py
 - probe A：删除 `[[nodiscard]]` → FAIL，指向头文件；
 - probe B：把调用点改成绑定后从不读取 → FAIL，指向 `ChannelController.cc:87`。
   缺 probe B 的话，「只检查头文件属性」的退化改法会全绿通过。
+
+## 门禁 11：组装根形状（check_app_context，退出码 4）
+
+```bash
+python3 tools/arch/check_app_context.py
+```
+
+P4-W2 把启动流程从 `main.cc` 的双层 lambda 搬进 `AppContext` + `AppWiring` 之后，
+有四条性质完全靠「代码现在恰好长这样」维持，编译器与单测都抓不住。这道门禁把它们钉死。
+
+**四条判据**（任一不满足即 rc=4）：
+
+| 判据 | 内容 | 退化后果 |
+|---|---|---|
+| A1 | `main.cc` 中 `build()` 的返回值必须被接住并据以决定退出 | 写成裸调用或 `(void)` 强转即复发 G1：建表失败被吞，进程带着未建表的 Store 继续 `run()` |
+| A2 | 每个 `addOwner` 必须位于某个步骤的 lambda 内部 | 逃到 `registerApplicationSteps` 顶层后，`build()` 中途失败会去 `stop` 一个从未 `start` 的 owner |
+| A3 | `shutdown()` 只接受绝对 deadline（`steady_clock::time_point`） | 改回相对时长不会有编译错误，但跨 owner 逐段累加会突破 SIGTERM 宽限期，即 G5 复发 |
+| A4 | `main.cc` 不得再出现直接的 Store 注入 | 接线出现第二处真相后，门禁 5 反而会因「在候选文件里搜到了」而通过 —— 两道门禁一起变瞎 |
+
+**为什么前十道都看不见**：这类退化不成环、不跨层、不改 CMake、不加测试文件，
+注入语句也确实还在（只是搬错了地方或丢了返回值），十道全绿。
+A4 尤其要紧：它守的是**门禁 5 的前提**，即「组装根只有一处」。
+
+**自检探针**（本轮实测，两条都断言 rc=4）：
+- probe J1：把接住 `build()` 返回值的那行改成裸调用 → FAIL；
+- probe J2：在 `registerApplicationSteps` 顶层插一条 `addOwner` → FAIL。
+  缺 J2 的话，「只看 main.cc 调用形状」的判据会对 owner 逃逸完全无感。
+
+**已知局限**：与门禁 5 同源 —— 文本 + 结构近似，不做语义分析。
+`AppWiring.cpp` 若改名或 `registerApplicationSteps` 若重命名，
+必须同步更新脚本与两个探针；脚本在找不到锚点时会显式报错而非静默通过。

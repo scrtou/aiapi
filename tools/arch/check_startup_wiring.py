@@ -1,17 +1,46 @@
 #!/usr/bin/env python3
 """启动接线检查（退出码 4）。
 
-动因：R4 依赖倒置后，Manager 不再自取具体实现，改由 main.cc 注入。
+动因：R4 依赖倒置后，Manager 不再自取具体实现，改由 composition root 注入。
 注入语句一旦漏写，编译与单元测试全部照常通过（曾真实发生），
 但运行期会退化到 Null 实现，静默丢失建表与默认数据。
-单元测试无法覆盖此处——它们自己注入 Fake，不经过 main.cc。
-故用静态检查守住：每个已倒置的 Manager 必须在 main.cc 中
+单元测试无法覆盖此处——它们自己注入 Fake，不经过组装根。
+故用静态检查守住：每个已倒置的 Manager 必须在组装根中
 出现对应的注入调用，且行号早于其 init。
+
+P04-W2 之后：组装根不再是单个 src/main.cc。初始化流程搬进了
+src/runtime/AppWiring.cpp（注册为 AppContext 的步骤序列），main.cc
+只保留 config -> build -> run -> shutdown 的编排。
+
+本脚本因此改为在 WIRING_SOURCES 列出的**若干**组装文件中查找，而不是
+硬编码单一路径。这不是为了「更灵活」——恰恰相反，是为了让门禁在接线
+搬家时**不会静默变成永真或永假**：
+
+  - 搬家前的写法（# 组装根候选文件。顺序即查找优先级；同一条接线只要在其中一个文件里
+# 满足「注入早于 init」即判通过。
+WIRING_SOURCES = [
+    'src/runtime/AppWiring.cpp',
+    'src/main.cc',
+]）在接线迁出后全部 FAIL，
+    是刺眼的假警报，会诱使后来者直接删掉这道门禁；
+  - 而若改成「在全仓任意文件里找得到就算数」，则单测里的 Fake 注入
+    也会命中，门禁反过来变成永真，比没有更危险。
+
+折中是：候选文件写死成一份短清单，且清单里**一个都不存在**时直接判失败
+（见 main() 的前置检查）——路径写错不会伪装成通过。
+
+顺序判据仍是「注入早于 init」，但比较必须发生在**同一文件内**：
+跨文件比行号没有意义，两个文件的第 90 行之间不存在先后关系。
 """
 import re
 import sys
 
-MAIN = 'src/main.cc'
+# 组装根候选文件。顺序即查找优先级；同一条接线只要在其中一个文件里
+# 满足「注入早于 init」即判通过。
+WIRING_SOURCES = [
+    'src/runtime/AppWiring.cpp',
+    'src/main.cc',
+]
 
 # (类名, 说明)：完成依赖倒置、要求 main.cc 注入的 Manager
 # (类名, 注入方法名, 说明)：完成依赖倒置、要求 main.cc 注入的接线。
@@ -44,6 +73,18 @@ REQUIRED_STATIC = [
 ]
 
 
+def load_sources():
+    """读取候选组装文件，返回 [(path, lines)]；不存在的路径跳过。"""
+    out = []
+    for path in WIRING_SOURCES:
+        try:
+            with open(path, encoding='utf-8') as f:
+                out.append((path, f.read().splitlines()))
+        except FileNotFoundError:
+            continue
+    return out
+
+
 def line_of(lines, pattern):
     for i, ln in enumerate(lines, 1):
         if re.search(pattern, ln):
@@ -51,36 +92,63 @@ def line_of(lines, pattern):
     return None
 
 
+def locate(sources, inject_pat, init_pat):
+    """在候选文件中定位一条接线。
+
+    返回 (path, inject_line, init_line)。init_pat 为 None 表示该接线无 init
+    概念（静态 setter）。找不到注入点时返回 (None, None, None)。
+
+    先命中先返回：若同一条接线在多个组装文件中都出现，以 WIRING_SOURCES
+    的顺序为准，因为那正是「哪个文件是当前的组装根」的声明。
+    """
+    for path, lines in sources:
+        inject_ln = line_of(lines, inject_pat)
+        if inject_ln is None:
+            continue
+        init_ln = line_of(lines, init_pat) if init_pat else None
+        return path, inject_ln, init_ln
+    return None, None, None
+
+
 def main():
-    with open(MAIN, encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    sources = load_sources()
+    if not sources:
+        print('FAIL 组装根候选文件一个都不存在：%s' % ', '.join(WIRING_SOURCES))
+        print('     门禁无法判定。若接线已再次搬家，请同步更新 WIRING_SOURCES。')
+        return 4
+
+    print('组装根候选：%s' % ', '.join(path for path, _ in sources))
 
     failed = False
     for cls, setter, note, impact in REQUIRED:
-        set_ln = line_of(lines, re.escape(cls) + r'::getInstance\(\)\.' + re.escape(setter) + r'\(')
-        init_ln = line_of(lines, re.escape(cls) + r'::getInstance\(\)\.init\(')
+        inject_pat = re.escape(cls) + r'::getInstance\(\)\s*\.\s*' + re.escape(setter) + r'\('
+        init_pat = re.escape(cls) + r'::getInstance\(\)\s*\.\s*init\('
+        path, set_ln, init_ln = locate(sources, inject_pat, init_pat)
+
         if set_ln is None:
-            print('FAIL %s.%s(%s): main.cc 缺少注入 -> %s' % (cls, setter, note, impact))
+            print('FAIL %s.%s(%s): 组装根缺少注入 -> %s' % (cls, setter, note, impact))
             failed = True
             continue
         if init_ln is None:
-            print('OK   %s.%s(%s): 已注入(第 %d 行)，未见 init 调用' % (cls, setter, note, set_ln))
+            print('OK   %s.%s(%s): 已注入(%s:%d)，未见 init 调用' % (cls, setter, note, path, set_ln))
             continue
         if set_ln >= init_ln:
-            print('FAIL %s.%s(%s): 注入在第 %d 行，晚于 init 的第 %d 行；'
+            print('FAIL %s.%s(%s): 注入在 %s:%d，晚于 init 的第 %d 行；'
                   'init 期间的行为 -> %s'
-                  % (cls, setter, note, set_ln, init_ln, impact))
+                  % (cls, setter, note, path, set_ln, init_ln, impact))
             failed = True
         else:
-            print('OK   %s.%s(%s): 注入(第 %d 行) 早于 init(第 %d 行)' % (cls, setter, note, set_ln, init_ln))
+            print('OK   %s.%s(%s): 注入(%s:%d) 早于 init(第 %d 行)'
+                  % (cls, setter, note, path, set_ln, init_ln))
 
     for cls, setter, note, impact in REQUIRED_STATIC:
-        set_ln = line_of(lines, re.escape(cls) + r'::' + re.escape(setter) + r'\(')
+        inject_pat = re.escape(cls) + r'::' + re.escape(setter) + r'\('
+        path, set_ln, _ = locate(sources, inject_pat, None)
         if set_ln is None:
-            print('FAIL %s::%s(%s): main.cc 缺少注入 -> %s' % (cls, setter, note, impact))
+            print('FAIL %s::%s(%s): 组装根缺少注入 -> %s' % (cls, setter, note, impact))
             failed = True
         else:
-            print('OK   %s::%s(%s): 已注入(第 %d 行)' % (cls, setter, note, set_ln))
+            print('OK   %s::%s(%s): 已注入(%s:%d)' % (cls, setter, note, path, set_ln))
 
     return 4 if failed else 0
 

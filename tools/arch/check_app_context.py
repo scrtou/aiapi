@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""composition root 结构检查（失败退出码 4）。
+
+动因（P04-W2 / C7）：P4-W2 把启动流程从 main.cc 的双层 lambda 搬进了
+AppContext + AppWiring。搬完之后，四条关键性质全部只由「代码现在长这样」
+维持，没有任何一条能被编译器或单测抓住：
+
+  A1  build() 的返回值必须被检查。
+      这正是 G1 的同构复发点：从前 `return 1` 被 std::function<void()> 吞掉，
+      现在若有人写成裸的 `appContext.build();`，进程会带着失败的 Store
+      继续 run()。头文件上的 [[nodiscard]] 只在开了对应告警且没被 -Wno- 关掉
+      时才有效，且 `(void)appContext.build()` 能合法绕过它。
+
+  A2  每个 addOwner 都必须落在某个已注册步骤内部，且与其启动动作同处一处。
+      AppContext 的回滚正确性依赖「owners_ 里的东西恰好是已经起来的东西」。
+      若有人把 addOwner 提到 registerApplicationSteps 的顶层（步骤之外），
+      该 owner 会在任何步骤执行前就进入列表，build() 中途失败时会去 stop()
+      一个从未 start() 的东西。
+
+  A3  shutdown 的实参必须是绝对时间点（steady_clock::now() + ...），
+      不能是裸时长。G5 的整个修法建立在「绝对 deadline 可跨 owner 累减」上，
+      改回相对时长不会有任何编译错误，但宽限期会被逐段突破。
+
+  A4  main.cc 不得再直接注入单例 Store（setStore / setSink / setDbProbe 等）。
+      接线的唯一真相是 AppWiring；main.cc 里出现第二处注入，
+      check_startup_wiring.py 反而会因为「在候选文件里找到了」而通过，
+      两道门禁一起变瞎。
+
+所有判据都是**结构性**的，不看注释、不看命名，只看语法形状。
+盲区必须明说：本脚本是正则级的，不解析 C++。
+它能抓住「写法退回旧形状」，抓不住「保持形状但语义错」——
+例如 addOwner 登记在步骤内、但登记的 stop 闭包停的是另一个对象。
+那类问题归单测（C5/C6 的逆序 teardown 与幂等用例）。
+"""
+import re
+import sys
+
+MAIN = 'src/main.cc'
+WIRING = 'src/runtime/AppWiring.cpp'
+CONTEXT_H = 'src/runtime/AppContext.h'
+FAIL = 4
+
+# main.cc 里禁止出现的注入形状。与 check_startup_wiring.py 的 REQUIRED 表
+# 互补：那张表管「AppWiring 里必须有」，这张管「main.cc 里必须没有」。
+FORBIDDEN_IN_MAIN = [
+    (r'\.\s*setStore\s*\(',            'setStore'),
+    (r'\.\s*setChannelStore\s*\(',     'setChannelStore'),
+    (r'\.\s*setSink\s*\(',             'setSink'),
+    (r'::\s*setDbProbe\s*\(',          'setDbProbe'),
+    (r'\.\s*setRetoolProvisionClock\s*\(', 'setRetoolProvisionClock'),
+]
+
+
+def read(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def strip_comments(text):
+    """去掉 // 与 /* */ 注释。
+
+    必要而非洁癖：本文件的注释里大量讨论 `appContext.build()`、`setStore` 这些
+    正是判据要找的字面量。不去注释，A1/A4 会被自己的解释性注释触发或掩盖。
+    """
+    text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.S)
+    text = re.sub(r'//[^\n]*', ' ', text)
+    return text
+
+
+def lines_of(text):
+    return text.splitlines()
+
+
+def check_build_result_used(src, problems):
+    """A1：build() 的返回值必须被绑定到变量。"""
+    calls = [(i, ln) for i, ln in enumerate(lines_of(src), 1)
+             if re.search(r'\.\s*build\s*\(\s*\)', ln)]
+    if not calls:
+        problems.append('A1 %s 中找不到 build() 调用；composition root 是否已改写？'
+                        '门禁无法判定，按失败处理' % MAIN)
+        return
+    for ln_no, ln in calls:
+        # 必须是「有名字接住」的形式：`auto x = ctx.build()` / `Result x = ...`。
+        # 显式丢弃（(void)、std::ignore）同样判失败——它绕过 [[nodiscard]]，
+        # 而绕过的后果恰好是 G1。
+        if re.search(r'(?:std::ignore\s*=|\(\s*void\s*\))\s*\w+\s*\.\s*build\s*\(', ln):
+            problems.append('A1 %s:%d build() 的返回值被显式丢弃，'
+                            'G1（失败静默继续）会复发' % (MAIN, ln_no))
+            continue
+        if not re.search(r'=\s*\w+\s*\.\s*build\s*\(\s*\)', ln):
+            problems.append('A1 %s:%d build() 的返回值未被接住：%s'
+                            % (MAIN, ln_no, ln.strip()))
+
+
+def check_nodiscard(src, problems):
+    """A1 补强：头文件上的 [[nodiscard]] 不得被摘掉。"""
+    if not re.search(r'\[\[nodiscard\]\]\s*StartupResult\s+build\s*\(', src):
+        problems.append('A1 %s 中 build() 的 [[nodiscard]] 已消失；'
+                        '编译期那层提醒没了' % CONTEXT_H)
+
+
+def check_owner_inside_step(src, problems):
+    """A2：addOwner 必须出现在 addStep 的 lambda 内，或某个 step 函数体内。
+
+    判据用花括号深度而非「离哪个 addStep 近」：后者在嵌套 lambda 下会误判。
+    registerApplicationSteps 的顶层语句深度为 1（函数体），步骤 lambda 内
+    至少为 2。故「深度 <= 1 的 addOwner」即为逃到步骤之外的那种。
+    """
+    lines = lines_of(src)
+    fn_start = None
+    for i, ln in enumerate(lines):
+        if re.search(r'void\s+registerApplicationSteps\s*\(', ln):
+            fn_start = i
+            break
+    if fn_start is None:
+        problems.append('A2 %s 中找不到 registerApplicationSteps 定义' % WIRING)
+        return
+
+    depth = 0
+    seen = 0
+    for i in range(fn_start, len(lines)):
+        ln = lines[i]
+        if 'addOwner' in ln and depth <= 1:
+            seen += 1
+            problems.append('A2 %s:%d addOwner 位于步骤之外（花括号深度 %d）：'
+                            'build() 中途失败会去 stop 一个从未 start 的 owner'
+                            % (WIRING, i + 1, depth))
+        depth += ln.count('{') - ln.count('}')
+        if depth <= 0 and i > fn_start:
+            break
+    return seen
+
+
+def check_absolute_deadline(src, problems):
+    """A3：shutdown 实参必须含 steady_clock::now()。"""
+    idx = src.find('.shutdown(')
+    if idx < 0:
+        problems.append('A3 %s 中找不到 shutdown() 调用' % MAIN)
+        return
+    # 取调用点之后的一小段（跨行实参），只判是否出现绝对时间基点。
+    window = src[idx:idx + 300]
+    call = window.split(';')[0]
+    if 'steady_clock::now()' not in call:
+        problems.append('A3 shutdown() 的实参不含 steady_clock::now()，'
+                        '疑似退回相对时长；跨 owner 会逐段累加突破宽限期')
+
+
+def check_main_has_no_injection(src, problems):
+    """A4：main.cc 不得直接注入 Store。"""
+    for i, ln in enumerate(lines_of(src), 1):
+        for pat, name in FORBIDDEN_IN_MAIN:
+            if re.search(pat, ln):
+                problems.append('A4 %s:%d 出现 %s：接线的唯一真相应是 %s'
+                                % (MAIN, i, name, WIRING))
+
+
+def main():
+    problems = []
+    try:
+        main_src = strip_comments(read(MAIN))
+        wiring_src = strip_comments(read(WIRING))
+        context_src = read(CONTEXT_H)
+    except FileNotFoundError as exc:
+        print('FAIL 待检文件缺失：%s' % exc)
+        print('     composition root 若已再次搬家，请同步更新本脚本的路径常量。')
+        return FAIL
+
+    check_build_result_used(main_src, problems)
+    check_nodiscard(context_src, problems)
+    check_owner_inside_step(wiring_src, problems)
+    check_absolute_deadline(main_src, problems)
+    check_main_has_no_injection(main_src, problems)
+
+    if problems:
+        print('composition root 结构检查未通过：')
+        for p in problems:
+            print('  FAIL %s' % p)
+        return FAIL
+
+    print('OK A1 build() 返回值被接住，且 [[nodiscard]] 仍在')
+    print('OK A2 全部 addOwner 均位于步骤内部')
+    print('OK A3 shutdown() 使用绝对 deadline')
+    print('OK A4 main.cc 未直接注入任何 Store')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

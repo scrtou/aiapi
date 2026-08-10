@@ -103,6 +103,22 @@ jobs:
       - name: P4 - enqueue result must be handled
         run: python3 tools/arch/check_enqueue_result.py
 
+      # P4-W2：composition root 的形状（退出码 4）。
+      # 启动流程从 main.cc 的双层 lambda 搬进 AppContext + AppWiring 之后，
+      # 四条关键性质全靠「代码现在恰好长这样」维持，编译器与单测都抓不住：
+      #   A1 build() 的返回值必须被接住（写成裸调用或 (void) 强转即复发 G1：
+      #      失败被吞、进程带着未建表的 Store 继续 run()）；
+      #   A2 每个 addOwner 必须落在步骤内部（逃到 registerApplicationSteps 顶层，
+      #      会让 build() 中途失败时去 stop 一个从未 start 的 owner）；
+      #   A3 shutdown() 必须收绝对 deadline（改回相对时长不会有编译错误，
+      #      但跨 owner 逐段累加会突破 SIGTERM 宽限期，即 G5 复发）；
+      #   A4 main.cc 不得再直接注入 Store —— 否则接线出现第二处真相，
+      #      上面那道 startup wiring 反而会因「在候选文件里搜到了」而通过，两道一起变瞎。
+      # 前十道全看不见这些：不成环、不跨层、不改 CMake、不加测试文件，
+      # 注入语句也确实还在（只是搬错了地方）。
+      - name: P4 - composition root shape (AppContext)
+        run: python3 tools/arch/check_app_context.py
+
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
       # 若脚本哪天被改成永远返回 0，上面各道会全绿，只有这一步能发现。
@@ -142,11 +158,13 @@ jobs:
             [ -f "$PROBE_TMP"/probe_i.bak ] && cp "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h
             [ -f "$PROBE_TMP"/probe_i2.bak ] && cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
             [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
-            [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/main.cc
-            [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/main.cc
+            [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/runtime/AppWiring.cpp
+            [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/runtime/AppWiring.cpp
             rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp \
               src/__source_owner_selftest_probe.cpp src/__include_path_selftest_probe.cpp
             [ -f "$PROBE_TMP"/probe_target_cmake.bak ] && cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
+            [ -f "$PROBE_TMP"/probe_j1.bak ] && cp "$PROBE_TMP"/probe_j1.bak src/main.cc
+            [ -f "$PROBE_TMP"/probe_j2.bak ] && cp "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp
             rm -rf "$PROBE_TMP"
             return 0
           }
@@ -155,6 +173,7 @@ jobs:
           # 探针会临时改写真实源文件。复原是否成功，必须用「跑前/跑后」快照来断言。
           probe_snapshot() {
             md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc src/CMakeLists.txt 2>&1
+            md5sum src/runtime/AppWiring.cpp src/runtime/AppContext.h 2>&1
             find src/domain src/test -type f 2>/dev/null | sort | xargs -r md5sum 2>&1
             find src -maxdepth 1 -type f -name '*selftest_probe*' 2>/dev/null | \
               sort | xargs -r md5sum 2>&1
@@ -173,44 +192,55 @@ jobs:
           expect_rc 3 python3 tools/arch/check_cycles.py --layer-rules tools/arch/layer-rules.json
           rm -f src/domain/__selftest_probe.h
 
-          echo '--- probe C: main.cc loses its setStore injection -> expect rc=4 ---'
+          echo '--- probe C: wiring loses its setStore injection -> expect rc=4 ---'
           # 复现 48 步的真实事故：注入语句漏写。
+          # 探针目标随组装根迁移：P4-W2 把注入从 main.cc 搬到了 AppWiring.cpp。
+          # 迁移当时若不同步改这里，本探针会「删掉一个已不存在的东西」，
+          # 门禁照样 rc=0，expect_rc 4 失败 —— 这正是本轮 selftest 实际抓到的。
           # 注意这里不能用 sed -i 删行后靠 git checkout 复原——
-          # 若本次 PR 本就修改了 main.cc，checkout 会连正常改动一起丢掉。
-          cp src/main.cc "$PROBE_TMP"/probe_c.bak
-          grep -v 'ChannelManager::getInstance().setStore' src/main.cc > "$PROBE_TMP"/probe_c.cc
-          cp "$PROBE_TMP"/probe_c.cc src/main.cc
-          expect_rc 4 python3 tools/arch/check_startup_wiring.py
-          cp "$PROBE_TMP"/probe_c.bak src/main.cc
+          # 若本次 PR 本就修改了该文件，checkout 会连正常改动一起丢掉。
+          cp src/runtime/AppWiring.cpp "$PROBE_TMP"/probe_c.bak
+          grep -v 'ChannelManager::getInstance().setStore' src/runtime/AppWiring.cpp \
+            > "$PROBE_TMP"/probe_c.cc
+          if diff -q "$PROBE_TMP"/probe_c.cc src/runtime/AppWiring.cpp > /dev/null; then
+            echo '::error::probe C 无法进行：AppWiring.cpp 中找不到 ChannelManager setStore 注入行'
+            echo '若注入方式已重构，请同步更新本探针与 check_startup_wiring.py。'
+            fail=1
+          else
+            cp "$PROBE_TMP"/probe_c.cc src/runtime/AppWiring.cpp
+            expect_rc 4 python3 tools/arch/check_startup_wiring.py
+          fi
+          cp "$PROBE_TMP"/probe_c.bak src/runtime/AppWiring.cpp
 
           echo '--- probe D: setStore placed after init -> expect rc=4 ---'
           # 仅「存在」不够：注入若晚于 init，init 期间的建表与默认数据仍走 Null 实现。
           # 这一步断言检查器确实校验了顺序，而不只是搜到字符串就放行。
-          cp src/main.cc "$PROBE_TMP"/probe_d.bak
+          # 与 probe C 同因迁移到 AppWiring.cpp。
+          cp src/runtime/AppWiring.cpp "$PROBE_TMP"/probe_d.bak
           python3 - <<'PROBE_D'
           import io, re
-          p = 'src/main.cc'
+          p = 'src/runtime/AppWiring.cpp'
           lines = io.open(p, encoding='utf-8').read().splitlines(True)
           # 两处查找都必须给 default。裸 next() 找不到时抛 StopIteration，
-          # 脚本会死在下面的复原 cp 之前，把 main.cc 留在破坏态——
+          # 脚本会死在下面的复原 cp 之前，把文件留在破坏态——
           # 这与本步「探针必须复原」的设计意图直接冲突。
           idx = next((i for i, l in enumerate(lines)
                       if re.search(r'ChannelManager::getInstance\(\)\.setStore\(', l)), -1)
           if idx < 0:
-              print('probe D 无法进行：main.cc 中找不到 setStore 注入行。')
+              print('probe D 无法进行：AppWiring.cpp 中找不到 setStore 注入行。')
               print('若注入方式已重构，请同步更新本探针与 check_startup_wiring.py。')
               raise SystemExit(1)
           set_line = lines.pop(idx)
           init_idx = next((i for i, l in enumerate(lines)
                            if re.search(r'ChannelManager::getInstance\(\)\.init\(', l)), -1)
           if init_idx < 0:
-              print('probe D 无法进行：main.cc 中找不到 ChannelManager init 行。')
+              print('probe D 无法进行：AppWiring.cpp 中找不到 ChannelManager init 行。')
               raise SystemExit(1)
           lines.insert(init_idx + 1, set_line)
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_D
           expect_rc 4 python3 tools/arch/check_startup_wiring.py
-          cp "$PROBE_TMP"/probe_d.bak src/main.cc
+          cp "$PROBE_TMP"/probe_d.bak src/runtime/AppWiring.cpp
 
           echo '--- probe E: unregistered test -> expect rc=4 (both modes) ---'
           # 断言这道门禁确实会失败；若哪天它被改成永远返回 0，
@@ -277,6 +307,49 @@ jobs:
           PROBE_I2
           expect_rc 4 python3 tools/arch/check_enqueue_result.py
           cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
+
+          echo '--- probe J1: build() result discarded -> expect rc=4 ---'
+          # G1 的同构复发：从前是 std::function<void()> 吞掉 return 1，
+          # 现在只需把接住返回值的那行改成裸调用，失败照样静默继续。
+          # [[nodiscard]] 在此拦不住 —— 本项目未开 -Werror。
+          cp src/main.cc "$PROBE_TMP"/probe_j1.bak
+          python3 - <<'PROBE_J1'
+          import io, re
+          p = 'src/main.cc'
+          lines = io.open(p, encoding='utf-8').read().splitlines(True)
+          idx = next((i for i, l in enumerate(lines)
+                      if re.search(r'=\s*\w+\s*\.\s*build\s*\(\s*\)', l)), -1)
+          if idx < 0:
+              print('probe J1 无法进行：找不到接住 build() 返回值的调用点。')
+              print('若 composition root 已重构，请同步更新本探针与 check_app_context.py。')
+              raise SystemExit(1)
+          lines[idx] = re.sub(r'^(\s*).*?\.\s*build\s*\(\s*\)\s*;',
+                              r'\1appContext.build();', lines[idx])
+          io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
+          PROBE_J1
+          expect_rc 4 python3 tools/arch/check_app_context.py
+          cp "$PROBE_TMP"/probe_j1.bak src/main.cc
+
+          echo '--- probe J2: addOwner escapes its step -> expect rc=4 ---'
+          # 仅校验 main.cc 的调用形状不够：回滚正确性取决于
+          # 「owners_ 里的东西恰好是已经起来的东西」。把一条 addOwner 提到
+          # registerApplicationSteps 顶层即破坏该不变式，而这不影响编译。
+          cp src/runtime/AppWiring.cpp "$PROBE_TMP"/probe_j2.bak
+          python3 - <<'PROBE_J2'
+          import io, re
+          p = 'src/runtime/AppWiring.cpp'
+          lines = io.open(p, encoding='utf-8').readlines()
+          fs = next((i for i, l in enumerate(lines)
+                     if re.search(r'void\s+registerApplicationSteps\s*\(', l)), -1)
+          if fs < 0:
+              print('probe J2 无法进行：找不到 registerApplicationSteps 定义。')
+              print('若接线入口改名，请同步更新本探针与 check_app_context.py。')
+              raise SystemExit(1)
+          lines.insert(fs + 2, '    ctx.addOwner("__selftest_probe_owner", []{});\n')
+          io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
+          PROBE_J2
+          expect_rc 4 python3 tools/arch/check_app_context.py
+          cp "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp
 
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。
