@@ -82,7 +82,7 @@ composition root。P4-W2 接手的是 **composition root 本身**：`src/main.cc
 | **G4** | 全部 `init()` 无返回值，失败不可观测，因此**回滚无从谈起** | 表 #14/19/20/21/22 | C2 + C5 |
 | **G5** | 停机无 deadline：Reaper 可能阻塞在同步 HTTP DELETE，独占整个 SIGTERM 宽限期（P1 harness 已记录） | main.cc 415-423 | C6 |
 | **G6** | `runApplicationShutdown` 非幂等，二次调用会重复执行四个 stop | ApplicationShutdown.cpp 15-32 | C6 |
-| **G7** | ownership 全隐式：26 类全局单例（`AccountManager` 56 处、`RetoolWorkspaceManager`/`ResponseIndex` 各 44 处、`BackgroundTaskQueue` 29 处……），析构顺序由静态存储期决定 | 全仓 getInstance 统计 | C3 + C7 |
+| **G7** | ownership 全隐式：26 类全局单例（`AccountManager` 56 处、`RetoolWorkspaceManager`/`ResponseIndex` 各 44 处、`BackgroundTaskQueue` 29 处……），析构顺序由静态存储期决定 | 全仓 getInstance 统计 | C3 + C7 | —— 持线程部分已于 §8 收口（A5 + probe J3）
 | **G8** | 两处「建表失败 → 静默降级」是**有意**行为（会话持久化、chayns 台账），迁移时必须保留为显式 `Degraded` 结果，不得被 fail-fast 吞掉语义 | main.cc 276-334 | C2 + C5 |
 
 ---
@@ -192,3 +192,58 @@ TSan 的 2 条告警均为 Drogon 信号路径固有的 signal-unsafe（`queueIn
 
 > 教训：**判据脚本本身就是判据的一部分**。TSan 结论只在 `tools/run-tsan.sh` 下成立，
 > 裸跑二进制得到的红/绿都不作数；文档与 README 引用 TSan 结果时一律指向该脚本。
+
+---
+
+## 8. G7 收口证据（2026-08-10）
+
+C8 收口时 G7 仍是「ownership 全隐式」的开放缺口。本轮把最后一处**持线程单例**
+交还给 `AppContext` 编排，并给守住它的判据补上负向探针。
+
+### 8.1 缺陷本体
+
+`ErrorStatsService::init()` 会拉起 `workerThread_`，但接线处没有任何 `addOwner`，
+停机全靠 `~ErrorStatsService()` 里的兜底 `shutdown()`。这条兜底路径有两个问题：
+
+1. **时机在编排之外**：静态析构发生在 `main` 返回之后，早已越过 `shutdown(deadline)`，
+   停机日志对它只字不提——超时也无从计量。
+2. **依赖可能已先死**：同为静态存储期的 `ErrorStatsDbManager` 与 drogon DB 客户端
+   销毁顺序不确定，兜底里的 flush 可能落在已析构对象上。
+
+这正是 G7 描述的隐式 ownership 在**持线程**场景下的具体复发形态。
+
+### 8.2 修复与门禁
+
+| 项 | 内容 |
+|----|------|
+| 代码 | `AppWiring.cpp` 中登记 `ctx.addOwner("error stats service", ...)`，停机按 owner 逆序收尾 |
+| 判据 | `check_app_context.py` 新增 A5：登记册内每个持线程单例都必须在接线处出现 `addOwner` |
+| 探针 | CI selftest 新增 probe J3：摘掉该 `addOwner` 后门禁必须转红（`expect_rc 4`） |
+| 回归 | Debug 构建 rc=0；301 cases / 1645 assertions 全绿；13 项架构门禁全部 rc=0 |
+
+A5 采用**双判据**：既查具体的停机调用是否存在，也查 `addOwner` 出现次数是否
+少于登记册规模。前者定位到具体服务，后者兜住「新增持线程单例却忘了登记」。
+probe J3 触发时两条同时报出，符合预期。
+
+### 8.3 探针为何删「注册」而不删「函数体」
+
+删函数体同样能让 `check_app_context.py` 退 4，但那是计数判据在起作用，
+证明不了「漏登记」这条判据活着。探针必须精确命中被看守的那一条，
+否则它退化成 D-3 里记过的那种「什么都没破坏也能绿」的假探针。
+
+### D-5 · 探针正则在多行 `addOwner` 上失配（本轮踩到）
+
+probe J3 初版用 `[^;]*;\n` 截取待删行。实际 `addOwner` 的 lambda 参数换行书写，
+否定字符类在 lambda 体内的**第一个分号**处就停住，之后又要求紧跟行尾——必然失配。
+而失配时探针脚本 `raise SystemExit(1)`、门禁照常 rc=0，`expect_rc 4` 报失败，
+表面看像门禁坏了。已改为惰性跨行匹配 `.*?\);\n`。
+
+> 教训：**探针的正则也要按判据对待**。凡是匹配 C++ 调用点的模式，
+> 都必须假定实参会跨行；写完立刻用「从 yml 原文抽出 heredoc 实跑一遍」验证，
+> 而不是只在本地凭记忆重敲一份等价脚本——两者不是同一段字节。
+
+### 8.4 G7 状态
+
+持线程单例的显式 ownership 已闭环并由 A5 + probe J3 双向看守。
+`getInstance` 总量仍高（G7 的广义部分），但那属于后续工作项的静态依赖收敛范畴，
+与停机安全解耦：**不持线程的单例即使靠静态析构收尾，也不会越过 `shutdown(deadline)`**。
