@@ -82,7 +82,7 @@ composition root。P4-W2 接手的是 **composition root 本身**：`src/main.cc
 | **G4** | 全部 `init()` 无返回值，失败不可观测，因此**回滚无从谈起** | 表 #14/19/20/21/22 | C2 + C5 |
 | **G5** | 停机无 deadline：Reaper 可能阻塞在同步 HTTP DELETE，独占整个 SIGTERM 宽限期（P1 harness 已记录） | main.cc 415-423 | C6 |
 | **G6** | `runApplicationShutdown` 非幂等，二次调用会重复执行四个 stop | ApplicationShutdown.cpp 15-32 | C6 |
-| **G7** | ownership 全隐式：26 类全局单例（`AccountManager` 56 处、`RetoolWorkspaceManager`/`ResponseIndex` 各 44 处、`BackgroundTaskQueue` 29 处……），析构顺序由静态存储期决定 | 全仓 getInstance 统计 | C3 + C7 | —— 持线程部分已于 §8 收口（A5 + probe J3）
+| **G7** | ownership 全隐式：26 类全局单例（`AccountManager` 56 处、`RetoolWorkspaceManager`/`ResponseIndex` 各 44 处、`BackgroundTaskQueue` 29 处……），析构顺序由静态存储期决定 | 全仓 getInstance 统计 | C3 + C7（持线程部分已于 §8 收口：A5 + probe J3） |
 | **G8** | 两处「建表失败 → 静默降级」是**有意**行为（会话持久化、chayns 台账），迁移时必须保留为显式 `Degraded` 结果，不得被 fail-fast 吞掉语义 | main.cc 276-334 | C2 + C5 |
 
 ---
