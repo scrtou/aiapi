@@ -27,11 +27,19 @@ struct StartupStep
  *
  * `name` 不是装饰：停机日志此前是四条硬编码的 LOG_INFO，owner 一旦增删就与
  * 实际行为脱节。改成数据后日志由名字生成，不存在「说停了其实没停」的偏差。
+ *
+ * `stop` 收一个**绝对**截止时间点，而不是 `void()`：P4-W2 里 deadline 只到
+ * `stopOwnersInReverse` 为止，owner 内部无从得知还剩多少时间，于是每个 owner 各
+ * 自 join 到底——五个 owner 串起来，SIGTERM 宽限期被逐段突破（H3）。签名带上
+ * deadline 后，「还剩多少」在任意一段里都能直接算出。
+ *
+ * 这里不保留 `void()` 重载：保留就等于允许新 owner 继续忽略 deadline，H1 会以
+ * 「新代码走老路」的形式复发。让编译器强制每个 owner 都正面处理 deadline。
  */
 struct RuntimeOwner
 {
-    std::string           name;
-    std::function<void()> stop;
+    std::string                                                name;
+    std::function<void(std::chrono::steady_clock::time_point)> stop;
 };
 
 /**
@@ -70,7 +78,8 @@ public:
      * 约定：谁启动谁登记，且**紧接启动之后**登记——这样 build() 中途失败时，
      * ownersStarted() 恰好等于「已经起来的那些」，逆序 stop 才是正确的回滚。
      */
-    void addOwner(std::string name, std::function<void()> stop);
+    void addOwner(std::string name,
+                  std::function<void(std::chrono::steady_clock::time_point)> stop);
 
     /**
      * 依次执行已注册步骤。

@@ -11,7 +11,8 @@ void AppContext::addStep(std::string name, std::function<StartupResult()> run)
     steps_.push_back(StartupStep{std::move(name), std::move(run)});
 }
 
-void AppContext::addOwner(std::string name, std::function<void()> stop)
+void AppContext::addOwner(std::string name,
+                          std::function<void(std::chrono::steady_clock::time_point)> stop)
 {
     owners_.push_back(RuntimeOwner{std::move(name), std::move(stop)});
 }
@@ -86,8 +87,13 @@ void AppContext::stopOwnersInReverse(std::chrono::steady_clock::time_point deadl
         }
 
         LOG_INFO << "[停机] 正在停止 " << it->name << "...";
-        it->stop();
-        LOG_INFO << "[停机] " << it->name << " 已停止";
+        const auto startedAt = std::chrono::steady_clock::now();
+        it->stop(deadline);
+        const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt);
+        // 逐 owner 记录实耗：H3 的现场特征是「总时长超支但看不出是谁吃掉的」。
+        // 没有这条日志，超支只能靠通读五个 owner 的实现去猜。
+        LOG_INFO << "[停机] " << it->name << " 已停止，耗时 " << spent.count() << "ms";
     }
     owners_.clear();
 }

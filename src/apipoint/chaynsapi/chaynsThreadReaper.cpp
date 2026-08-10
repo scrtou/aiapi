@@ -6,6 +6,7 @@
 #include <chrono>
 #include <ctime>
 
+#include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
 #include <apiManager/ApiManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
@@ -59,8 +60,43 @@ void chaynsThreadReaper::start(const Options& options)
 
 void chaynsThreadReaper::stop()
 {
+    stopInternal(std::nullopt);
+}
+
+void chaynsThreadReaper::stop(std::chrono::steady_clock::time_point deadline)
+{
+    stopInternal(deadline);
+}
+
+void chaynsThreadReaper::interruptibleSleepFor(std::chrono::milliseconds duration)
+{
+    if (duration <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    // 与 loop() 的等待共用 wakeMutex_/wakeCv_/stopRequested_：限速等待因此和
+    // 扫描周期等待具备同一套唤醒保证，不会出现「周期能打断、限速打不断」的偏差。
+    std::unique_lock<std::mutex> lock(wakeMutex_);
+    wakeCv_.wait_for(lock, duration, [this]() { return stopRequested_.load(); });
+}
+
+void chaynsThreadReaper::stopInternal(
+    std::optional<std::chrono::steady_clock::time_point> deadline)
+{
     if (!running_.load()) {
         return;
+    }
+    if (deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            *deadline - std::chrono::steady_clock::now());
+        const auto httpCap = std::chrono::milliseconds(static_cast<long long>(
+            chayns::kUpstreamRequestTimeoutSeconds * 1000.0));
+        if (remaining < httpCap) {
+            // 如实告警而不是静默：一次已发出的上游 DELETE 无法撤回，最长占用
+            // 30s。预算比它还短时，join 就是可能超支的那一段，必须留痕。
+            LOG_WARN << "[chayns线程回收] 停机预算 " << remaining.count()
+                     << "ms 小于单次上游请求上限 " << httpCap.count()
+                     << "ms，若此刻正在删除上游线程，join 可能超出预算";
+        }
     }
     {
         // 置位必须与 loop() 的 wait_for 共用 wakeMutex_：谓词读的是同一个
@@ -151,6 +187,8 @@ int chaynsThreadReaper::runOnce()
     int succeeded = 0;
     for (const auto& row : rows) {
         if (stopRequested_.load()) {
+            // 停机时剩余行留在台账里，下次启动照样能回收：回收是可重入的尽力
+            // 任务，宁可少删一轮，不可拖垮停机。
             break;
         }
         if (row.threadId.empty() || row.accountUserName.empty()) {
@@ -184,9 +222,7 @@ int chaynsThreadReaper::runOnce()
             threadDb->bumpDeleteAttempts(row.threadId);
         }
 
-        if (opt.deleteSpacingMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(opt.deleteSpacingMs));
-        }
+        interruptibleSleepFor(std::chrono::milliseconds(opt.deleteSpacingMs));
     }
     return succeeded;
 }

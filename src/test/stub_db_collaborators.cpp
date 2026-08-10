@@ -13,6 +13,7 @@
 // 缺口清单来自链接实测而非推测；Provider 退役后已同步删除不再需要的 backup 桩。
 #include <dbManager/config/ConfigDbManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include "chayns_thread_stub_control.h"
 #include <retoolWorkspace/RetoolWorkspaceService.h>
 
 #include <map>
@@ -44,10 +45,14 @@ RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value
     return RetoolWorkspaceInfo{};
 }
 
-// ---- ChaynsThreadDbManager ----
-// Chayns provider characterization compiles the real provider but keeps its
-// asynchronous ledger collaborator disabled.  The upstream HTTP transport is
-// faked separately; neither database nor network is touched.
+// ---- chaynsThreadDbManager ----
+// 测试二进制整体替换该单例：真实实现（走 drogon DbClient）不进 aiapi_test。
+// 桩原先是纯静默的（loadThreadsOlderThan 恒返回空），导致 runOnce()
+// 的删除循环在单测中不可达——D4 的 M2 变异（限速等待退回 sleep_for）
+// 因此无法被任何单测杀死。
+//
+// 现改为可控桩：测试注入待回收行，桩记录被调用的删除/重试序列。
+// 只影响测试二进制，生产代码零改动。
 std::shared_ptr<chaynsThreadDbManager> chaynsThreadDbManager::getInstance()
 {
     static auto instance = std::make_shared<chaynsThreadDbManager>();
@@ -58,6 +63,74 @@ void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string&) {}
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string&, const std::string&) {}
 int chaynsThreadDbManager::purgeExhaustedThreads(int, std::string*) { return 0; }
 std::vector<chaynsThreadDbManager::ThreadRow>
-chaynsThreadDbManager::loadThreadsOlderThan(int64_t, int, std::string*) { return {}; }
-bool chaynsThreadDbManager::deleteThread(const std::string&, std::string*) { return true; }
-int chaynsThreadDbManager::bumpDeleteAttempts(const std::string&, std::string*) { return 0; }
+chaynsThreadDbManager::loadThreadsOlderThan(int64_t, int limit, std::string*)
+{
+    auto rows = chaynsThreadStubControl::instance().takeRows();
+    if (limit > 0 && static_cast<int>(rows.size()) > limit) {
+        rows.resize(static_cast<size_t>(limit));
+    }
+    return rows;
+}
+bool chaynsThreadDbManager::deleteThread(const std::string& threadId, std::string*)
+{
+    chaynsThreadStubControl::instance().recordDeleted(threadId);
+    return true;
+}
+int chaynsThreadDbManager::bumpDeleteAttempts(const std::string& threadId, std::string*)
+{
+    chaynsThreadStubControl::instance().recordBumped(threadId);
+    return 1;
+}
+
+// ---- chaynsThreadStubControl 实现 ----
+chaynsThreadStubControl& chaynsThreadStubControl::instance()
+{
+    static chaynsThreadStubControl control;
+    return control;
+}
+void chaynsThreadStubControl::reset()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    rows_.clear();
+    deleted_.clear();
+    bumped_.clear();
+    loadCalls_ = 0;
+}
+void chaynsThreadStubControl::setRows(std::vector<chaynsThreadDbManager::ThreadRow> newRows)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    rows_ = std::move(newRows);
+}
+std::vector<chaynsThreadDbManager::ThreadRow> chaynsThreadStubControl::takeRows()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++loadCalls_;
+    auto out = rows_;
+    rows_.clear();
+    return out;
+}
+void chaynsThreadStubControl::recordDeleted(const std::string& threadId)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    deleted_.push_back(threadId);
+}
+void chaynsThreadStubControl::recordBumped(const std::string& threadId)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    bumped_.push_back(threadId);
+}
+std::vector<std::string> chaynsThreadStubControl::deletedIds() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return deleted_;
+}
+std::vector<std::string> chaynsThreadStubControl::bumpedIds() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return bumped_;
+}
+int chaynsThreadStubControl::loadCallCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return loadCalls_;
+}

@@ -50,12 +50,12 @@ DROGON_TEST(AppContextRollsBackStartedOwnersInReverseOnFailure)
 
     ctx.addStep("start-A", [&] {
         trace.push_back("start-A");
-        ctx.addOwner("A", [&] { trace.push_back("stop-A"); });
+        ctx.addOwner("A", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-A"); });
         return StartupResult::ok();
     });
     ctx.addStep("start-B", [&] {
         trace.push_back("start-B");
-        ctx.addOwner("B", [&] { trace.push_back("stop-B"); });
+        ctx.addOwner("B", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-B"); });
         return StartupResult::ok();
     });
     ctx.addStep("boom", [&] {
@@ -159,9 +159,9 @@ DROGON_TEST(AppContextShutdownIsIdempotentAndReverseOrdered)
     std::vector<std::string> trace;
 
     ctx.addStep("start-all", [&] {
-        ctx.addOwner("reaper", [&] { trace.push_back("stop-reaper"); });
-        ctx.addOwner("account-workers", [&] { trace.push_back("stop-account-workers"); });
-        ctx.addOwner("task-queue", [&] { trace.push_back("stop-task-queue"); });
+        ctx.addOwner("reaper", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-reaper"); });
+        ctx.addOwner("account-workers", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-account-workers"); });
+        ctx.addOwner("task-queue", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-task-queue"); });
         return StartupResult::ok();
     });
 
@@ -189,7 +189,7 @@ DROGON_TEST(AppContextShutdownStopsOwnersEvenPastDeadline)
     std::vector<std::string> trace;
 
     ctx.addStep("start", [&] {
-        ctx.addOwner("slow", [&] { trace.push_back("stop-slow"); });
+        ctx.addOwner("slow", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-slow"); });
         return StartupResult::ok();
     });
     CHECK(ctx.build().isOk());
@@ -229,7 +229,7 @@ DROGON_TEST(AppContextShutdownIsTerminalAndIgnoresLateOwners)
     std::vector<std::string> trace;
 
     ctx.addStep("start", [&] {
-        ctx.addOwner("early", [&] { trace.push_back("stop-early"); });
+        ctx.addOwner("early", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-early"); });
         return StartupResult::ok();
     });
     CHECK(ctx.build().isOk());
@@ -240,9 +240,95 @@ DROGON_TEST(AppContextShutdownIsTerminalAndIgnoresLateOwners)
     CHECK(ctx.isShutdown());
 
     // 停机宣告完成之后迟到的 owner：不得被后续 shutdown 执行。
-    ctx.addOwner("late", [&] { trace.push_back("stop-late"); });
+    ctx.addOwner("late", [&](std::chrono::steady_clock::time_point) { trace.push_back("stop-late"); });
     ctx.shutdown(soon());
 
     REQUIRE(trace.size() == 1);
     CHECK(trace[0] == "stop-early");
+}
+
+/*
+ * D3 的核心不变量：deadline 是被**传递**的，不是被各 owner 重新起算的。
+ *
+ * 没有这条断言，stopOwnersInReverse 里把 it->stop(deadline) 误写成
+ * it->stop(std::chrono::steady_clock::now() + kSomething) 也能让全部既有用例
+ * 通过——因为其余用例都丢弃了这个形参。这正是 H1 复发的最短路径。
+ */
+DROGON_TEST(AppContextPassesExactDeadlineToOwners)
+{
+    lifecycle::AppContext ctx;
+
+    std::chrono::steady_clock::time_point seen{};
+    bool called = false;
+    ctx.addOwner("probe", [&](std::chrono::steady_clock::time_point deadline) {
+        seen   = deadline;
+        called = true;
+    });
+
+    const auto expected = std::chrono::steady_clock::now() + std::chrono::seconds(7);
+    ctx.shutdown(expected);
+
+    CHECK(called);
+    // 严格相等而非「相近」：相近会容忍「owner 自己 now()+7s」这一错误实现。
+    CHECK(seen == expected);
+}
+
+/*
+ * 五个 owner 必须共享同一份预算，而不是每人一份。
+ *
+ * H3 的成因就是各段各拿一份相对超时、总时长变成各段之和。若哪天有人在
+ * stopOwnersInReverse 里给每个 owner 续期，这条用例会立刻变红。
+ */
+DROGON_TEST(AppContextAllOwnersShareOneDeadline)
+{
+    lifecycle::AppContext ctx;
+
+    std::vector<std::chrono::steady_clock::time_point> seen;
+    for (const char* name : {"first", "second", "third"}) {
+        ctx.addOwner(name, [&seen](std::chrono::steady_clock::time_point deadline) {
+            seen.push_back(deadline);
+        });
+    }
+
+    const auto expected = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    ctx.shutdown(expected);
+
+    REQUIRE(seen.size() == 3);
+    for (const auto& d : seen) {
+        CHECK(d == expected);
+    }
+}
+
+/*
+ * 回滚路径（build() 失败）同样要把 deadline 送到 owner。
+ *
+ * 回滚用的是 5s 兜底 deadline，与 shutdown() 的来源不同，是一条独立分支——
+ * 独立分支就有独立漏改的可能，故单独断言 owner 确实收到了一个未来时刻。
+ */
+DROGON_TEST(AppContextRollbackAlsoDeliversDeadline)
+{
+    lifecycle::AppContext ctx;
+
+    std::chrono::steady_clock::time_point seen{};
+    bool called = false;
+
+    ctx.addStep("start owner", [&ctx, &seen, &called] {
+        ctx.addOwner("probe", [&](std::chrono::steady_clock::time_point deadline) {
+            seen   = deadline;
+            called = true;
+        });
+        return lifecycle::StartupResult::ok();
+    });
+    ctx.addStep("boom", [] {
+        return lifecycle::StartupResult::failed(lifecycle::StartupError::OwnerStartFailed,
+                                                "intentional");
+    });
+
+    const auto before = std::chrono::steady_clock::now();
+    const auto result = ctx.build();
+
+    CHECK(result.isFailed());
+    CHECK(called);
+    // 兜底 deadline 必须落在未来：传 now() 或默认构造值都会让 owner 一进来就判定超支。
+    CHECK(seen > before);
 }

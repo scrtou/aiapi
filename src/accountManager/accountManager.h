@@ -162,9 +162,12 @@ class AccountManager
     void stopBackgroundThreads();
 
   private:
-    /// 可中断睡眠：睡满 seconds 返回 true；被停机唤醒立即返回 false。
-    /// 所有定时线程的 sleep 必须走这里，否则停机会被拖到一个完整周期。
-    bool backgroundSleep(std::chrono::seconds seconds);
+    /// 可中断睡眠：睡满 duration 返回 true；被停机唤醒立即返回 false。
+    /// 所有定时线程的 sleep、以及长循环内的节流等待，都必须走这里——
+    /// clock_->sleepFor 的生产实现是 std::this_thread::sleep_for，停机时不可打断。
+    /// 形参用 milliseconds 而非 seconds，是为了容纳亚秒级节流（如账号类型刷新的 500ms）；
+    /// hours/minutes/seconds 实参隐式转换无精度损失，既有调用点无需改写。
+    bool backgroundSleep(std::chrono::milliseconds duration);
 
     std::atomic<bool>       backgroundStopRequested_{false};
     std::mutex              backgroundWakeMutex_;

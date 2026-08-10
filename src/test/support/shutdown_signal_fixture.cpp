@@ -15,13 +15,13 @@ int main()
     // fixture 必须复用生产代码里的 AppContext，而不是自己复述一份顺序——
     // 复述出来的顺序即使与生产不一致，测试也照样绿。
     lifecycle::AppContext appContext;
-    appContext.addOwner("task-queue", [] {
+    appContext.addOwner("task-queue", [](std::chrono::steady_clock::time_point) {
         BackgroundTaskQueue::instance().shutdown();
         std::cout << "QUEUE" << std::endl;
     });
-    appContext.addOwner("session-cleaner", [] { std::cout << "SESSION" << std::endl; });
-    appContext.addOwner("account-workers", [] { std::cout << "ACCOUNTS" << std::endl; });
-    appContext.addOwner("chayns-reaper", [] { std::cout << "REAPER" << std::endl; });
+    appContext.addOwner("session-cleaner", [](std::chrono::steady_clock::time_point) { std::cout << "SESSION" << std::endl; });
+    appContext.addOwner("account-workers", [](std::chrono::steady_clock::time_point) { std::cout << "ACCOUNTS" << std::endl; });
+    appContext.addOwner("chayns-reaper", [](std::chrono::steady_clock::time_point) { std::cout << "REAPER" << std::endl; });
 
     // READY 必须在 Drogon 装好 SIGTERM handler *之后* 才打印，否则外部脚本
     // 一看到 READY 就发信号，会命中默认处置直接把进程杀掉（exit 143/124），

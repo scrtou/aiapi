@@ -1,0 +1,1 @@
+-I/home/vps/code/aiapi/src -isystem /home/vps/code/aiapi/.deps/drogon-install/include -isystem /usr/include/jsoncpp -isystem /usr/include/postgresql -std=c++17

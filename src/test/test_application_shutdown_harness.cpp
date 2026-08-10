@@ -105,10 +105,10 @@ DROGON_TEST(ApplicationShutdown_StopsOwnersInReverseRegistrationOrder)
     // order, so shutdown must be its reverse and no second order table exists.
     std::vector<std::string> order;
     lifecycle::AppContext ctx;
-    ctx.addOwner("task-queue", [&order] { order.push_back("queue"); });
-    ctx.addOwner("session-cleaner", [&order] { order.push_back("session"); });
-    ctx.addOwner("account-workers", [&order] { order.push_back("accounts"); });
-    ctx.addOwner("chayns-reaper", [&order] { order.push_back("reaper"); });
+    ctx.addOwner("task-queue", [&order](std::chrono::steady_clock::time_point) { order.push_back("queue"); });
+    ctx.addOwner("session-cleaner", [&order](std::chrono::steady_clock::time_point) { order.push_back("session"); });
+    ctx.addOwner("account-workers", [&order](std::chrono::steady_clock::time_point) { order.push_back("accounts"); });
+    ctx.addOwner("chayns-reaper", [&order](std::chrono::steady_clock::time_point) { order.push_back("reaper"); });
 
     ctx.shutdown(std::chrono::steady_clock::now() + std::chrono::seconds(5));
 
@@ -123,7 +123,7 @@ DROGON_TEST(ApplicationShutdown_SecondShutdownIsNoOp)
     // joined and shut down the queue twice.
     int stops = 0;
     lifecycle::AppContext ctx;
-    ctx.addOwner("counted", [&stops] { ++stops; });
+    ctx.addOwner("counted", [&stops](std::chrono::steady_clock::time_point) { ++stops; });
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     ctx.shutdown(deadline);
@@ -139,8 +139,8 @@ DROGON_TEST(ApplicationShutdown_PastDeadlineStillStopsEveryOwner)
     // joins to be truncated at process exit -- the very bug this replaced.
     std::vector<std::string> order;
     lifecycle::AppContext ctx;
-    ctx.addOwner("first", [&order] { order.push_back("first"); });
-    ctx.addOwner("second", [&order] { order.push_back("second"); });
+    ctx.addOwner("first", [&order](std::chrono::steady_clock::time_point) { order.push_back("first"); });
+    ctx.addOwner("second", [&order](std::chrono::steady_clock::time_point) { order.push_back("second"); });
 
     ctx.shutdown(std::chrono::steady_clock::now() - std::chrono::seconds(1));
 

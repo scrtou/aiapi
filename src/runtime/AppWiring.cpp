@@ -25,6 +25,30 @@
 
 namespace lifecycle {
 
+namespace {
+
+/**
+ * 把绝对 deadline 换算成「还剩多少」。
+ *
+ * 每个 owner 的 stop 都要回答同一个问题：我还能等多久？绝对 deadline 减去当下
+ * 就是答案，且这个答案在停机链上是逐段递减的——这正是 H3 想要的性质：五个
+ * owner 共享一份预算，而不是各自重新起算一份相对超时。
+ *
+ * 钳到 0 而不放任负值：负值传给 wait_for 是 UB 边缘（实现上多半立即返回，但
+ * 语义不可依赖），显式钳零让「已超支」表现为「不再等待」，行为确定。
+ */
+std::chrono::milliseconds remainingBudget(std::chrono::steady_clock::time_point deadline)
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+        return std::chrono::milliseconds::zero();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
+}  // namespace
+
+
 int hoursToSeconds(double hours)
 {
     const double seconds = hours * 3600.0;
@@ -118,7 +142,14 @@ StartupResult stepErrorStats(AppContext& ctx)
     // 登记一个实际空转的 stop 只会让停机日志谎报「已停错误统计服务」。
     if (statsConfig.enabled) {
         ctx.addOwner("error stats service",
-                     [] { metrics::ErrorStatsService::getInstance().shutdown(); });
+                     [](std::chrono::steady_clock::time_point deadline) {
+                         // shutdown() 尾部还要 flushEvents()/flushRequestAgg() 落库，
+                         // 是整条停机链上唯一会碰 DB 的一段。剩余预算先记下来：
+                         // D4 给 shutdown 加 deadline 形参后，这里直接透传即可。
+                         LOG_INFO << "[停机] error stats 剩余预算 "
+                                  << remainingBudget(deadline).count() << "ms";
+                         metrics::ErrorStatsService::getInstance().shutdown();
+                     });
     }
     return StartupResult::ok();
 }
@@ -170,7 +201,18 @@ StartupResult stepchaynsThreadLedger(const Json::Value& cfg, AppContext& ctx)
     }
     chaynsThreadReaper::getInstance().start(reaperOpt);
     // 启动后立刻登记：build() 中途失败时，逆序回滚才恰好覆盖「已经起来的那些」。
-    ctx.addOwner("chayns thread reaper", [] { chaynsThreadReaper::getInstance().stop(); });
+    ctx.addOwner("chayns thread reaper",
+                 [](std::chrono::steady_clock::time_point deadline) {
+                     // reaper 已能接收 deadline：睡眠与限速等待均可被打断，
+                     // 逐行删除循环也会在预算耗尽时退出。仍不可中断的只剩
+                     // 单次已发出的上游 DELETE（30s 硬上限）。
+                     // 原 loop() 睡 scanIntervalSeconds（默认 15 分钟），
+                     // 停机全靠 wakeCv_ 唤醒。若唤醒丢失，这里的 join 就是 H3 里
+                     // 最容易吃满宽限期的一段，故记录剩余预算。
+                     LOG_INFO << "[停机] chayns thread reaper 剩余预算 "
+                              << remainingBudget(deadline).count() << "ms";
+                     chaynsThreadReaper::getInstance().stop(deadline);
+                 });
     return StartupResult::ok();
 }
 
@@ -209,7 +251,12 @@ StartupResult stepSessionTuning(const Json::Value& cfg)
 StartupResult stepSessionCleaner(AppContext& ctx)
 {
     chatSession::getInstance()->startClearExpiredSession();
-    ctx.addOwner("session cleaner", [] { chatSession::getInstance()->stopClearExpiredSession(); });
+    ctx.addOwner("session cleaner",
+                 [](std::chrono::steady_clock::time_point deadline) {
+                     LOG_INFO << "[停机] session cleaner 剩余预算 "
+                              << remainingBudget(deadline).count() << "ms";
+                     chatSession::getInstance()->stopClearExpiredSession();
+                 });
     LOG_INFO << "[会话清理] 内存会话过期清理线程已启动";
     return StartupResult::ok();
 }
@@ -245,7 +292,25 @@ void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig)
     ctx.addStep("background task queue", [&customConfig, &ctx] {
         const int workers = resolveWorkerThreads(customConfig);
         BackgroundTaskQueue::instance().start(static_cast<size_t>(workers));
-        ctx.addOwner("background task queue", [] { BackgroundTaskQueue::instance().shutdown(); });
+        ctx.addOwner("background task queue",
+                     [](std::chrono::steady_clock::time_point deadline) {
+                         // 这是五个 owner 中唯一已具备限时等待能力的一处：
+                         // waitUntilIdle(timeout) 只观测不推进状态机，可先按剩余
+                         // 预算等待在途任务自然收尾，再进 shutdown() 走 drain+join。
+                         //
+                         // 顺序不能颠倒：shutdown() 会把状态推到 Draining 并立即
+                         // join，一旦进去就再没有「限时」这一说，deadline 也就白拿了。
+                         auto& queue = BackgroundTaskQueue::instance();
+                         const auto budget = remainingBudget(deadline);
+                         if (!queue.waitUntilIdle(budget)) {
+                             // 未排空即超预算：如实告警。这条日志是 H3 的直接证据，
+                             // 有它才能判断超支是「任务确实没做完」还是「唤醒丢了」。
+                             LOG_WARN << "[停机] background task queue 在预算 "
+                                      << budget.count() << "ms 内未排空，仍有 "
+                                      << queue.runningCount() << " 个任务在执行";
+                         }
+                         queue.shutdown();
+                     });
         return StartupResult::ok();
     });
 
@@ -254,7 +319,35 @@ void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig)
     // 账号后台线程由 AccountManager::init() 内部拉起（见 stepInjectStores），
     // 故其停机动作在同一批次登记，位置严格晚于队列、早于会话设施。
     ctx.addStep("account workers owner", [&ctx] {
-        ctx.addOwner("account workers", [] { AccountManager::getInstance().stopBackgroundThreads(); });
+        ctx.addOwner("account workers",
+                     [](std::chrono::steady_clock::time_point deadline) {
+                         // 四个巡检线程的可中断睡眠最长 5 小时，join 前必须依赖
+                         // 两组 notify 全部生效；漏掉任一组就会挂满宽限期。
+                         const auto budget = remainingBudget(deadline);
+                         LOG_INFO << "[停机] account workers 剩余预算 "
+                                  << budget.count() << "ms";
+
+                         // D11：可中断化之后，账号线程的停机耗时上界不再是
+                         // isServerReachable 的 300 次重试（最坏约 7.6 小时），而是
+                         // 一次「已经发出、无法撤回」的上游请求。该请求的超时实参写死在
+                         // accountManager.cpp 的登录与注册两处 sendHttpRequest 里，均为
+                         // 300.0 秒——阈值即取自那两个字面量，不是本处另拍的数。
+                         //
+                         // 这里刻意不复用 chayns::kUpstreamRequestTimeoutSeconds（30s）：
+                         // 那是 chayns 上游的口径，与账号登录/注册不是同一条链路，混用会让
+                         // 告警阈值与它声称的来源脱钩。两者是否应该统一，见待议项 D11-Q1。
+                         constexpr auto kAccountUpstreamRequestCap =
+                             std::chrono::milliseconds(300 * 1000);
+                         if (budget < kAccountUpstreamRequestCap) {
+                             // 如实告警而不是静默：预算比单次请求上限还短时，join 就是
+                             // 可能超支的那一段。有这条日志才能把「超支」与「唤醒丢了」区分开。
+                             LOG_WARN << "[停机] account workers 停机预算 " << budget.count()
+                                      << "ms 小于单次上游请求上限 "
+                                      << kAccountUpstreamRequestCap.count()
+                                      << "ms，若此刻正在登录或注册账号，join 可能超出预算";
+                         }
+                         AccountManager::getInstance().stopBackgroundThreads();
+                     });
         return StartupResult::ok();
     });
     ctx.addStep("error stats",           [&ctx] { return stepErrorStats(ctx); });

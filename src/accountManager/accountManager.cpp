@@ -384,13 +384,13 @@ AccountManager::AccountManager()
 {
 
 }
-bool AccountManager::backgroundSleep(std::chrono::seconds seconds)
+bool AccountManager::backgroundSleep(std::chrono::milliseconds duration)
 {
     std::unique_lock<std::mutex> lock(backgroundWakeMutex_);
     // wait_for 带谓词：睡满周期返回 false（谓词仍为假），被停机唤醒返回 true。
     // 这里取反，把返回值语义统一成“是否应继续下一轮”。
     const bool stopped = backgroundWakeCv_.wait_for(
-        lock, seconds, [this] { return backgroundStopRequested_.load(); });
+        lock, duration, [this] { return backgroundStopRequested_.load(); });
     return !stopped;
 }
 
@@ -1257,7 +1257,11 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
     };
 
     int retryCount = 0;
-    while (retryCount < maxRetries) {
+    // 停机检查必须在循环条件里：本函数位于 waitUpdateAccountToken 工作线程的调用链上
+    // （updatechaynsToken -> getchaynsToken -> 此处），maxRetries 默认 300、每轮最坏
+    // 3x30s+1s，改前停机最坏要等约 7.6 小时。停机时提前放弃剩余重试并返回 false，
+    // 调用方走既有的“达到最大重试次数”失败分支，不新增失败模式。
+    while (retryCount < maxRetries && !backgroundStopRequested_.load()) {
         try {
             for (const auto& path : candidatePaths) {
                 auto checkRequest = HttpRequest::newHttpRequest();
@@ -1275,9 +1279,17 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
         }
         
         retryCount++;
-        clock_->sleepFor(std::chrono::seconds(1)); // 等待1秒后重试
+        // 原为 clock_->sleepFor(seconds(1))——其生产实现是 std::this_thread::sleep_for，
+        // 停机时照睡不误。改用 backgroundSleep 挂在 backgroundWakeCv_ 上，可被唤醒打断。
+        if (!backgroundSleep(std::chrono::seconds(1))) {
+            LOG_INFO << "[账户管理] 停机中，放弃剩余主机连通性重试，已重试: " << retryCount << " 次";
+            return false;
+        }
     }
-    
+
+    if (backgroundStopRequested_.load()) {
+        LOG_INFO << "[账户管理] 停机中，主机连通性探测提前结束: " << host;
+    }
     return false;
 }
 void AccountManager::loadAccountFromDatebase()
@@ -2175,11 +2187,21 @@ void AccountManager::updateAllAccountTypes()
         }
     }
     
-    // 在锁外进行更新操作
+    // 在锁外进行更新操作。
+    // 循环体内必须检查停机：本函数由 accountTypeThread_ 巡检线程调用，最坏耗时是
+    // N账号 x（单次上游请求 + 500ms 节流），与账号数成正比、无常量上界。改前该循环
+    // 跑到自然结束才回到 while 头看停机标志，账号一多就把停机拖成分钟级。
     for (auto& account : accountsToUpdate) {
+        if (backgroundStopRequested_.load()) {
+            LOG_INFO << "[账户管理] 停机中，中止全量账号类型刷新";
+            break;
+        }
         updateAccountType(account);
-        // 添加短暂延迟，避免请求过于频繁
-        clock_->sleepFor(std::chrono::milliseconds(500));
+        // 添加短暂延迟，避免请求过于频繁；改用可中断等待，停机时立即返回。
+        if (!backgroundSleep(std::chrono::milliseconds(500))) {
+            LOG_INFO << "[账户管理] 停机中，中止全量账号类型刷新";
+            break;
+        }
     }
     
     LOG_INFO << "[账户管理] 全量刷新账号类型结束";

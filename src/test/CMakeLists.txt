@@ -2,10 +2,13 @@ cmake_minimum_required(VERSION 3.5)
 project(aiapi_test CXX)
 
 # ------------------------------------------------------------------
-# Support two usages:
-#   1) standalone:  cmake -S src/test -B build/test_build
-#   2) from root:   add_subdirectory(src/test)
-# In standalone mode Drogon targets are not yet available, so resolve them here.
+# Only supported usage: configure from the repository ROOT, which
+# reaches this file via add_subdirectory(src/test).
+#     cmake -S . -B build/test_root -DCMAKE_BUILD_TYPE=Debug
+# Standalone configuration (cmake -S src/test) is intentionally
+# rejected below: since P3-W1 tests link aiapi_legacy instead of
+# recompiling production sources, and that target only exists when
+# the root project has been configured.  See the FATAL_ERROR guard.
 # ------------------------------------------------------------------
 if (NOT TARGET Drogon::Drogon)
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../.deps/drogon-install")
