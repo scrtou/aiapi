@@ -78,6 +78,7 @@ set(TEST_SOURCES
     test_application_shutdown_harness.cpp
     test_startup_result.cpp
     test_app_context.cpp
+    test_cancellation.cpp
     test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
     test_retool_provider_fixture.cpp

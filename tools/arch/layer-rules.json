@@ -10,6 +10,7 @@
         "controllers",
         "dbManager",
         "metrics",
+        "platform",
         "retoolWorkspace",
         "runtime",
         "sessionManager",
@@ -21,7 +22,9 @@
       "allow_out": []
     },
     "utils": {
-      "allow_out": []
+      "allow_out": [
+        "platform"
+      ]
     },
     "tools": {
       "allow_out": []
@@ -54,7 +57,8 @@
     "metrics": {
       "allow_out": [
         "dbManager",
-        "domain"
+        "domain",
+        "platform"
       ]
     },
     "managedAccount": {
@@ -69,6 +73,7 @@
         "channelManager",
         "dbManager",
         "domain",
+        "platform",
         "retoolWorkspace",
         "utils"
       ]
@@ -81,6 +86,7 @@
         "dbManager",
         "domain",
         "managedAccount",
+        "platform",
         "retoolWorkspace",
         "sessionManager",
         "utils"
@@ -108,6 +114,7 @@
         "dbManager",
         "domain",
         "metrics",
+        "platform",
         "tools"
       ]
     },
@@ -120,12 +127,17 @@
         "controllers",
         "dbManager",
         "metrics",
+        "platform",
         "retoolWorkspace",
         "runtime",
         "sessionManager",
         "utils"
       ],
       "role": "composition root; may know concrete modules（原 main.cc 的特权已迁移至此）"
+    },
+    "platform": {
+      "allow_out": [],
+      "role": "platform 闭包（migration-plan 3.5 第 1 项）：Result/Error/Deadline/取消/时钟/日志 port。allow_out 必须恒为空——它是依赖 DAG 的底，任何出边都会让「人人可依赖」这一前提失效。"
     }
   },
   "_target": "最终由 platform/domain/application/infrastructure/transport target 规则替代；当前业务模块白名单只能收紧。"
