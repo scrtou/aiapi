@@ -275,7 +275,12 @@ DROGON_TEST(IoLoopResponseStream_SendFailureClosesAndRejectsLaterChunks)
     auto bridge = IoLoopResponseStream::create(std::move(responseStream), loop);
     REQUIRE(bridge != nullptr);
 
-    CHECK(bridge->send("first chunk"));
+    // send() 只是把写入排入 loop，其返回值反映「排队那一刻」的流状态。
+    // 高负载下 loop 可能已跑完 sendInLoop、观察到底层 send 失败并置位
+    // closeRequested_，此时本线程再读该标志得到 false 是合法结果，而非缺陷。
+    // （4 路并发 x 8 轮压测下约 2/32 复现；单跑 60 次 0 复现，故此前被当成偶发。）
+    // 真正需要断言的不变量在下方：恰好 close 一次、至少尝试发送一次、后续 chunk 被拒。
+    (void)bridge->send("first chunk");
     REQUIRE(waitForClose(probe));
     CHECK(!bridge->isOpen());
     int attemptsAfterFailure = 0;

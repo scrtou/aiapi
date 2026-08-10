@@ -108,7 +108,8 @@ set(AIAPI_TRANSPORT_SOURCES
 )
 
 set(AIAPI_RUNTIME_SOURCES
-    utils/ApplicationShutdown.cpp
+    runtime/AppContext.cpp
+    runtime/AppWiring.cpp
 )
 
 set(AIAPI_LEGACY_SOURCES

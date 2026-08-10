@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <utils/ApplicationShutdown.h>
+#include <runtime/AppContext.h>
 
 #include <chrono>
 #include <csignal>
@@ -99,17 +99,52 @@ ChildResult runSignalFixture()
 
 }  // namespace
 
-DROGON_TEST(ApplicationShutdown_CallsOwnershipBoundariesInOrder)
+DROGON_TEST(ApplicationShutdown_StopsOwnersInReverseRegistrationOrder)
 {
+    // reverse-order is the invariant under test: registration order is startup
+    // order, so shutdown must be its reverse and no second order table exists.
     std::vector<std::string> order;
-    lifecycle::runApplicationShutdown({
-        [&order] { order.push_back("reaper"); },
-        [&order] { order.push_back("accounts"); },
-        [&order] { order.push_back("session"); },
-        [&order] { order.push_back("queue"); },
-    });
+    lifecycle::AppContext ctx;
+    ctx.addOwner("task-queue", [&order] { order.push_back("queue"); });
+    ctx.addOwner("session-cleaner", [&order] { order.push_back("session"); });
+    ctx.addOwner("account-workers", [&order] { order.push_back("accounts"); });
+    ctx.addOwner("chayns-reaper", [&order] { order.push_back("reaper"); });
+
+    ctx.shutdown(std::chrono::steady_clock::now() + std::chrono::seconds(5));
+
     const std::vector<std::string> expected{
         "reaper", "accounts", "session", "queue"};
+    CHECK(order == expected);
+}
+
+DROGON_TEST(ApplicationShutdown_SecondShutdownIsNoOp)
+{
+    // G6 idempotency: a real second stop would double-join threads already
+    // joined and shut down the queue twice.
+    int stops = 0;
+    lifecycle::AppContext ctx;
+    ctx.addOwner("counted", [&stops] { ++stops; });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    ctx.shutdown(deadline);
+    ctx.shutdown(deadline);
+
+    CHECK(stops == 1);
+    CHECK(ctx.isShutdown());
+}
+
+DROGON_TEST(ApplicationShutdown_PastDeadlineStillStopsEveryOwner)
+{
+    // The deadline records overrun; it never skips stop(). Skipping would leave
+    // joins to be truncated at process exit -- the very bug this replaced.
+    std::vector<std::string> order;
+    lifecycle::AppContext ctx;
+    ctx.addOwner("first", [&order] { order.push_back("first"); });
+    ctx.addOwner("second", [&order] { order.push_back("second"); });
+
+    ctx.shutdown(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+
+    const std::vector<std::string> expected{"second", "first"};
     CHECK(order == expected);
 }
 

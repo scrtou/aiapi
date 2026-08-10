@@ -76,6 +76,8 @@ set(TEST_SOURCES
     test_login_response_log_summary.cpp
     test_background_task_queue_shutdown.cpp
     test_application_shutdown_harness.cpp
+    test_startup_result.cpp
+    test_app_context.cpp
     test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
     test_retool_provider_fixture.cpp

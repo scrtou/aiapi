@@ -12,8 +12,8 @@
 #include <dbManager/channel/channelDbManager.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
-#include <utils/BackgroundTaskQueue.h>
-#include <utils/ApplicationShutdown.h>
+#include <runtime/AppContext.h>
+#include <runtime/AppWiring.h>
 #include <utils/ConfigValidator.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <dbManager/session/SessionDbManager.h>
@@ -30,6 +30,10 @@
 #include <exception>
 
 namespace {
+
+// SIGTERM 到 SIGKILL 的宽限期。取 25s 是为了落在容器编排默认的 30s
+// terminationGracePeriod 之内，留 5s 余量给进程收尾与日志刷盘。
+constexpr int kShutdownGraceSeconds = 25;
 
 bool validateConfigFile(const std::string& path) {
     std::ifstream in(path);
@@ -199,243 +203,62 @@ int main() {
     const auto processStartTime = std::chrono::steady_clock::now();
     HealthController::setStartTime(processStartTime);
 
+    // 这里只宣告「HTTP 开始受理」。后台队列的就绪与否不再由它表达——队列在
+    // build() 里已于 run() 之前同步启动，若在此打印「队列已就绪」，日志时序会
+    // 晚于事实，排查启动顺序问题时反而误导。
     drogon::app().registerBeginningAdvice([](){
-        LOG_INFO << "[后台任务队列] 已就绪";
+        LOG_INFO << "[启动] HTTP 监听已就绪，开始受理请求";
     });
 
-    app().getLoop()->queueInLoop([](){
-        const auto& customConfig = drogon::app().getCustomConfig();
-        int requestedWorkerThreads = static_cast<int>(
-            BackgroundTaskQueue::kDefaultWorkerThreads);
-        if (customConfig.isMember("background_task_threads")) {
-            if (customConfig["background_task_threads"].isIntegral()) {
-                requestedWorkerThreads = customConfig["background_task_threads"].asInt();
-            } else {
-                LOG_WARN << "[后台任务队列] background_task_threads 不是整数，使用默认值 "
-                         << BackgroundTaskQueue::kDefaultWorkerThreads;
-            }
-        }
-        const int workerThreads = std::clamp(requestedWorkerThreads, 2, 64);
-        if (workerThreads != requestedWorkerThreads) {
-            LOG_WARN << "[后台任务队列] background_task_threads="
-                     << requestedWorkerThreads << " 超出 2-64 范围，已调整为 "
-                     << workerThreads;
-        }
-        BackgroundTaskQueue::instance().start(static_cast<size_t>(workerThreads));
+    // ---- 启动接线（P4-W2）----
+    // 从前的写法是把整段初始化塞进 queueInLoop + BackgroundTaskQueue::enqueue 的
+    // 双层 lambda。代价有三：其一，enqueue 失败时那句 `return 1` 返回给的是
+    // trantor 的 std::function<void()>，返回值被丢弃，进程带着未建表的 Store
+    // 继续服务；其二，初始化跑在队列 worker 上，与 run() 并发，谁先谁后取决于
+    // 调度；其三，中途失败没有回滚，已起的线程留在原地。
+    //
+    // 改为在 main 线程上同步 build()：失败即 return，且 AppContext 按登记逆序
+    // 回滚已启动的 owner。run() 之后的停机也复用同一份 owner 列表，不再有
+    // 「启动登记一处、停机硬编码另一处」的双份真相。
+    lifecycle::AppContext appContext;
+    lifecycle::registerApplicationSteps(appContext, drogon::app().getCustomConfig());
 
-        const auto initEnqueued = BackgroundTaskQueue::instance().enqueue("init", []{
-            LOG_INFO << "[启动] 后台初始化任务开始";
-
-            auto customConfig = drogon::app().getCustomConfig();
-            if (customConfig.isMember("session_tracking")) {
-                std::string mode = customConfig["session_tracking"].get("mode", "hash").asString();
-                if (mode == "zerowidth" || mode == "zero_width") {
-                    chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
-                    LOG_INFO << "会话追踪模式：ZeroWidth（零宽字符嵌入）";
-                } else {
-                    chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
-                    LOG_INFO << "会话追踪模式：Hash（内容哈希）";
-                }
-            } else {
-                LOG_INFO << "会话追踪模式：Hash（默认）";
-            }
-
-            // R4 试点 B：注入 Channel 持久化实现。
-            // 必须早于 init()——init() 会立刻建表并写入内置渠道。
-            ChannelManager::getInstance().setStore(ChannelDbManager::getInstance());
-            ChannelManager::getInstance().init();
-            // R4 试点 C：注入 Account 持久化实现。
-            // 必须早于 init()——init() 会立刻建表并迁移/规整既有账号。
-            AccountManager::getInstance().setStore(AccountDbManager::getInstance());
-            // /ready 的库探针复用同一个 AccountDbManager 实例（未新造端口）。
-            // 漏注入不会崩溃，只会让 /ready 恒报 not_ready —— 故由启动接线门禁守住。
-            HealthController::setDbProbe(AccountDbManager::getInstance());
-            // 渠道列表来源，同样必须早于 init()：init() 启动的后台线程会调用
-            // checkChannelAccountCounts()。未注入则回退 Null 实现、渠道列表恒空，
-            // 自动补注册静默失效（不崩溃，故必须由启动接线门禁守住）。
-            AccountManager::getInstance().setChannelStore(ChannelDbManager::getInstance());
-            AccountManager::getInstance().setRetoolProvisionClock(
-                retoolProvision::makeSystemRetoolProvisionClock());
-            AccountManager::getInstance().init();
-            RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
-            RetoolWorkspaceManager::getInstance().init();
-            ApiManager::getInstance().init();
-
-            // P04·错误统计落库倒置：注入 IErrorStatsSink 实现。
-            // 必须早于 init()——init() 会立刻调 sink->init() 建表，
-            // 并启动后台 flush 线程。漏注入不会崩溃，只会让统计
-            // 全部落到默认单例（绕开端口），故由启动接线门禁守住。
-            metrics::ErrorStatsService::getInstance().setSink(
-                metrics::ErrorStatsDbManager::getInstance());
-            metrics::ErrorStatsConfig statsConfig;
-            metrics::ErrorStatsService::getInstance().init(statsConfig);
-
-            // ---- 会话持久化接线：建表成功后才开启写穿/懒加载 ----
-            // 说明：ResponseIndex 与后续 session_map 的写穿逻辑均以 persistenceEnabled 为总开关，
-            //       建表失败时静默降级为纯内存，绝不阻塞请求链路。
-            {
-                auto sessionDb = SessionDbManager::getInstance();
-                std::string dbErr;
-                if (sessionDb->ensureTables(&dbErr)) {
-                    sessionDb->setEnabled(true);
-                    ResponseIndex::instance().setPersistenceEnabled(true);
-                    // 会话状态写穿/懒加载与 ResponseIndex 同生命周期开启，
-                    // 保证 responseId->sessionId 索引与会话快照要么都持久化、要么都不持久化。
-                    chatSession::getInstance()->setPersistenceEnabled(true);
-                    LOG_INFO << "[会话持久化] 已启用：chat_session_state / response_index 写穿与懒加载生效";
-                } else {
-                    sessionDb->setEnabled(false);
-                    ResponseIndex::instance().setPersistenceEnabled(false);
-                    chatSession::getInstance()->setPersistenceEnabled(false);
-                    LOG_WARN << "[会话持久化] 未启用，降级为纯内存会话：" << dbErr;
-                }
-            }
-
-            // ---- chayns 上游线程台账接线：与会话持久化独立开关 ----
-            // 台账解决的是"上游 thread 泄漏"：内存 m_threadMap 随进程消失，
-            // 而上游 thread 是远端资源，只能靠这张表 + reaper 回收。
-            // 建表失败时整套机制静默关闭，chayns 正常聊天不受影响。
-            {
-                auto threadDb = chaynsThreadDbManager::getInstance();
-                std::string threadDbErr;
-                bool threadLedgerEnabled = false;
-                if (customConfig.isMember("chayns_thread_reaper") &&
-                    customConfig["chayns_thread_reaper"].isObject()) {
-                    threadLedgerEnabled =
-                        customConfig["chayns_thread_reaper"].get("enabled", true).asBool();
-                } else {
-                    threadLedgerEnabled = true;  // 未配置时默认开启，避免静默泄漏
-                }
-                if (!threadLedgerEnabled) {
-                    threadDb->setEnabled(false);
-                    LOG_WARN << "[chayns线程台账] 已按配置关闭，上游 thread 将不再被回收";
-                } else if (threadDb->ensureTable(&threadDbErr)) {
-                    threadDb->setEnabled(true);
-                    LOG_INFO << "[chayns线程台账] 已启用：chaynsa_thread 写穿生效";
-
-                    // 台账可用才启动回收器：表都建不出来时启动它只会空转刷日志。
-                    // 配置单位对齐运维直觉——间隔用分钟、空闲用小时，内部换算成秒。
-                    chaynsThreadReaper::Options reaperOpt;
-                    if (customConfig["chayns_thread_reaper"].isObject()) {
-                        const Json::Value& rc = customConfig["chayns_thread_reaper"];
-                        reaperOpt.scanIntervalSeconds = static_cast<int>(
-                            rc.get("scan_interval_minutes", 15).asDouble() * 60);
-                        reaperOpt.idleSeconds = static_cast<int>(
-                            rc.get("idle_hours", 24).asDouble() * 3600);
-                        reaperOpt.batchLimit      = rc.get("batch_limit", 50).asInt();
-                        reaperOpt.maxAttempts     = rc.get("max_attempts", 5).asInt();
-                        reaperOpt.deleteSpacingMs = rc.get("delete_spacing_ms", 200).asInt();
-                    }
-                    chaynsThreadReaper::getInstance().start(reaperOpt);
-                } else {
-                    threadDb->setEnabled(false);
-                    LOG_WARN << "[chayns线程台账] 未启用，上游 thread 不会被回收：" << threadDbErr;
-                }
-            }
-
-            // ---- 会话持久化可调参数（配置单位：小时）：内存TTL / 内存清理间隔 / DB保留期 / 两个落库开关 ----
-            // 必须在 startClearExpiredSession() 之前应用，否则清理线程会先按默认值起跑。
-            {
-                // 配置单位为“小时”，内部统一换算为秒；允许小数（0.5 = 30 分钟），换算结果最小 1 秒。
-                const auto hoursToSeconds = [](double hours) {
-                    const double seconds = hours * 3600.0;
-                    return seconds < 1.0 ? 1 : static_cast<int>(seconds + 0.5);
-                };
-                int  memExpire   = SESSION_EXPIRE_TIME;
-                int  memInterval = SESSION_CLEANUP_INTERVAL;
-                int  dbRetention = SESSION_EXPIRE_TIME;
-                bool storePayload = true;
-                bool storeBody    = false;
-                if (customConfig.isMember("session_persistence") &&
-                    customConfig["session_persistence"].isObject()) {
-                    const auto& sp = customConfig["session_persistence"];
-                    if (sp["memory_expire_hours"].isNumeric()) {
-                        memExpire = hoursToSeconds(sp["memory_expire_hours"].asDouble());
-                    }
-                    if (sp["memory_cleanup_interval_hours"].isNumeric()) {
-                        memInterval = hoursToSeconds(sp["memory_cleanup_interval_hours"].asDouble());
-                    }
-                    if (sp["db_retention_hours"].isNumeric()) {
-                        dbRetention = hoursToSeconds(sp["db_retention_hours"].asDouble());
-                    }
-                    storePayload = sp.get("store_session_payload", storePayload).asBool();
-                    storeBody    = sp.get("store_response_body", storeBody).asBool();
-                }
-                auto* cs = chatSession::getInstance();
-                cs->setSessionExpireSeconds(memExpire);
-                cs->setCleanupIntervalSeconds(memInterval);
-                cs->setDbRetentionSeconds(dbRetention);
-                cs->setStoreSessionPayload(storePayload);
-                ResponseIndex::instance().setStoreResponseBody(storeBody);
-                LOG_INFO << "[会话持久化] 参数生效: 内存TTL=" << cs->getSessionExpireSeconds() / 3600.0
-                         << "h, 内存清理间隔=" << cs->getCleanupIntervalSeconds() / 3600.0
-                         << "h, DB保留=" << cs->getDbRetentionSeconds() / 3600.0
-                         << "h, payload落库=" << (cs->isStoreSessionPayloadEnabled() ? "on" : "off")
-                         << ", response_body落库="
-                         << (ResponseIndex::instance().isStoreResponseBodyEnabled() ? "on" : "off");
-            }
-
-            // ---- 内存会话清理线程：此前从未启动，导致 session_map 无限增长 ----
-            chatSession::getInstance()->startClearExpiredSession();
-            LOG_INFO << "[会话清理] 内存会话过期清理线程已启动";
-
-            int maxEntries = 200000;
-            int maxAgeHours = 6;
-            int cleanupMinutes = 10;
-            if (customConfig.isMember("response_index") && customConfig["response_index"].isObject()) {
-                maxEntries = customConfig["response_index"].get("max_entries", maxEntries).asInt();
-                maxAgeHours = customConfig["response_index"].get("max_age_hours", maxAgeHours).asInt();
-                cleanupMinutes = customConfig["response_index"].get("cleanup_interval_minutes", cleanupMinutes).asInt();
-            }
-            if (maxEntries > 0 && maxAgeHours > 0 && cleanupMinutes > 0) {
-                app().getLoop()->runEvery(
-                    static_cast<double>(cleanupMinutes * 60),
-                    [maxEntries, maxAgeHours]() {
-                        ResponseIndex::instance().cleanup(
-                            static_cast<size_t>(maxEntries),
-                            std::chrono::hours(maxAgeHours)
-                        );
-                    }
-                );
-            }
-        });
-    if (initEnqueued != EnqueueResult::Accepted) {
-        // 启动期队列必为空且刚 start()，被拒即代表生命周期被破坏；
-        // 继续运行会得到一个未初始化 Store/未建表的“半启动”进程。
-        LOG_FATAL << "[启动] 后台初始化任务入队失败(" << toString(initEnqueued)
-                  << ")，进程无法进入可用状态，终止启动";
+    const auto startup = appContext.build();
+    if (!startup.canProceed()) {
+        // stepsCompleted() 是已跑完的步骤数，失败时恰为失败步骤的 0-based 下标。
+        LOG_FATAL << "[启动] 第 " << appContext.stepsCompleted()
+                  << " 号步骤失败 code=" << lifecycle::toString(startup.error())
+                  << " detail=" << startup.detail()
+                  << "，已回滚 " << appContext.ownersStarted()
+                  << " 个已启动 owner，终止启动";
         return 1;
     }
-    });
+    // 降级不阻塞启动，但必须留痕：G8 的两处有意降级正是靠这里从「静默」变成「可见」。
+    for (const auto& reason : appContext.degradedReasons()) {
+        LOG_WARN << "[启动·降级] " << reason;
+    }
+    LOG_INFO << "[启动] 接线完成：" << appContext.stepsCompleted() << " 个步骤，"
+             << appContext.ownersStarted() << " 个后台 owner";
 
     drogon::app().run();
 
-    // 优雅停机
+    // 优雅停机：顺序不再写在这里。
     //
-    // 顺序约束：Reaper 必须先于 BackgroundTaskQueue 停止，但理由不是依赖关系——
-    // Reaper 只调用 chaynsThreadDbManager 的同步方法（loadThreadsOlderThan /
-    // deleteThread / purgeExhaustedThreads），全程不碰 BackgroundTaskQueue，
-    // 两者之间不存在生产者-消费者关系。
+    // 从前此处硬编码 reaper -> account -> session -> queue 四元组，与启动处的
+    // 登记顺序是两份彼此独立、需人工同步的真相；新增一个后台 owner 而忘了改这里，
+    // 症状是进程退出时线程被强杀，且不会有任何编译期提示。
     //
-    // 当前精确语义是串行 join，并不会与后续步骤重叠：Reaper 单轮可能对多个
-    // 上游线程逐个发 HTTP DELETE，若正阻塞在同步 IO 中，stop() 会一直等到该
-    // 调用返回。把它放在首位只保证其他 owner 尚未 teardown；它仍可能独占整个
-    // SIGTERM 宽限期。P1 harness 已记录该缺口，deadline/cancellation 留到 P4。
-    // N4: 原先 AccountManager 的 4 个后台线程全部 detach，进程退出时被强行
-    // 截断，可能在持有 accountListNeedUpdateMutex 或 DB 连接的状态下消失。
-    // 现已改为持有 std::thread 成员 + 条件变量可中断睡眠，此处统一 join。
+    // 现在 AppContext 按登记逆序停机，登记又紧跟各自的启动，故顺序由构造过程本身
+    // 保证。唯一的真实约束——三个 owner 都必须早于 BackgroundTaskQueue 停止
+    // （账号线程与会话清理线程会向队列投递任务，队列先关会 fail-fast 拒收并丢任务）
+    // ——因队列是第一个登记、最后一个停止而自动满足。
     //
-    // 顺序：必须在 BackgroundTaskQueue::shutdown() 之前——账号线程（尤其是
-    // checkToken/cleanExpiredAccounts）会向该队列投递任务，若队列先关闭并
-    // fail-fast 拒收，这些任务会静默丢失且刷屏拒收日志。
-    // N4: 会话过期清理线程同样由 detach 改为 join；它在每轮里会同步删除 DB 中
-    // 过期快照，必须在 DB 相关设施拆除前干净退出。
-    lifecycle::runApplicationShutdown({
-        [] { chaynsThreadReaper::getInstance().stop(); },
-        [] { AccountManager::getInstance().stopBackgroundThreads(); },
-        [] { chatSession::getInstance()->stopClearExpiredSession(); },
-        [] { BackgroundTaskQueue::instance().shutdown(); },
-    });
+    // deadline 取绝对时间点而非给每段一份相对超时：停机跨多个 owner，相对超时会
+    // 逐段累加，总时长突破 SIGTERM 宽限期。
+    // 已知缺口：reaper 单轮可能阻塞在同步 HTTP DELETE 上，其 stop() 会等该调用
+    // 返回，deadline 只能限制「还剩多少」的计算，无法真正打断它。
+    appContext.shutdown(std::chrono::steady_clock::now() +
+                        std::chrono::seconds(kShutdownGraceSeconds));
 
     return 0;
 }

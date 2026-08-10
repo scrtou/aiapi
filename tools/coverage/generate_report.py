@@ -118,8 +118,8 @@ TARGETS = [
     },
     {
         "name": "Process shutdown orchestration after Drogon run",
-        "file": "src/utils/ApplicationShutdown.cpp",
-        "functions": ["lifecycle::runApplicationShutdown("],
+        "file": "src/runtime/AppContext.cpp",
+        "functions": ["lifecycle::AppContext::shutdown("],
     },
 ]
 

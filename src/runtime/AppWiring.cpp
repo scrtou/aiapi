@@ -1,0 +1,255 @@
+#include <runtime/AppWiring.h>
+
+#include <accountManager/accountManager.h>
+#include <accountManager/RetoolProvisionClock.h>
+#include <apiManager/ApiManager.h>
+#include <apipoint/chaynsapi/chaynsThreadReaper.h>
+#include <channelManager/channelManager.h>
+#include <controllers/HealthController.h>
+#include <dbManager/account/accountDbManager.h>
+#include <dbManager/channel/channelDbManager.h>
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <dbManager/session/SessionDbManager.h>
+#include <metrics/ErrorStatsService.h>
+#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/core/Session.h>
+#include <utils/BackgroundTaskQueue.h>
+
+#include <drogon/drogon.h>
+
+#include <algorithm>
+#include <string>
+
+namespace lifecycle {
+
+int hoursToSeconds(double hours)
+{
+    const double seconds = hours * 3600.0;
+    return seconds < 1.0 ? 1 : static_cast<int>(seconds + 0.5);
+}
+
+int resolveWorkerThreads(const Json::Value& customConfig)
+{
+    int requested = static_cast<int>(BackgroundTaskQueue::kDefaultWorkerThreads);
+    if (customConfig.isMember("background_task_threads")) {
+        if (customConfig["background_task_threads"].isIntegral()) {
+            requested = customConfig["background_task_threads"].asInt();
+        } else {
+            LOG_WARN << "[后台任务队列] background_task_threads 不是整数，使用默认值 "
+                     << BackgroundTaskQueue::kDefaultWorkerThreads;
+        }
+    }
+    const int clamped = std::clamp(requested, 2, 64);
+    if (clamped != requested) {
+        LOG_WARN << "[后台任务队列] background_task_threads=" << requested
+                 << " 超出 2-64 范围，已调整为 " << clamped;
+    }
+    return clamped;
+}
+
+bool resolveThreadLedgerEnabled(const Json::Value& customConfig)
+{
+    // 未配置时默认开启：关掉回收器意味着上游 thread 只增不减，这种代价不该
+    // 由「配置里没写」来隐式决定。
+    if (!customConfig.isMember("chayns_thread_reaper") ||
+        !customConfig["chayns_thread_reaper"].isObject()) {
+        return true;
+    }
+    return customConfig["chayns_thread_reaper"].get("enabled", true).asBool();
+}
+
+namespace {
+
+// 会话追踪模式：与持久化无关，纯内存行为，故无失败路径。
+StartupResult stepSessionTrackingMode(const Json::Value& cfg)
+{
+    std::string mode = "hash";
+    if (cfg.isMember("session_tracking")) {
+        mode = cfg["session_tracking"].get("mode", "hash").asString();
+    }
+    if (mode == "zerowidth" || mode == "zero_width") {
+        chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
+        LOG_INFO << "会话追踪模式：ZeroWidth（零宽字符嵌入）";
+    } else {
+        chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
+        LOG_INFO << "会话追踪模式：Hash（内容哈希）";
+    }
+    return StartupResult::ok();
+}
+
+// Store 注入必须早于各自的 init()：init() 会立刻建表/迁移数据。漏注入不会崩溃，
+// 只会静默走 Null 实现，所以这一步的存在本身就是那道门禁。
+StartupResult stepInjectStores()
+{
+    ChannelManager::getInstance().setStore(ChannelDbManager::getInstance());
+    ChannelManager::getInstance().init();
+
+    AccountManager::getInstance().setStore(AccountDbManager::getInstance());
+    HealthController::setDbProbe(AccountDbManager::getInstance());
+    AccountManager::getInstance().setChannelStore(ChannelDbManager::getInstance());
+    AccountManager::getInstance().setRetoolProvisionClock(
+        retoolProvision::makeSystemRetoolProvisionClock());
+    AccountManager::getInstance().init();
+
+    RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
+    RetoolWorkspaceManager::getInstance().init();
+
+    ApiManager::getInstance().init();
+    return StartupResult::ok();
+}
+
+StartupResult stepErrorStats()
+{
+    metrics::ErrorStatsService::getInstance().setSink(
+        metrics::ErrorStatsDbManager::getInstance());
+    metrics::ErrorStatsConfig statsConfig;
+    metrics::ErrorStatsService::getInstance().init(statsConfig);
+    return StartupResult::ok();
+}
+
+// G8 的第一处有意降级：建表失败退回纯内存会话，进程仍可服务。
+StartupResult stepSessionPersistence()
+{
+    auto sessionDb = SessionDbManager::getInstance();
+    std::string dbErr;
+    if (sessionDb->ensureTables(&dbErr)) {
+        sessionDb->setEnabled(true);
+        ResponseIndex::instance().setPersistenceEnabled(true);
+        chatSession::getInstance()->setPersistenceEnabled(true);
+        LOG_INFO << "[会话持久化] 已启用：chat_session_state / response_index 写穿与懒加载生效";
+        return StartupResult::ok();
+    }
+    sessionDb->setEnabled(false);
+    ResponseIndex::instance().setPersistenceEnabled(false);
+    chatSession::getInstance()->setPersistenceEnabled(false);
+    return StartupResult::degraded("会话持久化未启用，降级为纯内存会话: " + dbErr);
+}
+
+// G8 的第二处有意降级：台账建不出来时整套回收机制关闭，聊天不受影响。
+StartupResult stepchaynsThreadLedger(const Json::Value& cfg, AppContext& ctx)
+{
+    auto threadDb = chaynsThreadDbManager::getInstance();
+    if (!resolveThreadLedgerEnabled(cfg)) {
+        threadDb->setEnabled(false);
+        return StartupResult::degraded("chayns 线程台账已按配置关闭，上游 thread 不再回收");
+    }
+
+    std::string threadDbErr;
+    if (!threadDb->ensureTable(&threadDbErr)) {
+        threadDb->setEnabled(false);
+        return StartupResult::degraded("chayns 线程台账未启用，上游 thread 不会被回收: " + threadDbErr);
+    }
+
+    threadDb->setEnabled(true);
+    LOG_INFO << "[chayns线程台账] 已启用：chaynsa_thread 写穿生效";
+
+    chaynsThreadReaper::Options reaperOpt;
+    if (cfg.isMember("chayns_thread_reaper") && cfg["chayns_thread_reaper"].isObject()) {
+        const Json::Value& rc = cfg["chayns_thread_reaper"];
+        reaperOpt.scanIntervalSeconds = static_cast<int>(rc.get("scan_interval_minutes", 15).asDouble() * 60);
+        reaperOpt.idleSeconds         = static_cast<int>(rc.get("idle_hours", 24).asDouble() * 3600);
+        reaperOpt.batchLimit          = rc.get("batch_limit", 50).asInt();
+        reaperOpt.maxAttempts         = rc.get("max_attempts", 5).asInt();
+        reaperOpt.deleteSpacingMs     = rc.get("delete_spacing_ms", 200).asInt();
+    }
+    chaynsThreadReaper::getInstance().start(reaperOpt);
+    // 启动后立刻登记：build() 中途失败时，逆序回滚才恰好覆盖「已经起来的那些」。
+    ctx.addOwner("chayns thread reaper", [] { chaynsThreadReaper::getInstance().stop(); });
+    return StartupResult::ok();
+}
+
+StartupResult stepSessionTuning(const Json::Value& cfg)
+{
+    int  memExpire    = SESSION_EXPIRE_TIME;
+    int  memInterval  = SESSION_CLEANUP_INTERVAL;
+    int  dbRetention  = SESSION_EXPIRE_TIME;
+    bool storePayload = true;
+    bool storeBody    = false;
+
+    if (cfg.isMember("session_persistence") && cfg["session_persistence"].isObject()) {
+        const auto& sp = cfg["session_persistence"];
+        if (sp["memory_expire_hours"].isNumeric())           memExpire   = hoursToSeconds(sp["memory_expire_hours"].asDouble());
+        if (sp["memory_cleanup_interval_hours"].isNumeric()) memInterval = hoursToSeconds(sp["memory_cleanup_interval_hours"].asDouble());
+        if (sp["db_retention_hours"].isNumeric())            dbRetention = hoursToSeconds(sp["db_retention_hours"].asDouble());
+        storePayload = sp.get("store_session_payload", storePayload).asBool();
+        storeBody    = sp.get("store_response_body", storeBody).asBool();
+    }
+
+    auto* cs = chatSession::getInstance();
+    cs->setSessionExpireSeconds(memExpire);
+    cs->setCleanupIntervalSeconds(memInterval);
+    cs->setDbRetentionSeconds(dbRetention);
+    cs->setStoreSessionPayload(storePayload);
+    ResponseIndex::instance().setStoreResponseBody(storeBody);
+    LOG_INFO << "[会话持久化] 参数生效: 内存TTL=" << cs->getSessionExpireSeconds() / 3600.0
+             << "h, 内存清理间隔=" << cs->getCleanupIntervalSeconds() / 3600.0
+             << "h, DB保留=" << cs->getDbRetentionSeconds() / 3600.0
+             << "h, payload落库=" << (cs->isStoreSessionPayloadEnabled() ? "on" : "off")
+             << ", response_body落库="
+             << (ResponseIndex::instance().isStoreResponseBodyEnabled() ? "on" : "off");
+    return StartupResult::ok();
+}
+
+StartupResult stepSessionCleaner(AppContext& ctx)
+{
+    chatSession::getInstance()->startClearExpiredSession();
+    ctx.addOwner("session cleaner", [] { chatSession::getInstance()->stopClearExpiredSession(); });
+    LOG_INFO << "[会话清理] 内存会话过期清理线程已启动";
+    return StartupResult::ok();
+}
+
+StartupResult stepResponseIndexCleanup(const Json::Value& cfg)
+{
+    int maxEntries     = 200000;
+    int maxAgeHours    = 6;
+    int cleanupMinutes = 10;
+    if (cfg.isMember("response_index") && cfg["response_index"].isObject()) {
+        maxEntries     = cfg["response_index"].get("max_entries", maxEntries).asInt();
+        maxAgeHours    = cfg["response_index"].get("max_age_hours", maxAgeHours).asInt();
+        cleanupMinutes = cfg["response_index"].get("cleanup_interval_minutes", cleanupMinutes).asInt();
+    }
+    if (maxEntries <= 0 || maxAgeHours <= 0 || cleanupMinutes <= 0) {
+        return StartupResult::degraded("response_index 定时清理已按配置关闭，索引将无限增长");
+    }
+    drogon::app().getLoop()->runEvery(
+        static_cast<double>(cleanupMinutes * 60),
+        [maxEntries, maxAgeHours] {
+            ResponseIndex::instance().cleanup(static_cast<size_t>(maxEntries),
+                                              std::chrono::hours(maxAgeHours));
+        });
+    return StartupResult::ok();
+}
+
+}  // namespace
+
+void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig)
+{
+    // 队列先起：后续步骤（账号线程等）会向它投递任务。它同时是最后一个被停的
+    // owner——登记顺序即逆序停机顺序，这一点由 AppContext 保证，不再靠注释维持。
+    ctx.addStep("background task queue", [&customConfig, &ctx] {
+        const int workers = resolveWorkerThreads(customConfig);
+        BackgroundTaskQueue::instance().start(static_cast<size_t>(workers));
+        ctx.addOwner("background task queue", [] { BackgroundTaskQueue::instance().shutdown(); });
+        return StartupResult::ok();
+    });
+
+    ctx.addStep("session tracking mode", [&customConfig] { return stepSessionTrackingMode(customConfig); });
+    ctx.addStep("inject stores",         [] { return stepInjectStores(); });
+    // 账号后台线程由 AccountManager::init() 内部拉起（见 stepInjectStores），
+    // 故其停机动作在同一批次登记，位置严格晚于队列、早于会话设施。
+    ctx.addStep("account workers owner", [&ctx] {
+        ctx.addOwner("account workers", [] { AccountManager::getInstance().stopBackgroundThreads(); });
+        return StartupResult::ok();
+    });
+    ctx.addStep("error stats",           [] { return stepErrorStats(); });
+    ctx.addStep("session persistence",   [] { return stepSessionPersistence(); });
+    ctx.addStep("chayns thread ledger",  [&customConfig, &ctx] { return stepchaynsThreadLedger(customConfig, ctx); });
+    ctx.addStep("session tuning",        [&customConfig] { return stepSessionTuning(customConfig); });
+    ctx.addStep("session cleaner",       [&ctx] { return stepSessionCleaner(ctx); });
+    ctx.addStep("response index cleanup",[&customConfig] { return stepResponseIndexCleanup(customConfig); });
+}
+
+}  // namespace lifecycle
