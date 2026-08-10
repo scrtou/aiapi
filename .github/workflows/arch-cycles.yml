@@ -351,6 +351,31 @@ jobs:
           expect_rc 4 python3 tools/arch/check_app_context.py
           cp "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp
 
+          echo '--- probe J3: thread-owning singleton loses its addOwner -> expect rc=4 ---'
+          # G7 的直接看守：ErrorStatsService::init() 会拉起 workerThread_，但此前
+          # 没有任何 addOwner，停机全靠 ~ErrorStatsService() 的兜底 shutdown()。
+          # 静态析构发生在 main 返回之后，那时 ErrorStatsDbManager 与 drogon 的 DB
+          # 客户端可能已先销毁，兜底里的 flush 就成了对已析构对象的调用；且此刻
+          # 已在 shutdown(deadline) 之外，停机日志对它只字不提。
+          # 这个洞让编译、301 个单测、以及 A1~A4 四条判据全绿——只有 A5 能抓。
+          #
+          # 探针删的是「注册」而不是「函数体」：后者会连带触发 A5 的计数分支，
+          # rc 虽仍为 4，却证明不了是漏登记那条判据在起作用。
+          cp src/runtime/AppWiring.cpp "$PROBE_TMP"/probe_j3.bak
+          python3 - <<'PROBE_J3'
+          import io, re
+          p = 'src/runtime/AppWiring.cpp'
+          src = io.open(p, encoding='utf-8').read()
+          pat = re.compile(r'[ \t]*ctx\.addOwner\("error stats service",.*?\);\n', re.S)
+          if not pat.search(src):
+              print('probe J3 无法进行：AppWiring.cpp 中找不到 error stats service 的 addOwner。')
+              print('若该 owner 已改名或迁走，请同步更新本探针与 check_app_context.py 的 THREAD_OWNING_SINGLETONS。')
+              raise SystemExit(1)
+          io.open(p, 'w', encoding='utf-8', newline='').write(pat.sub('', src, count=1))
+          PROBE_J3
+          expect_rc 4 python3 tools/arch/check_app_context.py
+          cp "$PROBE_TMP"/probe_j3.bak src/runtime/AppWiring.cpp
+
           echo '--- restore check: before/after snapshot ---'
           # 判据必须是「跑完 vs 跑前」，不能是「工作区 vs HEAD」。
           #
