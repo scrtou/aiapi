@@ -16,9 +16,16 @@
 
 ## 当前下一步
 
-当前是 **P4（阶段 4，AppContext、队列和停机）**，P4-W1 已 DONE，当前工作项 P4-W2 AppContext/Builder/runtime lifecycle。P3 全部退出门禁已通过：P3-W1～W3 建立 69/69 production owner/compile、单一 include 根和六个正式 target，29 个 implementation 已迁入，legacy ceiling 为 39；P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层 JsonCpp 归零。剩余 target 迁移由后续 service-locator/Provider port 工作逐步解锁，P8 最终执行 no-legacy 门禁。
-P4-W1 已于 2026-08-09 收口：C1～C7 全部 DONE。三 bool 状态位由单一四态 `State` 取代，`kDefaultCapacity = 1024` 背压上限与 Draining 拒绝递归入队生效，`waitUntilIdle(deadline)` 提供 drain 完成信号；transport 11 处按 QueueFull/终态区分 503 与 `Retry-After`，infrastructure 10 处失败打 ERROR 不静默，`main.cc` 显式 `start()` 且隐式 spawn 已移除；`enqueueLegacy` 兼容 shim 删除，生产调用点命中 0。退出门禁「23/23 调用点显式处理 `EnqueueResult`」已达成，并固化为 `tools/arch/check_enqueue_result.py`（CI 第 10 个门禁 step）。全量 282 用例 / 1513 断言在 normal、coverage、ASan 三构建下一致 PASS，ASan+UBSan 零报告，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。当前只允许执行 P4-W2，完成后进入下一项。
+当前是 **P4（阶段 4，AppContext、队列和停机）**，P4-W1 与 P4-W2 均已 DONE，当前工作项 **P4-W3 deadline / cancellation / shutdown**。P3 全部退出门禁已通过。
 
+P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
+`StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
+持线程单例经 `addOwner` 显式登记（G7 停机相关部分闭环）。新增门禁 `check_app_context.py`（A1～A5），
+CI 门禁总数 11 项 + 2 项 selftest step，R4 selftest 引入 `assert_mutated` 前置断言以区分「探针失效」与「门禁失效」。
+实测：Debug 构建 rc=0 / 0 warning，301 用例全过，11 项门禁全 rc=0。
+
+遗留至后续工作项：G7 的广义部分（`getInstance` 静态依赖收敛）归入阶段 5 注入改造；
+G5 停机 deadline 的端到端验证（五类 SIGTERM 集成测试、ASan/TSan）即为 P4-W3 的范围。
 
 ## 按 migration-plan 排列的工作项
 
@@ -37,7 +44,7 @@ P4-W1 已于 2026-08-09 收口：C1～C7 全部 DONE。三 bool 状态位由单�
 | P3-W3 | 阶段 3 | 正式 target、首批闭包与 legacy ceiling | [`P03-layered-targets.md`](../work-products/P03-layered-targets.md) | DONE |
 | P3-W4 | 阶段 3 | domain 模型与 JSON codec 分离 | [`P03-domain-codecs.md`](../work-products/P03-domain-codecs.md) | DONE |
 | P4-W1 | 阶段 4 | 有界 executor 和四态队列 | [`P04-bounded-executor.md`](../work-products/P04-bounded-executor.md) | DONE |
-| P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | 启动失败回滚、显式 ownership | DOING |
+| P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | [`P04-app-context.md`](../work-products/P04-app-context.md) | DONE |
 | P4-W3 | 阶段 4 | deadline/cancellation/shutdown | 五类 SIGTERM 集成测试、ASan/TSan | TODO |
 | P5-W1 | 阶段 5 | ProviderRegistry/Router 注入 | 删除 ApiFactory/ApiManager service locator | TODO |
 | P5-W2 | 阶段 5 | SessionStore/ResponseIndex/Gate 注入 | 删除 application 单例访问 | TODO |
