@@ -45,7 +45,7 @@ G5 停机 deadline 的端到端验证（五类 SIGTERM 集成测试、ASan/TSan�
 | P3-W4 | 阶段 3 | domain 模型与 JSON codec 分离 | [`P03-domain-codecs.md`](../work-products/P03-domain-codecs.md) | DONE |
 | P4-W1 | 阶段 4 | 有界 executor 和四态队列 | [`P04-bounded-executor.md`](../work-products/P04-bounded-executor.md) | DONE |
 | P4-W2 | 阶段 4 | AppContext/Builder/runtime lifecycle | [`P04-app-context.md`](../work-products/P04-app-context.md) | DONE |
-| P4-W3 | 阶段 4 | deadline/cancellation/shutdown | 五类 SIGTERM 集成测试、ASan/TSan | TODO |
+| P4-W3 | 阶段 4 | deadline/cancellation/shutdown | [`P04-shutdown-deadline.md`](../work-products/P04-shutdown-deadline.md) | DOING |
 | P5-W1 | 阶段 5 | ProviderRegistry/Router 注入 | 删除 ApiFactory/ApiManager service locator | TODO |
 | P5-W2 | 阶段 5 | SessionStore/ResponseIndex/Gate 注入 | 删除 application 单例访问 | TODO |
 | P5-W3 | 阶段 5 | Account/Channel/Workspace/Metrics 注入 | Controller 只依赖 use case | TODO |
