@@ -116,3 +116,84 @@ provider 重试退避，位于请求处理路径而非停机路径。它们属�
 > 教训：**inventory 的数字必须能逐条点名，否则总数没有意义。**
 > 7 / 48 / 21 / 14 四个数字里有三个是错的，而它们看上去都像「工具生成的机器数字」。
 > 凡是要写进文档当验收依据的清单，都必须打印完整明细并抽样定点核对，不能只看聚合计数。
+
+---
+
+## 7. D3 开工前的现状复核（2026-08-10 晚）
+
+D1 的 inventory 定稿于 `1a01f61`。此后 `1f9382d`（D11，停机可中断）改动了
+`AppContext` 与 reaper/accountManager，**D1 的若干结论已失效**。本节按「逐条点名」
+原则复核，不覆盖 §3/§4 原文，以便对照。
+
+### 7.1 行号漂移复核（程序重算，非手抄）
+
+| 编号 | 类别 | D1 行号 | 当前行号 | 判定 |
+|------|------|--------|---------|------|
+| B1/B2/B3/B4/B8/B9/B10/B11/B12/B13/B14 | — | — | 未变 | 11 处无漂移 |
+| B5 | `thread_join` | 76 | **112** | `stop()` 拆为 `stop()/stop(deadline)/stopInternal()` 后下移 |
+| B6 | `cv_wait_for` | 89 | **79** | 现为 `interruptibleSleepFor` 内的等待 |
+| B7 | `sleep_for` | 188 | **已消失** | 见 7.3 |
+
+`chaynsClock.cpp` 的路径在 §3 表中误写为 `chaynsClock.cpp`（首字母小写），实际为大写 `C`。
+
+### 7.2 H1 已消解 —— 由 D11 顺带完成，不由 D3 完成
+
+`RuntimeOwner::stop` 自 `1f9382d` 起为
+`std::function<void(std::chrono::steady_clock::time_point)>`；
+`stopOwnersInReverse` 已 `it->stop(deadline)` 并逐 owner 记录实耗；
+`AppWiring` 五个 `addOwner` 闭包全部接收 deadline；
+`test_app_context.cpp` 已有三条断言：`PassesExactDeadlineToOwners`、
+`AllOwnersShareOneDeadline`、`RollbackAlsoDeliversDeadline`。
+
+> 教训：**缺口清单也会过期。** D11 是为「后台线程停机可中断」开的，
+> 却顺带把 D3 的主改造做了。若 D3 照 §4 表开工，第一件事就是重复实现一遍
+> 已存在的签名改造。开工前复核缺口是否仍然存在，与开工前复核行号同等必要。
+
+### 7.3 H4 已消解 —— B7 不再是不可中断睡眠
+
+B7（删除间隔 `sleep_for(deleteSpacingMs)`）已被 `interruptibleSleepFor()` 取代
+（定义 `:71`，调用点 `:225`），与 `loop()` 的周期等待共用
+`wakeMutex_ / wakeCv_ / stopRequested_`，因此不存在「周期能打断、限速打不断」的偏差。
+逐行删除循环的循环头亦有 `stopRequested_` 检查（`:189`），停机时剩余台账行留待下次启动回收。
+
+仍不可中断的只剩**一次已发出的上游 DELETE**（30s 硬上限）；`stopInternal` 在剩余预算
+小于该上限时如实 WARN。这是 D5 的验证对象，不是 D3 的改造对象。
+
+### 7.4 H3 应为 6 处而非 5 处 —— D1 漏登记一处
+
+reaper 内 `cv_wait_for` 实为两处：
+
+| 新编号 | 位置 | 语义 |
+|-------|------|------|
+| B6 | `chaynsThreadReaper.cpp:79` | `interruptibleSleepFor`：删除限速等待（原 B7 的替代） |
+| **B15** | `chaynsThreadReaper.cpp:125` | `loop()` 的扫描周期等待（`scanIntervalSeconds`） |
+
+D1 的 §3 表把 reaper 的 `cv_wait_for` 只记了一条，故边界总数应为 **15**。
+两处的相对时长语义都未改为绝对 `wait_until(deadline)`，**H3 对二者均成立**。
+
+> 这正是 §6 E-1 那条教训的第二次应验：`grep` 计数为 2、文档登记为 1，
+> 而聚合总数「14」看上去仍然像个可信的机器数字。
+
+### 7.5 D3 的实际剩余范围（据此收窄）
+
+| 缺口 | 复核后状态 | 归属 |
+|------|-----------|------|
+| H1 | ✅ 已消解（`1f9382d`） | 不需 D3 动作，仅需本节留痕 |
+| H4 | ✅ 已消解（`1f9382d`） | 同上 |
+| H6 | ⚠️ 半消解：deadline 已传播；超支仍只 WARN，不施加取消 | D3 剩余项 |
+| H5 | ❌ 未做：5 处 `thread_join` 无超时上限 | **D3 主体** |
+| H3 | ❌ 未做，且靶子数 5 → 6 | D4 |
+
+H5 的硬约束：`std::thread` 没有限时 join，`join()` 一旦进入就无法带超时退出。
+故只有三条路：
+
+- **A. 线程自报完成 + 限时等标志**：worker 退出前置 `done` 并 notify，停机侧按剩余
+  预算 `wait_until(done)`；超预算则不 join。现网 `BackgroundTaskQueue::waitUntilIdle`
+  已是该模式的局部实例，可抽为通用原语与 D2 的 `CancellationSource` 并列。
+- **B. 超预算即 `detach()`**：join 不再挂死，但线程仍在访问对象，与本工作项退出门禁
+  「deadline 超时路径不析构活动线程所访问对象」直接冲突。
+- **C. 承认 join 无上限，靠 D4 把所有等待改可取消来间接封顶**：不新增机制，但
+  「任一 worker 卡在不可取消处（如已发出的上游 DELETE）即整链卡死」仍然成立。
+
+倾向 A：它能给出「超预算」这一**可观测事实**且不引入 use-after-free 风险；
+B 需与退出门禁一并重新定义，不在 D3 单独决定。

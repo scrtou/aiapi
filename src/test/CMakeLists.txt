@@ -82,6 +82,7 @@ set(TEST_SOURCES
     test_startup_result.cpp
     test_app_context.cpp
     test_cancellation.cpp
+    test_thread_join.cpp
     test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
     test_retool_provider_fixture.cpp
