@@ -13,6 +13,7 @@
 #include <queue>
 #include <atomic>
 #include <chrono>
+#include <platform/ThreadJoin.h>
 
 namespace metrics {
 
@@ -62,9 +63,46 @@ public:
     void init(const ErrorStatsConfig& config);
     
     /**
-     * @brief 停止服务并等待后台线程结束
+     * @brief 停止服务并【无上限】等待后台线程结束。
+     *
+     * 保留此重载的原因有二：~ErrorStatsService() 的兜底停机没有预算可用；
+     * 既有调用方（测试等）依赖它。语义与改造前完全一致。
      */
     void shutdown();
+
+    /**
+     * @brief 停止服务，并在 deadline 之前汇合后台线程（P4-W3 / D4，J5）。
+     *
+     * @return true  线程已在预算内退出，尾部 flushEvents()/flushRequestAgg()
+     *               已执行，服务已复位为可重新 init 的状态；
+     *         false 预算耗尽，线程仍在运行且**未 detach**。此时刻意
+     *               **不做**尾部落库、也不复位 initialized_：那个线程仍在
+     *               访问本对象的队列，再从停机侧并发 flush 只会制造竞争；
+     *               复位 initialized_ 更会允许再起第二个 worker。
+     *               调用方可在稍后用无参 shutdown() 重新收割该线程。
+     */
+    bool shutdown(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief 是否【尚未请求停机】。
+     *
+     * 注意这不是「线程是否存活」：shutdownWithin() 在 joinUntil() 之前就把
+     * running_ 置 false，因此限时停机超预算返回 false 时，本函数已经报 false，
+     * 而那条线程仍在运行。要判断「是否还有线程待收割」，用 hasPendingWorker()。
+     *
+     * 用途：确认 init() 这一轮是否真的拉起了 worker（撞上未复位的 initialized_
+     * 会变成 no-op），否则后续断言会被空壳状态免费满足。
+     */
+    bool isRunning() const { return running_.load(); }
+
+    /**
+     * @brief 是否仍有未被 join 的后台线程（限时停机超预算后的残局标志）。
+     *
+     * 超预算路径刻意不 detach、不清理，线程仍归本对象所有；此时
+     * isRunning()==false 但本函数为 true。调用方据此决定是否再用无参
+     * shutdown() 收割一次。线程收割干净后本函数转为 false 且不再回真。
+     */
+    bool hasPendingWorker() const { return workerThread_.joinable(); }
     
     /**
      * @brief 记录错误事件
@@ -131,6 +169,7 @@ private:
     
     void recordEvent(const ErrorEvent& event);
     void workerLoop();
+    bool shutdownWithin(const std::chrono::steady_clock::time_point* deadline);
     void flushEvents();
     void flushRequestAgg();
     void updatePrometheusCounters(const ErrorEvent& event);
@@ -151,6 +190,10 @@ private:
     
     // 后台线程
     std::thread workerThread_;
+    // 每次 init() 重建：ThreadCompletion 是一次性的（signal 后永久为真）。
+    // 若复用同一个实例，第二次停机会看到「上一个线程留下的已完成」而立刻
+    // join 一个仍在运行的新线程 —— 限时汇合会静默退化成无限阻塞。
+    platform::ThreadCompletionPtr workerDone_;
     std::condition_variable cv_;
     std::atomic<bool> running_{false};
     

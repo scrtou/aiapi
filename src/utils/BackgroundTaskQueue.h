@@ -10,7 +10,10 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <drogon/drogon.h>
+
+#include <platform/ThreadJoin.h>
 
 /**
  * @brief 后台任务执行器的入队结果。
@@ -82,7 +85,20 @@ public:
         if (state_ != State::Fresh) return;
         state_ = State::Running;
         for (size_t i = 0; i < numThreads; ++i) {
-            workers_.emplace_back([this, i]() { workerLoop(i); });
+            // 每条 worker 独占一个完成标志。ThreadCompletion 是一次性信号，
+            // 不可在多条线程间共享——共享会让第一条退出就宣告全体完成，
+            // 限时汇合随即静默退化成无限 join。
+            auto done = std::make_shared<platform::ThreadCompletion>();
+            workerDone_.push_back(done);
+            workers_.emplace_back([this, i, done]() {
+                // 析构守卫：正常 return、break 还是异常展开，都必须自报完成。
+                // 漏报会让停机侧白等满预算，把「线程早已退出」误判为超支。
+                struct Signal {
+                    platform::ThreadCompletionPtr d;
+                    ~Signal() { d->signal(); }
+                } guard{done};
+                workerLoop(i);
+            });
         }
         LOG_INFO << "[后台任务队列] 启动" << numThreads << " 个工作线程";
     }
@@ -137,32 +153,28 @@ public:
         return EnqueueResult::Accepted;
     }
 
-    /// 优雅停机：拒绝新任务，等待队列排空，然后 join 所有线程
-    void shutdown()
+    /// 优雅停机：拒绝新任务，等待队列排空，然后 join 所有线程。
+    /// 语义与 P4-W1 起完全一致——无限等待，直到全部 worker 退出。
+    /// 亦用于收割上一轮限时停机超预算后残留的线程。
+    void shutdown() { (void)shutdownImpl(std::nullopt); }
+
+    /**
+     * 限时停机（P4-D5）：在绝对 deadline 之前完成 drain + join。
+     *
+     * @return true  全部 worker 已汇合，队列已进入 Stopped；
+     *         false 预算耗尽仍有 worker 未退出。此时**状态停留在 Draining**，
+     *               线程既未 join 也未 detach，仍被本对象持有。
+     *
+     * 为什么超预算时不清空 workers_：`std::vector<std::thread>` 析构会对
+     * joinable 元素调用 std::terminate。「停机超时」绝不能升级成进程崩溃。
+     * 也不推进到 Stopped——那会让残局无从辨认，调用方将失去再次收割的依据。
+     *
+     * 注意 deadline 是绝对时间点：N 条线程依次汇合共用同一个截止时间，
+     * 总上界仍是 deadline 本身，而非 N 倍预算。
+     */
+    [[nodiscard]] bool shutdown(std::chrono::steady_clock::time_point deadline)
     {
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            // Fresh 直接落到 Stopped：即使队列从未启动过，也要封死后续
-            // enqueue，否则「启动后未收到任何请求就退出」的场景仍可被复活。
-            if (state_ == State::Fresh) {
-                state_ = State::Stopped;
-                return;
-            }
-            if (state_ != State::Running) return;  // Draining/Stopped 幂等
-            state_ = State::Draining;
-        }
-        cv_.notify_all();
-        for (auto& w : workers_) {
-            if (w.joinable()) {
-                w.join();
-            }
-        }
-        workers_.clear();
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            state_ = State::Stopped;
-        }
-        LOG_INFO << "[后台任务队列] 已停机，所有工作线程已退出";
+        return shutdownImpl(deadline);
     }
 
     /**
@@ -252,6 +264,54 @@ private:
     explicit BackgroundTaskQueue(size_t capacity = kDefaultCapacity)
         : capacity_(capacity) {}
 
+    bool shutdownImpl(std::optional<std::chrono::steady_clock::time_point> deadline)
+    {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            // Fresh 直接落到 Stopped：即使队列从未启动过，也要封死后续
+            // enqueue，否则「启动后未收到任何请求就退出」的场景仍可被复活。
+            if (state_ == State::Fresh) {
+                state_ = State::Stopped;
+                return true;
+            }
+            if (state_ == State::Stopped) return true;  // 终态，幂等
+            // Running -> Draining；若已是 Draining，说明是在收割上一轮限时
+            // 停机的残局，状态不必也不能回退。
+            state_ = State::Draining;
+        }
+        cv_.notify_all();
+
+        bool allJoined = true;
+        for (size_t i = 0; i < workers_.size(); ++i) {
+            auto& w = workers_[i];
+            if (!w.joinable()) continue;
+            if (deadline) {
+                if (!platform::joinUntil(w, *workerDone_[i], *deadline)) {
+                    allJoined = false;
+                    // 不 break：后续线程可能已退出，能收一条是一条。
+                    // 预算已过期时它们的 waitUntil 会立即返回，不会追加等待。
+                }
+            } else {
+                w.join();
+            }
+        }
+
+        if (!allJoined) {
+            LOG_WARN << "[后台任务队列] 停机预算耗尽，仍有工作线程未退出；"
+                     << "线程与队列保持原样，等待后续收割";
+            return false;
+        }
+
+        workers_.clear();
+        workerDone_.clear();
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            state_ = State::Stopped;
+        }
+        LOG_INFO << "[后台任务队列] 已停机，所有工作线程已退出";
+        return true;
+    }
+
     struct NamedTask {
         std::string name;
         std::function<void()> fn;
@@ -303,6 +363,8 @@ private:
     std::condition_variable idleCv_;  ///< 唤醒 waitUntilIdle 观测方
     std::queue<NamedTask> tasks_;
     std::vector<std::thread> workers_;
+    /// 与 workers_ 同下标一一对应的完成标志，供限时汇合使用。
+    std::vector<platform::ThreadCompletionPtr> workerDone_;
     size_t running_ = 0;           ///< 已出队但未执行完的任务数
     State state_ = State::Fresh;   // N2：单向不可逆，无回边
     const size_t capacity_ = kDefaultCapacity;

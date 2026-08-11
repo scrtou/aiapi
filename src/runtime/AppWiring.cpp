@@ -148,7 +148,10 @@ StartupResult stepErrorStats(AppContext& ctx)
                          // D4 给 shutdown 加 deadline 形参后，这里直接透传即可。
                          LOG_INFO << "[停机] error stats 剩余预算 "
                                   << remainingBudget(deadline).count() << "ms";
-                         metrics::ErrorStatsService::getInstance().shutdown();
+                         if (!metrics::ErrorStatsService::getInstance().shutdown(deadline)) {
+                             LOG_WARN << "[停机] error stats 后台线程未在预算内退出，"
+                                      << "尾部落库已跳过";
+                         }
                      });
     }
     return StartupResult::ok();

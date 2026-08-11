@@ -42,7 +42,16 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
     
     // 启动后台线程
     running_ = true;
-    workerThread_ = std::thread(&ErrorStatsService::workerLoop, this);
+    workerDone_ = std::make_shared<platform::ThreadCompletion>();
+    // 用守卫对象自报完成，而不是在 workerLoop 末尾加一行：后者会被任何提前
+    // return 或异常展开绕过，停机侧就要白等满整个预算才发现「没等到」。
+    workerThread_ = std::thread([this, done = workerDone_]() {
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
+        workerLoop();
+    });
     
     // 启动定时清理任务（每小时执行一次）
     drogon::app().getLoop()->runEvery(std::chrono::hours(1), [this]() {
@@ -78,29 +87,60 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
 }
 
 void ErrorStatsService::shutdown() {
-    if (!running_) return;
-    
-    LOG_INFO << "[错误统计服务] 开始关闭服务";
-    {
-        // 置位必须持 eventMutex_：workerLoop 的 wait_for 谓词读的就是
-        // running_，锁外置位会与「谓词已检查、尚未进入等待」的窗口交错，
-        // 使 notify 落空。这里最坏情况只多等一个 asyncFlushMs（不会像
-        // reaper 那样挂死），但停机延迟不应依赖调度巧合，统一按同一套
-        // 约束写，也避免以后把 wait_for 改成 wait 时退化成真死锁。
-        std::lock_guard<std::mutex> lock(eventMutex_);
-        running_ = false;
+    (void)shutdownWithin(nullptr);
+}
+
+bool ErrorStatsService::shutdown(std::chrono::steady_clock::time_point deadline) {
+    return shutdownWithin(&deadline);
+}
+
+bool ErrorStatsService::shutdownWithin(const std::chrono::steady_clock::time_point* deadline) {
+    // 幂等：既没在跑、也没有待收割的线程，才算真的无事可做。
+    // 注意判据不能只看 running_：上一次限时汇合超预算时会留下一个仍 joinable
+    // 的线程，那种状态下必须允许再次进入并把它收割掉。
+    if (!running_ && !workerThread_.joinable()) {
+        return true;
     }
-    cv_.notify_all();
-    
+
+    if (running_) {
+        LOG_INFO << "[错误统计服务] 开始关闭服务";
+        {
+            // 置位必须持 eventMutex_：workerLoop 的 wait_for 谓词读的就是
+            // running_，锁外置位会与「谓词已检查、尚未进入等待」的窗口交错，
+            // 使 notify 落空。这里最坏情况只多等一个 asyncFlushMs（不会像
+            // reaper 那样挂死），但停机延迟不应依赖调度巧合，统一按同一套
+            // 约束写，也避免以后把 wait_for 改成 wait 时退化成真死锁。
+            std::lock_guard<std::mutex> lock(eventMutex_);
+            running_ = false;
+        }
+        cv_.notify_all();
+    }
+
+    bool joined = true;
     if (workerThread_.joinable()) {
-        workerThread_.join();
+        if (deadline != nullptr && workerDone_) {
+            joined = platform::joinUntil(workerThread_, *workerDone_, *deadline);
+        } else {
+            // 无预算路径：维持改造前的无限等待语义（析构兜底走这里）。
+            workerThread_.join();
+        }
     }
-    
+
+    if (!joined) {
+        LOG_WARN << "[错误统计服务] 后台线程未在停机预算内退出，未 join、未 detach，"
+                 << "线程仍在运行；跳过尾部落库以避免与其并发 flush";
+        return false;
+    }
 
     flushEvents();
     flushRequestAgg();
-    
+
+    // 复位 initialized_：改造前它一旦为真永不复位，服务被停过之后 init() 只会
+    // 打一条「跳过重复初始化」而不再拉起线程，形成一个看不出来的空壳。
+    initialized_ = false;
+
     LOG_INFO << "[错误统计服务] 关闭完成，累计丢弃事件数=" << droppedCount_.load();
+    return true;
 }
 
 void ErrorStatsService::recordEvent(const ErrorEvent& event) {
