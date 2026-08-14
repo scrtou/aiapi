@@ -77,7 +77,7 @@ class HeapOrderFakeAccountStore : public IAccountStore
 DROGON_TEST(AccountPoolReordersAfterTokenStatusInvalidation)
 {
     auto store = std::make_shared<HeapOrderFakeAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
 
     // low@ hat useCount 0 und steht damit initial an der Spitze des Heaps.
@@ -103,7 +103,7 @@ DROGON_TEST(AccountPoolReordersAfterTokenStatusInvalidation)
 DROGON_TEST(AccountPoolReordersAfterUseCountUpdate)
 {
     auto store = std::make_shared<HeapOrderFakeAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
 
     store->rows = {makeAccount("low@example.com", 0), makeAccount("high@example.com", 5)};
@@ -132,7 +132,7 @@ DROGON_TEST(AccountPoolReordersAfterUseCountUpdate)
 DROGON_TEST(AccountPoolTypeFilterUnderMultipleInvalidations)
 {
     auto store = std::make_shared<HeapOrderFakeAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
 
     store->rows = {makeTypedAccount("free-0@example.com", 0, "free"),

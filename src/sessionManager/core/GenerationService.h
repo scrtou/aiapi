@@ -9,6 +9,11 @@
 #include <sessionManager/core/Errors.h>
 #include <sessionManager/tooling/ToolCallBridge.h>
 #include <sessionManager/tooling/XmlTagToolCallCodec.h>
+#include <domain/port/IProviderRegistry.h>
+#include <domain/port/IResponseIndex.h>
+#include <domain/port/IExecutionGate.h>
+#include <domain/port/IChannelCatalog.h>
+class chatSession;
 /**
  * @brief 生成服务
  *
@@ -23,7 +28,18 @@
  */
 class GenerationService {
 public:
-    GenerationService() = default;
+    GenerationService(IProviderRegistry* providerRegistry,
+                      chatSession* sessionStore,
+                      IResponseIndex* responseIndex,
+                      session::IExecutionGate* executionGate,
+                      IChannelCatalog* channelCatalog = nullptr)
+        : providerRegistry_(providerRegistry),
+          sessionStore_(sessionStore),
+          responseIndex_(responseIndex),
+          executionGate_(executionGate),
+          channelCatalog_(channelCatalog)
+    {
+    }
     ~GenerationService() = default;
     
     // 禁止拷贝和移动
@@ -146,7 +162,7 @@ private:
      * @param channelName 通道名称
      * @return 是否支持 tool calls
      */
-    static bool getChannelSupportsToolCalls(const std::string& channelName);
+    bool getChannelSupportsToolCalls(const std::string& channelName) const;
     
      /**
       * @brief 解析 XML 格式的 tool calls（Toolify-style）
@@ -155,12 +171,18 @@ private:
       * @param outTextContent 输出的纯文本内容
       * @param outToolCalls 输出的 tool calls 列表
       */
-     static void parseXmlToolCalls(
+    static void parseXmlToolCalls(
          const std::string& xmlInput,
          std::string& outTextContent,
          std::vector<generation::ToolCallDone>& outToolCalls,
          const std::string& sentinel
      );
+
+    IProviderRegistry* providerRegistry_ = nullptr;
+    chatSession* sessionStore_ = nullptr;
+    IResponseIndex* responseIndex_ = nullptr;
+    session::IExecutionGate* executionGate_ = nullptr;
+    IChannelCatalog* channelCatalog_ = nullptr;
     
 };
 

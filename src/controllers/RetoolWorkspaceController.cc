@@ -3,15 +3,19 @@
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <controllers/ControllerUtils.h>
-#include <channelManager/channelManager.h>
-#include <dbManager/config/ConfigDbManager.h>
-#include <managedAccount/service/ManagedAccountService.h>
 #include <optional>
+#include <stdexcept>
 #include <domain/model/RetoolWorkspaceInfo.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <retoolWorkspace/RetoolWorkspaceService.h>
 
 using namespace drogon;
+
+workspace::IRetoolWorkspaceAdminUseCase* RetoolWorkspaceController::useCase_ = nullptr;
+
+void RetoolWorkspaceController::setUseCase(
+    workspace::IRetoolWorkspaceAdminUseCase* workspaces)
+{
+    useCase_ = workspaces;
+}
 
 namespace
 {
@@ -26,48 +30,6 @@ std::optional<std::string> getWorkspaceId(const HttpRequestPtr& req, const Json:
     return std::nullopt;
 }
 
-std::optional<std::string> getConfigValue(const std::string& key)
-{
-    return ConfigDbManager::getInstance()->getValue(key, nullptr);
-}
-
-void mergeWorkspaceInfoPreservingExisting(
-    RetoolWorkspaceInfo& incoming,
-    const RetoolWorkspaceInfo& existing)
-{
-    auto keepIfEmpty = [](std::string& target, const std::string& fallback) {
-        if (target.empty()) target = fallback;
-    };
-
-    keepIfEmpty(incoming.email, existing.email);
-    keepIfEmpty(incoming.password, existing.password);
-    keepIfEmpty(incoming.mailProvider, existing.mailProvider);
-    keepIfEmpty(incoming.mailAccountId, existing.mailAccountId);
-    keepIfEmpty(incoming.baseUrl, existing.baseUrl);
-    keepIfEmpty(incoming.subdomain, existing.subdomain);
-    keepIfEmpty(incoming.accessToken, existing.accessToken);
-    keepIfEmpty(incoming.xsrfToken, existing.xsrfToken);
-    keepIfEmpty(incoming.extraCookiesJson, existing.extraCookiesJson);
-    keepIfEmpty(incoming.openaiResourceUuid, existing.openaiResourceUuid);
-    keepIfEmpty(incoming.openaiResourceName, existing.openaiResourceName);
-    keepIfEmpty(incoming.anthropicResourceUuid, existing.anthropicResourceUuid);
-    keepIfEmpty(incoming.anthropicResourceName, existing.anthropicResourceName);
-    keepIfEmpty(incoming.workflowId, existing.workflowId);
-    keepIfEmpty(incoming.workflowApiKey, existing.workflowApiKey);
-    keepIfEmpty(incoming.agentId, existing.agentId);
-    keepIfEmpty(incoming.status, existing.status);
-    keepIfEmpty(incoming.verifyStatus, existing.verifyStatus);
-    keepIfEmpty(incoming.lastVerifyAt, existing.lastVerifyAt);
-    keepIfEmpty(incoming.lastUsedAt, existing.lastUsedAt);
-    keepIfEmpty(incoming.notesJson, existing.notesJson);
-    keepIfEmpty(incoming.createdAt, existing.createdAt);
-    keepIfEmpty(incoming.updatedAt, existing.updatedAt);
-
-    if (incoming.inUseCount == 0 && existing.inUseCount != 0)
-    {
-        incoming.inUseCount = existing.inUseCount;
-    }
-}
 }  // namespace
 
 void RetoolWorkspaceController::createWorkspace(
@@ -78,7 +40,10 @@ void RetoolWorkspaceController::createWorkspace(
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
     try
     {
-        auto workspace = RetoolWorkspaceService::getInstance().provisionWorkspace(*jsonPtr);
+        if (!useCase_) throw std::runtime_error("workspace admin use case unavailable");
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = "";
+        auto workspace = useCase_->provision(Json::writeString(builder, *jsonPtr));
         Json::Value response(Json::objectValue);
         response["status"] = "success";
         response["workspace"] = retoolworkspacecodec::toJson(workspace, true);
@@ -105,23 +70,12 @@ void RetoolWorkspaceController::upsertWorkspace(
     }
 
     std::string error;
-    if (auto existing = RetoolWorkspaceManager::getInstance().getWorkspace(info.workspaceId, &error); existing)
+    if (!useCase_ || !useCase_->upsert(info, &error))
     {
-        mergeWorkspaceInfoPreservingExisting(info, *existing);
-    }
-    else
-    {
-        error.clear();
-    }
-
-    if (info.baseUrl.empty())
-    {
-        ctl::sendError(callback, k400BadRequest, "invalid_request_error", "baseUrl is required");
-        return;
-    }
-
-    if (!RetoolWorkspaceManager::getInstance().upsertWorkspace(info, &error))
-    {
+        if (error == "baseUrl is required") {
+            ctl::sendError(callback, k400BadRequest, "invalid_request_error", error);
+            return;
+        }
         ctl::sendError(callback, k500InternalServerError, "workspace_upsert_failed", error);
         return;
     }
@@ -144,7 +98,7 @@ void RetoolWorkspaceController::workspaceInfo(
     }
 
     std::string error;
-    auto workspace = RetoolWorkspaceManager::getInstance().getWorkspace(*workspaceId, &error);
+    auto workspace = useCase_ ? useCase_->get(*workspaceId, &error) : std::optional<RetoolWorkspaceInfo>{};
     if (!workspace)
     {
         ctl::sendError(callback, k404NotFound, "not_found", error.empty() ? "workspace not found" : error);
@@ -153,9 +107,7 @@ void RetoolWorkspaceController::workspaceInfo(
 
     Json::Value response(Json::objectValue);
     response["workspace"] = retoolworkspacecodec::toJson(*workspace, true);
-    auto executionContext = ManagedAccountService::getInstance().buildExecutionContext(
-        ManagedAccountKind::RetoolWorkspace, *workspaceId, nullptr);
-    response["hasExecutionContext"] = executionContext.has_value();
+    response["hasExecutionContext"] = useCase_->hasExecutionContext(*workspace);
     ctl::sendJson(callback, response, k200OK);
 }
 
@@ -163,12 +115,19 @@ void RetoolWorkspaceController::workspaceList(
     const HttpRequestPtr&,
     std::function<void(const HttpResponsePtr&)>&& callback)
 {
-    auto records = ManagedAccountService::getInstance().listByKind(ManagedAccountKind::RetoolWorkspace);
+    auto records = useCase_ ? useCase_->list() : std::vector<RetoolWorkspaceInfo>{};
     Json::Value response(Json::objectValue);
     response["items"] = Json::Value(Json::arrayValue);
     for (const auto& record : records)
     {
-        response["items"].append(record.toJson());
+        Json::Value item(Json::objectValue);
+        item["id"] = record.workspaceId;
+        item["kind"] = "retool_workspace";
+        item["provider"] = "retool";
+        item["displayName"] = record.baseUrl.empty() ? record.email : record.baseUrl;
+        item["status"] = record.status;
+        item["metadata"] = retoolworkspacecodec::toJson(record, true);
+        response["items"].append(item);
     }
     response["total"] = static_cast<Json::UInt64>(records.size());
     ctl::sendJson(callback, response, k200OK);
@@ -178,57 +137,19 @@ void RetoolWorkspaceController::workspacePoolStatus(
     const HttpRequestPtr&,
     std::function<void(const HttpResponsePtr&)>&& callback)
 {
-    auto workspaces = RetoolWorkspaceManager::getInstance().listWorkspaces();
+    const auto status = useCase_ ? useCase_->poolStatus() : workspace::PoolStatus{};
     Json::Value response(Json::objectValue);
-    int idle = 0;
-    int inUse = 0;
-    int disabled = 0;
-    std::string latestUsedAt;
-    for (const auto& workspace : workspaces)
-    {
-        if (!workspace.lastUsedAt.empty() && (latestUsedAt.empty() || workspace.lastUsedAt > latestUsedAt))
-        {
-            latestUsedAt = workspace.lastUsedAt;
-        }
-        if (workspace.status == "disabled")
-        {
-            ++disabled;
-        }
-        else if (workspace.inUseCount > 0)
-        {
-            ++inUse;
-        }
-        else
-        {
-            ++idle;
-        }
-    }
-
-    Json::Value channelJson(Json::objectValue);
-    for (const auto& channel : ChannelManager::getInstance().getChannelList())
-    {
-        if (channel.channelName == "retoolapi")
-        {
-            channelJson = channelcodec::toJson(channel, true);
-            break;
-        }
-    }
-
-    response["total"] = static_cast<Json::UInt64>(workspaces.size());
-    response["idle"] = idle;
-    response["inUse"] = inUse;
-    response["disabled"] = disabled;
-    response["latestUsedAt"] = latestUsedAt;
-    response["channel"] = channelJson;
-    int consecutiveFailures = 0;
-    if (const auto value = getConfigValue("retoolapi.provision.consecutive_failures"); value && !value->empty())
-    {
-        try { consecutiveFailures = std::stoi(*value); } catch (...) {}
-    }
-    response["consecutiveFailures"] = consecutiveFailures;
-    response["lastFailureAt"] = getConfigValue("retoolapi.provision.last_failure_at").value_or("");
-    response["lastFailureReason"] = getConfigValue("retoolapi.provision.last_failure_reason").value_or("");
-    response["cooldownUntil"] = getConfigValue("retoolapi.provision.cooldown_until").value_or("");
+    response["total"] = static_cast<Json::UInt64>(status.total);
+    response["idle"] = status.idle;
+    response["inUse"] = status.inUse;
+    response["disabled"] = status.disabled;
+    response["latestUsedAt"] = status.latestUsedAt;
+    response["channel"] = status.channel
+        ? channelcodec::toJson(*status.channel, true) : Json::Value(Json::objectValue);
+    response["consecutiveFailures"] = status.consecutiveFailures;
+    response["lastFailureAt"] = status.lastFailureAt;
+    response["lastFailureReason"] = status.lastFailureReason;
+    response["cooldownUntil"] = status.cooldownUntil;
     ctl::sendJson(callback, response, k200OK);
 }
 
@@ -246,7 +167,7 @@ void RetoolWorkspaceController::workspaceDisable(
     }
 
     std::string error;
-    if (!ManagedAccountService::getInstance().disable(ManagedAccountKind::RetoolWorkspace, *workspaceId, &error))
+    if (!useCase_ || !useCase_->disable(*workspaceId, &error))
     {
         ctl::sendError(callback, k500InternalServerError, "workspace_disable_failed", error);
         return;
@@ -273,24 +194,17 @@ void RetoolWorkspaceController::workspaceEnable(
     }
 
     std::string error;
-    auto workspace = RetoolWorkspaceManager::getInstance().getWorkspace(*workspaceId, &error);
+    auto workspace = useCase_ ? useCase_->get(*workspaceId, &error) : std::optional<RetoolWorkspaceInfo>{};
     if (!workspace)
     {
         ctl::sendError(callback, k404NotFound, "not_found", error.empty() ? "workspace not found" : error);
         return;
     }
 
-    const auto currentVerifyStatus = workspace->verifyStatus.empty() ? std::string("unknown") : workspace->verifyStatus;
-    const auto nextStatus =
-        (currentVerifyStatus == "ready" || currentVerifyStatus == "passed")
-            ? std::string("ready")
-            : std::string("needs_attention");
-
-    if (!RetoolWorkspaceManager::getInstance().updateWorkspaceStatus(
-            *workspaceId,
-            nextStatus,
-            currentVerifyStatus,
-            &error))
+    std::string currentVerifyStatus;
+    std::string nextStatus;
+    if (!useCase_ || !useCase_->enable(
+            *workspaceId, &nextStatus, &currentVerifyStatus, &error))
     {
         ctl::sendError(callback, k500InternalServerError, "workspace_enable_failed", error);
         return;
@@ -318,7 +232,7 @@ void RetoolWorkspaceController::workspaceDelete(
     }
 
     std::string error;
-    if (!RetoolWorkspaceManager::getInstance().deleteWorkspace(*workspaceId, &error))
+    if (!useCase_ || !useCase_->remove(*workspaceId, &error))
     {
         ctl::sendError(callback, k500InternalServerError, "workspace_delete_failed", error);
         return;
@@ -344,25 +258,18 @@ void RetoolWorkspaceController::workspaceVerify(
     }
 
     std::string error;
-    auto workspace = RetoolWorkspaceManager::getInstance().getWorkspace(*workspaceId, &error);
+    auto workspace = useCase_ ? useCase_->get(*workspaceId, &error) : std::optional<RetoolWorkspaceInfo>{};
     if (!workspace)
     {
         ctl::sendError(callback, k404NotFound, "not_found", error.empty() ? "workspace not found" : error);
         return;
     }
 
-    const bool ready = !workspace->baseUrl.empty() &&
-                       !workspace->accessToken.empty() &&
-                       !workspace->xsrfToken.empty() &&
-                       !workspace->workflowId.empty() &&
-                       !workspace->agentId.empty();
-    const std::string verifyStatus = ready ? "ready" : "incomplete";
-
-    if (!RetoolWorkspaceManager::getInstance().updateWorkspaceStatus(
-            *workspaceId,
-            ready ? workspace->status : "needs_attention",
-            verifyStatus,
-            &error))
+    bool ready = false;
+    std::string verifyStatus;
+    RetoolWorkspaceInfo verifiedWorkspace;
+    if (!useCase_ || !useCase_->verify(
+            *workspaceId, &ready, &verifyStatus, &verifiedWorkspace, &error))
     {
         ctl::sendError(callback, k500InternalServerError, "workspace_verify_failed", error);
         return;
@@ -372,10 +279,10 @@ void RetoolWorkspaceController::workspaceVerify(
     response["workspaceId"] = *workspaceId;
     response["ready"] = ready;
     response["verifyStatus"] = verifyStatus;
-    response["checks"]["baseUrl"] = !workspace->baseUrl.empty();
-    response["checks"]["accessToken"] = !workspace->accessToken.empty();
-    response["checks"]["xsrfToken"] = !workspace->xsrfToken.empty();
-    response["checks"]["workflowId"] = !workspace->workflowId.empty();
-    response["checks"]["agentId"] = !workspace->agentId.empty();
+    response["checks"]["baseUrl"] = !verifiedWorkspace.baseUrl.empty();
+    response["checks"]["accessToken"] = !verifiedWorkspace.accessToken.empty();
+    response["checks"]["xsrfToken"] = !verifiedWorkspace.xsrfToken.empty();
+    response["checks"]["workflowId"] = !verifiedWorkspace.workflowId.empty();
+    response["checks"]["agentId"] = !verifiedWorkspace.agentId.empty();
     ctl::sendJson(callback, response, k200OK);
 }

@@ -13,14 +13,15 @@
 // 缺口清单来自链接实测而非推测；Provider 退役后已同步删除不再需要的 backup 桩。
 #include <dbManager/config/ConfigDbManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include "chayns_thread_stub_control.h"
+#include <test/chayns_thread_stub_control.h>
 #include <retoolWorkspace/RetoolWorkspaceService.h>
 
 #include <map>
 #include <optional>
 #include <string>
 
-// ---- ConfigDbManager（4 个）----
+// ---- ConfigDbManager（5 个）----
+void ConfigDbManager::initialize() {}
 void ConfigDbManager::detectDbType() {}
 bool ConfigDbManager::ensureTable(std::string*) { return true; }
 std::optional<std::string> ConfigDbManager::getValue(const std::string&, std::string*)
@@ -39,25 +40,14 @@ bool ConfigDbManager::setValues(const std::map<std::string, std::string>&, std::
 // channelDbManager.cpp object。它仅提供符号；测试用例不调用其任何方法，
 // 故不会触达真实数据库。
 
-// ---- RetoolWorkspaceService（1 个）----
-RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value&, std::string*)
-{
-    return RetoolWorkspaceInfo{};
-}
-
 // ---- chaynsThreadDbManager ----
-// 测试二进制整体替换该单例：真实实现（走 drogon DbClient）不进 aiapi_test。
-// 桩原先是纯静默的（loadThreadsOlderThan 恒返回空），导致 runOnce()
+// 测试二进制替换的是显式构造 ledger 的 DB 副作用：真实实现（走 drogon
+// DbClient）不进 aiapi_test。桩原先是纯静默的（loadThreadsOlderThan 恒返回空），导致 runOnce()
 // 的删除循环在单测中不可达——D4 的 M2 变异（限速等待退回 sleep_for）
 // 因此无法被任何单测杀死。
 //
 // 现改为可控桩：测试注入待回收行，桩记录被调用的删除/重试序列。
-// 只影响测试二进制，生产代码零改动。
-std::shared_ptr<chaynsThreadDbManager> chaynsThreadDbManager::getInstance()
-{
-    static auto instance = std::make_shared<chaynsThreadDbManager>();
-    return instance;
-}
+// 只影响测试二进制，生产 composition root 仍注入真实 ledger。
 void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow&) {}
 void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string&) {}
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string&, const std::string&) {}

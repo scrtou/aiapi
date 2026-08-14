@@ -13,17 +13,16 @@
 class RetoolWorkspaceDbManager : public IRetoolWorkspaceStore
 {
   public:
-    static std::shared_ptr<RetoolWorkspaceDbManager> getInstance()
-    {
-        static std::shared_ptr<RetoolWorkspaceDbManager> instance;
-        if (instance == nullptr)
-        {
-            instance = std::make_shared<RetoolWorkspaceDbManager>();
-            instance->dbClient_ = drogon::app().getDbClient("aichatpg");
-            instance->detectDbType();
-        }
-        return instance;
-    }
+    // The composition root owns this concrete adapter.  Construction is
+    // intentionally side-effect free: a local test fixture must not touch
+    // the process-wide Drogon app merely by creating a store object.
+    RetoolWorkspaceDbManager() = default;
+    RetoolWorkspaceDbManager(const RetoolWorkspaceDbManager&) = delete;
+    RetoolWorkspaceDbManager& operator=(const RetoolWorkspaceDbManager&) = delete;
+
+    /// Bind the configured DB client after Drogon configuration is available.
+    /// AppWiring calls this before publishing the store to workspace services.
+    void initialize();
 
     bool ensureTable(std::string* errorMessage = nullptr) override;
     bool upsertWorkspace(const RetoolWorkspaceInfo& info, std::string* errorMessage = nullptr) override;
@@ -41,12 +40,14 @@ class RetoolWorkspaceDbManager : public IRetoolWorkspaceStore
                               std::string* errorMessage = nullptr) override;
 
   private:
+    bool hasDbClient(std::string* errorMessage) const;
     void detectDbType();
     std::string createTableSql() const;
     bool ensureColumns(std::string* errorMessage = nullptr);
 
     std::shared_ptr<drogon::orm::DbClient> dbClient_;
     DbType dbType_ = DbType::PostgreSQL;
+    bool initialized_ = false;
 };
 
 #endif

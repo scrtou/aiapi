@@ -1,5 +1,5 @@
 #include <dbManager/session/SessionDbManager.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <domain/port/IBackgroundExecutor.h>
 #include <algorithm>
 #include <sstream>
 
@@ -7,21 +7,23 @@ namespace {
 constexpr const char* kLogTag = "[会话持久化]";
 }
 
-std::shared_ptr<SessionDbManager> SessionDbManager::getInstance()
+SessionDbManager::SessionDbManager(IBackgroundExecutor* executor)
+    : executor_(executor)
 {
-    static std::shared_ptr<SessionDbManager> instance;
-    if (instance == nullptr) {
-        instance = std::make_shared<SessionDbManager>();
-        try {
-            instance->dbClient_ = drogon::app().getDbClient("aichatpg");
-            instance->detectDbType();
-            instance->enabled_ = (instance->dbClient_ != nullptr);
-        } catch (const std::exception& ex) {
-            LOG_WARN << kLogTag << " 获取数据库客户端失败，持久化降级为纯内存: " << ex.what();
-            instance->enabled_ = false;
-        }
+}
+
+void SessionDbManager::initialize()
+{
+    if (initialized_) return;
+    initialized_ = true;
+    try {
+        dbClient_ = drogon::app().getDbClient("aichatpg");
+        detectDbType();
+        enabled_ = (dbClient_ != nullptr);
+    } catch (const std::exception& ex) {
+        LOG_WARN << kLogTag << " 获取数据库客户端失败，持久化降级为纯内存: " << ex.what();
+        enabled_ = false;
     }
-    return instance;
 }
 
 void SessionDbManager::detectDbType()
@@ -217,7 +219,7 @@ bool SessionDbManager::upsertSession(const SessionRow& row, std::string* errorMe
     if (!enabled_ || !dbClient_ || row.sessionId.empty()) return false;
 
     try {
-        const std::string payloadStr = toJsonString(row.payload);
+        const std::string& payloadStr = row.payloadJson;
         // 采用「先查后写」的通用路径，避免 PG/MySQL/SQLite 三套 upsert 语法差异带来的兼容风险。
         auto existing = dbClient_->execSqlSync(
             "select session_id from chat_session_state where session_id=$1 limit 1",
@@ -261,7 +263,7 @@ std::optional<SessionDbManager::SessionRow> SessionDbManager::loadSession(
         row.apiName      = r["api_name"].isNull() ? "" : r["api_name"].as<std::string>();
         row.apiType      = r["api_type"].isNull() ? 0 : r["api_type"].as<int>();
         row.contextKey   = r["context_key"].isNull() ? "" : r["context_key"].as<std::string>();
-        row.payload      = fromJsonString(r["payload"].isNull() ? "" : r["payload"].as<std::string>());
+        row.payloadJson  = r["payload"].isNull() ? "" : r["payload"].as<std::string>();
         row.createdAt    = r["created_at"].isNull() ? 0 : r["created_at"].as<int64_t>();
         row.lastActiveAt = r["last_active_at"].isNull() ? 0 : r["last_active_at"].as<int64_t>();
         return row;
@@ -343,7 +345,7 @@ bool SessionDbManager::upsertResponse(const ResponseRow& row, std::string* error
     if (!enabled_ || !dbClient_ || row.responseId.empty()) return false;
 
     try {
-        const std::string bodyStr = row.hasResponse ? toJsonString(row.response) : std::string();
+        const std::string bodyStr = row.hasResponse ? row.responseJson : std::string();
         const int hasResp = row.hasResponse ? 1 : 0;
 
         auto existing = dbClient_->execSqlSync(
@@ -391,8 +393,8 @@ std::optional<SessionDbManager::ResponseRow> SessionDbManager::loadResponse(
         row.sessionId   = r["session_id"].isNull() ? "" : r["session_id"].as<std::string>();
         row.hasResponse = !r["has_response"].isNull() && r["has_response"].as<int>() != 0;
         if (row.hasResponse) {
-            row.response = fromJsonString(r["response_body"].isNull() ? "" : r["response_body"].as<std::string>());
-            if (row.response.isNull()) row.hasResponse = false;
+            row.responseJson = r["response_body"].isNull() ? "" : r["response_body"].as<std::string>();
+            if (row.responseJson.empty()) row.hasResponse = false;
         }
         row.createdAt = r["created_at"].isNull() ? 0 : r["created_at"].as<int64_t>();
         return row;
@@ -441,74 +443,86 @@ int SessionDbManager::deleteResponsesOlderThan(int64_t cutoffEpochSeconds, std::
     }
 }
 
-// ========================= 异步写穿（BackgroundTaskQueue）=========================
+// ========================= 异步写穿（injected executor）=========================
+
+void SessionDbManager::submitWrite(const char* taskName, std::function<void()> task)
+{
+    if (!executor_) {
+        // Do not resurrect a process singleton here.  A missing executor is a
+        // composition-root error; retaining only in-memory state is safer than
+        // silently submitting work to an unrelated queue.
+        LOG_ERROR << "[会话DB] executor 未注入，数据未落盘：" << taskName;
+        return;
+    }
+    const auto result = executor_->submit(taskName, std::move(task));
+    if (result != TaskSubmitResult::Accepted) {
+        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
+        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(result)
+                  << ")，数据未落盘：" << taskName;
+    }
+}
 
 void SessionDbManager::asyncUpsertSession(const SessionRow& row)
 {
     if (!enabled_ || row.sessionId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("session.upsert", [self, row]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[会话DB] 未由 shared_ptr 持有，数据未落盘：session.upsert";
+        return;
+    }
+    submitWrite("session.upsert", [self, row]() {
         self->upsertSession(row);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：session.upsert";
-    }
 }
 
 void SessionDbManager::asyncUpsertResponse(const ResponseRow& row)
 {
     if (!enabled_ || row.responseId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("responseIndex.upsert", [self, row]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[会话DB] 未由 shared_ptr 持有，数据未落盘：responseIndex.upsert";
+        return;
+    }
+    submitWrite("responseIndex.upsert", [self, row]() {
         self->upsertResponse(row);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：responseIndex.upsert";
-    }
 }
 
 void SessionDbManager::asyncDeleteSession(const std::string& sessionId)
 {
     if (!enabled_ || sessionId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("session.delete", [self, sessionId]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[会话DB] 未由 shared_ptr 持有，数据未落盘：session.delete";
+        return;
+    }
+    submitWrite("session.delete", [self, sessionId]() {
         self->deleteSession(sessionId);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：session.delete";
-    }
 }
 
 void SessionDbManager::asyncDeleteSessions(const std::vector<std::string>& sessionIds)
 {
     if (!enabled_ || sessionIds.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("session.deleteBatch", [self, sessionIds]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[会话DB] 未由 shared_ptr 持有，数据未落盘：session.deleteBatch";
+        return;
+    }
+    submitWrite("session.deleteBatch", [self, sessionIds]() {
         self->deleteSessions(sessionIds);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：session.deleteBatch";
-    }
 }
 
 void SessionDbManager::asyncDeleteResponses(const std::vector<std::string>& responseIds)
 {
     if (!enabled_ || responseIds.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("responseIndex.deleteBatch", [self, responseIds]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[会话DB] 未由 shared_ptr 持有，数据未落盘：responseIndex.deleteBatch";
+        return;
+    }
+    submitWrite("responseIndex.deleteBatch", [self, responseIds]() {
         self->deleteResponses(responseIds);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[会话DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：responseIndex.deleteBatch";
-    }
 }

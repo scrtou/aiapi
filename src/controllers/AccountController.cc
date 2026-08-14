@@ -1,11 +1,6 @@
 #include <controllers/AccountController.h>
 #include <accountManager/AccountJsonCodec.h>
 #include <controllers/ControllerUtils.h>
-#include <accountManager/accountManager.h>
-#include <channelManager/channelManager.h>
-#include <dbManager/account/accountBackupDbManager.h>
-#include <dbManager/account/accountDbManager.h>
-#include <utils/BackgroundTaskQueue.h>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
@@ -14,6 +9,13 @@
 
 using namespace drogon;
 using std::list;
+
+IAccountAdminUseCase* AccountController::accounts_ = nullptr;
+
+void AccountController::setUseCase(IAccountAdminUseCase* accounts)
+{
+    accounts_ = accounts;
+}
 
 namespace {
 
@@ -164,7 +166,7 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
         responseitem["apiName"] = accountinfo.apiName;
         responseitem["userName"] = accountinfo.userName;
         // 先添加到 账号Manager
-        if (AccountManager::getInstance().addAccountbyPost(accountinfo)) {
+        if (accounts_->stageAdd(accountinfo)) {
             responseitem["status"] = "success";
             accountList.push_back(accountinfo);
         } else {
@@ -172,24 +174,12 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
         }
         response.append(responseitem);
     }
-    const auto addEnqueued = BackgroundTaskQueue::instance().enqueue("accountAdd", [accountList](){
-        for (auto &account : accountList) {
-            AccountDbManager::getInstance()->addAccount(account);
-        }
-        AccountManager::getInstance().checkUpdateAccountToken();
-        // 账号添加后，只对新添加的账号更新 账号Type
-        for (const auto &account : accountList) {
-            auto accountMap = AccountManager::getInstance().getAccountList();
-            if (accountMap.find(account.apiName) != accountMap.end() &&
-                accountMap[account.apiName].find(account.userName) != accountMap[account.apiName].end()) {
-                AccountManager::getInstance().updateAccountType(accountMap[account.apiName][account.userName]);
-            }
-        }
-    });
-    if (auto rejection = ctl::makeEnqueueRejection(addEnqueued)) {
+    const auto addEnqueued = accounts_ ? accounts_->persistAdds(accountList) : TaskSubmitResult::Stopped;
+    if (addEnqueued != TaskSubmitResult::Accepted) {
         // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
         LOG_WARN << "[账号Ctrl] 添加账号 后台任务入队被拒：" << toString(addEnqueued);
-        callback(rejection);
+        ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                       std::string("Background task rejected: ") + toString(addEnqueued));
         return;
     }
 
@@ -200,7 +190,7 @@ void AccountController::accountAdd(const HttpRequestPtr &req, std::function<void
 void AccountController::accountInfo(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
     LOG_INFO << "[账号Ctrl] 获取账号信息";
-    auto accountList = AccountManager::getInstance().getAccountList();
+    auto accountList = accounts_ ? accounts_->listAccounts() : IAccountAdminUseCase::AccountMap{};
     Json::Value response(Json::arrayValue);
     for (auto &account : accountList) {
         for (auto &userName : account.second) {
@@ -229,7 +219,7 @@ void AccountController::accountBackupInfo(const HttpRequestPtr &req, std::functi
 {
     LOG_INFO << "[账号Ctrl] 获取备份账号信息";
     Json::Value response(Json::arrayValue);
-    for (auto &account : AccountBackupDbManager::getInstance()->getBackupAccountList()) {
+    for (auto &account : accounts_ ? accounts_->listBackupAccounts() : std::list<Accountinfo_st>{}) {
         response.append(buildAccountPublicJson(account));
     }
     if (response.empty()) {
@@ -263,7 +253,7 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
     list<Accountinfo_st> accountList;
 
     // 在删除前获取完整账号信息（包含 authToken、 等），用于上游删除
-    auto currentAccountMap = AccountManager::getInstance().getAccountList();
+    auto currentAccountMap = accounts_ ? accounts_->listAccounts() : IAccountAdminUseCase::AccountMap{};
 
     for (auto &item : reqItems)
     {
@@ -275,7 +265,7 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
         responseitem["userName"] = accountinfo.userName;
 
         // 检查账号是否正在注册中，如果是则拒绝删除
-        if (AccountManager::getInstance().isAccountRegisteringByUsername(accountinfo.userName)) {
+        if (accounts_->isRegistering(accountinfo.userName)) {
             responseitem["status"] = "failed";
             responseitem["error"] = "Account is currently being registered, cannot delete";
             LOG_WARN << "[账号Ctrl] 账号" << accountinfo.userName << " 正在注册中，无法删除";
@@ -293,7 +283,7 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
             accountinfo.personId = fullAccount->personId;
         }
 
-        if (AccountManager::getInstance().deleteAccountbyPost(accountinfo.apiName, accountinfo.userName)) {
+        if (accounts_->stageDelete(accountinfo.apiName, accountinfo.userName)) {
             responseitem["status"] = "success";
             accountList.push_back(accountinfo);
         } else {
@@ -301,26 +291,12 @@ void AccountController::accountDelete(const HttpRequestPtr &req, std::function<v
         }
         response.append(responseitem);
     }
-    const auto deleteEnqueued = BackgroundTaskQueue::instance().enqueue("accountDelete", [accountList](){
-        for (auto &account : accountList) {
-            // 先从上游删除账号
-            bool upstreamDeleted = AccountManager::getInstance().deleteUpstreamAccount(account);
-            if (upstreamDeleted) {
-                LOG_INFO << "[账号Ctrl] 上游账号删除成功：" << account.userName;
-            } else {
-                LOG_WARN << "[账号Ctrl] 上游账号删除失败（继续删除本地数据库）：" << account.userName;
-            }
-            // 再从本地数据库删除
-            AccountDbManager::getInstance()->deleteAccount(account.apiName, account.userName);
-        }
-        AccountManager::getInstance().loadAccount();
-        // 账号删除后，检查渠道账号数量（可能需要补充账号）
-        AccountManager::getInstance().checkChannelAccountCounts();
-    });
-    if (auto rejection = ctl::makeEnqueueRejection(deleteEnqueued)) {
+    const auto deleteEnqueued = accounts_ ? accounts_->persistDeletes(accountList) : TaskSubmitResult::Stopped;
+    if (deleteEnqueued != TaskSubmitResult::Accepted) {
         // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
         LOG_WARN << "[账号Ctrl] 删除账号 后台任务入队被拒：" << toString(deleteEnqueued);
-        callback(rejection);
+        ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                       std::string("Background task rejected: ") + toString(deleteEnqueued));
         return;
     }
 
@@ -333,7 +309,7 @@ void AccountController::accountDbInfo(const HttpRequestPtr &req, std::function<v
     Json::Value response;
     response["dbName"] = "aichat";
     response["tableName"] = "account";
-    for (auto &account : AccountDbManager::getInstance()->getAccountDBList()) {
+    for (auto &account : accounts_ ? accounts_->listStoredAccounts() : std::list<Accountinfo_st>{}) {
         response.append(buildAccountPublicJson(account));
     }
     ctl::sendJson(callback, response);
@@ -375,7 +351,7 @@ void AccountController::accountUpdate(const HttpRequestPtr &req, std::function<v
         responseitem["apiName"] = accountinfo.apiName;
         responseitem["userName"] = accountinfo.userName;
 
-        if (AccountManager::getInstance().updateAccount(accountinfo)) {
+        if (accounts_->stageUpdate(accountinfo)) {
             responseitem["status"] = "success";
             accountList.push_back(accountinfo);
         } else {
@@ -385,23 +361,12 @@ void AccountController::accountUpdate(const HttpRequestPtr &req, std::function<v
         response.append(responseitem);
     }
 
-    const auto updateEnqueued = BackgroundTaskQueue::instance().enqueue("accountUpdate", [accountList](){
-        for (auto &account : accountList) {
-            AccountDbManager::getInstance()->updateAccount(account);
-        }
-        // 账号更新后，只对操作的账号更新 账号Type
-        for (const auto &account : accountList) {
-            auto accountMap = AccountManager::getInstance().getAccountList();
-            if (accountMap.find(account.apiName) != accountMap.end() &&
-                accountMap[account.apiName].find(account.userName) != accountMap[account.apiName].end()) {
-                AccountManager::getInstance().updateAccountType(accountMap[account.apiName][account.userName]);
-            }
-        }
-    });
-    if (auto rejection = ctl::makeEnqueueRejection(updateEnqueued)) {
+    const auto updateEnqueued = accounts_ ? accounts_->persistUpdates(accountList) : TaskSubmitResult::Stopped;
+    if (updateEnqueued != TaskSubmitResult::Accepted) {
         // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
         LOG_WARN << "[账号Ctrl] 更新账号 后台任务入队被拒：" << toString(updateEnqueued);
-        callback(rejection);
+        ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                       std::string("Background task rejected: ") + toString(updateEnqueued));
         return;
     }
 
@@ -419,17 +384,12 @@ void AccountController::accountRefresh(const HttpRequestPtr &req, std::function<
     response["message"] = "Account status refresh started in background";
 
     // 异步执行刷新操作
-    const auto refreshEnqueued = BackgroundTaskQueue::instance().enqueue("accountRefresh", [](){
-        LOG_INFO << "[账号Ctrl] 后台刷新：开始检查 有效性";
-        AccountManager::getInstance().checkToken();
-        LOG_INFO << "[账号Ctrl] 后台刷新：开始更新账号类型";
-        AccountManager::getInstance().updateAllAccountTypes();
-        LOG_INFO << "[账号Ctrl] 后台刷新：刷新完成";
-    });
-    if (auto rejection = ctl::makeEnqueueRejection(refreshEnqueued)) {
+    const auto refreshEnqueued = accounts_ ? accounts_->refreshAccounts() : TaskSubmitResult::Stopped;
+    if (refreshEnqueued != TaskSubmitResult::Accepted) {
         // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
         LOG_WARN << "[账号Ctrl] 刷新状态 后台任务入队被拒：" << toString(refreshEnqueued);
-        callback(rejection);
+        ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                       std::string("Background task rejected: ") + toString(refreshEnqueued));
         return;
     }
 
@@ -447,23 +407,13 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
     std::string apiName = reqBody.get("apiName", "chaynsapi").asString();
     int count = reqBody.get("count", 1).asInt();
 
-    bool channelFound = false;
-    bool channelEnabled = false;
-    for (const auto& channel : ChannelManager::getInstance().getChannelList())
-    {
-        if (channel.channelName == apiName)
-        {
-            channelFound = true;
-            channelEnabled = channel.channelStatus;
-            break;
-        }
-    }
-    if (!channelFound)
+    const auto channelEnabled = accounts_ ? accounts_->channelEnabled(apiName) : std::nullopt;
+    if (!channelEnabled.has_value())
     {
         ctl::sendError(callback, k404NotFound, "not_found", "channel not found");
         return;
     }
-    if (!channelEnabled)
+    if (!*channelEnabled)
     {
         ctl::sendError(callback, k409Conflict, "channel_disabled", "channel is disabled");
         return;
@@ -482,25 +432,12 @@ void AccountController::accountAutoRegister(const HttpRequestPtr &req, std::func
     response["count"] = count;
 
     // 异步执行注册操作
-    const auto registerEnqueued = BackgroundTaskQueue::instance().enqueue("accountAutoRegister", [apiName, count](){
-        LOG_INFO << "[账号Ctrl] 后台注册：开始为" << apiName << " 注册 " << count << " 个账号";
-        for (int i = 0; i < count; ++i) {
-            LOG_INFO << "[账号Ctrl] 后台注册：正在注册第" << (i + 1) << "/" << count << " 个账号";
-            if (!AccountManager::getInstance().autoRegisterAccount(apiName)) {
-                LOG_WARN << "[账号Ctrl] 后台注册：第" << (i + 1) << " 个账号/资源注册失败，停止继续尝试";
-                break;
-            }
-            // 注册间隔 5 秒，避免过快
-            if (i < count - 1) {
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-        }
-        LOG_INFO << "[账号Ctrl] 后台注册：注册完成";
-    });
-    if (auto rejection = ctl::makeEnqueueRejection(registerEnqueued)) {
+    const auto registerEnqueued = accounts_ ? accounts_->autoRegister(apiName, count) : TaskSubmitResult::Stopped;
+    if (registerEnqueued != TaskSubmitResult::Accepted) {
         // 任务未入队 = 上述工作一件也不会发生，不能再回 success/started。
         LOG_WARN << "[账号Ctrl] 自动注册 后台任务入队被拒：" << toString(registerEnqueued);
-        callback(rejection);
+        ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                       std::string("Background task rejected: ") + toString(registerEnqueued));
         return;
     }
 
@@ -512,7 +449,7 @@ void AccountController::accountSettingsGet(const HttpRequestPtr &req, std::funct
 {
     (void)req;
     LOG_INFO << "[账号Ctrl] 获取账号自动化设置";
-    const auto settings = AccountManager::getInstance().getAccountAutomationSettings();
+    const auto settings = accounts_->automationSettings();
     ctl::sendJson(callback, buildAccountAutomationSettingsJson(settings));
 }
 
@@ -522,7 +459,7 @@ void AccountController::accountSettingsUpdate(const HttpRequestPtr &req, std::fu
     std::shared_ptr<Json::Value> jsonPtr;
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
 
-    const auto currentSettings = AccountManager::getInstance().getAccountAutomationSettings();
+    const auto currentSettings = accounts_->automationSettings();
     AccountAutomationSettings updatedSettings;
     std::string errorMessage;
     if (!mergeAccountAutomationSettingsFromJson(*jsonPtr, currentSettings, updatedSettings, errorMessage)) {
@@ -530,7 +467,7 @@ void AccountController::accountSettingsUpdate(const HttpRequestPtr &req, std::fu
         return;
     }
 
-    if (!AccountManager::getInstance().updateAccountAutomationSettings(updatedSettings, true, &errorMessage)) {
+    if (!accounts_->updateAutomationSettings(updatedSettings, &errorMessage)) {
         ctl::sendError(callback, k500InternalServerError, "config_update_error", errorMessage.empty() ? "Failed to update account automation settings." : errorMessage);
         return;
     }

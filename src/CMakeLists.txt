@@ -73,6 +73,12 @@ set(AIAPI_PLATFORM_SOURCES
 
 set(AIAPI_APPLICATION_SOURCES
     accountManager/RetoolProvisionHealth.cpp
+    application/account/AccountAdminUseCase.cpp
+    application/channel/ChannelAdminUseCase.cpp
+    application/health/HealthUseCase.cpp
+    application/metrics/MetricsUseCase.cpp
+    application/workspace/RetoolWorkspaceAdminUseCase.cpp
+    application/workspace/RetoolWorkspaceUseCase.cpp
 )
 
 set(AIAPI_INFRASTRUCTURE_SOURCES
@@ -96,6 +102,7 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
     dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
     metrics/ErrorStatsConfig.cpp
     metrics/ErrorStatsService.cpp
+    infrastructure/provider/ProviderRegistry.cpp
     utils/ConfigValidator.cpp
 )
 
@@ -114,8 +121,6 @@ set(AIAPI_RUNTIME_SOURCES
 
 set(AIAPI_LEGACY_SOURCES
     accountManager/accountManager.cpp
-    apiManager/ApiFactory.cpp
-    apiManager/ApiManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
     apipoint/chaynsapi/chaynsThreadReaper.cpp
     apipoint/retoolapi/retoolapi.cpp
@@ -135,6 +140,7 @@ set(AIAPI_LEGACY_SOURCES
     sessionManager/core/Session.cpp
     sessionManager/core/SessionCodec.cpp
     sessionManager/core/ClientOutputSanitizer.cpp
+    sessionManager/core/AiApiUseCase.cpp
     sessionManager/core/GenerationService.cpp
     sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
     sessionManager/core/RetiredProviderTelemetry.cpp

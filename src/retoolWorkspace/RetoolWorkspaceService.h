@@ -5,24 +5,24 @@
 #include <optional>
 #include <domain/model/RetoolWorkspaceInfo.h>
 #include <string>
+#include <memory>
+#include <domain/port/IRetoolWorkspaceUseCase.h>
+#include <domain/port/IRetoolWorkspaceStore.h>
 
-class RetoolWorkspaceService
+class RetoolWorkspaceService : public workspace::IRetoolWorkspaceProvisioner
 {
   public:
-    static RetoolWorkspaceService& getInstance()
-    {
-        static RetoolWorkspaceService instance;
-        return instance;
-    }
-
-    using ProvisionCallback = std::function<void(const std::optional<RetoolWorkspaceInfo>& workspace, const std::string& errorMessage)>;
+    // The provisioner retains the injected port so asynchronous callers never
+    // borrow a store whose ownership is outside the runtime graph.
+    explicit RetoolWorkspaceService(std::shared_ptr<IRetoolWorkspaceStore> workspaceStore);
+    RetoolWorkspaceService(const RetoolWorkspaceService&) = delete;
+    RetoolWorkspaceService& operator=(const RetoolWorkspaceService&) = delete;
 
     RetoolWorkspaceInfo provisionWorkspace(const Json::Value& requestBody, std::string* errorMessage = nullptr);
-    void provisionWorkspaceAsync(const Json::Value& requestBody, ProvisionCallback callback);
+    RetoolWorkspaceInfo provision(const std::string& requestJson) override;
 
   private:
-    RetoolWorkspaceService() = default;
-
     std::string orchestratorBaseUrl() const;
     std::string orchestratorApiKey() const;
+    std::shared_ptr<IRetoolWorkspaceStore> workspaceStore_;
 };

@@ -9,8 +9,10 @@
 #include <memory>
 #include <chrono>
 #include <domain/model/ErrorEvent.h>
+#include <domain/model/MetricsData.h>
 #include <domain/model/RequestAggData.h>
 #include <domain/port/IErrorStatsSink.h>
+#include <domain/port/IMetricsQuery.h>
 
 namespace metrics {
 
@@ -24,64 +26,13 @@ enum class DbType {
 };
 
 /**
- * @brief 查询参数结构体
- */
-struct QueryParams {
-    std::string from;           // 开始时间（ISO 格式）
-    std::string to;             // 结束时间（ISO 格式）
-    std::string severity;       // 严重级别过滤
-    std::string domain;         // 域过滤
-    std::string type;           // 类型过滤
-    std::string provider;       // 提供商过滤
-    std::string model;          // 模型过滤
-    std::string clientType;     // 客户端类型过滤
-    std::string apiKind;        // API 类型过滤
-};
-
-/**
- * @brief 聚合桶结构体（用于时间序列查询结果）
- */
-struct AggBucket {
-    std::string bucketStart;    // 桶开始时间
-    int64_t count = 0;          // 计数
-};
-
-/**
- * @brief 错误事件记录结构体（用于查询结果）
- */
-struct ErrorEventRecord {
-    int64_t id = 0;
-    std::string ts;
-    std::string severity;
-    std::string domain;
-    std::string type;
-    std::string provider;
-    std::string model;
-    std::string clientType;
-    std::string apiKind;
-    bool stream = false;
-    int httpStatus = 0;
-    std::string requestId;
-    std::string responseId;
-    std::string toolName;
-    std::string message;
-    std::string detailJson;
-    std::string rawSnippet;
-};
-
-/**
  * @brief 错误统计数据库管理器
  *
  * 负责 error_event、error_agg_hour、request_agg_hour 三张表的
  * 创建、升级、批量写入、聚合 upsert、查询等操作
  */
-class ErrorStatsDbManager : public IErrorStatsSink {
+class ErrorStatsDbManager : public IErrorStatsSink, public IErrorMetricsQuery {
 public:
-    /**
-     * @brief 获取单例实例
-     */
-    static std::shared_ptr<ErrorStatsDbManager> getInstance();
-    
     /**
      * @brief 初始化数据库管理器
      *
@@ -117,7 +68,7 @@ public:
      * @param params 查询参数（包含时间范围和过滤条件）
      * @return 按小时聚合的统计数据
      */
-    std::vector<AggBucket> queryErrorSeries(const QueryParams& params);
+    std::vector<AggBucket> queryErrorSeries(const QueryParams& params) override;
     
     /**
      * @brief 查询请求时间序列（从 request_agg_hour）
@@ -125,7 +76,7 @@ public:
      * @param params 查询参数（包含时间范围和过滤条件）
      * @return 按小时聚合的统计数据
      */
-    std::vector<AggBucket> queryRequestSeries(const QueryParams& params);
+    std::vector<AggBucket> queryRequestSeries(const QueryParams& params) override;
     
     /**
      * @brief 查询错误事件明细列表
@@ -135,12 +86,12 @@ public:
      * @param offset 偏移量
      * @return 事件列表
      */
-    std::vector<ErrorEventRecord> queryEvents(const QueryParams& params, int limit, int offset);
+    std::vector<ErrorEventRecord> queryEvents(const QueryParams& params, int limit, int offset) override;
     
     /**
      * @brief 根据 ID 查询单条错误事件
      */
-    std::optional<ErrorEventRecord> queryEventById(int64_t id);
+    std::optional<ErrorEventRecord> queryEventById(int64_t id) override;
     
     // ========== 清理接口 ==========
     

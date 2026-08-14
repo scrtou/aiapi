@@ -6,6 +6,7 @@
 #include <metrics/ErrorStatsConfig.h>
 #include <domain/model/RequestAggData.h>
 #include <domain/port/IErrorStatsSink.h>
+#include <domain/port/ITelemetrySink.h>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
@@ -13,7 +14,12 @@
 #include <queue>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <platform/ThreadJoin.h>
+
+namespace trantor {
+class EventLoop;
+}
 
 namespace metrics {
 
@@ -31,7 +37,7 @@ struct RequestCompletedData {
 };
 
 /**
- * @brief 错误统计服务 - 单例
+ * @brief 错误统计服务
  * 
  * 负责：
  * - 接收错误/警告事件并推入异步队列
@@ -39,22 +45,22 @@ struct RequestCompletedData {
  * - 更新 Prometheus 指标
  * - 管理数据清理任务
  */
-class ErrorStatsService {
+class ErrorStatsService : public ITelemetrySink,
+                          public std::enable_shared_from_this<ErrorStatsService> {
 public:
-    static ErrorStatsService& getInstance();
-    
+    /**
+     * @brief 构造一个显式拥有的错误统计服务。
+     *
+     * 落库端口是必需的 composition-root 依赖。这里没有默认 DB singleton
+     * fallback：漏接线必须在构造点可见，而不是等到 worker 首次 flush 时
+     * 才悄悄重新定位一个全局对象。
+     */
+    explicit ErrorStatsService(std::shared_ptr<IErrorStatsSink> sink);
+    ~ErrorStatsService();
+
     // 禁止拷贝和移动
     ErrorStatsService(const ErrorStatsService&) = delete;
     ErrorStatsService& operator=(const ErrorStatsService&) = delete;
-    
-    /**
-     * @brief 注入落库端口（依赖倒置）
-     *
-     * 必须在 init() 之前调用；未注入时 init() 会回退到
-     * ErrorStatsDbManager 默认实现，以兼容既有生产路径。
-     * 测试可注入 Fake 实现，从而不触碰真实数据库。
-     */
-    void setSink(std::shared_ptr<IErrorStatsSink> sink);
 
     /**
      * @brief 初始化服务
@@ -146,6 +152,8 @@ public:
      * @brief 记录请求完成（用于请求总数统计）
      */
     void recordRequestCompleted(const RequestCompletedData& data);
+    void record(const ErrorEvent& event) override;
+    void recordRequestCompleted(const RequestCompletedEvent& event) override;
     
     /**
      * @brief 获取丢弃的事件计数
@@ -164,14 +172,12 @@ public:
     int runCleanup();
     
 private:
-    ErrorStatsService() = default;
-    ~ErrorStatsService();
-    
     void recordEvent(const ErrorEvent& event);
     void workerLoop();
     bool shutdownWithin(const std::chrono::steady_clock::time_point* deadline);
     void flushEvents();
     void flushRequestAgg();
+    void runScheduledCleanup();
     void updatePrometheusCounters(const ErrorEvent& event);
     void updatePrometheusRequestCounter(const RequestCompletedData& data);
     std::string truncateRawSnippet(const std::string& snippet);
@@ -196,12 +202,18 @@ private:
     platform::ThreadCompletionPtr workerDone_;
     std::condition_variable cv_;
     std::atomic<bool> running_{false};
+
+    // 定时清理与服务本体同属 AppContext 生命周期。timer callback 捕获
+    // weak_from_this()，shutdown 后先注销 timer，避免 context 销毁后保留
+    // 一个悬垂的 [this] 回调。
+    trantor::EventLoop* cleanupLoop_ = nullptr;
+    std::uint64_t cleanupTimerId_ = 0;
     
     // 统计
     std::atomic<uint64_t> droppedCount_{0};
     
 
-    std::shared_ptr<IErrorStatsSink> dbManager_;
+    std::shared_ptr<IErrorStatsSink> sink_;
     
     // 队列大小上限
     static constexpr size_t MAX_QUEUE_SIZE = 10000;

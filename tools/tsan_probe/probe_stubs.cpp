@@ -1,6 +1,5 @@
 // TSan 窄范围探针专用桩。仅供 tools/tsan_probe 使用，不参与主构建与 313 用例。
 // 签名逐字对齐各自头文件，任何不匹配都会在链接期暴露为 undefined reference。
-#include <apiManager/ApiManager.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 
@@ -47,25 +46,11 @@ int chaynsThreadDbManager::bumpDeleteAttempts(const std::string&, std::string* e
     return 1;
 }
 
-// ---- ApiManager ----
-ApiManager& ApiManager::getInstance() {
-    static ApiManager inst;
-    return inst;
-}
-
-std::shared_ptr<APIinterface> ApiManager::getApiByApiName(std::string) {
-    return nullptr;  // 让 reaper 走 "chaynsapi 未注册，跳过本轮上游删除" 分支
-}
-
 // ---- chaynsapi ----
 bool chaynsapi::deleteUpstreamThread(const std::string&, const std::string&,
                                      const std::string&, const std::string&) {
     return true;
 }
-
-// ---- ApiManager 构造/析构（头文件声明为非 default，需给出定义）----
-ApiManager::ApiManager() = default;
-ApiManager::~ApiManager() = default;
 
 // ---- chaynsapi 完整 vtable ----
 // dynamic_pointer_cast<chaynsapi> 需要 typeinfo；typeinfo/vtable 只在

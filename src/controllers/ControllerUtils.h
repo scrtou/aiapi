@@ -5,7 +5,7 @@
 #include <ctime>
 #include <string>
 
-#include <utils/BackgroundTaskQueue.h>
+#include <domain/port/IBackgroundExecutor.h>
 
 /**
  * @brief Controller 层通用工具函数
@@ -70,7 +70,7 @@ inline drogon::HttpResponsePtr makeError(
 }
 
 /**
- * @brief 把入队失败的 EnqueueResult 翻译成 HTTP 响应；Accepted 返回 nullptr。
+ * @brief 把 executor 提交失败翻译成 HTTP 响应；Accepted 返回 nullptr。
  *
  * 为什么必须区分两类拒绝：QueueFull 是**瞬时**背压，同一进程稍后会恢复，
  * 因此带 `Retry-After` 邀请客户端重试；ShuttingDown/Stopped 是**终态**，
@@ -81,13 +81,13 @@ inline drogon::HttpResponsePtr makeError(
  * 返回 nullptr 而非抛异常：调用点大多在已构造好响应的路径上，
  * 用「非空即拒绝」的哨兵可以让迁移后的代码保持单一出口。
  */
-inline drogon::HttpResponsePtr makeEnqueueRejection(EnqueueResult result)
+inline drogon::HttpResponsePtr makeEnqueueRejection(TaskSubmitResult result)
 {
     switch (result) {
-        case EnqueueResult::Accepted:
+        case TaskSubmitResult::Accepted:
             return nullptr;
 
-        case EnqueueResult::QueueFull: {
+        case TaskSubmitResult::QueueFull: {
             auto resp = makeError(
                 drogon::k503ServiceUnavailable, "service_unavailable",
                 "Server is busy, please retry later", "queue_full");
@@ -95,15 +95,15 @@ inline drogon::HttpResponsePtr makeEnqueueRejection(EnqueueResult result)
             return resp;
         }
 
-        case EnqueueResult::ShuttingDown:
-        case EnqueueResult::Stopped:
+        case TaskSubmitResult::ShuttingDown:
+        case TaskSubmitResult::Stopped:
             // 刻意不加 Retry-After：见上方说明。
             return makeError(
                 drogon::k503ServiceUnavailable, "service_unavailable",
                 "Server is shutting down", "shutting_down");
     }
     return makeError(drogon::k500InternalServerError, "internal_error",
-                     "Unknown enqueue result");
+                     "Unknown background task submit result");
 }
 
 inline void respondInLoop(

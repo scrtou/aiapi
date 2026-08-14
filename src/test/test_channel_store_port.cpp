@@ -67,8 +67,9 @@ class FakeChannelStore : public IChannelStore
 DROGON_TEST(ChannelStorePortInitUsesInjectedStore)
 {
     auto fake = std::make_shared<FakeChannelStore>();
-    ChannelManager::getInstance().setStore(fake);
-    ChannelManager::getInstance().init();
+    ChannelManager manager;
+    manager.setStore(fake);
+    manager.init();
 
     // isTableExist 返回 false，init 应据此建表。
     CHECK(fake->createTableCalls == 1);
@@ -82,12 +83,13 @@ DROGON_TEST(ChannelStorePortInitUsesInjectedStore)
 DROGON_TEST(ChannelStorePortAddChannelForwards)
 {
     auto fake = std::make_shared<FakeChannelStore>();
-    ChannelManager::getInstance().setStore(fake);
+    ChannelManager manager;
+    manager.setStore(fake);
 
     const int before = fake->addCalls;
     Channelinfo_st c;
     c.channelName = "__port_test_channel__";
-    CHECK(ChannelManager::getInstance().addChannel(c) == true);
+    CHECK(manager.addChannel(c) == true);
     CHECK(fake->addCalls == before + 1);
 }
 
@@ -95,9 +97,10 @@ DROGON_TEST(ChannelStorePortAddChannelForwards)
 // 这条正是 main.cc 漏注入场景的守门断言。
 DROGON_TEST(ChannelStorePortFallsBackWhenNotInjected)
 {
-    ChannelManager::getInstance().setStore(nullptr);
+    ChannelManager manager;
+    manager.setStore(nullptr);
     Channelinfo_st c;
     c.channelName = "__no_store__";
-    CHECK(ChannelManager::getInstance().addChannel(c) == false);
-    CHECK(ChannelManager::getInstance().getChannelList().empty());
+    CHECK(manager.addChannel(c) == false);
+    CHECK(manager.getChannelList().empty());
 }

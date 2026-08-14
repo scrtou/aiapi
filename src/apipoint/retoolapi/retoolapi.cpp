@@ -1,11 +1,8 @@
 #include <apipoint/retoolapi/retoolapi.h>
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
-#include <channelManager/channelManager.h>
 #include <drogon/drogon.h>
-#include <managedAccount/service/ManagedAccountService.h>
 #include <sessionManager/continuity/HistoryReplayBudget.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <chrono>
 #include <cctype>
 #include <cstring>
@@ -16,7 +13,6 @@
 
 using namespace drogon;
 
-IMPLEMENT_RUNTIME(retoolapi, retoolapi);
 
 namespace
 {
@@ -102,40 +98,36 @@ bool replaceQuotedValueAfter(std::string& input,
 class ScopedWorkspaceUsage
 {
   public:
-    explicit ScopedWorkspaceUsage(const std::string& workspaceId) : workspaceId_(workspaceId)
+    ScopedWorkspaceUsage(workspace::IRetoolWorkspaceUseCase* workspaces,
+                         const std::string& workspaceId)
+        : workspaces_(workspaces), workspaceId_(workspaceId)
     {
-        if (!workspaceId_.empty())
+        if (workspaces_ && !workspaceId_.empty())
         {
-            active_ = RetoolWorkspaceManager::getInstance().markWorkspaceUsageStarted(workspaceId_, nullptr);
+            active_ = workspaces_->markUsageStarted(workspaceId_, nullptr);
         }
     }
 
     ~ScopedWorkspaceUsage()
     {
-        if (active_ && !workspaceId_.empty())
+        if (active_ && workspaces_ && !workspaceId_.empty())
         {
-            RetoolWorkspaceManager::getInstance().markWorkspaceUsageFinished(workspaceId_, nullptr);
+            workspaces_->markUsageFinished(workspaceId_, nullptr);
         }
     }
 
   private:
+    workspace::IRetoolWorkspaceUseCase* workspaces_;
     std::string workspaceId_;
     bool active_ = false;
 };
 }  // namespace
 
-retoolapi::retoolapi()
-    : retoolapi(retool::makeDrogonRetoolHttpTransport(), retool::makeRealRetoolClock())
-{
-}
-
-retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport)
-    : retoolapi(std::move(transport), retool::makeRealRetoolClock())
-{
-}
-
 retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
-                     std::shared_ptr<retool::IRetoolClock> clock)
+                     std::shared_ptr<retool::IRetoolClock> clock,
+                     IManagedAccountContextResolver& accounts,
+                     workspace::IRetoolWorkspaceUseCase& workspaces,
+                     IChannelCatalog& channels)
     : transport_(std::move(transport)), clock_(std::move(clock))
 {
     if (!transport_)
@@ -146,16 +138,12 @@ retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
     {
         throw std::invalid_argument("retoolapi requires a non-null clock");
     }
+    accounts_ = &accounts;
+    workspaces_ = &workspaces;
+    channels_ = &channels;
 }
 
 retoolapi::~retoolapi() = default;
-
-void* retoolapi::createApi()
-{
-    auto* api = new retoolapi();
-    api->init();
-    return api;
-}
 
 void retoolapi::init()
 {
@@ -219,6 +207,11 @@ std::string retoolapi::requireWorkspaceId(const session_st& session) const
 
 std::string retoolapi::resolveWorkspaceId(session_st& session, bool requireAgent, std::string* errorMessage) const
 {
+    if (!workspaces_)
+    {
+        if (errorMessage) *errorMessage = "retool workspace service unavailable";
+        return "";
+    }
     auto explicitId = requireWorkspaceId(session);
     if (!explicitId.empty())
     {
@@ -244,7 +237,7 @@ std::string retoolapi::resolveWorkspaceId(session_st& session, bool requireAgent
         }
     }
 
-    auto workspaces = RetoolWorkspaceManager::getInstance().listWorkspaces(errorMessage);
+    auto workspaces = workspaces_->list(errorMessage);
     std::vector<RetoolWorkspaceInfo> candidates;
     for (const auto& workspace : workspaces)
     {
@@ -557,7 +550,10 @@ bool retoolapi::populateProviderResources(const std::string& workspaceId, Json::
     {
         info.subdomain = baseUrl;
     }
-    RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr);
+    if (!workspaces_ || !workspaces_->upsert(info, nullptr))
+    {
+        return false;
+    }
     return true;
 }
 
@@ -772,9 +768,14 @@ provider::ProviderResult retoolapi::requestWorkflow(session_st& session)
     {
         return provider::ProviderResult::fail(provider::ProviderError::auth(resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
-    ScopedWorkspaceUsage usageGuard(workspaceId);
+    ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
     std::string error;
-    auto ctx = ManagedAccountService::getInstance().buildExecutionContext(
+    if (!accounts_)
+    {
+        return provider::ProviderResult::fail(
+            provider::ProviderError::internal("managed account service unavailable"));
+    }
+    auto ctx = accounts_->buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, workspaceId, &error);
     if (!ctx)
     {
@@ -886,9 +887,14 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
     {
         return provider::ProviderResult::fail(provider::ProviderError::auth(resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
-    ScopedWorkspaceUsage usageGuard(workspaceId);
+    ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
     std::string error;
-    auto ctx = ManagedAccountService::getInstance().buildExecutionContext(
+    if (!accounts_)
+    {
+        return provider::ProviderResult::fail(
+            provider::ProviderError::internal("managed account service unavailable"));
+    }
+    auto ctx = accounts_->buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, workspaceId, &error);
     if (!ctx)
     {
@@ -1339,7 +1345,12 @@ provider::ProviderResult retoolapi::requestAgent(session_st& session)
 
 provider::ProviderResult retoolapi::generate(session_st& session)
 {
-    for (const auto& channel : ChannelManager::getInstance().getChannelList())
+    if (!channels_)
+    {
+        return provider::ProviderResult::fail(
+            provider::ProviderError::internal("channel catalog unavailable"));
+    }
+    for (const auto& channel : channels_->listChannels())
     {
         if (channel.channelName == "retoolapi" && !channel.channelStatus)
         {

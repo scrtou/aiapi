@@ -6,13 +6,21 @@
 
 // ---------------------------------------------------------------------------
 // RFC-001 §0-E-1 / R2: BridgeHelpers.h fanin=6, 已链接进测试二进制, 但零断言。
-// 本文件只覆盖 **纯函数**; recordErrorStat / recordWarnStat /
-// recordRequestCompletedStat 依赖 ErrorStatsService 单例 + 后台线程,
-// 属于副作用函数, 需要独立的 fixture, 不在本轮范围内。
+// 本文件覆盖纯函数及注入式 telemetry helper。
 // 所有断言均依据 BridgeHelpers.cpp 的实际实现, 而非期望行为。
 // ---------------------------------------------------------------------------
 
 namespace {
+
+class RecordingTelemetry final : public metrics::ITelemetrySink
+{
+  public:
+    void record(const metrics::ErrorEvent& event) override { events.push_back(event); }
+    void recordRequestCompleted(const metrics::RequestCompletedEvent& event) override
+    { completions.push_back(event); }
+    std::vector<metrics::ErrorEvent> events;
+    std::vector<metrics::RequestCompletedEvent> completions;
+};
 
 session_st makeSession(const std::string& trigger = "") {
     session_st s;
@@ -204,4 +212,31 @@ DROGON_TEST(BridgeHelpersApiKindFromSession) {
     session_st resp;
     resp.state.apiType = ApiType::Responses;
     CHECK(bridge::getApiKindFromSession(resp) == "responses");
+}
+
+DROGON_TEST(BridgeHelpersTelemetryUsesInjectedSink) {
+    RecordingTelemetry telemetry;
+    bridge::setTelemetrySink(&telemetry);
+    session_st session;
+    session.state.requestId = "req-injected";
+    session.request.api = "chaynsapi";
+    session.request.model = "model-x";
+    session.provider.clientInfo["client_type"] = "Codex";
+
+    Json::Value detail;
+    detail["attempt"] = 2;
+    bridge::recordWarnStat(
+        session, metrics::Domain::TOOL_BRIDGE, "test.warn", "warning", detail);
+    bridge::recordRequestCompletedStat(session, 202);
+
+    REQUIRE(telemetry.events.size() == 1);
+    CHECK(telemetry.events[0].severity == metrics::Severity::WARN);
+    CHECK(telemetry.events[0].requestId == "req-injected");
+    CHECK(telemetry.events[0].provider == "chaynsapi");
+    CHECK(telemetry.events[0].details.at("attempt") == metrics::ErrorDetailValue(std::int64_t{2}));
+    REQUIRE(telemetry.completions.size() == 1);
+    CHECK(telemetry.completions[0].httpStatus == 202);
+    CHECK(telemetry.completions[0].clientType == "Codex");
+
+    bridge::setTelemetrySink(nullptr);
 }

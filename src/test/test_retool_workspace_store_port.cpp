@@ -1,9 +1,12 @@
 #include <drogon/drogon_test.h>
 
+#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <retoolWorkspace/RetoolWorkspaceService.h>
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -102,128 +105,162 @@ class FakeRetoolWorkspaceStore : public IRetoolWorkspaceStore
     }
 };
 
-std::shared_ptr<FakeRetoolWorkspaceStore> installFake()
+struct ManagerFixture
 {
-    auto fake = std::make_shared<FakeRetoolWorkspaceStore>();
-    RetoolWorkspaceManager::getInstance().setStore(fake);
-    return fake;
-}
+    ManagerFixture()
+        : store(std::make_shared<FakeRetoolWorkspaceStore>()), manager(store)
+    {
+    }
+
+    std::shared_ptr<FakeRetoolWorkspaceStore> store;
+    RetoolWorkspaceManager manager;
+};
 
 }  // namespace
 
 DROGON_TEST(RetoolWorkspacePort_InitEnsuresTableThroughInjectedStore)
 {
-    auto fake = installFake();
-    RetoolWorkspaceManager::getInstance().init();
-    CHECK(fake->ensureTableCalls == 1);
+    ManagerFixture fixture;
+    fixture.manager.init();
+    CHECK(fixture.store->ensureTableCalls == 1);
 }
 
 DROGON_TEST(RetoolWorkspacePort_UpsertThenGetRoundTrips)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-round-trip";
-    CHECK(RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr));
+    CHECK(fixture.manager.upsertWorkspace(info, nullptr));
 
-    auto got = RetoolWorkspaceManager::getInstance().getWorkspace("ws-round-trip", nullptr);
+    auto got = fixture.manager.getWorkspace("ws-round-trip", nullptr);
     REQUIRE(got.has_value());
     CHECK(got->workspaceId == "ws-round-trip");
-    CHECK(fake->rows.size() == 1);
+    CHECK(fixture.store->rows.size() == 1);
 }
 
 DROGON_TEST(RetoolWorkspacePort_GetMissingReturnsNullopt)
 {
-    installFake();
-    auto got = RetoolWorkspaceManager::getInstance().getWorkspace("no-such-id", nullptr);
+    ManagerFixture fixture;
+    auto got = fixture.manager.getWorkspace("no-such-id", nullptr);
     CHECK(!got.has_value());
 }
 
 DROGON_TEST(RetoolWorkspacePort_DeleteRemovesRow)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-delete";
-    RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr);
-    CHECK(fake->rows.size() == 1);
+    fixture.manager.upsertWorkspace(info, nullptr);
+    CHECK(fixture.store->rows.size() == 1);
 
-    CHECK(RetoolWorkspaceManager::getInstance().deleteWorkspace("ws-delete", nullptr));
-    CHECK(fake->rows.empty());
+    CHECK(fixture.manager.deleteWorkspace("ws-delete", nullptr));
+    CHECK(fixture.store->rows.empty());
 }
 
 DROGON_TEST(RetoolWorkspacePort_UpdateStatusIsForwarded)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-status";
-    RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr);
+    fixture.manager.upsertWorkspace(info, nullptr);
 
-    CHECK(RetoolWorkspaceManager::getInstance().updateWorkspaceStatus("ws-status", "active", "verified", nullptr));
-    REQUIRE(fake->rows.size() == 1);
-    CHECK(fake->rows[0].status == "active");
-    CHECK(fake->rows[0].verifyStatus == "verified");
+    CHECK(fixture.manager.updateWorkspaceStatus("ws-status", "active", "verified", nullptr));
+    REQUIRE(fixture.store->rows.size() == 1);
+    CHECK(fixture.store->rows[0].status == "active");
+    CHECK(fixture.store->rows[0].verifyStatus == "verified");
 }
 
 DROGON_TEST(RetoolWorkspacePort_UsageCounterIncrementsThenDecrements)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-usage";
     info.inUseCount = 0;
-    RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr);
+    fixture.manager.upsertWorkspace(info, nullptr);
 
-    CHECK(RetoolWorkspaceManager::getInstance().markWorkspaceUsageStarted("ws-usage", nullptr));
-    REQUIRE(fake->rows.size() == 1);
-    CHECK(fake->rows[0].inUseCount == 1);
+    CHECK(fixture.manager.markWorkspaceUsageStarted("ws-usage", nullptr));
+    REQUIRE(fixture.store->rows.size() == 1);
+    CHECK(fixture.store->rows[0].inUseCount == 1);
 
-    CHECK(RetoolWorkspaceManager::getInstance().markWorkspaceUsageFinished("ws-usage", nullptr));
-    CHECK(fake->rows[0].inUseCount == 0);
+    CHECK(fixture.manager.markWorkspaceUsageFinished("ws-usage", nullptr));
+    CHECK(fixture.store->rows[0].inUseCount == 0);
 
     // 两次都应带 touchLastUsedAt=true
-    REQUIRE(fake->usageLog.size() == 2);
-    CHECK(fake->usageLog[0] == "ws-usage:1:touch");
-    CHECK(fake->usageLog[1] == "ws-usage:0:touch");
+    REQUIRE(fixture.store->usageLog.size() == 2);
+    CHECK(fixture.store->usageLog[0] == "ws-usage:1:touch");
+    CHECK(fixture.store->usageLog[1] == "ws-usage:0:touch");
 }
 
 DROGON_TEST(RetoolWorkspacePort_UsageCounterNeverGoesNegative)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-floor";
     info.inUseCount = 0;
-    RetoolWorkspaceManager::getInstance().upsertWorkspace(info, nullptr);
+    fixture.manager.upsertWorkspace(info, nullptr);
 
     // 未开始就结束：实现用 std::max(0, n-1) 兜底，不应变负。
-    CHECK(RetoolWorkspaceManager::getInstance().markWorkspaceUsageFinished("ws-floor", nullptr));
-    REQUIRE(fake->rows.size() == 1);
-    CHECK(fake->rows[0].inUseCount == 0);
+    CHECK(fixture.manager.markWorkspaceUsageFinished("ws-floor", nullptr));
+    REQUIRE(fixture.store->rows.size() == 1);
+    CHECK(fixture.store->rows[0].inUseCount == 0);
 }
 
 DROGON_TEST(RetoolWorkspacePort_UsageOnMissingWorkspaceShortCircuits)
 {
-    auto fake = installFake();
+    ManagerFixture fixture;
 
     // 工作区不存在时应提前返回 false，且不产生任何 usage 写入。
-    CHECK(!RetoolWorkspaceManager::getInstance().markWorkspaceUsageStarted("no-such-id", nullptr));
-    CHECK(!RetoolWorkspaceManager::getInstance().markWorkspaceUsageFinished("no-such-id", nullptr));
-    CHECK(fake->usageLog.empty());
+    CHECK(!fixture.manager.markWorkspaceUsageStarted("no-such-id", nullptr));
+    CHECK(!fixture.manager.markWorkspaceUsageFinished("no-such-id", nullptr));
+    CHECK(fixture.store->usageLog.empty());
 }
 
 DROGON_TEST(RetoolWorkspacePort_NullStoreFailsSafelyWithDiagnostic)
 {
     // 未注入实现时必须返回失败并给出错误信息，而不是解引用空指针。
-    RetoolWorkspaceManager::getInstance().setStore(nullptr);
+    RetoolWorkspaceManager manager(nullptr);
 
     std::string error;
     RetoolWorkspaceInfo info;
     info.workspaceId = "ws-null";
 
-    CHECK(!RetoolWorkspaceManager::getInstance().upsertWorkspace(info, &error));
+    CHECK(!manager.upsertWorkspace(info, &error));
     CHECK(!error.empty());
-    CHECK(RetoolWorkspaceManager::getInstance().listWorkspaces(nullptr).empty());
-    CHECK(!RetoolWorkspaceManager::getInstance().getWorkspace("ws-null", nullptr).has_value());
+    CHECK(manager.listWorkspaces(nullptr).empty());
+    CHECK(!manager.getWorkspace("ws-null", nullptr).has_value());
+}
+
+DROGON_TEST(RetoolWorkspaceProvisionerRequiresInjectedStore)
+{
+    bool rejected = false;
+    try
+    {
+        RetoolWorkspaceService provisioner(std::shared_ptr<IRetoolWorkspaceStore>{});
+        static_cast<void>(provisioner);
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    CHECK(rejected);
+}
+
+/*
+ * The concrete adapter may no longer lazily locate Drogon's DB client through
+ * a singleton accessor.  Before AppWiring explicitly initializes it, fail
+ * diagnosably instead of dereferencing a null client or silently constructing
+ * another process-wide owner.
+ */
+DROGON_TEST(RetoolWorkspaceDbStoreRequiresExplicitRuntimeInitialization)
+{
+    RetoolWorkspaceDbManager store;
+    std::string error;
+
+    CHECK(!store.ensureTable(&error));
+    CHECK(!error.empty());
 }

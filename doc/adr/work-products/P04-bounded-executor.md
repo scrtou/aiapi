@@ -187,3 +187,11 @@ C7 之后 shim 已删除，回滚粒度随之变粗：再要回退单层调用�
 端口与门禁规则可独立回退：删除 `REQUIRED` 第 6 条即解除门禁约束；
 `ErrorStatsService::init()` 的 `if (!dbManager_)` 回退分支仍在，去掉 `main.cc` 注入后
 运行期会回落到具体单例，行为等价于倒置前。四元组改造是纯文案层，无行为影响。
+
+### 7.7 后续取代说明（P5-W3）
+
+本节是 2026-08-10 的历史快照。P5-W3 已删除 `ErrorStatsService` 的 `setSink()` 与具体 DB
+singleton fallback，并将 ErrorStatsService、ErrorStatsDbManager、StatusDbManager 及配置解析迁入
+`AppContext` 的显式生命周期；原第 6 条 startup-wiring 规则也随之删除，替换为
+`check_lifecycle_services.py` 的 context ownership/constructor injection 棘轮。当前事实与验证见
+[`P05-controller-services-progress.md`](./P05-controller-services-progress.md)。

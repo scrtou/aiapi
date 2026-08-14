@@ -1,28 +1,9 @@
 #include <drogon/drogon.h>
-#include <accountManager/accountManager.h>
-#include <accountManager/RetoolProvisionClock.h>
-// R4 试点 C：main.cc 是组装根，需同时见到端口与实现才能接线。
-// accountManager.h 已不再 include 实现头，故这里必须显式引入（IWYU）。
-#include <dbManager/account/accountDbManager.h>
-#include <apiManager/ApiManager.h>
-#include <channelManager/channelManager.h>
-#include <sessionManager/core/Session.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
-#include <metrics/ErrorStatsService.h>
-#include <dbManager/channel/channelDbManager.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <runtime/AppContext.h>
 #include <runtime/AppWiring.h>
 #include <utils/ConfigValidator.h>
-#include <sessionManager/continuity/ResponseIndex.h>
-#include <dbManager/session/SessionDbManager.h>
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include <apipoint/chaynsapi/chaynsThreadReaper.h>
-#include <controllers/HealthController.h>
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
-#include <algorithm>
 #include <chrono>
 #include <execinfo.h>
 #include <fstream>
@@ -201,7 +182,6 @@ int main() {
 
     // 记录服务启动时间（用于健康检查接口）
     const auto processStartTime = std::chrono::steady_clock::now();
-    HealthController::setStartTime(processStartTime);
 
     // 这里只宣告「HTTP 开始受理」。后台队列的就绪与否不再由它表达——队列在
     // build() 里已于 run() 之前同步启动，若在此打印「队列已就绪」，日志时序会
@@ -221,7 +201,8 @@ int main() {
     // 回滚已启动的 owner。run() 之后的停机也复用同一份 owner 列表，不再有
     // 「启动登记一处、停机硬编码另一处」的双份真相。
     lifecycle::AppContext appContext;
-    lifecycle::registerApplicationSteps(appContext, drogon::app().getCustomConfig());
+    lifecycle::registerApplicationSteps(
+        appContext, drogon::app().getCustomConfig(), processStartTime);
 
     const auto startup = appContext.build();
     if (!startup.canProceed()) {

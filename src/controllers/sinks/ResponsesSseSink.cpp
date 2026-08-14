@@ -10,11 +10,13 @@ ResponsesSseSink::ResponsesSseSink(
     StreamCallback streamCallback,
     CloseCallback closeCallback,
     const std::string& model,
-    bool nativeToolItems
+    bool nativeToolItems,
+    int inputTokensEstimated
 ) : streamCallback_(std::move(streamCallback)),
     closeCallback_(std::move(closeCallback)),
     model_(model),
-    nativeToolItems_(nativeToolItems)
+    nativeToolItems_(nativeToolItems),
+    responseRecordSink_([](const Json::Value&, int) {}, model, inputTokensEstimated, nativeToolItems)
 {
     createdAt_ = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(
@@ -25,8 +27,13 @@ ResponsesSseSink::ResponsesSseSink(
 }
 
 void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
+    // Persistence mirrors semantic events even after the client-side stream
+    // has gone away.  That preserves the prior collector behavior: request
+    // completion and response-index state are not made contingent on a live
+    // socket.
+    responseRecordSink_.onEvent(event);
     if (closed_) {
-        LOG_WARN << "[响应SSE] 关闭后收到事件";
+        LOG_WARN << "[SSE] ";
         return;
     }
     
@@ -60,13 +67,23 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
 }
 
 void ResponsesSseSink::onClose() {
+    if (responseRecordSink_.isValid()) {
+        responseRecordSink_.onClose();
+    }
     if (!closed_) {
         closed_ = true;
-        LOG_INFO << "[响应SSE] 正在关闭";
+        LOG_INFO << "[SSE] ";
         if (closeCallback_) {
             closeCallback_();
         }
     }
+}
+
+ResponsesSseSink::~ResponsesSseSink() = default;
+
+std::optional<ResponsePersistenceRecord> ResponsesSseSink::responseRecord() const
+{
+    return responseRecordSink_.responseRecord();
 }
 
 bool ResponsesSseSink::isValid() const {

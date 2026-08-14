@@ -1,9 +1,14 @@
 #include <controllers/MetricsController.h>
 #include <controllers/ControllerUtils.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
-#include <dbManager/metrics/StatusDbManager.h>
 
 using namespace drogon;
+
+metrics::IMetricsUseCase* MetricsController::useCase_ = nullptr;
+
+void MetricsController::setUseCase(metrics::IMetricsUseCase* metrics)
+{
+    useCase_ = metrics;
+}
 
 // ========== 请求 / 错误时序 ==========
 
@@ -19,8 +24,8 @@ void MetricsController::getRequestsSeries(const HttpRequestPtr &req, std::functi
     params.from = from;
     params.to   = to;
 
-    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
-    auto series = dbManager->queryRequestSeries(params);
+    auto series = useCase_ ? useCase_->requestSeries(params)
+                            : std::vector<metrics::AggBucket>{};
 
     Json::Value response(Json::objectValue);
     response["from"] = from;
@@ -63,8 +68,8 @@ void MetricsController::getErrorsSeries(const HttpRequestPtr &req, std::function
     params.model      = model;
     params.clientType = clientType;
 
-    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
-    auto series = dbManager->queryErrorSeries(params);
+    auto series = useCase_ ? useCase_->errorSeries(params)
+                            : std::vector<metrics::AggBucket>{};
 
     Json::Value response(Json::objectValue);
     response["from"] = from;
@@ -114,8 +119,8 @@ void MetricsController::getErrorsEvents(const HttpRequestPtr &req, std::function
     params.from = from;
     params.to   = to;
 
-    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
-    auto events = dbManager->queryEvents(params, limit, offset);
+    auto events = useCase_ ? useCase_->errorEvents(params, limit, offset)
+                            : std::vector<metrics::ErrorEventRecord>{};
 
     Json::Value response(Json::objectValue);
     response["from"]   = from;
@@ -151,8 +156,8 @@ void MetricsController::getErrorsEventById(const HttpRequestPtr &req, std::funct
 {
     LOG_INFO << "[MetricsCtrl] 获取错误事件详情 - ID：" << id;
 
-    auto dbManager = metrics::ErrorStatsDbManager::getInstance();
-    auto eventOpt = dbManager->queryEventById(id);
+    auto eventOpt = useCase_ ? useCase_->errorEventById(id)
+                          : std::optional<metrics::ErrorEventRecord>{};
 
     if (!eventOpt.has_value()) {
         ctl::sendError(callback, HttpStatusCode::k404NotFound,
@@ -195,8 +200,8 @@ void MetricsController::getStatusSummary(const HttpRequestPtr &req, std::functio
     params.from = from;
     params.to   = to;
 
-    auto statusManager = metrics::StatusDbManager::getInstance();
-    auto summary = statusManager->getStatusSummary(params);
+    auto summary = useCase_ ? useCase_->statusSummary(params)
+                       : metrics::StatusSummaryData{};
 
     Json::Value response(Json::objectValue);
     response["total_requests"]   = static_cast<Json::Int64>(summary.totalRequests);
@@ -207,7 +212,7 @@ void MetricsController::getStatusSummary(const HttpRequestPtr &req, std::functio
     response["healthy_channels"] = summary.healthyChannels;
     response["degraded_channels"]= summary.degradedChannels;
     response["down_channels"]    = summary.downChannels;
-    response["overall_status"]   = metrics::StatusDbManager::statusToString(summary.overallStatus);
+    response["overall_status"]   = metrics::statusToString(summary.overallStatus);
 
     Json::Value buckets(Json::arrayValue);
     for (const auto& bucket : summary.buckets) {
@@ -236,8 +241,8 @@ void MetricsController::getStatusChannels(const HttpRequestPtr &req, std::functi
     params.to       = to;
     params.provider = provider;
 
-    auto statusManager = metrics::StatusDbManager::getInstance();
-    auto channels = statusManager->getChannelStatusList(params);
+    auto channels = useCase_ ? useCase_->channelStatus(params)
+                       : std::vector<metrics::ChannelStatusData>{};
 
     Json::Value response(Json::objectValue);
     Json::Value data(Json::arrayValue);
@@ -249,7 +254,7 @@ void MetricsController::getStatusChannels(const HttpRequestPtr &req, std::functi
         item["total_requests"]   = static_cast<Json::Int64>(ch.totalRequests);
         item["total_errors"]     = static_cast<Json::Int64>(ch.totalErrors);
         item["error_rate"]       = ch.errorRate;
-        item["status"]           = metrics::StatusDbManager::statusToString(ch.status);
+        item["status"]           = metrics::statusToString(ch.status);
         item["last_request_time"]= ch.lastRequestTime;
 
         Json::Value buckets(Json::arrayValue);
@@ -287,8 +292,8 @@ void MetricsController::getStatusModels(const HttpRequestPtr &req, std::function
     params.provider = provider;
     params.model    = model;
 
-    auto statusManager = metrics::StatusDbManager::getInstance();
-    auto models = statusManager->getModelStatusList(params);
+    auto models = useCase_ ? useCase_->modelStatus(params)
+                     : std::vector<metrics::ModelStatusData>{};
 
     Json::Value response(Json::objectValue);
     Json::Value data(Json::arrayValue);
@@ -300,7 +305,7 @@ void MetricsController::getStatusModels(const HttpRequestPtr &req, std::function
         item["total_requests"]   = static_cast<Json::Int64>(m.totalRequests);
         item["total_errors"]     = static_cast<Json::Int64>(m.totalErrors);
         item["error_rate"]       = m.errorRate;
-        item["status"]           = metrics::StatusDbManager::statusToString(m.status);
+        item["status"]           = metrics::statusToString(m.status);
         item["last_request_time"]= m.lastRequestTime;
 
         Json::Value buckets(Json::arrayValue);

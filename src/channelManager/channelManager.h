@@ -7,17 +7,16 @@
 #include <shared_mutex>
 #include <drogon/drogon.h>
 #include <domain/port/IChannelStore.h>
+#include <domain/port/IChannelCatalog.h>
 
 using std::list;
 using std::shared_ptr;
 using std::string;
 
-class ChannelManager
+class ChannelManager : public IChannelCatalog
 {
 private:
     shared_ptr<IChannelStore> channelDbManager;
-    ChannelManager();
-    ~ChannelManager();
 
     // P7: 内存缓存 —— 所有通道信息常驻内存，避免每次请求查 DB
     mutable std::shared_mutex cacheMutex_;
@@ -30,11 +29,10 @@ private:
     IChannelStore* requireStore();
 
 public:
-    static ChannelManager& getInstance()
-    {
-        static ChannelManager instance;
-        return instance;
-    }
+    /// AppContext owns the production instance; tests use independent locals.
+    /// There is deliberately no process-global accessor.
+    ChannelManager();
+    ~ChannelManager();
 
     ChannelManager(const ChannelManager&) = delete;
     ChannelManager& operator=(const ChannelManager&) = delete;
@@ -49,10 +47,13 @@ public:
     bool updateChannel(struct Channelinfo_st channelinfo);
     bool deleteChannel(int channelId);
     list<Channelinfo_st> getChannelList();
+    std::list<Channelinfo_st> listChannels() const override;
     bool updateChannelStatus(string channelName, bool status);
 
     /// P7： 从内存缓存中查询通道是否支持 工具调用，避免每次请求查数据库
     std::optional<bool> getSupportsToolCalls(const std::string& channelName) const;
+    std::optional<bool> supportsToolCalls(const std::string& channelName) const override
+    { return getSupportsToolCalls(channelName); }
 };
 
 #endif

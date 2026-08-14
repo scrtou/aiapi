@@ -1,20 +1,17 @@
 #pragma once
 
-#include <managedAccount/backends/ClassicProviderAccountBackend.h>
-#include <managedAccount/backends/RetoolWorkspaceBackend.h>
+#include <managedAccount/backends/IManagedAccountBackend.h>
 #include <managedAccount/contracts/ManagedAccount.h>
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
-class ManagedAccountService
+class ManagedAccountService final : public IManagedAccountContextResolver
 {
   public:
-    static ManagedAccountService& getInstance()
-    {
-        static ManagedAccountService instance;
-        return instance;
-    }
+    ManagedAccountService(std::shared_ptr<IManagedAccountBackend> classicBackend,
+                          std::shared_ptr<IManagedAccountBackend> retoolBackend);
 
     std::vector<ManagedAccountRecord> listAll();
     std::vector<ManagedAccountRecord> listByKind(ManagedAccountKind kind);
@@ -22,11 +19,9 @@ class ManagedAccountService
     bool disable(ManagedAccountKind kind, const std::string& id, std::string* errorMessage = nullptr);
     std::optional<ManagedExecutionContext> buildExecutionContext(ManagedAccountKind kind,
                                                                  const std::string& id,
-                                                                 std::string* errorMessage = nullptr);
+                                                                 std::string* errorMessage = nullptr) override;
 
   private:
-    ManagedAccountService() = default;
-
-    ClassicProviderAccountBackend classicBackend_;
-    RetoolWorkspaceBackend retoolBackend_;
+    std::shared_ptr<IManagedAccountBackend> classicBackend_;
+    std::shared_ptr<IManagedAccountBackend> retoolBackend_;
 };

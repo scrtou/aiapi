@@ -51,3 +51,14 @@ struct ManagedAccountRecord
         return value;
     }
 };
+
+// Provider 只需要解析执行上下文，不应依赖完整的账号管理 facade。
+class IManagedAccountContextResolver
+{
+  public:
+    virtual ~IManagedAccountContextResolver() = default;
+    virtual std::optional<ManagedExecutionContext> buildExecutionContext(
+        ManagedAccountKind kind,
+        const std::string& id,
+        std::string* errorMessage = nullptr) = 0;
+};

@@ -4,17 +4,11 @@
     "accountManager/accountManager.cpp",
     "apipoint/chaynsapi/chaynsThreadReaper.cpp",
     "apipoint/chaynsapi/chaynsapi.cpp",
-    "controllers/AccountController.cc",
-    "controllers/MetricsController.cc",
-    "controllers/RetoolWorkspaceController.cc",
-    "main.cc",
-    "metrics/ErrorStatsService.cpp",
-    "runtime/AppWiring.cpp",
-    "sessionManager/continuity/ResponseIndex.cpp",
-    "sessionManager/core/Session.cpp"
+    "runtime/AppContext.cpp",
+    "runtime/AppWiring.cpp"
   ],
   "must_stay_clean": [
     "retoolWorkspace"
   ],
-  "_note": "must_stay_clean 列出已完成依赖倒置的模块，必须保持零直连。每完成一个模块的倒置，把它从 allowed_files 移除并加入此列表。 组装根（main.cc / runtime/AppWiring.cpp）按定义可知具体模块，其条目不代表待偿债务；业务层条目才是。"
+  "_note": "must_stay_clean 列出已完成依赖倒置的模块，必须保持零直连。每完成一个模块的倒置，把它从 allowed_files 移除并加入此列表。composition root（main.cc / runtime/AppWiring.cpp / runtime/AppContext.cpp）按定义可知具体模块；AppContext.cpp 为不完整 runtime-owned 类型提供析构定义，其条目不代表待偿债务；业务层条目才是。"
 }

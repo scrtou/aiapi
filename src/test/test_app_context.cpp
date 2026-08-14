@@ -2,7 +2,28 @@
 
 #include <runtime/AppContext.h>
 #include <runtime/StartupResult.h>
+#include <accountManager/accountManager.h>
+#include <application/account/AccountAdminUseCase.h>
+#include <application/channel/ChannelAdminUseCase.h>
+#include <application/health/HealthUseCase.h>
+#include <application/metrics/MetricsUseCase.h>
+#include <application/workspace/RetoolWorkspaceAdminUseCase.h>
+#include <application/workspace/RetoolWorkspaceUseCase.h>
+#include <channelManager/channelManager.h>
+#include <dbManager/account/accountBackupDbManager.h>
+#include <dbManager/account/accountDbManager.h>
+#include <dbManager/channel/channelDbManager.h>
+#include <dbManager/config/ConfigDbManager.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <dbManager/metrics/StatusDbManager.h>
+#include <dbManager/session/SessionDbManager.h>
+#include <domain/port/IBackgroundExecutor.h>
+#include <metrics/ErrorStatsService.h>
+#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <utils/BackgroundTaskQueue.h>
 
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -18,7 +39,270 @@ std::chrono::steady_clock::time_point soon()
     return std::chrono::steady_clock::now() + std::chrono::seconds(5);
 }
 
+class RecordingExecutor final : public IBackgroundExecutor
+{
+  public:
+    TaskSubmitResult submit(const std::string& name, std::function<void()>) override
+    {
+        names.push_back(name);
+        return result;
+    }
+
+    TaskSubmitResult result = TaskSubmitResult::Accepted;
+    std::vector<std::string> names;
+};
+
+class TestWorkspaceProvisioner final : public workspace::IRetoolWorkspaceProvisioner
+{
+  public:
+    RetoolWorkspaceInfo provision(const std::string&) override { return {}; }
+};
+
+class TestAiApiUseCase final : public aiapi::IAiApiUseCase
+{
+  public:
+    aiapi::SubmissionResult submitGeneration(
+        aiapi::GenerationInput, SinkFactory, Completion) override
+    {
+        return {};
+    }
+    aiapi::ModelCatalogResult modelCatalog(const std::string&) const override { return {}; }
+    aiapi::StoredResponseResult getResponse(const std::string&) override { return {}; }
+    aiapi::DeleteResponseResult deleteResponse(const std::string&) override { return {}; }
+};
+
 }  // namespace
+
+/*
+ * P5-W3: BackgroundTaskQueue is no longer a process singleton or a
+ * function-static adapter dependency.  The same object AppContext owns must
+ * be what application code receives through IBackgroundExecutor.
+ */
+DROGON_TEST(AppContextPublishesItsOwnedQueueAsBackgroundExecutor)
+{
+    AppContext ctx;
+    auto queue = std::make_shared<BackgroundTaskQueue>();
+    ctx.setBackgroundTaskQueue(queue);
+
+    REQUIRE(ctx.backgroundTaskQueue() == queue);
+    REQUIRE(ctx.backgroundExecutor() == static_cast<IBackgroundExecutor*>(queue.get()));
+
+    queue->start(1);
+    std::atomic<int> executed{0};
+    CHECK(ctx.backgroundExecutor()->submit("context-owned-executor", [&executed] {
+              ++executed;
+          }) == TaskSubmitResult::Accepted);
+    CHECK(queue->waitUntilIdle(std::chrono::seconds(5)) == true);
+    CHECK(executed.load() == 1);
+    queue->shutdown();
+}
+
+/*
+ * The session persistence write-through path used to rediscover both its own
+ * singleton and BackgroundTaskQueue::instance().  A local manager now only
+ * submits to the executor passed by its owner; this fake observes all five
+ * request-path write kinds without touching a drogon DB client.
+ */
+DROGON_TEST(SessionDbManagerAsyncWritesUseInjectedExecutorOnly)
+{
+    RecordingExecutor executor;
+    auto persistence = std::make_shared<SessionDbManager>(&executor);
+    persistence->setEnabled(true);
+
+    SessionDbManager::SessionRow session;
+    session.sessionId = "session-id";
+    SessionDbManager::ResponseRow response;
+    response.responseId = "response-id";
+
+    persistence->asyncUpsertSession(session);
+    persistence->asyncUpsertResponse(response);
+    persistence->asyncDeleteSession("session-id");
+    persistence->asyncDeleteSessions({"session-id"});
+    persistence->asyncDeleteResponses({"response-id"});
+
+    const std::vector<std::string> expected{
+        "session.upsert", "responseIndex.upsert", "session.delete",
+        "session.deleteBatch", "responseIndex.deleteBatch"};
+    CHECK(executor.names == expected);
+}
+
+/*
+ * Metrics used to be split across three unrelated process singletons.  The
+ * AppContext now keeps the worker and both concrete query/store adapters in
+ * one lifetime graph, so the worker's injected sink cannot outlive its store.
+ */
+DROGON_TEST(AppContextOwnsMetricsWorkerAndStores)
+{
+    AppContext ctx;
+    auto errors = std::make_shared<metrics::ErrorStatsDbManager>();
+    auto status = std::make_shared<metrics::StatusDbManager>();
+    auto service = std::make_shared<metrics::ErrorStatsService>(errors);
+
+    ctx.setErrorStatsStore(errors);
+    ctx.setStatusMetricsStore(status);
+    ctx.setErrorStatsService(service);
+
+    CHECK(ctx.errorStatsStore() == errors);
+    CHECK(ctx.statusMetricsStore() == status);
+    CHECK(ctx.errorStatsService() == service);
+}
+
+/*
+ * P5-W3: account selection, channel catalog and every controller-facing
+ * application facade are ordinary context-owned objects.  The test
+ * deliberately drops all local owners after publishing them, proving
+ * AppContext is the remaining lifetime root rather than a function-static
+ * helper in AppWiring.
+ */
+DROGON_TEST(AppContextOwnsAccountChannelAndApplicationFacades)
+{
+    AppContext ctx;
+    auto channels = std::make_shared<ChannelManager>();
+    auto workspaces = std::make_shared<workspace::RetoolWorkspaceUseCase>(
+        nullptr, nullptr, channels.get());
+    auto accounts = std::make_shared<AccountManager>();
+    auto admin = std::make_shared<AccountAdminUseCase>(
+        accounts.get(), accounts.get(), nullptr, nullptr, channels.get(), nullptr);
+    auto channelAdmin = std::make_shared<ChannelAdminUseCase>(
+        channels.get(), accounts.get(), nullptr);
+    auto health = std::make_shared<HealthUseCase>(
+        std::chrono::steady_clock::now(), nullptr, nullptr, accounts.get());
+    auto metrics = std::make_shared<metrics::MetricsUseCase>(nullptr, nullptr);
+    auto provisioner = std::make_shared<TestWorkspaceProvisioner>();
+    auto workspaceAdmin = std::make_shared<workspace::RetoolWorkspaceAdminUseCase>(
+        *workspaces, *provisioner);
+
+    ctx.setChannelManager(channels);
+    ctx.setRetoolWorkspaceUseCase(workspaces);
+    ctx.setAccountManager(accounts);
+    ctx.setAccountAdminUseCase(admin);
+    ctx.setChannelAdminUseCase(channelAdmin);
+    ctx.setHealthUseCase(health);
+    ctx.setMetricsUseCase(metrics);
+    ctx.setRetoolWorkspaceProvisioner(provisioner);
+    ctx.setRetoolWorkspaceAdminUseCase(workspaceAdmin);
+
+    channels.reset();
+    workspaces.reset();
+    accounts.reset();
+    admin.reset();
+    channelAdmin.reset();
+    health.reset();
+    metrics.reset();
+    provisioner.reset();
+    workspaceAdmin.reset();
+
+    REQUIRE(ctx.channelManager() != nullptr);
+    REQUIRE(ctx.retoolWorkspaceUseCase() != nullptr);
+    REQUIRE(ctx.accountManager() != nullptr);
+    REQUIRE(ctx.accountAdminUseCase() != nullptr);
+    REQUIRE(ctx.channelAdminUseCase() != nullptr);
+    REQUIRE(ctx.healthUseCase() != nullptr);
+    REQUIRE(ctx.metricsUseCase() != nullptr);
+    REQUIRE(ctx.retoolWorkspaceProvisioner() != nullptr);
+    REQUIRE(ctx.retoolWorkspaceAdminUseCase() != nullptr);
+}
+
+DROGON_TEST(AppContextOwnsAiApiUseCase)
+{
+    AppContext ctx;
+    auto facade = std::make_shared<TestAiApiUseCase>();
+    const auto* expected = facade.get();
+
+    ctx.setAiApiUseCase(facade);
+    facade.reset();
+
+    REQUIRE(ctx.aiApiUseCase() != nullptr);
+    CHECK(ctx.aiApiUseCase().get() == expected);
+}
+
+/*
+ * P5-W3 workspace lifecycle increment: both the legacy store facade and the
+ * provisioner port are published by AppContext.  The local owners are dropped
+ * deliberately so a future function-static accessor cannot silently become
+ * their actual lifetime root again.
+ */
+DROGON_TEST(AppContextOwnsRetoolWorkspaceManagerAndProvisioner)
+{
+    AppContext ctx;
+    auto manager = std::make_shared<RetoolWorkspaceManager>(
+        std::shared_ptr<IRetoolWorkspaceStore>{});
+    auto provisioner = std::make_shared<TestWorkspaceProvisioner>();
+
+    ctx.setRetoolWorkspaceManager(manager);
+    ctx.setRetoolWorkspaceProvisioner(provisioner);
+
+    manager.reset();
+    provisioner.reset();
+
+    REQUIRE(ctx.retoolWorkspaceManager() != nullptr);
+    REQUIRE(ctx.retoolWorkspaceProvisioner() != nullptr);
+}
+
+/*
+ * The concrete workspace adapter is also context-owned.  It has no lazy
+ * process-global accessor now, so dropping the local owner must leave the
+ * exact same store reachable only through AppContext's lifecycle graph.
+ */
+DROGON_TEST(AppContextOwnsRetoolWorkspaceConcreteStore)
+{
+    AppContext ctx;
+    auto store = std::make_shared<RetoolWorkspaceDbManager>();
+    const auto* expected = store.get();
+
+    ctx.setRetoolWorkspaceStore(store);
+    store.reset();
+
+    REQUIRE(ctx.retoolWorkspaceStore() != nullptr);
+    CHECK(ctx.retoolWorkspaceStore().get() == expected);
+}
+
+/*
+ * AccountManager and the workspace application facade both borrow this config
+ * port.  Keeping its concrete adapter under AppContext prevents either path
+ * from recreating a ConfigDbManager singleton after a partial migration.
+ */
+DROGON_TEST(AppContextOwnsConcreteConfigStore)
+{
+    AppContext ctx;
+    auto store = std::make_shared<ConfigDbManager>();
+    const auto* expected = store.get();
+
+    ctx.setConfigStore(store);
+    store.reset();
+
+    REQUIRE(ctx.configStore() != nullptr);
+    CHECK(ctx.configStore().get() == expected);
+}
+
+/*
+ * The remaining account/channel persistence adapters share the same lifecycle
+ * rule: no static accessor can outlive AppContext or bypass its startup graph.
+ */
+DROGON_TEST(AppContextOwnsConcreteAccountAndChannelStores)
+{
+    AppContext ctx;
+    auto accounts = std::make_shared<AccountDbManager>();
+    auto backups = std::make_shared<AccountBackupDbManager>();
+    auto channels = std::make_shared<ChannelDbManager>();
+    const auto* expectedAccounts = accounts.get();
+    const auto* expectedBackups = backups.get();
+    const auto* expectedChannels = channels.get();
+
+    ctx.setAccountStore(accounts);
+    ctx.setAccountBackupStore(backups);
+    ctx.setChannelStore(channels);
+    accounts.reset();
+    backups.reset();
+    channels.reset();
+
+    REQUIRE(ctx.accountStore() != nullptr);
+    REQUIRE(ctx.accountBackupStore() != nullptr);
+    REQUIRE(ctx.channelStore() != nullptr);
+    CHECK(ctx.accountStore().get() == expectedAccounts);
+    CHECK(ctx.accountBackupStore().get() == expectedBackups);
+    CHECK(ctx.channelStore().get() == expectedChannels);
+}
 
 DROGON_TEST(AppContextRunsStepsInRegistrationOrder)
 {

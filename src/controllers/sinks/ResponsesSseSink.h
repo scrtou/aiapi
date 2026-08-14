@@ -2,6 +2,7 @@
 #define RESPONSES_SSE_SINK_H
 
 #include <sessionManager/contracts/IResponseSink.h>
+#include <controllers/sinks/ResponsesJsonSink.h>
 #include <drogon/drogon.h>
 #include <functional>
 #include <string>
@@ -20,7 +21,7 @@
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 7.2 节
  */
-class ResponsesSseSink : public IResponseSink {
+class ResponsesSseSink : public IResponseSink, public IResponsePersistenceSink {
 public:
     using StreamCallback = std::function<bool(const std::string&)>;
     using CloseCallback = std::function<void()>;
@@ -36,15 +37,17 @@ public:
         StreamCallback streamCallback,
         CloseCallback closeCallback,
         const std::string& model,
-        bool nativeToolItems = false
+        bool nativeToolItems = false,
+        int inputTokensEstimated = 0
     );
     
-    ~ResponsesSseSink() override = default;
+    ~ResponsesSseSink() override;
     
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
     std::string getSinkType() const override { return "ResponsesSseSink"; }
+    std::optional<ResponsePersistenceRecord> responseRecord() const override;
     
 private:
     /**
@@ -113,6 +116,10 @@ private:
     bool textItemAdded_ = false;
     bool sawDelta_ = false;
     bool closed_ = false;
+    // A silent JSON sink mirrors semantic events solely to expose the final
+    // record to the use case.  SSE encoding stays here; persistence stays out
+    // of the Controller.
+    ResponsesJsonSink responseRecordSink_;
 };
 
 

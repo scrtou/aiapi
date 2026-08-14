@@ -51,20 +51,6 @@ struct ErrorStatsConfig {
     static ErrorStatsConfig loadFromJson(const Json::Value& config);
     
     /**
-     * @brief 获取全局配置实例（单例）
-     * 
-     * @return ErrorStatsConfig& 配置引用
-     */
-    static ErrorStatsConfig& getInstance();
-    
-    /**
-     * @brief 初始化全局配置（从 drogon app 配置加载）
-     * 
-     * 应在 app 启动时调用一次
-     */
-    static void initFromApp();
-    
-    /**
      * @brief 将 DropPolicy 枚举转换为字符串
      */
     static std::string dropPolicyToString(DropPolicy p) {

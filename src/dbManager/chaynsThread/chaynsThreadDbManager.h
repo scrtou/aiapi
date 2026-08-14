@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <ctime>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,7 +25,9 @@
  *   - 真正的上游删除由 ThreadReaper 后台按 last_active_at 批量回收；
  *   - DB 不可用时整体降级为纯内存，chayns 聊天功能不受影响。
  */
-class chaynsThreadDbManager
+class IBackgroundExecutor;
+
+class chaynsThreadDbManager : public std::enable_shared_from_this<chaynsThreadDbManager>
 {
 public:
     enum class DbType { PostgreSQL, MySQL, SQLite3 };
@@ -42,10 +45,17 @@ public:
         int         deleteAttempts = 0;  ///< 上游删除失败次数，超阈值按孤儿丢弃
     };
 
-    static std::shared_ptr<chaynsThreadDbManager> getInstance();
-
-    chaynsThreadDbManager() = default;
+    /// Context-owned thread ledger.  The executor is borrowed from the same
+    /// AppContext and remains alive until all queued write-through work is
+    /// drained during shutdown.
+    explicit chaynsThreadDbManager(IBackgroundExecutor* executor = nullptr)
+        : executor_(executor) {}
     ~chaynsThreadDbManager() = default;
+
+    /// Acquire the configured drogon DB client after composition-root setup.
+    /// Keeping construction side-effect free makes a disabled ledger cheap in
+    /// tests and prevents accidental process-global initialization.
+    void initialize();
 
     /// 建表 + 建索引；失败返回 false 并通过 errorMessage 输出原因
     bool ensureTable(std::string* errorMessage = nullptr);
@@ -86,6 +96,7 @@ public:
     void asyncDeleteThread(const std::string& threadId);
 
 private:
+    void submitWrite(const char* taskName, std::function<void()> task);
     void detectDbType();
     static ThreadRow rowFromRecord(const drogon::orm::Row& r);
 
@@ -94,8 +105,10 @@ private:
     std::string getCreateThreadSessionIndexSql() const;
 
     drogon::orm::DbClientPtr dbClient_;
+    IBackgroundExecutor* executor_ = nullptr;  // borrowed; owned by AppContext
     DbType dbType_ = DbType::PostgreSQL;
     std::atomic<bool> enabled_{false};
+    bool initialized_ = false;
 };
 
 #endif  // CHAYNS_THREAD_DB_MANAGER_H

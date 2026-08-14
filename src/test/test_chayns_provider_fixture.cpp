@@ -5,7 +5,10 @@
 #include <apipoint/chaynsapi/ChaynsClock.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
-#include <apiManager/ApiManager.h>
+#include <infrastructure/provider/ProviderRegistry.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/core/SessionExecutionGate.h>
+#include <sessionManager/core/Session.h>
 #include <controllers/sinks/ChatJsonSink.h>
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ResponsesJsonSink.h>
@@ -235,11 +238,10 @@ Accountinfo_st chaynsAccount(const std::string& type)
     return account;
 }
 
-void installAccount(const std::string& type)
+void installAccount(AccountManager& accountManager, const std::string& type)
 {
     auto accountStore = std::make_shared<ChaynsFixtureAccountStore>();
     accountStore->rows = {chaynsAccount(type)};
-    auto& accountManager = AccountManager::getInstance();
     accountManager.setStore(accountStore);
     accountManager.loadAccount();
 }
@@ -278,26 +280,34 @@ struct GenerationFixtureHarness
 {
     GenerationFixtureHarness()
     {
-        installAccount("free");
+        installAccount(accounts, "free");
         transport = std::make_shared<FixtureChaynsTransport>();
         transport->enqueue("model-catalog.json");
         transport->enqueue("thread-create-free.json");
         transport->enqueue("poll-messages.json");
-        provider = std::make_shared<chaynsapi>(transport);
+        provider = std::make_shared<chaynsapi>(
+            accounts, transport, chayns::makeRealChaynsClock());
         provider->init();
-        ApiManager::getInstance().addApiInfo(
-            std::make_shared<ApiInfo>("chaynsapi", provider));
+        if (!registry.registerProvider("chaynsapi", provider)) {
+            throw std::runtime_error("failed to register chayns fixture provider");
+        }
     }
 
+    AccountManager accounts;
     std::shared_ptr<FixtureChaynsTransport> transport;
     std::shared_ptr<chaynsapi> provider;
+    provider::ProviderRegistry registry;
+    chatSession sessionStore;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
 };
 
 }  // namespace
 
 DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
 {
-    installAccount("free");
+    AccountManager accounts;
+    installAccount(accounts, "free");
 
     auto transport = std::make_shared<FixtureChaynsTransport>();
     transport->enqueue("model-catalog.json");
@@ -305,7 +315,7 @@ DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
     transport->enqueue("poll-empty.json");
     transport->enqueue("poll-messages.json");
 
-    chaynsapi provider(transport);
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
     provider.init();
 
     auto session = makeRequest(
@@ -327,13 +337,14 @@ DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
 
 DROGON_TEST(ChaynsProvider_ProFixturePreservesWorkspaceRouteOffline)
 {
-    installAccount("pro");
+    AccountManager accounts;
+    installAccount(accounts, "pro");
     auto transport = std::make_shared<FixtureChaynsTransport>();
     transport->enqueue("model-catalog.json");
     transport->enqueue("thread-create-pro.json");
     transport->enqueue("poll-messages.json");
 
-    chaynsapi provider(transport);
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
     provider.init();
     auto session = makeRequest(
         "fixture-pro-model", "fixture-pro-conversation", "synthetic user question");
@@ -351,7 +362,8 @@ DROGON_TEST(ChaynsProvider_ProFixturePreservesWorkspaceRouteOffline)
 
 DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
 {
-    installAccount("free");
+    AccountManager accounts;
+    installAccount(accounts, "free");
     auto transport = std::make_shared<FixtureChaynsTransport>();
     transport->enqueue("model-catalog.json");
     transport->enqueue("thread-create-free.json");
@@ -359,7 +371,7 @@ DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
     transport->enqueue("message-create.json");
     transport->enqueue("poll-messages.json");
 
-    chaynsapi provider(transport);
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
     provider.init();
     auto first = makeRequest(
         "fixture-free-model", "fixture-first", "synthetic user question");
@@ -384,14 +396,15 @@ DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
 
 DROGON_TEST(ChaynsProvider_FakeClockReachesPollingDeadlineWithoutWallClockWait)
 {
-    installAccount("free");
+    AccountManager accounts;
+    installAccount(accounts, "free");
     auto transport = std::make_shared<FixtureChaynsTransport>();
     transport->enqueue("model-catalog.json");
     transport->enqueue("thread-create-free.json");
     transport->enqueue("poll-empty.json");
     auto clock = std::make_shared<DeadlineJumpClock>();
 
-    chaynsapi provider(transport, clock);
+    chaynsapi provider(accounts, transport, clock);
     provider.init();
     auto session = makeRequest(
         "fixture-free-model", "fixture-timeout", "synthetic user question");
@@ -420,7 +433,7 @@ DROGON_TEST(ChaynsProvider_ChatJsonRunsGenerationServiceAndProductionSink)
             status = valueStatus;
         },
         "fixture-free-model");
-    GenerationService service;
+    GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
         makeGenerationRequest(EndpointType::ChatCompletions, false, "chat-json-input"),
         sink);
@@ -446,7 +459,7 @@ DROGON_TEST(ChaynsProvider_ChatSseRunsGenerationServiceAndProductionSink)
         },
         [&]() { ++closes; },
         "fixture-free-model");
-    GenerationService service;
+    GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
         makeGenerationRequest(EndpointType::ChatCompletions, true, "chat-sse-input"),
         sink);
@@ -472,7 +485,7 @@ DROGON_TEST(ChaynsProvider_ResponsesJsonRunsGenerationServiceAndProductionSink)
         "fixture-free-model",
         0,
         false);
-    GenerationService service;
+    GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
         makeGenerationRequest(EndpointType::Responses, false, "responses-json-input"),
         sink);
@@ -500,7 +513,7 @@ DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
         [&]() { ++closes; },
         "fixture-free-model",
         false);
-    GenerationService service;
+    GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
         makeGenerationRequest(EndpointType::Responses, true, "responses-sse-input"),
         sink);

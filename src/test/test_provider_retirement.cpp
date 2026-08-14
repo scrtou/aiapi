@@ -182,7 +182,7 @@ DROGON_TEST(ProviderRetirement_PolicyRejectsOnlyConcreteRetiredProviderKeys)
 DROGON_TEST(ProviderRetirement_AccountManagerRejectsRetiredWritesBeforeStore)
 {
     auto store = std::make_shared<RetirementAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
     manager.loadAccount();
 
@@ -204,7 +204,7 @@ DROGON_TEST(ProviderRetirement_AccountManagerRejectsRetiredWritesBeforeStore)
 DROGON_TEST(ProviderRetirement_ChannelManagerRejectsRetiredWritesBeforeStore)
 {
     auto store = std::make_shared<RetirementChannelStore>();
-    auto& manager = ChannelManager::getInstance();
+    ChannelManager manager;
     manager.setStore(store);
 
     Channelinfo_st channel;

@@ -127,9 +127,9 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Provider 层                                 │
 │  ┌─────────────┐     ┌─────────────────────────────────────┐   │
-│  │  ApiManager │ ──▶ │         APIinterface                │   │
-│  │  (路由选择)  │     │  - generate()                       │   │
-│  │  ApiFactory  │     │  - ProviderResult                   │   │
+│  │ProviderReg- │ ──▶ │         APIinterface                │   │
+│  │istry (注入) │     │  - generate()                       │   │
+│  │ 构造后冻结   │     │  - ProviderResult                   │   │
 │  └─────────────┘     └─────────────────────────────────────┘   │
 │        │                                                        │
 │        ├── chaynsapi (Chayns AI Provider)                       │
@@ -275,10 +275,10 @@ aiapi/
     │   └── retoolapi/              # Retool Workspace Provider 实现
     │       └── retoolapi.h/cpp
     │
-    ├── apiManager/                 # Provider 管理
-    │   ├── Apicomn.h               # API 公共定义
-    │   ├── ApiFactory.h/cpp        # Provider 工厂
-    │   └── ApiManager.h/cpp        # Provider 路由选择
+    ├── infrastructure/provider/    # Provider 运行时注册表
+    │   └── ProviderRegistry.h/cpp  # 显式注册、发布前冻结、只读查找
+    ├── apiManager/
+    │   └── Apicomn.h               # 待随 P6 宽接口拆分迁移的公共定义
     │
     ├── accountManager/             # 账号池管理
     │   └── accountManager.h/cpp    # 账号 CRUD + Token 刷新 + 自动注册

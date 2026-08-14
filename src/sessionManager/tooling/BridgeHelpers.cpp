@@ -8,6 +8,56 @@ using namespace drogon;
 
 namespace bridge {
 
+namespace {
+metrics::ITelemetrySink* telemetrySink = nullptr;
+
+metrics::ErrorDetails scalarDetails(const Json::Value& detail)
+{
+    metrics::ErrorDetails result;
+    if (!detail.isObject()) return result;
+    for (const auto& key : detail.getMemberNames()) {
+        const auto& value = detail[key];
+        if (value.isString()) result[key] = value.asString();
+        else if (value.isBool()) result[key] = value.asBool();
+        else if (value.isInt64()) result[key] = value.asInt64();
+        else if (value.isUInt64()) result[key] = static_cast<std::int64_t>(value.asUInt64());
+        else if (value.isDouble()) result[key] = value.asDouble();
+        else result[key] = safeJsonAsString(value);
+    }
+    return result;
+}
+
+metrics::ErrorEvent makeEvent(const session_st& session,
+                              metrics::Severity severity,
+                              metrics::Domain domain,
+                              const std::string& type,
+                              const std::string& message,
+                              int httpStatus,
+                              const Json::Value& detail,
+                              const std::string& rawSnippet,
+                              const std::string& toolName)
+{
+    metrics::ErrorEvent event;
+    event.ts = std::chrono::system_clock::now();
+    event.severity = severity;
+    event.domain = domain;
+    event.type = type;
+    event.message = message;
+    event.requestId = session.state.requestId;
+    event.provider = session.request.api;
+    event.model = session.request.model;
+    event.clientType = getClientTypeFromSession(session);
+    event.apiKind = getApiKindFromSession(session);
+    event.httpStatus = httpStatus;
+    event.details = scalarDetails(detail);
+    event.rawSnippet = rawSnippet;
+    event.toolName = toolName;
+    return event;
+}
+}  // namespace
+
+void setTelemetrySink(metrics::ITelemetrySink* sink) { telemetrySink = sink; }
+
 // ========== 字符串工具函数 ==========
 
 std::string trimWhitespace(std::string s) {
@@ -148,12 +198,9 @@ void recordErrorStat(
     const std::string& rawSnippet,
     const std::string& toolName
 ) {
-    metrics::ErrorStatsService::getInstance().recordError(
-        domain, type, message,
-        session.state.requestId, session.request.api, session.request.model,
-        getClientTypeFromSession(session), getApiKindFromSession(session),
-        false, httpStatus, detail, rawSnippet, toolName
-    );
+    if (telemetrySink) telemetrySink->record(makeEvent(
+        session, metrics::Severity::ERROR, domain, type, message,
+        httpStatus, detail, rawSnippet, toolName));
 }
 
 void recordWarnStat(
@@ -165,16 +212,13 @@ void recordWarnStat(
     const std::string& rawSnippet,
     const std::string& toolName
 ) {
-    metrics::ErrorStatsService::getInstance().recordWarn(
-        domain, type, message,
-        session.state.requestId, session.request.api, session.request.model,
-        getClientTypeFromSession(session), getApiKindFromSession(session),
-        false, 0, detail, rawSnippet, toolName
-    );
+    if (telemetrySink) telemetrySink->record(makeEvent(
+        session, metrics::Severity::WARN, domain, type, message,
+        0, detail, rawSnippet, toolName));
 }
 
 void recordRequestCompletedStat(const session_st& session, int httpStatus) {
-    metrics::RequestCompletedData data;
+    metrics::RequestCompletedEvent data;
     data.provider = session.request.api;
     data.model = session.request.model;
     data.clientType = getClientTypeFromSession(session);
@@ -182,7 +226,7 @@ void recordRequestCompletedStat(const session_st& session, int httpStatus) {
     data.stream = false;
     data.httpStatus = httpStatus;
     data.ts = std::chrono::system_clock::now();
-    metrics::ErrorStatsService::getInstance().recordRequestCompleted(data);
+    if (telemetrySink) telemetrySink->recordRequestCompleted(data);
 }
 
 } // 命名空间 桥接

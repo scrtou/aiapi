@@ -11,11 +11,13 @@
 class RetoolWorkspaceManager
 {
   public:
-    static RetoolWorkspaceManager& getInstance()
-    {
-        static RetoolWorkspaceManager instance;
-        return instance;
-    }
+    // The composition root owns this facade.  A store is deliberately a
+    // construction dependency rather than a later setter: `init()` performs
+    // persistence work immediately, so a mutable injection phase would make
+    // the lifecycle ordering implicit again.
+    explicit RetoolWorkspaceManager(std::shared_ptr<IRetoolWorkspaceStore> store);
+    RetoolWorkspaceManager(const RetoolWorkspaceManager&) = delete;
+    RetoolWorkspaceManager& operator=(const RetoolWorkspaceManager&) = delete;
 
     void init();
     bool upsertWorkspace(const RetoolWorkspaceInfo& info, std::string* errorMessage = nullptr);
@@ -31,12 +33,6 @@ class RetoolWorkspaceManager
     bool markWorkspaceUsageFinished(const std::string& workspaceId, std::string* errorMessage = nullptr);
     bool disableWorkspace(const std::string& workspaceId, std::string* errorMessage = nullptr);
 
-    // R4 依赖倒置：由组合根(main.cc)注入具体实现。
-    void setStore(std::shared_ptr<IRetoolWorkspaceStore> store);
-
   private:
-    RetoolWorkspaceManager() = default;
-    IRetoolWorkspaceStore* requireStore();
-
     std::shared_ptr<IRetoolWorkspaceStore> store_;
 };

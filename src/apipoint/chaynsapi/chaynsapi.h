@@ -1,11 +1,11 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
-#include <accountManager/accountManager.h>
+#include <domain/port/IAccountSelector.h>
 #include <domain/port/APIinterface.h>
 #include <sessionManager/contracts/LegacySessionData.h>
-#include <apiManager/ApiFactory.h>
 #include <list>
 #include <map>
+#include <memory>
 #include <random>
 #include <sstream>
 #include <iomanip>
@@ -29,14 +29,20 @@ const int MAX_UPSTREAM_RETRIES = 4;  // 上游最大总重试次数（外层循�
 // 上游错误文本列表从配置 custom_config.upstream_error_texts 加载
 
 std::string generateGuid();
+class chaynsThreadDbManager;
 
 class chaynsapi:public APIinterface
 {
     public:
-        static void* createApi();
-        explicit chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport);
-        chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport,
-                  std::shared_ptr<chayns::IChaynsClock> clock);
+        /**
+         * All account selection is supplied by the composition root.  A
+         * provider must not rediscover AccountManager while handling a request:
+         * that would create a second, unowned account-pool lifetime.
+         */
+        chaynsapi(IAccountSelector& accountSelector,
+                  std::shared_ptr<chayns::IChaynsHttpTransport> transport,
+                  std::shared_ptr<chayns::IChaynsClock> clock,
+                  std::shared_ptr<chaynsThreadDbManager> threadLedger = nullptr);
         provider::ProviderResult generate(session_st& session) override;
         void postChatMessage(session_st& session);
         void checkAlivableTokens();
@@ -57,7 +63,7 @@ class chaynsapi:public APIinterface
                                   const std::string& referer);
 
     private:
-        DEClARE_RUNTIME(chaynsapi);
+        IAccountSelector& m_accountSelector;
         chayns::ModelCatalog m_modelCatalog;
         mutable std::shared_mutex m_modelCatalogMutex;
         std::mutex m_modelRefreshMutex;
@@ -75,9 +81,11 @@ class chaynsapi:public APIinterface
                                          const std::string& origin,
                                          const std::string& referer);
 
-        chaynsapi();
         std::shared_ptr<chayns::IChaynsHttpTransport> m_transport;
         std::shared_ptr<chayns::IChaynsClock> m_clock;
+        // Context-owned ledger; null is an explicit memory-only/degraded
+        // configuration, never a fallback lookup of a global DB manager.
+        std::shared_ptr<chaynsThreadDbManager> m_threadLedger;
     
     // 定义一个结构体保存线程上下文信息
     struct ThreadContext {

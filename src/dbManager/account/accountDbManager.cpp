@@ -62,14 +62,49 @@ std::string createTableSqlite3 = R"(
 )";
 
 
+bool AccountDbManager::initialize(std::string* errorMessage)
+{
+    if (initialized_)
+    {
+        return dbClient != nullptr;
+    }
+    initialized_ = true;
+
+    try
+    {
+        dbClient = drogon::app().getDbClient("aichatpg");
+        if (!dbClient)
+        {
+            if (errorMessage) *errorMessage = "AccountDbManager database client is unavailable";
+            LOG_ERROR << "[账户数据库] 获取数据库客户端失败";
+            return false;
+        }
+        detectDbType();
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        dbClient.reset();
+        if (errorMessage) *errorMessage = ex.what();
+        LOG_ERROR << "[账户数据库] 初始化数据库客户端失败: " << ex.what();
+        return false;
+    }
+}
+
 void AccountDbManager::detectDbType()
 {
     // 从配置文件的 custom_config 读取数据库类型
-    auto customConfig = drogon::app().getCustomConfig();
     std::string dbTypeStr = "postgresql";  // 默认值
-    
-    if (customConfig.isMember("dbtype")) {
-        dbTypeStr = customConfig["dbtype"].asString();
+    try
+    {
+        const auto customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isMember("dbtype")) {
+            dbTypeStr = customConfig["dbtype"].asString();
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        LOG_WARN << "[账户数据库] 读取数据库类型配置失败，使用 PostgreSQL 默认值: " << ex.what();
     }
     
     // 转换为小写进行比较
@@ -90,9 +125,10 @@ void AccountDbManager::detectDbType()
 void AccountDbManager::init()
 {
     LOG_INFO << "[账户数据库] 初始化开始";
-    dbClient = app().getDbClient("aichatpg");
-    detectDbType();
-    LOG_INFO << "[账户数据库] 初始化完成";
+    if (initialize())
+    {
+        LOG_INFO << "[账户数据库] 初始化完成";
+    }
 }
 
 void AccountDbManager::checkAndUpgradeTable()

@@ -2,7 +2,7 @@
 """composition root 结构检查（失败退出码 4）。
 
 动因（P04-W2 / C7）：P4-W2 把启动流程从 main.cc 的双层 lambda 搬进了
-AppContext + AppWiring。搬完之后，四条关键性质全部只由「代码现在长这样」
+AppContext + AppWiring。搬完之后，五条关键性质全部只由「代码现在长这样」
 维持，没有任何一条能被编译器或单测抓住：
 
   A1  build() 的返回值必须被检查。
@@ -21,8 +21,8 @@ AppContext + AppWiring。搬完之后，四条关键性质全部只由「代码�
       不能是裸时长。G5 的整个修法建立在「绝对 deadline 可跨 owner 累减」上，
       改回相对时长不会有任何编译错误，但宽限期会被逐段突破。
 
-  A5  每个「会拉起后台线程的单例」都必须在 AppWiring 里登记为 owner。
-      G7 的实质不是「有单例」，而是「单例的线程靠静态析构收尾」。静态析构在
+  A5  每个「会拉起后台线程的 runtime service」都必须在 AppWiring 里登记为 owner。
+      G7 的实质不是「有单例」，而是「后台线程靠隐式析构收尾」。静态析构在
       main 返回之后发生，此时它依赖的 DbManager / drogon DB 客户端可能已先被
       销毁，析构里的兜底 shutdown() 于是变成对已析构对象的调用；而且那一刻
       早已在 shutdown(deadline) 的宽限期之外，停机日志对此只字不提。
@@ -54,14 +54,23 @@ FAIL = 4
 #
 # 为什么是白名单而不是自动发现：正则级脚本无法判定 `std::thread` 成员是否
 # 真的会被 start，自动发现只会制造噪音。这张表是**人工审过一次**的结论，
-# 新增持线程单例时必须手工进表——进表这个动作本身就是 review 的钩子。
+# 新增持线程 service 时必须手工进表——进表这个动作本身就是 review 的钩子。
 # 表若与代码脱节，A5 会失败而不是静默放行（见 check_thread_owners_registered）。
-THREAD_OWNING_SINGLETONS = [
-    ('BackgroundTaskQueue', r'BackgroundTaskQueue::instance\(\)\s*\.\s*shutdown\s*\('),
-    ('AccountManager',      r'AccountManager::getInstance\(\)\s*\.\s*stopBackgroundThreads\s*\('),
-    ('chaynsThreadReaper',  r'chaynsThreadReaper::getInstance\(\)\s*\.\s*stop\s*\('),
-    ('chatSession',         r'chatSession::getInstance\(\)\s*->\s*stopClearExpiredSession\s*\('),
-    ('ErrorStatsService',   r'ErrorStatsService::getInstance\(\)\s*\.\s*shutdown\s*\('),
+THREAD_OWNING_SERVICES = [
+    # P5-W3: queue is now AppContext-owned and captured by the same owner
+    # closure that drains it; a process singleton must not reappear.
+    ('BackgroundTaskQueue', r'\bqueue\s*->\s*shutdown\s*\('),
+    # P5-W3: AccountManager is context-owned; the owner must retain the same
+    # shared object that was published to providers and application services.
+    ('AccountManager',      r'\baccounts\s*->\s*stopBackgroundThreads\s*\('),
+    # P5-W3: both are normal AppContext-owned objects now.  The capture names
+    # make the stop action and the owning object visibly part of one wiring step.
+    ('chaynsThreadReaper',  r'\breaper\s*->\s*stop\s*\('),
+    ('chatSession',         r'\bsessionStore\s*->\s*stopClearExpiredSession\s*\('),
+    # P5-W3: the metrics worker is an AppContext-owned shared object; its
+    # deadline-aware owner must stop that exact capture, not rediscover a
+    # process singleton.
+    ('ErrorStatsService',   r'\berrorStats\s*->\s*shutdown\s*\('),
 ]
 
 FORBIDDEN_IN_MAIN = [
@@ -177,23 +186,23 @@ def check_main_has_no_injection(src, problems):
 
 
 def check_thread_owners_registered(src, problems):
-    """A5：登记册里的每个持线程单例，都要能在 AppWiring 中找到对应的 stop 调用。
+    """A5：登记册里的每个持线程 service，都要能在 AppWiring 中找到对应的 stop 调用。
 
     只认「出现在某个 addOwner 之后的同一区段内」过于脆弱（闭包可跨行、可提取成
     具名函数），故判据放宽为：该 stop 形状必须在 AppWiring.cpp 中出现，且文件里
     addOwner 的总数不少于登记册条目数。前者防漏登，后者防「把 stop 写在别处
     （例如某个步骤体里直接调用）却没真正交给 AppContext 编排」。
     """
-    for name, pattern in THREAD_OWNING_SINGLETONS:
+    for name, pattern in THREAD_OWNING_SERVICES:
         if not re.search(pattern, src):
             problems.append('A5 %s 的停机调用在 %s 中找不到：'
-                            '它的后台线程将退回由静态析构收尾（G7 复发）'
+                            '它的后台线程将退回到隐式析构收尾（G7 复发）'
                             % (name, WIRING))
     owner_count = len(re.findall(r'\.\s*addOwner\s*\(', src))
-    if owner_count < len(THREAD_OWNING_SINGLETONS):
-        problems.append('A5 %s 中 addOwner 仅 %d 处，少于登记册的 %d 个持线程单例：'
+    if owner_count < len(THREAD_OWNING_SERVICES):
+        problems.append('A5 %s 中 addOwner 仅 %d 处，少于登记册的 %d 个持线程 service：'
                         '至少有一个的 stop 没有交给 AppContext 编排'
-                        % (WIRING, owner_count, len(THREAD_OWNING_SINGLETONS)))
+                            % (WIRING, owner_count, len(THREAD_OWNING_SERVICES)))
 
 
 def main():
@@ -224,7 +233,7 @@ def main():
     print('OK A2 全部 addOwner 均位于步骤内部')
     print('OK A3 shutdown() 使用绝对 deadline')
     print('OK A4 main.cc 未直接注入任何 Store')
-    print('OK A5 %d 个持线程单例均已登记为 owner' % len(THREAD_OWNING_SINGLETONS))
+    print('OK A5 %d 个持线程 runtime service 均已登记为 owner' % len(THREAD_OWNING_SERVICES))
     return 0
 
 

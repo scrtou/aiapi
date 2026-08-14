@@ -22,14 +22,21 @@ using namespace std;
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
 #include <domain/port/IRetoolProvisionClock.h>
+#include <domain/port/IAccountCatalog.h>
+#include <domain/port/IAccountAdminCommands.h>
+#include <domain/port/IAccountSelector.h>
+#include <domain/port/IKeyValueConfigStore.h>
+#include <domain/port/IRetoolWorkspaceUseCase.h>
 #include <accountManager/AccountHttpTransport.h>
 #include <accountManager/AccountClock.h>
+#include <platform/ThreadJoin.h>
 
 
-class AccountManager
+class AccountManager : public IAccountCatalog,
+                       public IAccountAdminCommands,
+                       public IAccountSelector
 {
     private:
-   // 旧单例写法保留：当前已改为函数内静态对象
     map<string,shared_ptr<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>> accountPoolMap;
     map<string,map<string,shared_ptr<Accountinfo_st>>> accountList;// 二级索引结构：apiName -> userName -> accountInfo
     mutable std::mutex accountListMutex;  // 保护 accountList 的互斥锁
@@ -61,7 +68,7 @@ class AccountManager
     // 自动注册失败时的回滚：先改回 WAITING 再删除占位记录（删除要求状态为 WAITING）。
     void rollbackWaitingAccount(int waitingId);
 
-    // R4 续：渠道列表来源。改造前是 ChannelDbManager::getInstance() 直呼（3 处）。
+    // R4 续：渠道列表来源。改造前直接查找 ChannelDbManager（3 处）。
     // 复用试点 B 已有的 IChannelStore 端口，未新造抽象。
     // 命名不与上面的 setStore 重载：AccountManager 有两条独立接线，
     // 同名会让 main.cc 意图含糊，也让启动接线门禁难以分辨。
@@ -70,13 +77,21 @@ class AccountManager
     std::shared_ptr<account::IAccountHttpTransport> httpTransport_;
     std::shared_ptr<account::IAccountClock> clock_;
     std::shared_ptr<retoolProvision::IRetoolProvisionClock> retoolProvisionClock_;
+    std::shared_ptr<IKeyValueConfigStore> configStore_;
+    workspace::IRetoolWorkspaceUseCase* workspaceUseCase_ = nullptr;
+    workspace::IRetoolWorkspaceProvisioner* workspaceProvisioner_ = nullptr;
     account::HttpResult sendHttpRequest(const std::string& baseUrl,
                                         const drogon::HttpRequestPtr& request,
                                         double timeoutSeconds) const;
-     AccountManager();
+    public:
+    /**
+     * Runtime creates one AccountManager in AppContext; tests create local
+     * instances.  There is intentionally no process-global getInstance()
+     * fallback because providers now receive IAccountSelector explicitly.
+     */
+    AccountManager();
     ~AccountManager();
 
-    public:
     // R4 试点 C 注入点：必须在 init() 之前调用（init() 会立刻建表/迁移账号）。
     void setStore(std::shared_ptr<IAccountStore> store);
     void setChannelStore(std::shared_ptr<IChannelStore> store);
@@ -84,30 +99,31 @@ class AccountManager
     void setClock(std::shared_ptr<account::IAccountClock> clock);
     void setRetoolProvisionClock(
         std::shared_ptr<retoolProvision::IRetoolProvisionClock> clock);
+    void setConfigStore(std::shared_ptr<IKeyValueConfigStore> store);
+    void setRetoolWorkspaceServices(
+        workspace::IRetoolWorkspaceUseCase* useCase,
+        workspace::IRetoolWorkspaceProvisioner* provisioner);
 
-    static AccountManager& getInstance()
-    {
-        static AccountManager instance;
-        return instance;
-    }
     AccountManager(const AccountManager&) = delete;
     AccountManager& operator=(const AccountManager&) = delete;
     void init();
-    void loadAccount();
+    void loadAccount() override;
     void saveAccount();
 
     void addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime="",string accountType="free",string status="active",std::int64_t workspaceUacId=0);
-    bool addAccountbyPost(Accountinfo_st accountinfo);
-    bool updateAccount(Accountinfo_st accountinfo);
-    bool deleteAccountbyPost(string apiName,string userName);
+    bool addAccountbyPost(Accountinfo_st accountinfo) override;
+    bool updateAccount(Accountinfo_st accountinfo) override;
+    bool deleteAccountbyPost(string apiName,string userName) override;
     void getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType = "");
     bool getEligibleAccount(const string& apiName,
                             shared_ptr<Accountinfo_st>& account,
                             AccountRequirement requirement,
-                            const set<string>& excludedUsers = {});
-    void getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account);
+                            const set<string>& excludedUsers = {}) override;
+    void getAccountByUserName(const string& apiName,
+                              const string& userName,
+                              shared_ptr<Accountinfo_st>& account) override;
     void checkAccount();
-    void checkToken();
+    void checkToken() override;
     void updateToken();
     void updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo);
     bool checkChaynsToken(string token);
@@ -116,7 +132,7 @@ class AccountManager
     void refreshAccountQueue(string apiName);
     void printAccountPoolMap();
     void checkUpdateTokenthread();
-    void checkUpdateAccountToken();
+    void checkUpdateAccountToken() override;
     bool isServerReachable(const string& host, int maxRetries = 300);
     void loadAccountFromDatebase();
     void saveAccountToDatebase();
@@ -124,30 +140,31 @@ class AccountManager
     void setStatusAccountStatus(string apiName,string userName,bool status);
     void setStatusTokenStatus(string apiName,string userName,bool status);
     std::map<string,map<string,shared_ptr<Accountinfo_st>>> getAccountList();
+    IAccountCatalog::AccountMap listAccounts() override { return getAccountList(); }
     void loadAccountAutomationSettings();
-    AccountAutomationSettings getAccountAutomationSettings() const;
+    AccountAutomationSettings getAccountAutomationSettings() const override;
     bool updateAccountAutomationSettings(const AccountAutomationSettings& settings,
                                          bool persistToConfig = true,
-                                         std::string* errorMessage = nullptr);
+                                         std::string* errorMessage = nullptr) override;
     void waitUpdateAccountToken();
     void waitUpdateAccountTokenThread();
 
-    void checkChannelAccountCounts();
-    void checkChannelAccountCount(string apiName);
-    bool autoRegisterAccount(string apiName);
+    void checkChannelAccountCounts() override;
+    void checkChannelAccountCount(string apiName) override;
+    bool autoRegisterAccount(string apiName) override;
     void checkAccountCountThread();
     
     // 竞态条件保护相关方法
     bool isAccountRegistering(int pendingId);  // 检查账号是否正在注册中
-    bool isAccountRegisteringByUsername(const string& userName);  // 通过用户名检查
+    bool isAccountRegisteringByUsername(const string& userName) override;  // 通过用户名检查
     
     // 上游账号删除
-    bool deleteUpstreamAccount(const Accountinfo_st& account);  // 从上游服务删除账号
+    bool deleteUpstreamAccount(const Accountinfo_st& account) override;  // 从上游服务删除账号
     
     // 定时更新账号类型相关方法
     bool getUserProAccess(const string& token, const string& personId);  // 获取用户 Pro 权限状态
-    void updateAccountType(shared_ptr<Accountinfo_st> account);  // 更新单个账号的 accountType
-    void updateAllAccountTypes();  // 更新所有账号的 accountType
+    void updateAccountType(shared_ptr<Accountinfo_st> account) override;  // 更新单个账号的 accountType
+    void updateAllAccountTypes() override;  // 更新所有账号的 accountType
     void checkAccountTypeThread();  // 启动定时检查 accountType 的线程
     void cleanExpiredAccounts();  // 自动清理创建超过配置天数的过期账号
 
@@ -160,6 +177,12 @@ class AccountManager
     /// waitUpdateAccountToken 阻塞在 accountListNeedUpdateCondition 上，
     /// 靠 notify_all + 谓词复查退出。
     void stopBackgroundThreads();
+
+    /**
+     * 停止全部后台线程，并在绝对 deadline 前尝试汇合。
+     * 超时返回 false，未汇合的线程保持 joinable，由后续无参调用收割。
+     */
+    [[nodiscard]] bool stopBackgroundThreads(std::chrono::steady_clock::time_point deadline);
 
   private:
     /// 可中断睡眠：睡满 duration 返回 true；被停机唤醒立即返回 false。
@@ -176,5 +199,9 @@ class AccountManager
     std::thread             tokenUpdateWorker_;    ///< waitUpdateAccountTokenThread
     std::thread             accountCountThread_;   ///< checkAccountCountThread
     std::thread             accountTypeThread_;    ///< checkAccountTypeThread
+    platform::ThreadCompletionPtr tokenCheckDone_;
+    platform::ThreadCompletionPtr tokenUpdateDone_;
+    platform::ThreadCompletionPtr accountCountDone_;
+    platform::ThreadCompletionPtr accountTypeDone_;
 };
 #endif

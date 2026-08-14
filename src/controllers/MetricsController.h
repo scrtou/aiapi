@@ -2,6 +2,7 @@
 
 #include <controllers/AdminAuthFilter.h>
 #include <drogon/HttpController.h>
+#include <domain/port/IMetricsUseCase.h>
 
 /**
  * @brief 错误统计 & 服务状态监控 Controller
@@ -18,6 +19,7 @@
 class MetricsController : public drogon::HttpController<MetricsController>
 {
   public:
+    static void setUseCase(metrics::IMetricsUseCase* metrics);
     METHOD_LIST_BEGIN
     ADD_METHOD_TO(MetricsController::getRequestsSeries,   "/aichat/metrics/requests/series",     drogon::Get, "AdminAuthFilter");
     ADD_METHOD_TO(MetricsController::getErrorsSeries,     "/aichat/metrics/errors/series",       drogon::Get, "AdminAuthFilter");
@@ -35,4 +37,7 @@ class MetricsController : public drogon::HttpController<MetricsController>
     void getStatusSummary(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void getStatusChannels(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void getStatusModels(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+  private:
+    static metrics::IMetricsUseCase* useCase_;
 };

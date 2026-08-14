@@ -1,10 +1,28 @@
 #include <sessionManager/continuity/ResponseIndex.h>
-#include <dbManager/session/SessionDbManager.h>
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 #include <vector>
 
 namespace {
+Json::StreamWriterBuilder& compactWriter()
+{
+    static Json::StreamWriterBuilder writer = [] {
+        Json::StreamWriterBuilder value;
+        value["indentation"] = "";
+        return value;
+    }();
+    return writer;
+}
+
+bool parseResponseJson(const std::string& json, Json::Value& out)
+{
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream stream(json);
+    return Json::parseFromStream(builder, stream, &out, &errors);
+}
+
 /// 数据库侧 TTL 使用绝对时间（epoch 秒）；内存侧仍用 steady_clock 判龄。
 int64_t nowEpochSeconds()
 {
@@ -14,23 +32,20 @@ int64_t nowEpochSeconds()
 }
 }  // namespace
 
-ResponseIndex& ResponseIndex::instance() {
-    static ResponseIndex inst;
-    return inst;
-}
-
 bool ResponseIndex::loadFromDbAndFill(const std::string& responseId, Entry& outEntry) {
     // 调用方需持有 mutex_；数据库异常在 SessionDbManager 内部已降级为未命中。
     if (!persistenceEnabled_.load()) return false;
 
-    auto row = SessionDbManager::getInstance()->loadResponse(responseId);
+    if (!persistence_) return false;
+    auto row = persistence_->loadResponse(responseId);
     if (!row.has_value()) return false;
 
     Entry e;
     e.sessionId   = row->sessionId;
     e.createdAt   = std::chrono::steady_clock::now();
     e.hasResponse = row->hasResponse;
-    if (row->hasResponse) e.response = row->response;
+    if (row->hasResponse && !parseResponseJson(row->responseJson, e.response))
+        e.hasResponse = false;
 
     map_[responseId] = e;
     outEntry = e;
@@ -74,38 +89,40 @@ void ResponseIndex::bind(const std::string& responseId, const std::string& sessi
     if (!persistenceEnabled_.load()) return;
 
     // 写穿：hasResponse=false 表示只重绑 sessionId，不覆盖已有响应体。
-    SessionDbManager::ResponseRow row;
+    ResponsePersistenceRow row;
     row.responseId  = responseId;
     row.sessionId   = sessionId;
     row.hasResponse = false;
     row.createdAt   = nowEpochSeconds();
-    SessionDbManager::getInstance()->asyncUpsertResponse(row);
+    if (persistence_) persistence_->asyncUpsertResponse(row);
 
     // 内存淘汰只降温，不删库：DB 行的生命周期跟随 chat_session_state 级联清理，
     // 以支撑内存已淘汰(6h)但会话快照仍在(24h)窗口内的 previous_response_id 续接。
     (void)evicted;
 }
 
-bool ResponseIndex::tryGetResponse(const std::string& responseId, Json::Value& outResponse) {
+bool ResponseIndex::tryGetResponse(const std::string& responseId, std::string& outResponseJson) {
     if (responseId.empty()) return false;
     std::lock_guard<std::mutex> lock(mutex_);
 
     auto it = map_.find(responseId);
     if (it != map_.end()) {
         if (!it->second.hasResponse) return false;
-        outResponse = it->second.response;
+        outResponseJson = Json::writeString(compactWriter(), it->second.response);
         return true;
     }
 
     Entry loaded;
     if (!loadFromDbAndFill(responseId, loaded)) return false;
     if (!loaded.hasResponse) return false;
-    outResponse = loaded.response;
+    outResponseJson = Json::writeString(compactWriter(), loaded.response);
     return true;
 }
 
-void ResponseIndex::storeResponse(const std::string& responseId, const Json::Value& response) {
+void ResponseIndex::storeResponse(const std::string& responseId, const std::string& responseJson) {
     if (responseId.empty()) return;
+    Json::Value response;
+    if (!parseResponseJson(responseJson, response)) return;
 
     std::vector<std::string> evicted;
     std::string sessionId;
@@ -125,15 +142,15 @@ void ResponseIndex::storeResponse(const std::string& responseId, const Json::Val
 
     if (!persistenceEnabled_.load()) return;
 
-    SessionDbManager::ResponseRow row;
+    ResponsePersistenceRow row;
     row.responseId  = responseId;
     row.sessionId   = sessionId;
     // 响应体默认不落库：内存热层仍保留完整响应，DB 只维持 responseId -> sessionId 映射。
     const bool persistBody = storeResponseBody_.load();
     row.hasResponse = persistBody;
-    if (persistBody) row.response = response;
+    if (persistBody) row.responseJson = responseJson;
     row.createdAt   = nowEpochSeconds();
-    SessionDbManager::getInstance()->asyncUpsertResponse(row);
+    if (persistence_) persistence_->asyncUpsertResponse(row);
 
     // 内存淘汰只降温，不删库：DB 行的生命周期跟随 chat_session_state 级联清理，
     // 以支撑内存已淘汰(6h)但会话快照仍在(24h)窗口内的 previous_response_id 续接。
@@ -152,7 +169,7 @@ bool ResponseIndex::erase(const std::string& responseId) {
     // 即便内存未命中也要删库：条目可能已被内存淘汰，但数据库行仍需清除，
     // 否则已删除的 responseId 会被懒加载"复活"。
     if (persistenceEnabled_.load()) {
-        SessionDbManager::getInstance()->asyncDeleteResponses({responseId});
+        if (persistence_) persistence_->asyncDeleteResponses({responseId});
     }
     return erased;
 }

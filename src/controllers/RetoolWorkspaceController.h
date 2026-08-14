@@ -2,10 +2,12 @@
 
 #include <controllers/AdminAuthFilter.h>
 #include <drogon/HttpController.h>
+#include <domain/port/IRetoolWorkspaceAdminUseCase.h>
 
 class RetoolWorkspaceController : public drogon::HttpController<RetoolWorkspaceController>
 {
   public:
+    static void setUseCase(workspace::IRetoolWorkspaceAdminUseCase* workspaces);
     METHOD_LIST_BEGIN
     ADD_METHOD_TO(RetoolWorkspaceController::createWorkspace, "/aichat/retool/workspace/create", drogon::Post, "AdminAuthFilter");
     ADD_METHOD_TO(RetoolWorkspaceController::upsertWorkspace, "/aichat/retool/workspace/upsert", drogon::Post, "AdminAuthFilter");
@@ -36,4 +38,7 @@ class RetoolWorkspaceController : public drogon::HttpController<RetoolWorkspaceC
                          std::function<void(const drogon::HttpResponsePtr&)>&& callback);
     void workspaceVerify(const drogon::HttpRequestPtr& req,
                          std::function<void(const drogon::HttpResponsePtr&)>&& callback);
+
+  private:
+    static workspace::IRetoolWorkspaceAdminUseCase* useCase_;
 };

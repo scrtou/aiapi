@@ -25,8 +25,11 @@ chaynsThreadReaper::Options fastOptions() {
 
 int main() {
     using namespace std::chrono_literals;
-    chaynsThreadDbManager::getInstance()->setEnabled(true);
-    auto& reaper = chaynsThreadReaper::getInstance();
+    // The probe is a tiny composition root too: keep the ledger alive for the
+    // whole reaper lifetime instead of relying on the production singleton.
+    auto ledger = chaynsThreadDbManager::getInstance();
+    ledger->setEnabled(true);
+    chaynsThreadReaper reaper(ledger);
 
     // 场景 A：高频 start/stop，只压 stopRequested_/wakeCv_/worker_ 的同步配对。
     for (int i = 0; i < 300; ++i) {
@@ -51,14 +54,14 @@ int main() {
         std::atomic<bool> stopFlag{false};
         std::thread flipper([&] {
             while (!stopFlag.load(std::memory_order_relaxed)) {
-                chaynsThreadDbManager::getInstance()->setEnabled(true);
-                chaynsThreadDbManager::getInstance()->setEnabled(false);
+                ledger->setEnabled(true);
+                ledger->setEnabled(false);
             }
         });
         for (int i = 0; i < 300; ++i) reaper.runOnce();
         stopFlag.store(true, std::memory_order_relaxed);
         flipper.join();
-        chaynsThreadDbManager::getInstance()->setEnabled(true);
+        ledger->setEnabled(true);
     }
     std::printf("[probe] C done: runOnce vs setEnabled\n");
 

@@ -5,6 +5,14 @@ using namespace drogon;
 
 namespace {
 
+class FakeAccountSettings final : public IAccountSettingsQuery
+{
+  public:
+    AccountAutomationSettings settings;
+    AccountAutomationSettings getAccountAutomationSettings() const override
+    { return settings; }
+};
+
 HttpRequestPtr makeJsonRequest(const Json::Value& body,
                                const std::string& ua = "",
                                const std::string& auth = "") {
@@ -161,6 +169,31 @@ DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeav
     CHECK(bridged["name"].asString() == "filesystem__read_file");
     CHECK(bridged["_aiapi_original_name"].asString() == "read_file");
     CHECK(bridged["_aiapi_namespace"].asString() == "filesystem");
+}
+
+DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
+{
+    FakeAccountSettings settings;
+    settings.settings.namespaceToolBridgeEnabled = false;
+    RequestAdapters::setAccountSettingsQuery(&settings);
+
+    Json::Value body;
+    body["model"] = "GPT-4o";
+    body["input"] = "namespace disabled";
+    Json::Value namespaceTool;
+    namespaceTool["type"] = "namespace";
+    namespaceTool["name"] = "filesystem";
+    Json::Value function;
+    function["type"] = "function";
+    function["name"] = "read_file";
+    namespaceTool["tools"].append(function);
+    body["tools"].append(namespaceTool);
+
+    const auto request = RequestAdapters::buildGenerationRequestFromResponses(
+        makeJsonRequest(body));
+    CHECK(request.tools.empty());
+    REQUIRE(request.toolsRaw.size() == 1);
+    RequestAdapters::setAccountSettingsQuery(nullptr);
 }
 
 DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayDistinct)

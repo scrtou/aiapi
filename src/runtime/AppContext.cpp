@@ -1,10 +1,33 @@
 #include <runtime/AppContext.h>
 
+#include <accountManager/accountManager.h>
+#include <channelManager/channelManager.h>
+#include <dbManager/account/accountBackupDbManager.h>
+#include <dbManager/account/accountDbManager.h>
+#include <dbManager/channel/channelDbManager.h>
+#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <dbManager/config/ConfigDbManager.h>
+#include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/metrics/StatusDbManager.h>
+#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <dbManager/session/SessionDbManager.h>
+#include <apipoint/chaynsapi/chaynsThreadReaper.h>
 #include <drogon/drogon.h>
+#include <metrics/ErrorStatsService.h>
+#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <sessionManager/core/Session.h>
+#include <utils/BackgroundTaskQueue.h>
 
 #include <utility>
 
 namespace lifecycle {
+
+AppContext::~AppContext() = default;
+
+IBackgroundExecutor* AppContext::backgroundExecutor() const
+{
+    return backgroundTaskQueue_.get();
+}
 
 void AppContext::addStep(std::string name, std::function<StartupResult()> run)
 {

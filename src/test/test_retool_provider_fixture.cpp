@@ -3,8 +3,10 @@
 #include <apipoint/retoolapi/RetoolClock.h>
 #include <apipoint/retoolapi/RetoolHttpTransport.h>
 #include <apipoint/retoolapi/retoolapi.h>
+#include <application/workspace/RetoolWorkspaceUseCase.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <managedAccount/backends/RetoolWorkspaceBackend.h>
+#include <managedAccount/service/ManagedAccountService.h>
 
 #include <algorithm>
 #include <chrono>
@@ -208,27 +210,80 @@ class FakeRetoolWorkspaceStore final : public IRetoolWorkspaceStore
     }
 };
 
-std::shared_ptr<FakeRetoolWorkspaceStore> installWorkspace(const std::string& id,
-                                                           bool workflow,
-                                                           bool agent,
-                                                           const std::string& openai = "openai-resource-synthetic",
-                                                           const std::string& anthropic = "anthropic-resource-synthetic")
+class NoopManagedAccountBackend final : public IManagedAccountBackend
 {
-    auto store = std::make_shared<FakeRetoolWorkspaceStore>();
-    RetoolWorkspaceInfo info;
-    info.workspaceId = id;
-    info.baseUrl = "https://workspace.invalid";
-    info.workflowId = workflow ? "workflow-1" : "";
-    info.agentId = agent ? "agent-1" : "";
-    info.openaiResourceName = openai;
-    info.anthropicResourceName = anthropic;
-    info.accessToken = "synthetic-access-token";
-    info.xsrfToken = "synthetic-xsrf-token";
-    info.status = "active";
-    info.verifyStatus = "passed";
-    store->rows.push_back(info);
-    RetoolWorkspaceManager::getInstance().setStore(store);
-    return store;
+  public:
+    ManagedAccountKind kind() const override
+    { return ManagedAccountKind::ClassicProviderAccount; }
+    std::vector<ManagedAccountRecord> list() override { return {}; }
+    std::optional<ManagedAccountRecord> get(const std::string&) override
+    { return std::nullopt; }
+    bool disable(const std::string&, std::string*) override { return false; }
+    std::optional<ManagedExecutionContext> buildExecutionContext(
+        const std::string&, std::string*) override
+    { return std::nullopt; }
+};
+
+class RetoolProviderFixture
+{
+  public:
+    RetoolProviderFixture(const std::string& id,
+                          bool workflow,
+                          bool agent,
+                          const std::string& openai = "openai-resource-synthetic",
+                          const std::string& anthropic = "anthropic-resource-synthetic")
+        : workspaces(store.get(), nullptr),
+          retoolBackend(std::make_shared<RetoolWorkspaceBackend>(workspaces)),
+          accounts(std::make_shared<NoopManagedAccountBackend>(), retoolBackend)
+    {
+        RetoolWorkspaceInfo info;
+        info.workspaceId = id;
+        info.baseUrl = "https://workspace.invalid";
+        info.workflowId = workflow ? "workflow-1" : "";
+        info.agentId = agent ? "agent-1" : "";
+        info.openaiResourceName = openai;
+        info.anthropicResourceName = anthropic;
+        info.accessToken = "synthetic-access-token";
+        info.xsrfToken = "synthetic-xsrf-token";
+        info.status = "active";
+        info.verifyStatus = "passed";
+        store->rows.push_back(info);
+    }
+
+    retoolapi provider(std::shared_ptr<retool::IRetoolHttpTransport> transport,
+                       std::shared_ptr<retool::IRetoolClock> clock)
+    {
+        return retoolapi(std::move(transport), std::move(clock),
+                         accounts, workspaces, channels);
+    }
+
+    std::shared_ptr<FakeRetoolWorkspaceStore> store =
+        std::make_shared<FakeRetoolWorkspaceStore>();
+    workspace::RetoolWorkspaceUseCase workspaces;
+    std::shared_ptr<RetoolWorkspaceBackend> retoolBackend;
+    ManagedAccountService accounts;
+
+  private:
+    class Channels final : public IChannelCatalog
+    {
+      public:
+        std::list<Channelinfo_st> listChannels() const override { return {}; }
+        bool addChannel(Channelinfo_st) override { return false; }
+        bool updateChannel(Channelinfo_st) override { return false; }
+        bool deleteChannel(int) override { return false; }
+        bool updateChannelStatus(std::string, bool) override { return false; }
+        std::optional<bool> supportsToolCalls(const std::string&) const override
+        { return std::nullopt; }
+    } channels;
+};
+
+RetoolProviderFixture installWorkspace(const std::string& id,
+                                       bool workflow,
+                                       bool agent,
+                                       const std::string& openai = "openai-resource-synthetic",
+                                       const std::string& anthropic = "anthropic-resource-synthetic")
+{
+    return RetoolProviderFixture(id, workflow, agent, openai, anthropic);
 }
 
 session_st makeRequest(const std::string& model, const std::string& conversation, const std::string& message,
@@ -278,11 +333,11 @@ Json::Value agentPollExchange(const std::string& status)
 
 DROGON_TEST(RetoolProvider_WorkflowFixtureRunsRealRequestWorkflowOffline)
 {
-    auto store = installWorkspace("ws-1", true, false);
+    auto fixture = installWorkspace("ws-1", true, false);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     transport->enqueue(loadFixture("workflow-success.json"));
     auto clock = std::make_shared<FakeRetoolClock>();
-    retoolapi provider(transport, clock);
+    auto provider = fixture.provider(transport, clock);
 
     auto session = makeRequest("gpt-4o-mini", "workflow-conversation", "synthetic current question");
     const auto result = provider.generate(session);
@@ -295,16 +350,16 @@ DROGON_TEST(RetoolProvider_WorkflowFixtureRunsRealRequestWorkflowOffline)
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }
 
 DROGON_TEST(RetoolProvider_AgentFixtureRunsRealRequestAgentOffline)
 {
-    auto store = installWorkspace("ws-1", false, true);
+    auto fixture = installWorkspace("ws-1", false, true);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     transport->enqueue(loadFixture("agent-success.json"));
     auto clock = std::make_shared<FakeRetoolClock>();
-    retoolapi provider(transport, clock);
+    auto provider = fixture.provider(transport, clock);
 
     auto session = makeRequest("agent-claude-sonnet-4-6", "agent-conversation", "synthetic agent question");
     const auto result = provider.generate(session);
@@ -318,17 +373,17 @@ DROGON_TEST(RetoolProvider_AgentFixtureRunsRealRequestAgentOffline)
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }
 
 DROGON_TEST(RetoolProvider_WorkspaceAffinityPersistsAfterExplicitSelection)
 {
-    auto store = installWorkspace("ws-1", true, false);
+    auto fixture = installWorkspace("ws-1", true, false);
     auto transport = std::make_shared<FixtureRetoolTransport>();
-    const auto fixture = loadFixture("workflow-success.json");
-    transport->enqueue(fixture);
-    transport->enqueue(fixture);
-    retoolapi provider(transport, std::make_shared<FakeRetoolClock>());
+    const auto workflowFixture = loadFixture("workflow-success.json");
+    transport->enqueue(workflowFixture);
+    transport->enqueue(workflowFixture);
+    auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
 
     auto first = makeRequest("gpt-4o-mini", "affinity-conversation", "synthetic current question");
     CHECK(provider.generate(first).isSuccess());
@@ -337,7 +392,7 @@ DROGON_TEST(RetoolProvider_WorkspaceAffinityPersistsAfterExplicitSelection)
     CHECK(provider.generate(second).isSuccess());
     CHECK(second.provider.clientInfo["workspace_id"] == "ws-1");
     CHECK(transport->errors.empty());
-    CHECK(store->usageLog.size() == 4);
+    CHECK(fixture.store->usageLog.size() == 4);
 }
 
 DROGON_TEST(RetoolProvider_WorkflowErrorMappingsComeFromProductionPath)
@@ -345,7 +400,7 @@ DROGON_TEST(RetoolProvider_WorkflowErrorMappingsComeFromProductionPath)
     const auto errors = loadFixture("http-errors.json")["cases"];
     for (const auto& item : errors)
     {
-        auto store = installWorkspace("ws-1", true, false);
+        auto fixture = installWorkspace("ws-1", true, false);
         auto transport = std::make_shared<FixtureRetoolTransport>();
         Json::Value entry(Json::objectValue);
         entry["request"]["base_url"] = "https://workspace.invalid";
@@ -353,7 +408,7 @@ DROGON_TEST(RetoolProvider_WorkflowErrorMappingsComeFromProductionPath)
         entry["request"]["path"] = "/api/workflow/workflow-1";
         entry["response"] = item;
         transport->enqueueSingle(entry);
-        retoolapi provider(transport, std::make_shared<FakeRetoolClock>());
+        auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
         auto session = makeRequest("gpt-4o-mini", "error-" + std::to_string(item["status"].asInt()), "question");
         const auto result = provider.generate(session);
         CHECK(!result.isSuccess());
@@ -361,28 +416,28 @@ DROGON_TEST(RetoolProvider_WorkflowErrorMappingsComeFromProductionPath)
         if (item["expected_code"] == "AuthError") CHECK(result.error.code == provider::ProviderErrorCode::AuthError);
         if (item["expected_code"] == "RateLimited") CHECK(result.error.code == provider::ProviderErrorCode::RateLimited);
         if (item["expected_code"] == "InternalError") CHECK(result.error.code == provider::ProviderErrorCode::InternalError);
-        CHECK(usageBalanced(store));
+        CHECK(usageBalanced(fixture.store));
     }
 }
 
 DROGON_TEST(RetoolProvider_InvalidJsonMappingIsCharacterized)
 {
-    auto store = installWorkspace("ws-1", true, false);
+    auto fixture = installWorkspace("ws-1", true, false);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     transport->enqueueSingle(loadFixture("invalid-json.json")["exchange"]);
-    retoolapi provider(transport, std::make_shared<FakeRetoolClock>());
+    auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
     auto session = makeRequest("gpt-4o-mini", "invalid-json-conversation", "question");
     const auto result = provider.generate(session);
     CHECK(!result.isSuccess());
     CHECK(result.error.code == provider::ProviderErrorCode::Unknown);
     CHECK(result.statusCode == 200);
     CHECK(transport->errors.empty());
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }
 
 DROGON_TEST(RetoolProvider_WorkflowPollingTimeoutUsesFakeClock)
 {
-    auto store = installWorkspace("ws-1", true, false);
+    auto fixture = installWorkspace("ws-1", true, false);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     const auto success = loadFixture("workflow-success.json");
     for (const auto& exchange : success["exchanges"])
@@ -398,19 +453,19 @@ DROGON_TEST(RetoolProvider_WorkflowPollingTimeoutUsesFakeClock)
     running["response"]["body"]["blockLevelLogs"]["code1"]["status"] = "RUNNING";
     for (int i = 0; i < 120; ++i) transport->enqueueSingle(running);
     auto clock = std::make_shared<FakeRetoolClock>();
-    retoolapi provider(transport, clock);
+    auto provider = fixture.provider(transport, clock);
     auto session = makeRequest("gpt-4o-mini", "timeout-conversation", "question");
     const auto result = provider.generate(session);
     CHECK(!result.isSuccess());
     CHECK(result.error.code == provider::ProviderErrorCode::Timeout);
     CHECK(clock->sleepCalls == 120);
     CHECK(transport->remaining() == 0);
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }
 
 DROGON_TEST(RetoolProvider_AgentFailedRunIsMappedToInternalError)
 {
-    auto store = installWorkspace("ws-1", false, true);
+    auto fixture = installWorkspace("ws-1", false, true);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     enqueueAgentSetup(transport);
     auto failed = agentPollExchange("FAILED");
@@ -418,7 +473,7 @@ DROGON_TEST(RetoolProvider_AgentFailedRunIsMappedToInternalError)
         Json::Value(Json::objectValue));
     failed["response"]["body"]["trace"][0]["data"]["error"] = "synthetic agent failure";
     transport->enqueueSingle(failed);
-    retoolapi provider(transport, std::make_shared<FakeRetoolClock>());
+    auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
     auto session = makeRequest("agent-claude-sonnet-4-6", "agent-failed-conversation", "synthetic agent question");
     const auto result = provider.generate(session);
     CHECK(!result.isSuccess());
@@ -426,18 +481,18 @@ DROGON_TEST(RetoolProvider_AgentFailedRunIsMappedToInternalError)
     CHECK(result.error.message == "synthetic agent failure");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }
 
 DROGON_TEST(RetoolProvider_AgentPollingTimeoutUsesFakeClock)
 {
-    auto store = installWorkspace("ws-1", false, true);
+    auto fixture = installWorkspace("ws-1", false, true);
     auto transport = std::make_shared<FixtureRetoolTransport>();
     enqueueAgentSetup(transport);
     const auto running = agentPollExchange("RUNNING");
     for (int i = 0; i < 180; ++i) transport->enqueueSingle(running);
     auto clock = std::make_shared<FakeRetoolClock>();
-    retoolapi provider(transport, clock);
+    auto provider = fixture.provider(transport, clock);
     auto session = makeRequest("agent-claude-sonnet-4-6", "agent-timeout-conversation", "synthetic agent question");
     const auto result = provider.generate(session);
     CHECK(!result.isSuccess());
@@ -445,5 +500,5 @@ DROGON_TEST(RetoolProvider_AgentPollingTimeoutUsesFakeClock)
     CHECK(clock->sleepCalls == 180);
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
-    CHECK(usageBalanced(store));
+    CHECK(usageBalanced(fixture.store));
 }

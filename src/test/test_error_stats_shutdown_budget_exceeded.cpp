@@ -60,11 +60,10 @@ metrics::ErrorStatsConfig makeConfig()
 DROGON_TEST(ErrorStatsShutdown_BudgetExceededReturnsFalseAndStaysBounded)
 {
     auto sink = std::make_shared<StallingSink>();
-    auto& service = metrics::ErrorStatsService::getInstance();
-    service.setSink(sink);
+    metrics::ErrorStatsService service(sink);
     service.init(makeConfig());
-    // 前置：确认这一轮 init() 真的拉起了 worker，而不是撞上未复位的 initialized_
-    // 变成 no-op —— 否则下面的「超预算」会由「根本没线程」冒充。
+    // 前置：确认这一轮 init() 真的拉起了 worker；否则下面的「超预算」会
+    // 由「根本没线程」冒充。
     REQUIRE(service.isRunning());
 
     // 入队一条事件并等 worker 真正进入 sink，确保它已被拖住。
@@ -89,8 +88,7 @@ DROGON_TEST(ErrorStatsShutdown_BudgetExceededReturnsFalseAndStaysBounded)
     CHECK(elapsed < 1s);
 
     // 超预算时线程未被 detach，仍归本对象。用无参重载把它收割干净，
-    // 否则它会带着即将析构的 sink 继续运行，且下个用例的 init() 会对一个
-    // joinable 的 std::thread 赋值，直接 std::terminate。
+    // 否则它会带着即将析构的 sink 继续运行，局部 service 析构也无法安全收尾。
     // 收割前：running_ 早在上面的限时 shutdown 里就置了 false，单看它什么都证明不了；
     // hasPendingWorker() 才是「线程仍在、未被 detach」的实证。
     CHECK(service.hasPendingWorker());

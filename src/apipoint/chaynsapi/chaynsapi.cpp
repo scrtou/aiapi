@@ -15,7 +15,6 @@
 #include <unordered_set>
 #include <utils/chaynsBrowserImpersonation.h>
 #include <sessionManager/core/Session.h>
-IMPLEMENT_RUNTIME(chaynsapi,chaynsapi);
 using namespace drogon;
 
 namespace {
@@ -118,19 +117,14 @@ std::string summarizeUpstreamResponse(const HttpResponsePtr& response)
 
 }  // namespace
 
-chaynsapi::chaynsapi()
-    : chaynsapi(chayns::makeDrogonChaynsHttpTransport(), chayns::makeRealChaynsClock())
-{
-}
-
-chaynsapi::chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport)
-    : chaynsapi(std::move(transport), chayns::makeRealChaynsClock())
-{
-}
-
-chaynsapi::chaynsapi(std::shared_ptr<chayns::IChaynsHttpTransport> transport,
-                     std::shared_ptr<chayns::IChaynsClock> clock)
-    : m_transport(std::move(transport)), m_clock(std::move(clock))
+chaynsapi::chaynsapi(IAccountSelector& accountSelector,
+                     std::shared_ptr<chayns::IChaynsHttpTransport> transport,
+                     std::shared_ptr<chayns::IChaynsClock> clock,
+                     std::shared_ptr<chaynsThreadDbManager> threadLedger)
+    : m_accountSelector(accountSelector),
+      m_transport(std::move(transport)),
+      m_clock(std::move(clock)),
+      m_threadLedger(std::move(threadLedger))
 {
     if (!m_transport) {
         throw std::invalid_argument("chaynsapi requires a non-null HTTP transport");
@@ -376,7 +370,7 @@ void chaynsapi::postChatMessage(session_st& session)
         ? AccountRequirement::ProOnly
         : AccountRequirement::FreeOnly;
     std::set<std::string> attemptedAccounts;
-    shared_ptr<Accountinfo_st> selectedAccount;
+    std::shared_ptr<Accountinfo_st> selectedAccount;
 
     ThreadContext continuationContext;
     bool hasContinuationContext = false;
@@ -414,7 +408,7 @@ void chaynsapi::postChatMessage(session_st& session)
         }
         
         // ---- 1. 获取满足模型权限要求的账号 ----
-        shared_ptr<Accountinfo_st> previousAccount;
+        std::shared_ptr<Accountinfo_st> previousAccount;
         if (needSwitchAccount && selectedAccount) {
             previousAccount = selectedAccount;
             attemptedAccounts.insert(selectedAccount->userName);
@@ -428,7 +422,7 @@ void chaynsapi::postChatMessage(session_st& session)
             // account is still valid and satisfies the current model.
             if (totalAttempts == 1 && !needSwitchAccount && hasContinuationContext &&
                 !continuationContext.accountUserName.empty()) {
-                AccountManager::getInstance().getAccountByUserName(
+                m_accountSelector.getAccountByUserName(
                     "chaynsapi", continuationContext.accountUserName, selectedAccount);
                 if (!isUsableChaynsAccount(selectedAccount, selectedModel.requiresPro)) {
                     LOG_WARN << "[chaynsAPI] 续聊账户不可用或权限不足: "
@@ -437,7 +431,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 }
             }
 
-            if (!selectedAccount && !AccountManager::getInstance().getEligibleAccount(
+            if (!selectedAccount && !m_accountSelector.getEligibleAccount(
                     "chaynsapi", selectedAccount, accountRequirement, attemptedAccounts)) {
                 // Switching is a retry preference, not an additional account
                 // requirement. If there is only one eligible account, finish
@@ -459,7 +453,7 @@ void chaynsapi::postChatMessage(session_st& session)
             }
         }
 
-        shared_ptr<Accountinfo_st> accountinfo = selectedAccount;
+        std::shared_ptr<Accountinfo_st> accountinfo = selectedAccount;
         const ChaynsRequestRoute requestRoute = requestRouteForAccount(*accountinfo);
         LOG_INFO << "[chaynsAPI] 已选择请求路由: accountType="
                  << accountinfo->accountType
@@ -1087,8 +1081,7 @@ void chaynsapi::postChatMessage(session_st& session)
         // 上游线程台账：内存 m_threadMap 会随进程退出/会话过期消失，
         // 但上游 thread 是真实存在的远端资源，必须单独留痕，否则重启即泄漏。
         {
-            auto threadDb = chaynsThreadDbManager::getInstance();
-            if (threadDb && threadDb->isEnabled() && !final_threadId.empty()) {
+            if (m_threadLedger && m_threadLedger->isEnabled() && !final_threadId.empty()) {
                 chaynsThreadDbManager::ThreadRow row;
                 row.threadId        = final_threadId;
                 row.sessionId       = session.state.conversationId;
@@ -1098,7 +1091,7 @@ void chaynsapi::postChatMessage(session_st& session)
                 row.createdAt       = static_cast<int64_t>(time(nullptr));
                 row.lastActiveAt    = row.createdAt;
                 // 异步落库：请求链路不等 DB，失败在 DbManager 内部降级忽略。
-                threadDb->asyncUpsertThread(row);
+                m_threadLedger->asyncUpsertThread(row);
             }
         }
         
@@ -1130,12 +1123,11 @@ void chaynsapi::postChatMessage(session_st& session)
         // 台账只做 detach 不删行：该 thread 已不可续聊，但远端仍在，
         // 需要留给 ThreadReaper 异步删上游；此处绝不发 HTTP，避免拖慢错误返回。
         if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
-            auto threadDb = chaynsThreadDbManager::getInstance();
-            if (threadDb && threadDb->isEnabled()) {
+            if (m_threadLedger && m_threadLedger->isEnabled()) {
                 if (!session.provider.prevProviderKey.empty()) {
-                    threadDb->asyncDetachThreadBySessionId(session.provider.prevProviderKey);
+                    m_threadLedger->asyncDetachThreadBySessionId(session.provider.prevProviderKey);
                 }
-                threadDb->asyncDetachThreadBySessionId(session.state.conversationId);
+                m_threadLedger->asyncDetachThreadBySessionId(session.state.conversationId);
             }
         }
         if (!final_requestMessageId.empty()) {
@@ -1365,9 +1357,8 @@ void chaynsapi::transferThreadContext(const std::string& oldId, const std::strin
         m_threadMap.erase(it);
         LOG_INFO << "[chaynsAPI] 成功转移线程上下文，从" << oldId << " 到 " << newId;
         // 台账跟随轮转：否则旧 sessionId 的行会立刻显得"已过期"而被 reaper 误删活跃线程。
-        auto threadDb = chaynsThreadDbManager::getInstance();
-        if (threadDb && threadDb->isEnabled()) {
-            threadDb->asyncUpdateThreadSessionId(oldId, newId);
+        if (m_threadLedger && m_threadLedger->isEnabled()) {
+            m_threadLedger->asyncUpdateThreadSessionId(oldId, newId);
         }
     }
     else
@@ -1397,9 +1388,8 @@ void chaynsapi::eraseChatinfoMap(string ConversationId)
     // 这里被调用时正持有 chatSession 的清理路径（clearExpiredSession），
     // 原实现曾想同步调用 deleteUpstreamThread，但那会让清理线程被一串上游 HTTP 阻塞，
     // 一轮清理几百个会话就可能卡住数分钟，因此改为：只 detach 台账，删上游交给 ThreadReaper。
-    auto threadDb = chaynsThreadDbManager::getInstance();
-    if (threadDb && threadDb->isEnabled()) {
-        threadDb->asyncDetachThreadBySessionId(ConversationId);
+    if (m_threadLedger && m_threadLedger->isEnabled()) {
+        m_threadLedger->asyncDetachThreadBySessionId(ConversationId);
     }
 }
 
@@ -1409,7 +1399,7 @@ bool chaynsapi::deleteUpstreamThread(const std::string& accountUserName,
                                      const std::string& referer)
 {
     std::shared_ptr<Accountinfo_st> account;
-    AccountManager::getInstance().getAccountByUserName("chaynsapi", accountUserName, account);
+    m_accountSelector.getAccountByUserName("chaynsapi", accountUserName, account);
     if (!account || account->authToken.empty() || account->personId.empty()) {
         LOG_WARN << "[chaynsAPI] 无法删除上游线程：账户不可用或缺少 personId";
         return false;
@@ -1478,10 +1468,4 @@ ProviderModelCatalog chaynsapi::getModels()
         catalog.models.push_back(std::move(model));
     }
     return catalog;
-}
-void* chaynsapi::createApi()
-{
-    chaynsapi* api=new chaynsapi();
-    api->init();
-    return api;
 }

@@ -42,34 +42,63 @@ WIRING_SOURCES = [
     'src/main.cc',
 ]
 
-# (类名, 说明)：完成依赖倒置、要求 main.cc 注入的 Manager
-# (类名, 注入方法名, 说明)：完成依赖倒置、要求 main.cc 注入的接线。
+# (类名, 注入方法名, 注入正则, init 正则, 说明)：完成依赖倒置、要求 composition
+# root 注入的 Manager。已迁移的 Manager 一律以构造参数或局部对象 setter
+# 接线；不得靠 getInstance() 补回一个第二构造路径。
 # 粒度是「一条接线」而非「一个类」——步骤 101 发现的盲区：
 # AccountManager 有两条独立接线(setStore/setChannelStore)，
 # 按类名检查时，只要其中一条存在就整体判 OK，另一条被删也不会报警。
 REQUIRED = [
-    ('ChannelManager', 'setStore', 'R4 试点 B',
+    ('ChannelDbManager', 'context-owned construction',
+     r'\bauto\s+channelStore\s*=\s*std::make_shared<ChannelDbManager>\s*\(\s*\)',
+     r'\bchannels\s*->\s*init\s*\(', 'P5-W3 channel concrete store',
+     'ChannelManager 会在未绑定 DB client 的情况下建表，启动会失败或崩溃'),
+    ('ChannelManager', 'setStore',
+     r'\bchannels\s*->\s*setStore\s*\(',
+     r'\bchannels\s*->\s*init\s*\(', 'R4 试点 B',
      '退化为 Null 实现：init 期间的建表与内置渠道写入全部丢失'),
-    ('RetoolWorkspaceManager', 'setStore', 'R4 试点 A',
+    ('ConfigDbManager', 'context-owned construction',
+     r'\bauto\s+configStore\s*=\s*std::make_shared<ConfigDbManager>\s*\(\s*\)',
+     r'\baccounts\s*->\s*init\s*\(', 'P5-W3 config concrete store',
+     'AccountManager 会在未绑定 DB client 的情况下加载自动化策略，持久化退化为失败'),
+    ('AccountDbManager', 'context-owned construction',
+     r'\bauto\s+accountStore\s*=\s*std::make_shared<AccountDbManager>\s*\(\s*\)',
+     r'\baccounts\s*->\s*init\s*\(', 'P5-W3 account concrete store',
+     'AccountManager 会在未绑定 DB client 的情况下建表和加载账号，启动会失败或崩溃'),
+    ('AccountBackupDbManager', 'context-owned construction',
+     r'\bauto\s+accountBackupStore\s*=\s*std::make_shared<AccountBackupDbManager>\s*\(\s*\)',
+     r'\baccounts\s*->\s*init\s*\(', 'P5-W3 account backup concrete store',
+     'AccountAdminUseCase 会借用未初始化的备份库，备份/读取路径退化为失败'),
+    ('RetoolWorkspaceDbManager', 'context-owned construction',
+     r'\bauto\s+workspaceStore\s*=\s*std::make_shared<RetoolWorkspaceDbManager>\s*\(\s*\)',
+     r'\bworkspaceManager\s*->\s*init\s*\(', 'P5-W3 workspace concrete store',
+     'workspace facade 会在未绑定 DB client 的情况下建表，持久化退化为失败'),
+    ('RetoolWorkspaceManager', 'constructor store injection',
+     r'\bauto\s+workspaceManager\s*=\s*std::make_shared<RetoolWorkspaceManager>\s*\(\s*workspaceStore\s*\)',
+     r'\bworkspaceManager\s*->\s*init\s*\(', 'P5-W3 workspace lifecycle',
      '退化为 Null 实现：建表与默认数据静默丢失'),
-    ('AccountManager', 'setStore', 'R4 试点 C',
+    ('AccountManager', 'setStore',
+     r'\baccounts\s*->\s*setStore\s*\(',
+     r'\baccounts\s*->\s*init\s*\(', 'R4 试点 C',
      '空指针解引用而崩溃（步骤 86 实测）'),
-    ('AccountManager', 'setChannelStore', 'R4 试点 C 续·渠道列表',
+    ('AccountManager', 'setChannelStore',
+     r'\baccounts\s*->\s*setChannelStore\s*\(',
+     r'\baccounts\s*->\s*init\s*\(', 'R4 试点 C 续·渠道列表',
      '不崩溃：渠道列表恒空、自动补注册静默失效'),
-    ('AccountManager', 'setRetoolProvisionClock', 'P3-W3·Retool 冷却时钟端口',
+    ('AccountManager', 'setRetoolProvisionClock',
+     r'\baccounts\s*->\s*setRetoolProvisionClock\s*\(',
+     r'\baccounts\s*->\s*init\s*\(', 'P3-W3·Retool 冷却时钟端口',
      '冷却时钟缺失，Retool 开通节流失效'),
-    # P04：ErrorStatsService::init() 内有 if(!dbManager_) 回退分支，
-    # 故漏注入既不崩溃也不是 Null，而是静默绕开端口回落到具体单例。
-    ('metrics::ErrorStatsService', 'setSink', 'P04·错误统计落库端口',
-     '不崩溃：静默绕开端口，回落到 ErrorStatsDbManager 具体单例'),
 ]
 
-# 步骤 176：静态 setter 形式的接线（无单例、无 init）。
-# HealthController 复用 IAccountStore 端口做 /ready 的库探针；漏注入不崩溃，
-# 只会让 /ready 恒报 not_ready —— 正因为静默，更需要门禁守。
+# P5-W3：Drogon Controller 不能直接持有 DB/Provider/Account collaborators。
+# HealthController 只接收 HealthUseCase；漏接线不会崩溃，却会让 /ready 静默降级，
+# 因此仍需在 composition root 静态守住。
 REQUIRED_STATIC = [
-    ('HealthController', 'setDbProbe', 'R4·/ready 库探针',
-     '探针为空，/ready 恒判 not_ready'),
+    ('HealthController', 'setUseCase',
+     r'\bHealthController::setUseCase\s*\(\s*healthUseCase\.get\(\)\s*\)',
+     'P5-W3 health use case',
+     'health use case 未发布，/ready 恒判 not_ready'),
 ]
 
 
@@ -120,9 +149,7 @@ def main():
     print('组装根候选：%s' % ', '.join(path for path, _ in sources))
 
     failed = False
-    for cls, setter, note, impact in REQUIRED:
-        inject_pat = re.escape(cls) + r'::getInstance\(\)\s*\.\s*' + re.escape(setter) + r'\('
-        init_pat = re.escape(cls) + r'::getInstance\(\)\s*\.\s*init\('
+    for cls, setter, inject_pat, init_pat, note, impact in REQUIRED:
         path, set_ln, init_ln = locate(sources, inject_pat, init_pat)
 
         if set_ln is None:
@@ -141,8 +168,7 @@ def main():
             print('OK   %s.%s(%s): 注入(%s:%d) 早于 init(第 %d 行)'
                   % (cls, setter, note, path, set_ln, init_ln))
 
-    for cls, setter, note, impact in REQUIRED_STATIC:
-        inject_pat = re.escape(cls) + r'::' + re.escape(setter) + r'\('
+    for cls, setter, inject_pat, note, impact in REQUIRED_STATIC:
         path, set_ln, _ = locate(sources, inject_pat, None)
         if set_ln is None:
             print('FAIL %s::%s(%s): 组装根缺少注入 -> %s' % (cls, setter, note, impact))

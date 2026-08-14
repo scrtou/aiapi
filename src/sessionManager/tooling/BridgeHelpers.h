@@ -3,14 +3,16 @@
 
 #include <sessionManager/contracts/LegacySessionData.h>
 #include <sessionManager/contracts/GenerationEvent.h>
-#include <metrics/ErrorStatsService.h>
 #include <domain/model/ErrorEvent.h>
+#include <domain/port/ITelemetrySink.h>
 #include <json/json.h>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace bridge {
+
+void setTelemetrySink(metrics::ITelemetrySink* sink);
 
 // ========== 字符串工具函数 ==========
 

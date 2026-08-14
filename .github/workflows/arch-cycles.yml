@@ -93,14 +93,14 @@ jobs:
       - name: P3 - layered target DAG and legacy ratchet
         run: python3 tools/arch/check_target_layers.py
 
-      # P4-W1：入队结果必须被真正处理（退出码 4）。
-      # [[nodiscard]] 只拦得住「整体丢弃返回值」一种写法；写成
-      # `const auto ignored = ...enqueue(...)` 后再不读它，编译器至多给一条
+      # P4-W1 / P5-W3：queue enqueue 与注入 executor submit 的结果必须被真正处理
+      # （退出码 4）。[[nodiscard]] 只拦得住「整体丢弃返回值」一种写法；写成
+      # `const auto ignored = ...submit(...)` 后再不读它，编译器至多给一条
       # -Wunused-variable，而本项目未开 -Werror —— 绿色照旧，队列满/停机中的
-      # 入队失败重新退化成「已受理」的假象。C4~C6 刚把 23 处调用点从 bool shim
-      # 逐层改成显式处理，这道门禁堵的就是「悄悄改回去」这条退路。
+      # 提交失败重新退化成「已受理」的假象。P5-W3 已把具体 queue 调用收敛到
+      # IBackgroundExecutor，本门禁继续堵住「悄悄改回去」这条退路。
       # 前六道全都看不见它：不成环、不跨层、不改 CMake、不动注入、不加测试文件。
-      - name: P4 - enqueue result must be handled
+      - name: P4/P5 - background executor result must be handled
         run: python3 tools/arch/check_enqueue_result.py
 
       # P4-W2：composition root 的形状（退出码 4）。
@@ -118,6 +118,65 @@ jobs:
       # 注入语句也确实还在（只是搬错了地方）。
       - name: P4 - composition root shape (AppContext)
         run: python3 tools/arch/check_app_context.py
+
+      # P4-W3：deadline 必须从 AppContext 穿透到五个 owner 的限时汇合路径。
+      # 只检查 RuntimeOwner 形参会漏掉「拿到 deadline 但调用无参 stop」的退化，
+      # 因此同时核对接线调用与各实现的 joinUntil。
+      - name: P4 - shutdown deadline propagation
+        run: python3 tools/arch/check_shutdown_deadline.py
+
+      # P5-W1：Provider 必须由 composition root 显式构造并注册；禁止恢复
+      # ApiFactory 静态注册或 ApiManager::getInstance() 查询双轨。
+      - name: P5 - provider registry has no service locator fallback
+        run: python3 tools/arch/check_provider_registry.py
+
+      - name: P5 - session services have no application service locator fallback
+        run: python3 tools/arch/check_session_services.py
+
+      # P5-W3 增量棘轮：已迁移的 Channel/Health/Metrics Controller 不得
+      # 重新定位 singleton，也不得从 transport 直接 include metrics DB。
+      - name: P5 - migrated controllers use injected services
+        run: python3 tools/arch/check_controller_services.py
+
+      - name: P5 - account application paths use injected services
+        run: python3 tools/arch/check_account_services.py
+
+      - name: P5 - managed account/provider paths use injected services
+        run: python3 tools/arch/check_managed_account_services.py
+
+      - name: P5 - session application paths use injected services
+        run: python3 tools/arch/check_session_application_services.py
+
+      # P5-W3 lifecycle increment: Workspace, SessionJanitor and ThreadReaper
+      # must be normal AppContext-owned objects.  A singleton compatibility
+      # fallback would create a second owner and bypass the deadline-aware
+      # shutdown chain even when all controller/application injection checks
+      # stay green.
+      - name: P5 - lifecycle workers have no singleton fallback
+        run: python3 tools/arch/check_lifecycle_services.py
+
+      # 这道门禁必须有杀伤力：把一个 owner 的限时调用临时改回无参形式，
+      # 静态检查应立即失败。探针只改本步自己的副本，退出时无条件恢复。
+      - name: R4 - shutdown deadline gate selftest
+        shell: bash
+        run: |
+          set -eu
+          tmp_dir="$(mktemp -d)"
+          trap 'cp "$tmp_dir/AppWiring.cpp" src/runtime/AppWiring.cpp; rm -rf "$tmp_dir"' EXIT
+          cp src/runtime/AppWiring.cpp "$tmp_dir/AppWiring.cpp"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/runtime/AppWiring.cpp')
+          text = path.read_text()
+          needle = 'stopBackgroundThreads(deadline)'
+          if needle not in text:
+              raise SystemExit('probe target stopBackgroundThreads(deadline) not found')
+          path.write_text(text.replace(needle, 'stopBackgroundThreads()', 1))
+          PY
+          if python3 tools/arch/check_shutdown_deadline.py; then
+            echo '::error::shutdown deadline gate selftest unexpectedly passed'
+            exit 1
+          fi
 
       # 门禁自检：一道从不 FAIL 的门禁比没有门禁更危险。
       # 这里故意制造违规，断言脚本确实以对应退出码失败。
@@ -219,7 +278,7 @@ jobs:
           # 注意这里不能用 sed -i 删行后靠 git checkout 复原——
           # 若本次 PR 本就修改了该文件，checkout 会连正常改动一起丢掉。
           cp src/runtime/AppWiring.cpp "$PROBE_TMP"/probe_c.bak
-          grep -v 'ChannelManager::getInstance().setStore' src/runtime/AppWiring.cpp \
+          grep -v 'channels->setStore' src/runtime/AppWiring.cpp \
             > "$PROBE_TMP"/probe_c.cc
           if diff -q "$PROBE_TMP"/probe_c.cc src/runtime/AppWiring.cpp > /dev/null; then
             echo '::error::probe C 无法进行：AppWiring.cpp 中找不到 ChannelManager setStore 注入行'
@@ -244,14 +303,14 @@ jobs:
           # 脚本会死在下面的复原 cp 之前，把文件留在破坏态——
           # 这与本步「探针必须复原」的设计意图直接冲突。
           idx = next((i for i, l in enumerate(lines)
-                      if re.search(r'ChannelManager::getInstance\(\)\.setStore\(', l)), -1)
+                      if re.search(r'channels\s*->\s*setStore\s*\(', l)), -1)
           if idx < 0:
               print('probe D 无法进行：AppWiring.cpp 中找不到 setStore 注入行。')
               print('若注入方式已重构，请同步更新本探针与 check_startup_wiring.py。')
               raise SystemExit(1)
           set_line = lines.pop(idx)
           init_idx = next((i for i, l in enumerate(lines)
-                           if re.search(r'ChannelManager::getInstance\(\)\.init\(', l)), -1)
+                           if re.search(r'channels\s*->\s*init\s*\(', l)), -1)
           if init_idx < 0:
               print('probe D 无法进行：AppWiring.cpp 中找不到 ChannelManager init 行。')
               raise SystemExit(1)
@@ -300,7 +359,7 @@ jobs:
             expect_rc 1 python3 tools/arch/check_target_layers.py
           cp "$PROBE_TMP"/probe_target_cmake.bak src/CMakeLists.txt
 
-          echo '--- probe I1: enqueue loses [[nodiscard]] -> expect rc=4 ---'
+          echo '--- probe I1: queue enqueue loses [[nodiscard]] -> expect rc=4 ---'
           # 属性被删是最省事的「消警告」改法，且不影响编译与测试。
           cp src/utils/BackgroundTaskQueue.h "$PROBE_TMP"/probe_i.bak
           sed -i 's/\[\[nodiscard\]\] EnqueueResult enqueue(/EnqueueResult enqueue(/' \
@@ -309,7 +368,7 @@ jobs:
             expect_rc 4 python3 tools/arch/check_enqueue_result.py
           cp "$PROBE_TMP"/probe_i.bak src/utils/BackgroundTaskQueue.h
 
-          echo '--- probe I2: result bound but never read -> expect rc=4 ---'
+          echo '--- probe I2: executor result bound but never read -> expect rc=4 ---'
           # 仅校验头文件属性是不够的：真正的退化发生在调用点。
           # 缺这一条，「只看 [[nodiscard]] 存不存在」的退化判据会全绿通过。
           cp src/controllers/ChannelController.cc "$PROBE_TMP"/probe_i2.bak
@@ -318,9 +377,9 @@ jobs:
           p = 'src/controllers/ChannelController.cc'
           lines = io.open(p, encoding='utf-8').read().splitlines(True)
           idx = next((i for i, l in enumerate(lines)
-                      if re.search(r'auto\s+\w+\s*=.*\.enqueue\s*\(', l)), -1)
+                      if re.search(r'auto\s+\w+\s*=.*->submit\s*\(', l)), -1)
           if idx < 0:
-              print('probe I2 无法进行：找不到绑定式 enqueue 调用点。')
+              print('probe I2 无法进行：找不到绑定式 executor submit 调用点。')
               print('若调用写法已重构，请同步更新本探针与 check_enqueue_result.py。')
               raise SystemExit(1)
           lines[idx] = re.sub(r'(?:const\s+)?auto\s+\w+\s*=',
@@ -376,13 +435,11 @@ jobs:
             expect_rc 4 python3 tools/arch/check_app_context.py
           cp "$PROBE_TMP"/probe_j2.bak src/runtime/AppWiring.cpp
 
-          echo '--- probe J3: thread-owning singleton loses its addOwner -> expect rc=4 ---'
-          # G7 的直接看守：ErrorStatsService::init() 会拉起 workerThread_，但此前
-          # 没有任何 addOwner，停机全靠 ~ErrorStatsService() 的兜底 shutdown()。
-          # 静态析构发生在 main 返回之后，那时 ErrorStatsDbManager 与 drogon 的 DB
-          # 客户端可能已先销毁，兜底里的 flush 就成了对已析构对象的调用；且此刻
-          # 已在 shutdown(deadline) 之外，停机日志对它只字不提。
-          # 这个洞让编译、301 个单测、以及 A1~A4 四条判据全绿——只有 A5 能抓。
+          echo '--- probe J3: thread-owning error stats worker loses its addOwner -> expect rc=4 ---'
+          # G7 的直接看守：ErrorStatsService::init() 会拉起 workerThread_。P5-W3
+          # 已将它迁为 AppContext-owned 对象；若漏掉 addOwner，即使 context 持有
+          # service，也会绕过 shutdown(deadline)，把 drain/join 推迟到析构兜底。
+          # 这个洞让编译和 A1~A4 判据全绿——只有 A5 能抓。
           #
           # 探针删的是「注册」而不是「函数体」：后者会连带触发 A5 的计数分支，
           # rc 虽仍为 4，却证明不了是漏登记那条判据在起作用。
@@ -391,10 +448,18 @@ jobs:
           import io, re
           p = 'src/runtime/AppWiring.cpp'
           src = io.open(p, encoding='utf-8').read()
-          pat = re.compile(r'[ \t]*ctx\.addOwner\("error stats service",.*?\);\n', re.S)
+          # Match this owner as a whole closure.  A loose `.*?\);` stops at an
+          # unrelated call inside the lambda (for example setQueries(...)); it
+          # would leave malformed source and only trip the owner-count branch,
+          # not prove the ErrorStats-specific A5 rule is live.
+          pat = re.compile(
+              r'[ \t]*ctx\.addOwner\("error stats service",\n'
+              r'[ \t]*\[errorStats\]\(std::chrono::steady_clock::time_point deadline\) \{.*?'
+              r'[ \t]*\}\);\n',
+              re.S)
           if not pat.search(src):
               print('probe J3 无法进行：AppWiring.cpp 中找不到 error stats service 的 addOwner。')
-              print('若该 owner 已改名或迁走，请同步更新本探针与 check_app_context.py 的 THREAD_OWNING_SINGLETONS。')
+              print('若该 owner 已改名或迁走，请同步更新本探针与 check_app_context.py 的 THREAD_OWNING_SERVICES。')
               raise SystemExit(1)
           io.open(p, 'w', encoding='utf-8', newline='').write(pat.sub('', src, count=1))
           PROBE_J3

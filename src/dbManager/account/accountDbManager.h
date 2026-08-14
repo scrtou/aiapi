@@ -10,25 +10,20 @@
 #include <dbManager/DbType.h>
 
 using std::list;
-using std::make_shared;
 using std::shared_ptr;
 using std::string;
-using drogon::app;
 
 class AccountDbManager : public IAccountStore
 {
     public:
-    static shared_ptr<AccountDbManager> getInstance()
-    {
-        static shared_ptr<AccountDbManager> instance;
-        if(instance == nullptr)
-        {
-            instance = make_shared<AccountDbManager>();
-            instance->dbClient = app().getDbClient("aichatpg");
-            instance->detectDbType();
-        }
-        return instance;
-    }
+    // The composition root owns this concrete store.  Construction must stay
+    // side-effect free so test fixtures cannot accidentally initialize Drogon.
+    AccountDbManager() = default;
+    AccountDbManager(const AccountDbManager&) = delete;
+    AccountDbManager& operator=(const AccountDbManager&) = delete;
+
+    /// Bind the configured DB client before the injected IAccountStore is used.
+    bool initialize(std::string* errorMessage = nullptr);
     void init();
     bool addAccount(struct Accountinfo_st accountinfo) override;
     bool updateAccount(struct Accountinfo_st accountinfo) override;
@@ -56,6 +51,7 @@ class AccountDbManager : public IAccountStore
     void detectDbType();
     shared_ptr<drogon::orm::DbClient> dbClient;
     DbType dbType = DbType::PostgreSQL;
+    bool initialized_ = false;
     
 };
 

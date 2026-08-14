@@ -1,5 +1,4 @@
 #include <sessionManager/continuity/ContinuityResolver.h>
-#include <sessionManager/continuity/ResponseIndex.h>
 #include <sessionManager/continuity/TextExtractor.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <chrono>
@@ -22,18 +21,14 @@ std::string roleToString(MessageRole role) {
 } // 命名空间结束
 
 ContinuityDecision ContinuityResolver::resolve(const GenerationRequest& req) const {
-    auto* sessionMgr = chatSession::getInstance();
-    const SessionTrackingMode mode = sessionMgr ? sessionMgr->getTrackingMode()
-                                                : SessionTrackingMode::Hash;
-
     ContinuityDecision decision;
-    decision.mode = mode;
+    decision.mode = mode_;
 
     // // Responses： previous_响应_id 优先
     if (req.isResponseApi()) {
         if (req.previousResponseId.has_value() && !req.previousResponseId->empty()) {
             std::string sessionId;
-            if (ResponseIndex::instance().tryGetSessionId(*req.previousResponseId, sessionId) &&
+            if (responseIndex_.tryGetSessionId(*req.previousResponseId, sessionId) &&
                 !sessionId.empty()) {
                 decision.source = ContinuityDecision::Source::PreviousResponseId;
                 decision.sessionId = sessionId;
@@ -70,7 +65,7 @@ ContinuityDecision ContinuityResolver::resolve(const GenerationRequest& req) con
     }
 
     // 无 previous_response_id：按配置模式决策
-    if (mode == SessionTrackingMode::ZeroWidth) {
+    if (mode_ == SessionTrackingMode::ZeroWidth) {
         const std::string sid = resolveZeroWidthSessionId(req);
         if (!sid.empty()) {
             decision.source = ContinuityDecision::Source::ZeroWidth;

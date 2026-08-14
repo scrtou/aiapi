@@ -2,20 +2,46 @@
 
 #include <accountManager/accountManager.h>
 #include <accountManager/RetoolProvisionClock.h>
-#include <apiManager/ApiManager.h>
+#include <apipoint/chaynsapi/chaynsapi.h>
 #include <apipoint/chaynsapi/chaynsThreadReaper.h>
+#include <apipoint/retoolapi/retoolapi.h>
 #include <channelManager/channelManager.h>
+#include <controllers/AiApiController.h>
+#include <controllers/AccountController.h>
 #include <controllers/HealthController.h>
+#include <controllers/ChannelController.h>
+#include <controllers/MetricsController.h>
+#include <controllers/RetoolWorkspaceController.h>
+#include <application/workspace/RetoolWorkspaceUseCase.h>
+#include <application/workspace/RetoolWorkspaceAdminUseCase.h>
+#include <application/account/AccountAdminUseCase.h>
+#include <application/channel/ChannelAdminUseCase.h>
+#include <application/health/HealthUseCase.h>
+#include <application/metrics/MetricsUseCase.h>
 #include <dbManager/account/accountDbManager.h>
+#include <dbManager/account/accountBackupDbManager.h>
 #include <dbManager/channel/channelDbManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <dbManager/metrics/ErrorStatsDbManager.h>
+#include <dbManager/metrics/StatusDbManager.h>
+#include <dbManager/config/ConfigDbManager.h>
 #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <dbManager/session/SessionDbManager.h>
+#include <domain/port/IBackgroundExecutor.h>
 #include <metrics/ErrorStatsService.h>
+#include <infrastructure/provider/ProviderRegistry.h>
+#include <managedAccount/backends/ClassicProviderAccountBackend.h>
+#include <managedAccount/backends/RetoolWorkspaceBackend.h>
+#include <managedAccount/service/ManagedAccountService.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <retoolWorkspace/RetoolWorkspaceService.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <sessionManager/core/Session.h>
+#include <sessionManager/core/AiApiUseCase.h>
+#include <sessionManager/core/SessionExecutionGate.h>
+#include <sessionManager/core/RequestAdapters.h>
+#include <sessionManager/tooling/BridgeHelpers.h>
+#include <sessionManager/core/RetiredProviderTelemetry.h>
 #include <utils/BackgroundTaskQueue.h>
 
 #include <drogon/drogon.h>
@@ -26,7 +52,6 @@
 namespace lifecycle {
 
 namespace {
-
 /**
  * 把绝对 deadline 换算成「还剩多少」。
  *
@@ -88,97 +113,412 @@ bool resolveThreadLedgerEnabled(const Json::Value& customConfig)
 namespace {
 
 // 会话追踪模式：与持久化无关，纯内存行为，故无失败路径。
-StartupResult stepSessionTrackingMode(const Json::Value& cfg)
+StartupResult stepSessionTrackingMode(const Json::Value& cfg, AppContext& ctx)
 {
+    const auto& sessionStore = ctx.sessionStore();
+    if (!sessionStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionStore is not owned by AppContext");
+    }
     std::string mode = "hash";
     if (cfg.isMember("session_tracking")) {
         mode = cfg["session_tracking"].get("mode", "hash").asString();
     }
     if (mode == "zerowidth" || mode == "zero_width") {
-        chatSession::getInstance()->setTrackingMode(SessionTrackingMode::ZeroWidth);
+        sessionStore->setTrackingMode(SessionTrackingMode::ZeroWidth);
+        RequestAdapters::setTrackingMode(SessionTrackingMode::ZeroWidth);
         LOG_INFO << "会话追踪模式：ZeroWidth（零宽字符嵌入）";
     } else {
-        chatSession::getInstance()->setTrackingMode(SessionTrackingMode::Hash);
+        sessionStore->setTrackingMode(SessionTrackingMode::Hash);
+        RequestAdapters::setTrackingMode(SessionTrackingMode::Hash);
         LOG_INFO << "会话追踪模式：Hash（内容哈希）";
     }
     return StartupResult::ok();
 }
 
-// Store 注入必须早于各自的 init()：init() 会立刻建表/迁移数据。漏注入不会崩溃，
-// 只会静默走 Null 实现，所以这一步的存在本身就是那道门禁。
-StartupResult stepInjectStores()
+// Session/thread persistence are ordinary runtime services, not lazy global
+// accessors.  They are created only after the queue is running, so every
+// write-through path receives the exact executor whose owner will drain it.
+StartupResult stepRuntimeDataServices(AppContext& ctx)
 {
-    ChannelManager::getInstance().setStore(ChannelDbManager::getInstance());
-    ChannelManager::getInstance().init();
+    auto* executor = ctx.backgroundExecutor();
+    if (!executor) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "BackgroundTaskQueue is not owned by AppContext");
+    }
 
-    AccountManager::getInstance().setStore(AccountDbManager::getInstance());
-    HealthController::setDbProbe(AccountDbManager::getInstance());
-    AccountManager::getInstance().setChannelStore(ChannelDbManager::getInstance());
-    AccountManager::getInstance().setRetoolProvisionClock(
-        retoolProvision::makeSystemRetoolProvisionClock());
-    AccountManager::getInstance().init();
+    auto sessionDb = std::make_shared<SessionDbManager>(executor);
+    sessionDb->initialize();
+    ctx.setSessionPersistence(std::move(sessionDb));
 
-    RetoolWorkspaceManager::getInstance().setStore(RetoolWorkspaceDbManager::getInstance());
-    RetoolWorkspaceManager::getInstance().init();
+    auto threadDb = std::make_shared<chaynsThreadDbManager>(executor);
+    threadDb->initialize();
+    ctx.setThreadLedger(std::move(threadDb));
 
-    ApiManager::getInstance().init();
+    // Metrics stores are ordinary context-owned infrastructure objects too.
+    // They are created before Controller/telemetry wiring, while their table
+    // initialization remains inside ErrorStatsService::init() so the existing
+    // sink contract has one authoritative lifecycle entry point.
+    ctx.setErrorStatsStore(std::make_shared<metrics::ErrorStatsDbManager>());
+    ctx.setStatusMetricsStore(std::make_shared<metrics::StatusDbManager>());
     return StartupResult::ok();
 }
 
-// G7 第一处收口：init() 内部会拉起 workerThread_，所以本步骤必须自登记 owner。
-// 此前它没有登记——停机完全依赖 ~ErrorStatsService() 里的兜底 shutdown()，
-// 而单例析构发生在 main 返回之后的静态析构阶段，此时 ErrorStatsDbManager
-// 与 drogon 的 DB 客户端可能已先被销毁，shutdown() 尾部的 flushEvents()/
-// flushRequestAgg() 就变成对已析构对象的调用；且那一刻已在 deadline 之外，
-// 停机日志也不会提到它。登记为 owner 后，join 与最后一次 flush 都被拉回
-// shutdown(deadline) 的确定性时序内。
-StartupResult stepErrorStats(AppContext& ctx)
+void addAccountWorkersOwner(AppContext& ctx, std::shared_ptr<AccountManager> accounts)
 {
-    metrics::ErrorStatsService::getInstance().setSink(
-        metrics::ErrorStatsDbManager::getInstance());
-    metrics::ErrorStatsConfig statsConfig;
-    metrics::ErrorStatsService::getInstance().init(statsConfig);
-    // 只在真起了线程时登记：配置禁用时 init() 直接返回，没有可停的东西，
-    // 登记一个实际空转的 stop 只会让停机日志谎报「已停错误统计服务」。
-    if (statsConfig.enabled) {
-        ctx.addOwner("error stats service",
-                     [](std::chrono::steady_clock::time_point deadline) {
-                         // shutdown() 尾部还要 flushEvents()/flushRequestAgg() 落库，
-                         // 是整条停机链上唯一会碰 DB 的一段。剩余预算先记下来：
-                         // D4 给 shutdown 加 deadline 形参后，这里直接透传即可。
-                         LOG_INFO << "[停机] error stats 剩余预算 "
-                                  << remainingBudget(deadline).count() << "ms";
-                         if (!metrics::ErrorStatsService::getInstance().shutdown(deadline)) {
-                             LOG_WARN << "[停机] error stats 后台线程未在预算内退出，"
-                                      << "尾部落库已跳过";
-                         }
-                     });
+    if (!accounts) {
+        return;
     }
+    ctx.addOwner("account workers",
+                 [accounts](std::chrono::steady_clock::time_point deadline) {
+                     // These APIs retain non-owning process-global pointers.
+                     // Stop publishing the context-owned account services before
+                     // their worker shutdown starts, so no late request can
+                     // observe a manager that is draining.
+                     RequestAdapters::setAccountSettingsQuery(nullptr);
+                     HealthController::setUseCase(nullptr);
+                     ChannelController::setUseCase(nullptr);
+                     AccountController::setUseCase(nullptr);
+
+                     const auto budget = remainingBudget(deadline);
+                     LOG_INFO << "[停机] account workers 剩余预算 "
+                              << budget.count() << "ms";
+
+                     // 登录/注册 HTTP 的单次不可撤回上限是 accountManager.cpp
+                     // 中的 300 秒。预算更短时只告警，不伪装成可保证的 join。
+                     constexpr auto kAccountUpstreamRequestCap =
+                         std::chrono::milliseconds(300 * 1000);
+                     if (budget < kAccountUpstreamRequestCap) {
+                         LOG_WARN << "[停机] account workers 停机预算 " << budget.count()
+                                  << "ms 小于单次上游请求上限 "
+                                  << kAccountUpstreamRequestCap.count()
+                                  << "ms，若此刻正在登录或注册账号，join 可能超出预算";
+                     }
+                     if (!accounts->stopBackgroundThreads(deadline)) {
+                         LOG_WARN << "[停机] account workers 未在预算内退出，线程仍在运行";
+                     }
+                 });
+}
+
+// Store 注入必须早于各自的 init()：init() 会立刻建表/迁移数据。漏注入不会崩溃，
+// 只会静默走 Null 实现，所以这一步的存在本身就是那道门禁。
+StartupResult stepInjectStores(AppContext& ctx)
+{
+    auto* executor = ctx.backgroundExecutor();
+    if (!executor) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "BackgroundTaskQueue is not available for store injection");
+    }
+
+    std::string storeError;
+    auto channelStore = std::make_shared<ChannelDbManager>();
+    if (!channelStore->initialize(&storeError)) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "ChannelDbManager initialization failed: " + storeError);
+    }
+    ctx.setChannelStore(channelStore);
+
+    auto channels = std::make_shared<ChannelManager>();
+    ctx.setChannelManager(channels);
+    channels->setStore(channelStore);
+    channels->init();
+
+    // Config persistence is another ordinary context-owned adapter.  Bind it
+    // before AccountManager::init(), which may immediately load or persist
+    // automation settings through the injected IKeyValueConfigStore port.
+    auto configStore = std::make_shared<ConfigDbManager>();
+    configStore->initialize();
+    ctx.setConfigStore(configStore);
+
+    auto accountStore = std::make_shared<AccountDbManager>();
+    if (!accountStore->initialize(&storeError)) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "AccountDbManager initialization failed: " + storeError);
+    }
+    ctx.setAccountStore(accountStore);
+
+    auto accountBackupStore = std::make_shared<AccountBackupDbManager>();
+    if (!accountBackupStore->initialize(&storeError)) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "AccountBackupDbManager initialization failed: " + storeError);
+    }
+    ctx.setAccountBackupStore(accountBackupStore);
+
+    auto accounts = std::make_shared<AccountManager>();
+    // Publish the exact object before init() can start workers.  Later steps
+    // receive this same shared object through AppContext; there is no fallback
+    // AccountManager singleton to rediscover.
+    ctx.setAccountManager(accounts);
+    accounts->setStore(accountStore);
+    accounts->setChannelStore(channelStore);
+    accounts->setRetoolProvisionClock(
+        retoolProvision::makeSystemRetoolProvisionClock());
+    accounts->setConfigStore(configStore);
+    accounts->init();
+    // init() has just started the AccountManager workers; register their
+    // teardown before any later wiring can fail.
+    addAccountWorkersOwner(ctx, accounts);
+    RequestAdapters::setAccountSettingsQuery(accounts.get());
+    auto accountAdmin = std::make_shared<AccountAdminUseCase>(
+        accounts.get(), accounts.get(), accountStore.get(),
+        accountBackupStore.get(), channels.get(), executor);
+    ctx.setAccountAdminUseCase(accountAdmin);
+    AccountController::setUseCase(accountAdmin.get());
+
+    auto channelAdmin = std::make_shared<ChannelAdminUseCase>(
+        channels.get(), accounts.get(), executor);
+    ctx.setChannelAdminUseCase(channelAdmin);
+    ChannelController::setUseCase(channelAdmin.get());
+
+    // This concrete store used to be a lazy process singleton.  Bind it once
+    // inside the context instead, before any facade can cause table creation
+    // or persistence work.
+    auto workspaceStore = std::make_shared<RetoolWorkspaceDbManager>();
+    workspaceStore->initialize();
+    ctx.setRetoolWorkspaceStore(workspaceStore);
+    auto workspaceManager = std::make_shared<RetoolWorkspaceManager>(workspaceStore);
+    ctx.setRetoolWorkspaceManager(workspaceManager);
+    workspaceManager->init();
+    auto workspaceProvisioner = std::make_shared<RetoolWorkspaceService>(workspaceStore);
+    ctx.setRetoolWorkspaceProvisioner(workspaceProvisioner);
+    auto workspaceUseCase = std::make_shared<workspace::RetoolWorkspaceUseCase>(
+        workspaceStore.get(),
+        configStore.get(), channels.get());
+    ctx.setRetoolWorkspaceUseCase(workspaceUseCase);
+    auto workspaceAdmin = std::make_shared<workspace::RetoolWorkspaceAdminUseCase>(
+        *workspaceUseCase, *workspaceProvisioner);
+    ctx.setRetoolWorkspaceAdminUseCase(workspaceAdmin);
+    accounts->setRetoolWorkspaceServices(
+        workspaceUseCase.get(), workspaceProvisioner.get());
+    RetoolWorkspaceController::setUseCase(workspaceAdmin.get());
+    // The controller and AccountManager retain non-owning workspace ports.
+    // Register their unpublish action immediately after wiring so startup
+    // rollback cannot leave dangling static controller bindings behind.
+    ctx.addOwner("workspace service bindings",
+                 [accounts](std::chrono::steady_clock::time_point) {
+                     RetoolWorkspaceController::setUseCase(nullptr);
+                     accounts->setRetoolWorkspaceServices(nullptr, nullptr);
+                 });
+
+    return StartupResult::ok();
+}
+
+StartupResult stepProviderRegistry(
+    AppContext& ctx, std::chrono::steady_clock::time_point processStartTime)
+{
+    auto registry = std::make_shared<provider::ProviderRegistry>();
+    const auto& accounts = ctx.accountManager();
+    if (!accounts) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "AccountManager is not owned by AppContext");
+    }
+    const auto& channels = ctx.channelManager();
+    const auto& workspaceUseCase = ctx.retoolWorkspaceUseCase();
+    if (!channels || !workspaceUseCase) {
+        return StartupResult::failed(
+            StartupError::OwnerStartFailed,
+            "ChannelManager and RetoolWorkspaceUseCase must be owned by AppContext");
+    }
+    const auto& threadLedger = ctx.threadLedger();
+    if (!threadLedger) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "thread ledger is not owned by AppContext");
+    }
+
+    auto classicAccounts = std::make_shared<ClassicProviderAccountBackend>(
+        *accounts, *accounts);
+    auto retoolAccounts = std::make_shared<RetoolWorkspaceBackend>(
+        *workspaceUseCase);
+    auto managedAccounts = std::make_shared<ManagedAccountService>(
+        std::move(classicAccounts), std::move(retoolAccounts));
+    ctx.setManagedAccountService(managedAccounts);
+
+    auto chayns = std::make_shared<chaynsapi>(
+        *accounts,
+        chayns::makeDrogonChaynsHttpTransport(),
+        chayns::makeRealChaynsClock(),
+        threadLedger);
+    chayns->init();
+    if (!registry->registerProvider("chaynsapi", chayns)) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "failed to register chaynsapi provider");
+    }
+
+    auto retoolProvider = std::make_shared<retoolapi>(
+        retool::makeDrogonRetoolHttpTransport(),
+        retool::makeRealRetoolClock(),
+        *managedAccounts,
+        *workspaceUseCase,
+        *channels);
+    retoolProvider->init();
+    if (!registry->registerProvider("retoolapi", retoolProvider)) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "failed to register retoolapi provider");
+    }
+
+    registry->freeze();
+    ctx.setProviderRegistry(registry);
+    const auto& accountStore = ctx.accountStore();
+    if (!accountStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "AccountDbManager is not owned by AppContext");
+    }
+    auto healthUseCase = std::make_shared<HealthUseCase>(
+        processStartTime, accountStore, registry.get(), accounts.get());
+    ctx.setHealthUseCase(healthUseCase);
+    HealthController::setUseCase(healthUseCase.get());
+    if (!ctx.sessionStore()) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionStore is not available for ProviderRegistry");
+    }
+    ctx.sessionStore()->setProviderRegistry(registry.get());
+    LOG_INFO << "[ProviderRegistry] 已显式注册 " << registry->providerNames().size()
+             << " 个 provider";
+    return StartupResult::ok();
+}
+
+StartupResult stepSessionServices(AppContext& ctx)
+{
+    const auto& sessionDb = ctx.sessionPersistence();
+    if (!sessionDb) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionDbManager is not owned by AppContext");
+    }
+    auto responseIndex = std::make_shared<ResponseIndex>(sessionDb.get());
+    auto executionGate = std::make_shared<session::SessionExecutionGate>();
+    const auto& sessionStore = ctx.sessionStore();
+    if (!sessionStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionStore is not owned by AppContext");
+    }
+
+    ctx.setResponseIndex(responseIndex);
+    ctx.setExecutionGate(executionGate);
+    sessionStore->setResponseIndex(responseIndex.get());
+    sessionStore->setPersistence(sessionDb.get());
+    return StartupResult::ok();
+}
+
+// The controller gets this one facade rather than six individual runtime
+// services.  The facade snapshots those collaborators when a job is admitted,
+// so revoking this raw Drogon binding during shutdown cannot race a worker.
+StartupResult stepAiApiUseCase(AppContext& ctx)
+{
+    const auto& registry = ctx.providerRegistry();
+    const auto& sessionStore = ctx.sessionStore();
+    const auto& responseIndex = ctx.responseIndex();
+    const auto& executionGate = ctx.executionGate();
+    const auto& channels = ctx.channelManager();
+    auto* const executor = ctx.backgroundExecutor();
+    if (!registry || !sessionStore || !responseIndex || !executionGate ||
+        !channels || !executor) {
+        return StartupResult::failed(
+            StartupError::OwnerStartFailed,
+            "AI API use case requires registry/session/index/gate/channel/executor ownership");
+    }
+
+    auto aiApiUseCase = std::make_shared<AiApiUseCase>(
+        registry.get(), sessionStore.get(), responseIndex.get(), executionGate.get(),
+        channels.get(), executor);
+    ctx.setAiApiUseCase(aiApiUseCase);
+    AiApiController::setUseCase(aiApiUseCase.get());
+    // Drogon owns Controller instances.  Revoke this non-owning static pointer
+    // immediately after publication so rollback cannot leave it dangling.
+    ctx.addOwner("AI API controller binding",
+                 [](std::chrono::steady_clock::time_point) {
+                     AiApiController::setUseCase(nullptr);
+                 });
+    return StartupResult::ok();
+}
+
+// ErrorStatsService is a normal AppContext-owned worker.  Constructing its
+// store, status query adapter and worker here means metrics has no static
+// lifetime or lazy singleton fallback left to bypass the shutdown chain.
+StartupResult stepErrorStats(const Json::Value& cfg, AppContext& ctx)
+{
+    const auto& errorStore = ctx.errorStatsStore();
+    const auto& statusStore = ctx.statusMetricsStore();
+    if (!errorStore || !statusStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "metrics stores are not owned by AppContext");
+    }
+
+    metrics::ErrorStatsConfig statsConfig;
+    if (cfg.isMember("error_stats")) {
+        statsConfig = metrics::ErrorStatsConfig::loadFromJson(cfg["error_stats"]);
+    }
+
+    auto errorStats = std::make_shared<metrics::ErrorStatsService>(errorStore);
+    ctx.setErrorStatsService(errorStats);
+    errorStats->init(statsConfig);
+
+    // init() may start a worker.  Register rollback/shutdown ownership before
+    // publishing raw telemetry/controller references so a later startup step
+    // cannot leave a running worker behind.
+    ctx.addOwner("error stats service",
+                 [errorStats](std::chrono::steady_clock::time_point deadline) {
+                     // These two APIs retain non-owning process-global pointers.
+                     // Clear them first so no late request can call into a worker
+                     // that is draining or about to be destroyed.
+                     bridge::setTelemetrySink(nullptr);
+                     observability::setTelemetrySink(nullptr);
+                     MetricsController::setUseCase(nullptr);
+
+                     LOG_INFO << "[停机] error stats 剩余预算 "
+                              << remainingBudget(deadline).count() << "ms";
+                     if (!errorStats->shutdown(deadline)) {
+                         LOG_WARN << "[停机] error stats 后台线程未在预算内退出，"
+                                  << "尾部落库已跳过";
+                     }
+                 });
+
+    // StatusDbManager does not start a worker, but explicitly initialize it
+    // before publishing the injected query ports to the Controller.
+    statusStore->init();
+    auto metricsUseCase = std::make_shared<metrics::MetricsUseCase>(
+        errorStore.get(), statusStore.get());
+    ctx.setMetricsUseCase(metricsUseCase);
+    MetricsController::setUseCase(metricsUseCase.get());
+    bridge::setTelemetrySink(errorStats.get());
+    observability::setTelemetrySink(errorStats.get());
     return StartupResult::ok();
 }
 
 // G8 的第一处有意降级：建表失败退回纯内存会话，进程仍可服务。
-StartupResult stepSessionPersistence()
+StartupResult stepSessionPersistence(AppContext& ctx)
 {
-    auto sessionDb = SessionDbManager::getInstance();
+    auto responseIndex = std::dynamic_pointer_cast<ResponseIndex>(ctx.responseIndex());
+    if (!responseIndex) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "ResponseIndex implementation missing during persistence setup");
+    }
+    const auto& sessionDb = ctx.sessionPersistence();
+    if (!sessionDb) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionDbManager is not owned by AppContext");
+    }
     std::string dbErr;
     if (sessionDb->ensureTables(&dbErr)) {
         sessionDb->setEnabled(true);
-        ResponseIndex::instance().setPersistenceEnabled(true);
-        chatSession::getInstance()->setPersistenceEnabled(true);
+        responseIndex->setPersistenceEnabled(true);
+        ctx.sessionStore()->setPersistenceEnabled(true);
         LOG_INFO << "[会话持久化] 已启用：chat_session_state / response_index 写穿与懒加载生效";
         return StartupResult::ok();
     }
     sessionDb->setEnabled(false);
-    ResponseIndex::instance().setPersistenceEnabled(false);
-    chatSession::getInstance()->setPersistenceEnabled(false);
+    responseIndex->setPersistenceEnabled(false);
+    ctx.sessionStore()->setPersistenceEnabled(false);
     return StartupResult::degraded("会话持久化未启用，降级为纯内存会话: " + dbErr);
 }
 
 // G8 的第二处有意降级：台账建不出来时整套回收机制关闭，聊天不受影响。
 StartupResult stepchaynsThreadLedger(const Json::Value& cfg, AppContext& ctx)
 {
-    auto threadDb = chaynsThreadDbManager::getInstance();
+    const auto& threadDb = ctx.threadLedger();
+    if (!threadDb) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "chaynsThreadDbManager is not owned by AppContext");
+    }
     if (!resolveThreadLedgerEnabled(cfg)) {
         threadDb->setEnabled(false);
         return StartupResult::degraded("chayns 线程台账已按配置关闭，上游 thread 不再回收");
@@ -202,10 +542,17 @@ StartupResult stepchaynsThreadLedger(const Json::Value& cfg, AppContext& ctx)
         reaperOpt.maxAttempts         = rc.get("max_attempts", 5).asInt();
         reaperOpt.deleteSpacingMs     = rc.get("delete_spacing_ms", 200).asInt();
     }
-    chaynsThreadReaper::getInstance().start(reaperOpt);
+    if (!ctx.providerRegistry()) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "ProviderRegistry is not available for thread reaper");
+    }
+    auto reaper = std::make_shared<chaynsThreadReaper>(threadDb);
+    ctx.setThreadReaper(reaper);
+    reaper->setProviderRegistry(ctx.providerRegistry().get());
+    reaper->start(reaperOpt);
     // 启动后立刻登记：build() 中途失败时，逆序回滚才恰好覆盖「已经起来的那些」。
     ctx.addOwner("chayns thread reaper",
-                 [](std::chrono::steady_clock::time_point deadline) {
+                 [reaper](std::chrono::steady_clock::time_point deadline) {
                      // reaper 已能接收 deadline：睡眠与限速等待均可被打断，
                      // 逐行删除循环也会在预算耗尽时退出。仍不可中断的只剩
                      // 单次已发出的上游 DELETE（30s 硬上限）。
@@ -214,12 +561,14 @@ StartupResult stepchaynsThreadLedger(const Json::Value& cfg, AppContext& ctx)
                      // 最容易吃满宽限期的一段，故记录剩余预算。
                      LOG_INFO << "[停机] chayns thread reaper 剩余预算 "
                               << remainingBudget(deadline).count() << "ms";
-                     chaynsThreadReaper::getInstance().stop(deadline);
+                     if (!reaper->stop(deadline)) {
+                         LOG_WARN << "[停机] chayns thread reaper 未在预算内退出，线程仍在运行";
+                     }
                  });
     return StartupResult::ok();
 }
 
-StartupResult stepSessionTuning(const Json::Value& cfg)
+StartupResult stepSessionTuning(const Json::Value& cfg, AppContext& ctx)
 {
     int  memExpire    = SESSION_EXPIRE_TIME;
     int  memInterval  = SESSION_CLEANUP_INTERVAL;
@@ -236,35 +585,52 @@ StartupResult stepSessionTuning(const Json::Value& cfg)
         storeBody    = sp.get("store_response_body", storeBody).asBool();
     }
 
-    auto* cs = chatSession::getInstance();
+    const auto& sessionStore = ctx.sessionStore();
+    if (!sessionStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionStore is not owned by AppContext");
+    }
+    auto* cs = sessionStore.get();
     cs->setSessionExpireSeconds(memExpire);
     cs->setCleanupIntervalSeconds(memInterval);
     cs->setDbRetentionSeconds(dbRetention);
     cs->setStoreSessionPayload(storePayload);
-    ResponseIndex::instance().setStoreResponseBody(storeBody);
+    auto responseIndex = std::dynamic_pointer_cast<ResponseIndex>(ctx.responseIndex());
+    if (!responseIndex) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "ResponseIndex implementation missing during tuning");
+    }
+    responseIndex->setStoreResponseBody(storeBody);
     LOG_INFO << "[会话持久化] 参数生效: 内存TTL=" << cs->getSessionExpireSeconds() / 3600.0
              << "h, 内存清理间隔=" << cs->getCleanupIntervalSeconds() / 3600.0
              << "h, DB保留=" << cs->getDbRetentionSeconds() / 3600.0
              << "h, payload落库=" << (cs->isStoreSessionPayloadEnabled() ? "on" : "off")
              << ", response_body落库="
-             << (ResponseIndex::instance().isStoreResponseBodyEnabled() ? "on" : "off");
+             << (responseIndex->isStoreResponseBodyEnabled() ? "on" : "off");
     return StartupResult::ok();
 }
 
 StartupResult stepSessionCleaner(AppContext& ctx)
 {
-    chatSession::getInstance()->startClearExpiredSession();
+    const auto sessionStore = ctx.sessionStore();
+    if (!sessionStore) {
+        return StartupResult::failed(StartupError::OwnerStartFailed,
+                                     "SessionStore is not owned by AppContext");
+    }
+    sessionStore->startClearExpiredSession();
     ctx.addOwner("session cleaner",
-                 [](std::chrono::steady_clock::time_point deadline) {
+                 [sessionStore](std::chrono::steady_clock::time_point deadline) {
                      LOG_INFO << "[停机] session cleaner 剩余预算 "
                               << remainingBudget(deadline).count() << "ms";
-                     chatSession::getInstance()->stopClearExpiredSession();
+                     if (!sessionStore->stopClearExpiredSession(deadline)) {
+                         LOG_WARN << "[停机] session cleaner 清理线程未在预算内退出，线程仍在运行";
+                     }
                  });
     LOG_INFO << "[会话清理] 内存会话过期清理线程已启动";
     return StartupResult::ok();
 }
 
-StartupResult stepResponseIndexCleanup(const Json::Value& cfg)
+StartupResult stepResponseIndexCleanup(const Json::Value& cfg, AppContext& ctx)
 {
     int maxEntries     = 200000;
     int maxAgeHours    = 6;
@@ -279,86 +645,75 @@ StartupResult stepResponseIndexCleanup(const Json::Value& cfg)
     }
     drogon::app().getLoop()->runEvery(
         static_cast<double>(cleanupMinutes * 60),
-        [maxEntries, maxAgeHours] {
-            ResponseIndex::instance().cleanup(static_cast<size_t>(maxEntries),
-                                              std::chrono::hours(maxAgeHours));
+        [index = ctx.responseIndex(), maxEntries, maxAgeHours] {
+            index->cleanup(static_cast<size_t>(maxEntries), std::chrono::hours(maxAgeHours));
         });
     return StartupResult::ok();
 }
 
 }  // namespace
 
-void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig)
+void registerApplicationSteps(
+    AppContext& ctx, const Json::Value& customConfig,
+    std::chrono::steady_clock::time_point processStartTime)
 {
+    // The queue itself is the IBackgroundExecutor implementation.  Construct
+    // it once at the composition root; no function-static adapter or global
+    // queue remains for late callers to rediscover.
+    ctx.setBackgroundTaskQueue(std::make_shared<BackgroundTaskQueue>());
+    // SessionStore 是有状态且持线程的生命周期服务，由 composition root 唯一持有。
+    // 构造本身不启动线程；真正启动仍发生在下方 session cleaner 步骤中。
+    ctx.setSessionStore(std::make_shared<chatSession>());
     // 队列先起：后续步骤（账号线程等）会向它投递任务。它同时是最后一个被停的
     // owner——登记顺序即逆序停机顺序，这一点由 AppContext 保证，不再靠注释维持。
     ctx.addStep("background task queue", [&customConfig, &ctx] {
         const int workers = resolveWorkerThreads(customConfig);
-        BackgroundTaskQueue::instance().start(static_cast<size_t>(workers));
+        const auto queue = ctx.backgroundTaskQueue();
+        if (!queue) {
+            return StartupResult::failed(StartupError::OwnerStartFailed,
+                                         "BackgroundTaskQueue is not owned by AppContext");
+        }
+        queue->start(static_cast<size_t>(workers));
         ctx.addOwner("background task queue",
-                     [](std::chrono::steady_clock::time_point deadline) {
+                     [queue](std::chrono::steady_clock::time_point deadline) {
                          // 这是五个 owner 中唯一已具备限时等待能力的一处：
                          // waitUntilIdle(timeout) 只观测不推进状态机，可先按剩余
                          // 预算等待在途任务自然收尾，再进 shutdown() 走 drain+join。
                          //
                          // 顺序不能颠倒：shutdown() 会把状态推到 Draining 并立即
                          // join，一旦进去就再没有「限时」这一说，deadline 也就白拿了。
-                         auto& queue = BackgroundTaskQueue::instance();
                          const auto budget = remainingBudget(deadline);
-                         if (!queue.waitUntilIdle(budget)) {
+                         if (!queue->waitUntilIdle(budget)) {
                              // 未排空即超预算：如实告警。这条日志是 H3 的直接证据，
                              // 有它才能判断超支是「任务确实没做完」还是「唤醒丢了」。
                              LOG_WARN << "[停机] background task queue 在预算 "
                                       << budget.count() << "ms 内未排空，仍有 "
-                                      << queue.runningCount() << " 个任务在执行";
+                                      << queue->runningCount() << " 个任务在执行";
                          }
-                         queue.shutdown();
+                         if (!queue->shutdown(deadline)) {
+                             LOG_WARN << "[停机] background task queue 工作线程未在预算内退出，"
+                                      << "线程仍在运行，等待后续收割";
+                         }
                      });
         return StartupResult::ok();
     });
 
-    ctx.addStep("session tracking mode", [&customConfig] { return stepSessionTrackingMode(customConfig); });
-    ctx.addStep("inject stores",         [] { return stepInjectStores(); });
-    // 账号后台线程由 AccountManager::init() 内部拉起（见 stepInjectStores），
-    // 故其停机动作在同一批次登记，位置严格晚于队列、早于会话设施。
-    ctx.addStep("account workers owner", [&ctx] {
-        ctx.addOwner("account workers",
-                     [](std::chrono::steady_clock::time_point deadline) {
-                         // 四个巡检线程的可中断睡眠最长 5 小时，join 前必须依赖
-                         // 两组 notify 全部生效；漏掉任一组就会挂满宽限期。
-                         const auto budget = remainingBudget(deadline);
-                         LOG_INFO << "[停机] account workers 剩余预算 "
-                                  << budget.count() << "ms";
-
-                         // D11：可中断化之后，账号线程的停机耗时上界不再是
-                         // isServerReachable 的 300 次重试（最坏约 7.6 小时），而是
-                         // 一次「已经发出、无法撤回」的上游请求。该请求的超时实参写死在
-                         // accountManager.cpp 的登录与注册两处 sendHttpRequest 里，均为
-                         // 300.0 秒——阈值即取自那两个字面量，不是本处另拍的数。
-                         //
-                         // 这里刻意不复用 chayns::kUpstreamRequestTimeoutSeconds（30s）：
-                         // 那是 chayns 上游的口径，与账号登录/注册不是同一条链路，混用会让
-                         // 告警阈值与它声称的来源脱钩。两者是否应该统一，见待议项 D11-Q1。
-                         constexpr auto kAccountUpstreamRequestCap =
-                             std::chrono::milliseconds(300 * 1000);
-                         if (budget < kAccountUpstreamRequestCap) {
-                             // 如实告警而不是静默：预算比单次请求上限还短时，join 就是
-                             // 可能超支的那一段。有这条日志才能把「超支」与「唤醒丢了」区分开。
-                             LOG_WARN << "[停机] account workers 停机预算 " << budget.count()
-                                      << "ms 小于单次上游请求上限 "
-                                      << kAccountUpstreamRequestCap.count()
-                                      << "ms，若此刻正在登录或注册账号，join 可能超出预算";
-                         }
-                         AccountManager::getInstance().stopBackgroundThreads();
-                     });
-        return StartupResult::ok();
+    ctx.addStep("session tracking mode", [&customConfig, &ctx] {
+        return stepSessionTrackingMode(customConfig, ctx);
     });
-    ctx.addStep("error stats",           [&ctx] { return stepErrorStats(ctx); });
-    ctx.addStep("session persistence",   [] { return stepSessionPersistence(); });
+    ctx.addStep("runtime persistence stores", [&ctx] { return stepRuntimeDataServices(ctx); });
+    ctx.addStep("inject stores",         [&ctx] { return stepInjectStores(ctx); });
+    ctx.addStep("provider registry",     [&ctx, processStartTime] {
+        return stepProviderRegistry(ctx, processStartTime);
+    });
+    ctx.addStep("session services",      [&ctx] { return stepSessionServices(ctx); });
+    ctx.addStep("AI API use case",       [&ctx] { return stepAiApiUseCase(ctx); });
+    ctx.addStep("error stats",           [&customConfig, &ctx] { return stepErrorStats(customConfig, ctx); });
+    ctx.addStep("session persistence",   [&ctx] { return stepSessionPersistence(ctx); });
     ctx.addStep("chayns thread ledger",  [&customConfig, &ctx] { return stepchaynsThreadLedger(customConfig, ctx); });
-    ctx.addStep("session tuning",        [&customConfig] { return stepSessionTuning(customConfig); });
+    ctx.addStep("session tuning",        [&customConfig, &ctx] { return stepSessionTuning(customConfig, ctx); });
     ctx.addStep("session cleaner",       [&ctx] { return stepSessionCleaner(ctx); });
-    ctx.addStep("response index cleanup",[&customConfig] { return stepResponseIndexCleanup(customConfig); });
+    ctx.addStep("response index cleanup",[&customConfig, &ctx] { return stepResponseIndexCleanup(customConfig, ctx); });
 }
 
 }  // namespace lifecycle

@@ -2,6 +2,8 @@
 #define IRESPONSE_SINK_H
 
 #include <sessionManager/contracts/GenerationEvent.h>
+
+#include <optional>
 /**
  * @brief 输出通道接口
  * 
@@ -43,6 +45,24 @@ public:
      * @return Sink 类型的描述字符串
      */
     virtual std::string getSinkType() const = 0;
+};
+
+/**
+ * A completed Responses sink may expose its protocol JSON for persistence.
+ *
+ * The AI use case owns the response-index write.  This narrow optional
+ * extension keeps protocol serialization in transport sinks while preventing
+ * Controllers from coordinating persistence themselves.
+ */
+struct ResponsePersistenceRecord {
+    std::string responseId;
+    std::string serializedJson;
+};
+
+class IResponsePersistenceSink {
+public:
+    virtual ~IResponsePersistenceSink() = default;
+    virtual std::optional<ResponsePersistenceRecord> responseRecord() const = 0;
 };
 
 /**

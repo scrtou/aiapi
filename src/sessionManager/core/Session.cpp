@@ -3,15 +3,34 @@
 #include <time.h>
 #include <drogon/drogon.h>
 #include <json/json.h>
-#include <apiManager/ApiManager.h>
 #include <apiManager/Apicomn.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <random>
 #include <chrono>
-#include <dbManager/session/SessionDbManager.h>
 #include <sessionManager/core/SessionCodec.h>
 using namespace drogon;
-chatSession *chatSession::instance = nullptr;
+
+namespace {
+std::string compactJson(const Json::Value& value)
+{
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    writer["emitUTF8"] = true;
+    return Json::writeString(writer, value);
+}
+
+Json::Value parseJson(const std::string& value)
+{
+    if (value.empty()) return Json::Value(Json::nullValue);
+    Json::CharReaderBuilder reader;
+    Json::Value result;
+    std::string errors;
+    std::istringstream input(value);
+    if (!Json::parseFromStream(reader, input, &result, &errors))
+        return Json::Value(Json::nullValue);
+    return result;
+}
+}  // namespace
 
 chatSession::chatSession()
 {
@@ -19,6 +38,9 @@ chatSession::chatSession()
 
 chatSession::~chatSession()
 {
+    // AppContext 已按 deadline 主动停机；这里只负责收割 deadline 超预算后仍在
+    // 运行的线程，避免 std::thread 在对象析构时触发 std::terminate。
+    stopClearExpiredSession();
 }
 
 // ========== 会话持久化实现（写穿 + 懒加载回填）==========
@@ -30,7 +52,8 @@ void chatSession::persistSession(const std::string& sessionId)
     // payload 落库开关：关闭时跳过快照写穿（懒加载随之自然失效，退化为纯内存）。
     if (!storeSessionPayload_.load()) return;
 
-    SessionDbManager::SessionRow row;
+    if (!persistence_) return;
+    SessionPersistenceRow row;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = session_map.find(sessionId);
@@ -41,12 +64,12 @@ void chatSession::persistSession(const std::string& sessionId)
         row.apiName      = s.request.api;
         row.apiType      = s.isResponseApi() ? 1 : 0;
         row.contextKey   = s.state.contextConversationId;
-        row.payload      = sessioncodec::encodeSession(s);
+        row.payloadJson  = compactJson(sessioncodec::encodeSession(s));
         row.createdAt    = static_cast<int64_t>(s.state.createdAt);
         row.lastActiveAt = static_cast<int64_t>(s.state.lastActiveAt);
     }
     // 出锁后再投递异步写入，避免 DB 队列抖动拉长热路径持锁时长。
-    SessionDbManager::getInstance()->asyncUpsertSession(row);
+    persistence_->asyncUpsertSession(row);
 }
 
 bool chatSession::hydrateSessionFromDb(const std::string& sessionId)
@@ -58,10 +81,13 @@ bool chatSession::hydrateSessionFromDb(const std::string& sessionId)
         if (session_map.count(sessionId)) return true;  // 已在内存，无需回填
     }
 
-    auto row = SessionDbManager::getInstance()->loadSession(sessionId);
+    if (!persistence_) return false;
+    auto row = persistence_->loadSession(sessionId);
     if (!row.has_value()) return false;
 
-    session_st restored = sessioncodec::decodeSession(row->payload);
+    const auto payload = parseJson(row->payloadJson);
+    if (payload.isNull()) return false;
+    session_st restored = sessioncodec::decodeSession(payload);
     // 以行主键为准修正 conversationId，避免快照与主键不一致导致索引错位。
     restored.state.conversationId = sessionId;
     if (restored.state.createdAt == 0)    restored.state.createdAt = static_cast<time_t>(row->createdAt);
@@ -90,7 +116,8 @@ bool chatSession::hydrateSessionByContextKey(const std::string& contextKey, std:
 {
     if (!persistenceEnabled_.load() || contextKey.empty()) return false;
 
-    auto row = SessionDbManager::getInstance()->loadSessionByContextKey(contextKey);
+    if (!persistence_) return false;
+    auto row = persistence_->loadSessionByContextKey(contextKey);
     if (!row.has_value() || row->sessionId.empty()) return false;
 
     if (!hydrateSessionFromDb(row->sessionId)) return false;
@@ -507,7 +534,7 @@ void chatSession::commitSessionTransfer(session_st& session)
     
     // 5. 转移 provider 线程上下文（如 chaynsapi 的 threadId 映射）
     if (!session.request.api.empty()) {
-        auto api = ApiManager::getInstance().getApiByApiName(session.request.api);
+        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
         if (api) {
             api->transferThreadContext(oldSessionId, newSessionId);
         }
@@ -520,7 +547,7 @@ void chatSession::commitSessionTransfer(session_st& session)
     // 在删除 oldSessionId 前，确保 responseId 已重新绑定到 newSessionId。
     // 否则可能出现 ResponseIndex 仍指向 oldSessionId，但 oldSessionId 已被删除，导致 previous_response_id 续接断链。
     if (session.state.apiType == ApiType::Responses && !session.response.responseId.empty()) {
-        ResponseIndex::instance().bind(session.response.responseId, newSessionId);
+        if (responseIndex_) responseIndex_->bind(session.response.responseId, newSessionId);
         LOG_INFO << "[会话迁移][响应模式] 提前重绑响应 ID 到会话 ID: "
                   << session.response.responseId << " -> " << newSessionId;
     }
@@ -532,7 +559,7 @@ void chatSession::commitSessionTransfer(session_st& session)
     // 反之最坏只是短暂多出一行旧快照，会被 TTL 清理回收。
     persistSession(newSessionId);
     if (persistenceEnabled_.load() && !oldSessionId.empty() && oldSessionId != newSessionId) {
-        SessionDbManager::getInstance()->asyncDeleteSessions({oldSessionId});
+        if (persistence_) persistence_->asyncDeleteSessions({oldSessionId});
     }
     
     // 7. Hash 模式特有：更新 context_map
@@ -688,7 +715,7 @@ void chatSession::clearExpiredSession()
         std::vector<std::string> expiredIds;
         expiredIds.reserve(expired.size());
         for (const auto& item : expired) expiredIds.push_back(std::get<0>(item));
-        SessionDbManager::getInstance()->asyncDeleteSessions(expiredIds);
+        if (persistence_) persistence_->asyncDeleteSessions(expiredIds);
         LOG_INFO << "[会话持久化] 已投递过期会话删除，数量: " << expiredIds.size();
     }
 
@@ -702,7 +729,7 @@ void chatSession::clearExpiredSession()
         if (apiName.empty())
             continue;
 
-        auto api = ApiManager::getInstance().getApiByApiName(apiName);
+        auto api = providerRegistry_ ? providerRegistry_->findProvider(apiName) : nullptr;
         if (api)
         {
             api->eraseChatinfoMap(sessionId);
@@ -727,8 +754,16 @@ void chatSession::startClearExpiredSession()
         return;
     }
     stopClearExpiredLoop_.store(false);
+    clearExpiredDone_ = std::make_shared<platform::ThreadCompletion>();
 
-    clearExpiredThread_ = std::thread([this]() {
+    clearExpiredThread_ = std::thread([this, done = clearExpiredDone_]() {
+        // 析构守卫自报完成：正常 break、提前 return 还是异常展开都会走到，
+        // 而写在循环之后的一行 signal() 会被后两者绕过，停机侧就要白等满
+        // 整个预算才发现「没等到」——那是把已退出的线程误判成超支。
+        struct Signaler {
+            platform::ThreadCompletionPtr d;
+            ~Signaler() { d->signal(); }
+        } signaler{done};
         while (true) {
             {
                 std::unique_lock<std::mutex> lock(clearExpiredWakeMutex_);
@@ -745,11 +780,10 @@ void chatSession::startClearExpiredSession()
 
             // B5: 同步清理数据库中早于 TTL 的会话快照，防止 chat_session_state 无限增长。
             // 任何 DB 异常在 SessionDbManager 内部已降级忽略，不影响内存清理。
-            auto sessionDb = SessionDbManager::getInstance();
-            if (sessionDb && sessionDb->isEnabled()) {
+            if (persistence_ && persistence_->isEnabled()) {
                 const int64_t cutoff =
                     static_cast<int64_t>(time(nullptr)) - dbRetentionSeconds_.load();
-                const int removed = sessionDb->deleteSessionsOlderThan(cutoff);
+                const int removed = persistence_->deleteSessionsOlderThan(cutoff);
                 if (removed > 0) {
                     LOG_INFO << "[会话持久化] 已清理过期会话快照 " << removed << " 条";
                 }
@@ -761,9 +795,21 @@ void chatSession::startClearExpiredSession()
 
 void chatSession::stopClearExpiredSession()
 {
-    // 幂等：未启动或已停机时直接返回，重复调用安全（main.cc 显式调用 + 析构兜底）。
+    (void)stopClearExpiredWithin(nullptr);
+}
+
+bool chatSession::stopClearExpiredSession(std::chrono::steady_clock::time_point deadline)
+{
+    return stopClearExpiredWithin(&deadline);
+}
+
+bool chatSession::stopClearExpiredWithin(const std::chrono::steady_clock::time_point* deadline)
+{
+    // 幂等：只有「没有待收割的线程」才算真的无事可做。判据看 joinable 而非
+    // 停机标志：上一轮限时停机超预算时标志早已为真，却留下一条仍在运行的
+    // 线程，那种状态下必须允许再次进入并把它收割掉。
     if (!clearExpiredThread_.joinable()) {
-        return;
+        return true;
     }
     {
         // 置位必须在持锁状态下完成，否则可能与 wait_for 的谓词检查交错，
@@ -772,7 +818,20 @@ void chatSession::stopClearExpiredSession()
         stopClearExpiredLoop_.store(true);
     }
     clearExpiredWakeCv_.notify_all();
-    clearExpiredThread_.join();
+
+    if (deadline != nullptr && clearExpiredDone_) {
+        if (!platform::joinUntil(clearExpiredThread_, *clearExpiredDone_, *deadline)) {
+            LOG_WARN << "[会话清理] 清理线程未在停机预算内退出，未 join、未 detach，"
+                     << "线程仍在运行；可稍后用无参 stopClearExpiredSession() 收割";
+            return false;
+        }
+    } else {
+        // 无预算路径：维持改造前的无限等待语义。
+        clearExpiredThread_.join();
+    }
+
+    clearExpiredDone_.reset();
+    return true;
 }
 
 bool chatSession::sessionIsExist(const std::string &ConversationId)
@@ -870,7 +929,7 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
     if (content.isString()) {
         std::string text = content.asString();
         // 如果使用零宽字符模式，从文本中移除可能存在的零宽字符编码
-        if (getInstance()->isZeroWidthMode()) {
+        if (isZeroWidthMode()) {
             text = ZeroWidthEncoder::stripZeroWidth(text);
         }
         return text;
@@ -884,7 +943,7 @@ std::string chatSession::getContentAsString(const Json::Value& content, std::vec
                 if ((itemType == "text" || itemType == "input_text") && item.isMember("text") && item["text"].isString()) {
                     std::string textPart = item["text"].asString();
                     // 如果使用零宽字符模式，从文本中移除可能存在的零宽字符编码
-                    if (getInstance()->isZeroWidthMode()) {
+                    if (isZeroWidthMode()) {
                         textPart = ZeroWidthEncoder::stripZeroWidth(textPart);
                     }
                     result += textPart;
@@ -1084,7 +1143,7 @@ bool chatSession::deleteResponseSession(const std::string& sessionId)
     const std::string& apiName = it->second.request.api;
     const std::string keyToDelete = it->first;
     if (!apiName.empty()) {
-        auto api = ApiManager::getInstance().getApiByApiName(apiName);
+        auto api = providerRegistry_ ? providerRegistry_->findProvider(apiName) : nullptr;
         if (api) {
             api->eraseChatinfoMap(keyToDelete);
         }
@@ -1137,7 +1196,7 @@ void chatSession::updateResponseSession(session_st& session)
     // 只有当 isContinuation 为 true 且 prevProviderKey 与 conversationId 不同时才需要转移
     if (session.state.isContinuation && !session.request.api.empty() &&
         !session.provider.prevProviderKey.empty() && session.provider.prevProviderKey != session.state.conversationId) {
-        auto api = ApiManager::getInstance().getApiByApiName(session.request.api);
+        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
         if (api) {
             LOG_INFO << "[Response API] 转移线程上下文: " << session.provider.prevProviderKey << " -> " << session.state.conversationId;
             api->transferThreadContext(session.provider.prevProviderKey, session.state.conversationId);

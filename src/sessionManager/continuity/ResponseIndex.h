@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 #include <json/json.h>
+#include <domain/port/IResponseIndex.h>
+#include <domain/port/ISessionPersistence.h>
 
 /**
  * @brief ResponseIndex（内存热层 + 数据库持久层）
@@ -28,21 +30,23 @@
  * - 持久化默认关闭，由启动流程在建表成功后开启；关闭时行为与旧版纯内存实现一致。
  * - 仍保留基于 maxEntries/maxAge 的清理策略，防止内存无限增长。
  */
-class ResponseIndex {
+class ResponseIndex final : public IResponseIndex {
 public:
-    static ResponseIndex& instance();
+    explicit ResponseIndex(ISessionPersistence* persistence = nullptr)
+        : persistence_(persistence) {}
+    ~ResponseIndex() override = default;
 
     // 映射：responseId -> sessionId
-    bool tryGetSessionId(const std::string& responseId, std::string& outSessionId);
-    void bind(const std::string& responseId, const std::string& sessionId);
+    bool tryGetSessionId(const std::string& responseId, std::string& outSessionId) override;
+    void bind(const std::string& responseId, const std::string& sessionId) override;
 
     // 映射：responseId -> 响应 JSON（可选存储）
-    bool tryGetResponse(const std::string& responseId, Json::Value& outResponse);
-    void storeResponse(const std::string& responseId, const Json::Value& response);
-    bool erase(const std::string& responseId);
+    bool tryGetResponse(const std::string& responseId, std::string& outResponseJson) override;
+    void storeResponse(const std::string& responseId, const std::string& responseJson) override;
+    bool erase(const std::string& responseId) override;
 
 
-    void cleanup(size_t maxEntries, std::chrono::seconds maxAge);
+    void cleanup(size_t maxEntries, std::chrono::seconds maxAge) override;
 
     /// 开关写穿/懒加载；由启动流程在 SessionDbManager 建表成功后开启。
     void setPersistenceEnabled(bool enabled) { persistenceEnabled_ = enabled; }
@@ -57,9 +61,6 @@ public:
     static constexpr std::chrono::seconds kDefaultMaxAge = std::chrono::hours(6);
 
 private:
-    ResponseIndex() = default;
-    ~ResponseIndex() = default;
-
     ResponseIndex(const ResponseIndex&) = delete;
     ResponseIndex& operator=(const ResponseIndex&) = delete;
 
@@ -80,7 +81,7 @@ private:
     std::unordered_map<std::string, Entry> map_;
     std::atomic<bool> persistenceEnabled_{false};
     std::atomic<bool> storeResponseBody_{false};
+    ISessionPersistence* persistence_ = nullptr;
 };
 
 #endif // 头文件保护结束
-

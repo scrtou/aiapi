@@ -4,6 +4,8 @@
 
 #include <json/json.h>
 
+#include <chrono>
+
 namespace lifecycle {
 
 /**
@@ -20,8 +22,12 @@ namespace lifecycle {
  * @param ctx           待填充的 composition root。
  * @param customConfig  drogon 的 custom_config 子树；显式传入而非在步骤内部
  *                      调用 drogon::app()，使步骤可在无 drogon 实例时被测试。
+ * @param processStartTime  main 在构建前记录的进程启动时刻；Health use case
+ *                          以它计算 uptime，而不直接读取 Controller 静态状态。
  */
-void registerApplicationSteps(AppContext& ctx, const Json::Value& customConfig);
+void registerApplicationSteps(
+    AppContext& ctx, const Json::Value& customConfig,
+    std::chrono::steady_clock::time_point processStartTime);
 
 // ---------------------------------------------------------------------------
 // 配置解析的纯函数接缝。它们此前是埋在 lambda 里的内联表达式，无法单测；

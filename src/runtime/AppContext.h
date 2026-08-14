@@ -1,11 +1,44 @@
 #pragma once
 
 #include <runtime/StartupResult.h>
+#include <domain/port/IProviderRegistry.h>
+#include <domain/port/IAiApiUseCase.h>
+#include <domain/port/IResponseIndex.h>
+#include <domain/port/IExecutionGate.h>
+#include <domain/port/IAccountAdminUseCase.h>
+#include <domain/port/IChannelAdminUseCase.h>
+#include <domain/port/IHealthUseCase.h>
+#include <domain/port/IMetricsUseCase.h>
+#include <domain/port/IRetoolWorkspaceAdminUseCase.h>
+#include <domain/port/IRetoolWorkspaceUseCase.h>
+#include <managedAccount/contracts/ManagedAccount.h>
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
+
+class chatSession;
+class chaynsThreadReaper;
+class BackgroundTaskQueue;
+class IBackgroundExecutor;
+class SessionDbManager;
+class chaynsThreadDbManager;
+class AccountDbManager;
+class AccountBackupDbManager;
+class AccountManager;
+class ChannelDbManager;
+class ChannelManager;
+class ConfigDbManager;
+class RetoolWorkspaceDbManager;
+class RetoolWorkspaceManager;
+
+namespace metrics {
+class ErrorStatsDbManager;
+class StatusDbManager;
+class ErrorStatsService;
+}  // namespace metrics
 
 namespace lifecycle {
 
@@ -62,7 +95,7 @@ class AppContext
 {
 public:
     AppContext() = default;
-    ~AppContext() = default;
+    ~AppContext();
 
     AppContext(const AppContext&)            = delete;
     AppContext& operator=(const AppContext&) = delete;
@@ -115,6 +148,213 @@ public:
     /// 已执行完成的步骤数量，失败时即为「失败步骤的下标」。
     size_t stepsCompleted() const { return stepsCompleted_; }
 
+    /// Runtime-owned service published only after its providers are complete.
+    void setProviderRegistry(std::shared_ptr<IProviderRegistry> registry)
+    {
+        providerRegistry_ = std::move(registry);
+    }
+    const std::shared_ptr<IProviderRegistry>& providerRegistry() const
+    {
+        return providerRegistry_;
+    }
+    void setHealthUseCase(std::shared_ptr<IHealthUseCase> useCase)
+    {
+        healthUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<IHealthUseCase>& healthUseCase() const
+    {
+        return healthUseCase_;
+    }
+    void setAiApiUseCase(std::shared_ptr<aiapi::IAiApiUseCase> useCase)
+    {
+        aiApiUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<aiapi::IAiApiUseCase>& aiApiUseCase() const
+    {
+        return aiApiUseCase_;
+    }
+    void setResponseIndex(std::shared_ptr<IResponseIndex> index) { responseIndex_ = std::move(index); }
+    const std::shared_ptr<IResponseIndex>& responseIndex() const { return responseIndex_; }
+    void setExecutionGate(std::shared_ptr<session::IExecutionGate> gate) { executionGate_ = std::move(gate); }
+    const std::shared_ptr<session::IExecutionGate>& executionGate() const { return executionGate_; }
+    /// The concrete queue is also the sole IBackgroundExecutor implementation
+    /// published to application/transport.  Keeping both concepts on one
+    /// context-owned object prevents an adapter singleton from outliving the
+    /// queue it borrows.
+    void setBackgroundTaskQueue(std::shared_ptr<BackgroundTaskQueue> queue)
+    {
+        backgroundTaskQueue_ = std::move(queue);
+    }
+    const std::shared_ptr<BackgroundTaskQueue>& backgroundTaskQueue() const
+    {
+        return backgroundTaskQueue_;
+    }
+    IBackgroundExecutor* backgroundExecutor() const;
+    void setSessionPersistence(std::shared_ptr<SessionDbManager> persistence)
+    {
+        sessionPersistence_ = std::move(persistence);
+    }
+    const std::shared_ptr<SessionDbManager>& sessionPersistence() const
+    {
+        return sessionPersistence_;
+    }
+    void setThreadLedger(std::shared_ptr<chaynsThreadDbManager> ledger)
+    {
+        threadLedger_ = std::move(ledger);
+    }
+    const std::shared_ptr<chaynsThreadDbManager>& threadLedger() const
+    {
+        return threadLedger_;
+    }
+    void setErrorStatsStore(std::shared_ptr<metrics::ErrorStatsDbManager> store)
+    {
+        errorStatsStore_ = std::move(store);
+    }
+    const std::shared_ptr<metrics::ErrorStatsDbManager>& errorStatsStore() const
+    {
+        return errorStatsStore_;
+    }
+    void setStatusMetricsStore(std::shared_ptr<metrics::StatusDbManager> store)
+    {
+        statusMetricsStore_ = std::move(store);
+    }
+    const std::shared_ptr<metrics::StatusDbManager>& statusMetricsStore() const
+    {
+        return statusMetricsStore_;
+    }
+    void setErrorStatsService(std::shared_ptr<metrics::ErrorStatsService> service)
+    {
+        errorStatsService_ = std::move(service);
+    }
+    const std::shared_ptr<metrics::ErrorStatsService>& errorStatsService() const
+    {
+        return errorStatsService_;
+    }
+    void setMetricsUseCase(std::shared_ptr<metrics::IMetricsUseCase> useCase)
+    {
+        metricsUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<metrics::IMetricsUseCase>& metricsUseCase() const
+    {
+        return metricsUseCase_;
+    }
+    void setChannelStore(std::shared_ptr<ChannelDbManager> store)
+    {
+        channelStore_ = std::move(store);
+    }
+    const std::shared_ptr<ChannelDbManager>& channelStore() const
+    {
+        return channelStore_;
+    }
+    void setChannelManager(std::shared_ptr<ChannelManager> channels)
+    {
+        channelManager_ = std::move(channels);
+    }
+    const std::shared_ptr<ChannelManager>& channelManager() const { return channelManager_; }
+    void setConfigStore(std::shared_ptr<ConfigDbManager> store)
+    {
+        configStore_ = std::move(store);
+    }
+    const std::shared_ptr<ConfigDbManager>& configStore() const
+    {
+        return configStore_;
+    }
+    void setAccountStore(std::shared_ptr<AccountDbManager> store)
+    {
+        accountStore_ = std::move(store);
+    }
+    const std::shared_ptr<AccountDbManager>& accountStore() const
+    {
+        return accountStore_;
+    }
+    void setAccountBackupStore(std::shared_ptr<AccountBackupDbManager> store)
+    {
+        accountBackupStore_ = std::move(store);
+    }
+    const std::shared_ptr<AccountBackupDbManager>& accountBackupStore() const
+    {
+        return accountBackupStore_;
+    }
+    void setRetoolWorkspaceStore(std::shared_ptr<RetoolWorkspaceDbManager> store)
+    {
+        retoolWorkspaceStore_ = std::move(store);
+    }
+    const std::shared_ptr<RetoolWorkspaceDbManager>& retoolWorkspaceStore() const
+    {
+        return retoolWorkspaceStore_;
+    }
+    void setRetoolWorkspaceManager(std::shared_ptr<RetoolWorkspaceManager> manager)
+    {
+        retoolWorkspaceManager_ = std::move(manager);
+    }
+    const std::shared_ptr<RetoolWorkspaceManager>& retoolWorkspaceManager() const
+    {
+        return retoolWorkspaceManager_;
+    }
+    void setRetoolWorkspaceProvisioner(
+        std::shared_ptr<workspace::IRetoolWorkspaceProvisioner> provisioner)
+    {
+        retoolWorkspaceProvisioner_ = std::move(provisioner);
+    }
+    const std::shared_ptr<workspace::IRetoolWorkspaceProvisioner>& retoolWorkspaceProvisioner() const
+    {
+        return retoolWorkspaceProvisioner_;
+    }
+    void setRetoolWorkspaceUseCase(std::shared_ptr<workspace::IRetoolWorkspaceUseCase> useCase)
+    {
+        retoolWorkspaceUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<workspace::IRetoolWorkspaceUseCase>& retoolWorkspaceUseCase() const
+    {
+        return retoolWorkspaceUseCase_;
+    }
+    void setRetoolWorkspaceAdminUseCase(
+        std::shared_ptr<workspace::IRetoolWorkspaceAdminUseCase> useCase)
+    {
+        retoolWorkspaceAdminUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<workspace::IRetoolWorkspaceAdminUseCase>&
+    retoolWorkspaceAdminUseCase() const
+    {
+        return retoolWorkspaceAdminUseCase_;
+    }
+    void setAccountManager(std::shared_ptr<AccountManager> accounts)
+    {
+        accountManager_ = std::move(accounts);
+    }
+    const std::shared_ptr<AccountManager>& accountManager() const { return accountManager_; }
+    void setAccountAdminUseCase(std::shared_ptr<IAccountAdminUseCase> useCase)
+    {
+        accountAdminUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<IAccountAdminUseCase>& accountAdminUseCase() const
+    {
+        return accountAdminUseCase_;
+    }
+    void setChannelAdminUseCase(std::shared_ptr<IChannelAdminUseCase> useCase)
+    {
+        channelAdminUseCase_ = std::move(useCase);
+    }
+    const std::shared_ptr<IChannelAdminUseCase>& channelAdminUseCase() const
+    {
+        return channelAdminUseCase_;
+    }
+    void setSessionStore(std::shared_ptr<chatSession> store) { sessionStore_ = std::move(store); }
+    const std::shared_ptr<chatSession>& sessionStore() const { return sessionStore_; }
+    void setThreadReaper(std::shared_ptr<chaynsThreadReaper> reaper)
+    {
+        threadReaper_ = std::move(reaper);
+    }
+    const std::shared_ptr<chaynsThreadReaper>& threadReaper() const { return threadReaper_; }
+    void setManagedAccountService(std::shared_ptr<IManagedAccountContextResolver> service)
+    {
+        managedAccountService_ = std::move(service);
+    }
+    const std::shared_ptr<IManagedAccountContextResolver>& managedAccountService() const
+    {
+        return managedAccountService_;
+    }
+
 private:
     void stopOwnersInReverse(std::chrono::steady_clock::time_point deadline);
 
@@ -124,6 +364,52 @@ private:
     size_t                    stepsCompleted_ = 0;
     bool                      built_          = false;
     bool                      shutdownDone_   = false;
+    // 声明顺序决定逆序析构。队列必须最后析构，确保仍在执行的写穿任务
+    // 不会访问已销毁的 DB manager；provider 必须先于其借用的 thread ledger。
+    std::shared_ptr<BackgroundTaskQueue> backgroundTaskQueue_;
+    std::shared_ptr<SessionDbManager> sessionPersistence_;
+    std::shared_ptr<chaynsThreadDbManager> threadLedger_;
+    // ErrorStatsService owns a sink reference and must be destroyed before the
+    // concrete metrics stores.  Providers are declared afterwards so their
+    // destruction may still emit final telemetry while this service is alive.
+    std::shared_ptr<metrics::ErrorStatsDbManager> errorStatsStore_;
+    std::shared_ptr<metrics::StatusDbManager> statusMetricsStore_;
+    std::shared_ptr<metrics::ErrorStatsService> errorStatsService_;
+    // MetricsController borrows this facade, which must disappear before the
+    // context-owned query adapters above are destroyed.
+    std::shared_ptr<metrics::IMetricsUseCase> metricsUseCase_;
+    // Application services have no process singleton.  Concrete account,
+    // channel, config and workspace stores all precede their borrowing
+    // managers/use cases, so reverse destruction tears down AccountManager /
+    // AccountAdminUseCase / workspace facades before their backing stores.
+    std::shared_ptr<ChannelDbManager> channelStore_;
+    std::shared_ptr<ChannelManager> channelManager_;
+    std::shared_ptr<ConfigDbManager> configStore_;
+    std::shared_ptr<AccountDbManager> accountStore_;
+    std::shared_ptr<AccountBackupDbManager> accountBackupStore_;
+    std::shared_ptr<RetoolWorkspaceDbManager> retoolWorkspaceStore_;
+    std::shared_ptr<RetoolWorkspaceManager> retoolWorkspaceManager_;
+    std::shared_ptr<workspace::IRetoolWorkspaceProvisioner> retoolWorkspaceProvisioner_;
+    std::shared_ptr<workspace::IRetoolWorkspaceUseCase> retoolWorkspaceUseCase_;
+    std::shared_ptr<workspace::IRetoolWorkspaceAdminUseCase> retoolWorkspaceAdminUseCase_;
+    // AccountManager outlives all providers and the account application facade.
+    // They are declared afterwards so reverse destruction tears them down first.
+    std::shared_ptr<AccountManager> accountManager_;
+    std::shared_ptr<IAccountAdminUseCase> accountAdminUseCase_;
+    std::shared_ptr<IChannelAdminUseCase> channelAdminUseCase_;
+    // Registry/Provider 必须先于其引用的账号服务销毁。
+    std::shared_ptr<IManagedAccountContextResolver> managedAccountService_;
+    std::shared_ptr<IProviderRegistry> providerRegistry_;
+    std::shared_ptr<IHealthUseCase> healthUseCase_;
+    std::shared_ptr<IResponseIndex> responseIndex_;
+    std::shared_ptr<session::IExecutionGate> executionGate_;
+    // SessionStore 借用上面各服务；其声明顺序保证先于所有借用目标析构。
+    std::shared_ptr<chatSession> sessionStore_;
+    // This facade borrows the context-owned collaborators above.  Declaring
+    // it here releases it before those collaborators during reverse teardown.
+    std::shared_ptr<aiapi::IAiApiUseCase> aiApiUseCase_;
+    // 最后声明、最先析构：Reaper 借用 ProviderRegistry，必须先于它析构。
+    std::shared_ptr<chaynsThreadReaper> threadReaper_;
 };
 
 }  // namespace lifecycle

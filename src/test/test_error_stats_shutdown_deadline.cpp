@@ -22,8 +22,11 @@
 #include <drogon/drogon_test.h>
 
 #include <metrics/ErrorStatsService.h>
+#include <domain/port/IErrorStatsSink.h>
 
 #include <chrono>
+#include <memory>
+#include <vector>
 
 // P4-W3 / D4 —— J5：ErrorStatsService 停机接入 deadline 的契约测试。
 //
@@ -40,6 +43,17 @@ using namespace std::chrono_literals;
 
 namespace {
 
+class NoopSink final : public metrics::IErrorStatsSink
+{
+  public:
+    void init() override {}
+    bool insertEvents(const std::vector<metrics::ErrorEvent>&) override { return true; }
+    bool upsertErrorAggHour(const std::vector<metrics::ErrorEvent>&) override { return true; }
+    bool upsertRequestAggHour(const metrics::RequestAggData&) override { return true; }
+    int cleanupOldEvents(int) override { return 0; }
+    int cleanupOldAgg(int) override { return 0; }
+};
+
 metrics::ErrorStatsConfig makeConfig()
 {
     metrics::ErrorStatsConfig config;
@@ -53,10 +67,8 @@ metrics::ErrorStatsConfig makeConfig()
 
 DROGON_TEST(ErrorStatsShutdown_JoinsWithinBudget)
 {
-    auto& service = metrics::ErrorStatsService::getInstance();
+    metrics::ErrorStatsService service(std::make_shared<NoopSink>());
     service.init(makeConfig());
-    // 单例状态跨用例串联：若上一个用例没把 initialized_ 复位，这里的 init()
-    // 会静默变成 no-op，后续断言就会被「服务根本没在跑」免费满足。
     REQUIRE(service.isRunning());
 
     const auto start  = std::chrono::steady_clock::now();
@@ -71,10 +83,8 @@ DROGON_TEST(ErrorStatsShutdown_JoinsWithinBudget)
 
 DROGON_TEST(ErrorStatsShutdown_ExpiredDeadlineStaysBounded)
 {
-    auto& service = metrics::ErrorStatsService::getInstance();
+    metrics::ErrorStatsService service(std::make_shared<NoopSink>());
     service.init(makeConfig());
-    // 单例状态跨用例串联：若上一个用例没把 initialized_ 复位，这里的 init()
-    // 会静默变成 no-op，后续断言就会被「服务根本没在跑」免费满足。
     REQUIRE(service.isRunning());
 
     // 过期 deadline：worker 仍会因 notify 迅速退出，返回值可能为 true。
@@ -85,20 +95,17 @@ DROGON_TEST(ErrorStatsShutdown_ExpiredDeadlineStaysBounded)
     CHECK(std::chrono::steady_clock::now() - start < 2s);
 
     // 超预算时线程不被 detach，仍归本对象；用无参重载把它收割掉，
-    // 否则下一个用例的 init() 会对一个 joinable 的 thread 赋值 -> terminate。
+    // 否则局部 service 析构时会遇到仍 joinable 的线程。
     service.shutdown();
 }
 
 DROGON_TEST(ErrorStatsShutdown_NoArgOverloadKeptAndIdempotent)
 {
-    auto& service = metrics::ErrorStatsService::getInstance();
+    metrics::ErrorStatsService service(std::make_shared<NoopSink>());
     service.init(makeConfig());
-    // 单例状态跨用例串联：若上一个用例没把 initialized_ 复位，这里的 init()
-    // 会静默变成 no-op，后续断言就会被「服务根本没在跑」免费满足。
     REQUIRE(service.isRunning());
 
-    // 现存调用方（test_error_stats_sink_port.cpp 等）仍用无参形式；该重载若被
-    // 删除，此行编译失败即为提示。
+    // 无参收割重载保留给析构兜底与超预算后的显式收割。
     service.shutdown();
 
     // 幂等：未运行时再停一次必须立即返回 true，且不得阻塞。

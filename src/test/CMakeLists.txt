@@ -86,8 +86,11 @@ set(TEST_SOURCES
     test_thread_join.cpp
     test_error_stats_shutdown_deadline.cpp
     test_error_stats_shutdown_budget_exceeded.cpp
+    test_session_cleaner_shutdown_deadline.cpp
     test_shutdown_workers.cpp
     test_retool_workspace_store_port.cpp
+    test_retool_workspace_use_case.cpp
+    test_managed_account_service.cpp
     test_retool_provider_fixture.cpp
     test_provider_result_codec.cpp
     test_domain_json_codecs.cpp
@@ -98,8 +101,17 @@ set(TEST_SOURCES
     test_account_pool_heap_order.cpp
     test_retool_provision_health.cpp
     test_health_ready_probe.cpp
+    test_metrics_controller_injection.cpp
+    test_channel_controller_injection.cpp
+    test_channel_admin_use_case.cpp
+    test_metrics_use_case.cpp
+    test_account_controller_injection.cpp
+    test_account_admin_use_case.cpp
     test_controller_utils.cpp
     test_provider_retirement.cpp
+    test_provider_registry_port.cpp
+    test_ai_api_controller_injection.cpp
+    test_ai_api_use_case.cpp
     test_error_stats_sink_port.cpp
     stub_db_collaborators.cpp
 )

@@ -2,24 +2,19 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
+#include <application/health/HealthUseCase.h>
 #include <controllers/HealthController.h>
+#include <domain/port/IAccountCatalog.h>
 #include <domain/port/IAccountStore.h>
+#include <domain/port/IProviderRegistry.h>
 
 #include <list>
 #include <memory>
 #include <stdexcept>
 #include <string>
 
-// 步骤 176 的配套回归测试：/ready 的库探针改走 IAccountStore 端口后，
-// HealthController 首次获得测试覆盖（此前 aiapi_test 里该类符号数为 0，见步骤 179.3）。
-//
-// 断言点刻意选在 checks["database"] 这一格，而不是 status 总判：
-// 离线测试环境下 provider/account 两项必为 false，status 恒 "not_ready"，
-// 用它断言会把探针的对错整个掩盖掉。
-//
-// 覆盖边界：只覆盖 HealthController 与 IAccountStore 之间的契约。
-// main.cc 的启动接线不在此列（本测试自行注入），由
-// tools/arch/check_startup_wiring.py 的 REQUIRED_STATIC 分支守住。
+// ARCH_TESTS: application/health/HealthUseCase.h
+// ARCH_TESTS: domain/port/IHealthUseCase.h
 
 namespace
 {
@@ -34,10 +29,7 @@ class FakeAccountStore : public IAccountStore
     bool isTableExist() override
     {
         ++isTableExistCalls;
-        if (throwOnCall)
-        {
-            throw std::runtime_error("probe boom");
-        }
+        if (throwOnCall) throw std::runtime_error("probe boom");
         return tableExists;
     }
 
@@ -47,7 +39,6 @@ class FakeAccountStore : public IAccountStore
     void createTable() override {}
     void checkAndUpgradeTable() override {}
     std::list<Accountinfo_st> getAccountDBList() override { return {}; }
-
     int createWaitingAccount(std::string) override { return 0; }
     bool activateAccount(int, struct Accountinfo_st) override { return true; }
     bool deleteWaitingAccount(int) override { return true; }
@@ -56,21 +47,72 @@ class FakeAccountStore : public IAccountStore
     std::string getAccountStatusByUsername(std::string, std::string) override { return {}; }
 };
 
+class FakeProvider final : public APIinterface
+{
+  public:
+    provider::ProviderResult generate(session_st&) override
+    {
+        return provider::ProviderResult::success("fake");
+    }
+    void checkAlivableTokens() override {}
+    void checkModels() override {}
+    ProviderModelCatalog getModels() override { return {}; }
+    void init() override {}
+    void afterResponseProcess(session_st&) override {}
+    void eraseChatinfoMap(std::string) override {}
+    void transferThreadContext(const std::string&, const std::string&) override {}
+};
+
+class FakeProviderRegistry final : public IProviderRegistry
+{
+  public:
+    std::shared_ptr<APIinterface> provider;
+
+    std::shared_ptr<APIinterface> findProvider(const std::string&) const override
+    {
+        return provider;
+    }
+};
+
+class FakeAccountCatalog final : public IAccountCatalog
+{
+  public:
+    AccountMap accounts;
+    bool throwOnList = false;
+    int listCalls = 0;
+
+    AccountMap listAccounts() override
+    {
+        ++listCalls;
+        if (throwOnList) throw std::runtime_error("account catalog boom");
+        return accounts;
+    }
+
+    void checkChannelAccountCount(std::string) override {}
+};
+
+std::shared_ptr<HealthUseCase> installHealthUseCase(
+    std::shared_ptr<IAccountStore> store,
+    IProviderRegistry* providers = nullptr,
+    IAccountCatalog* accounts = nullptr)
+{
+    auto useCase = std::make_shared<HealthUseCase>(
+        std::chrono::steady_clock::now() - std::chrono::seconds(1),
+        std::move(store), providers, accounts);
+    HealthController::setUseCase(useCase.get());
+    return useCase;
+}
+
 // 调用 /ready 并取回 checks["database"]。
-// 返回 -1 表示响应体缺失或该字段不存在（与 true/false 区分开，避免误判为通过）。
 int readyDatabaseFlag()
 {
     drogon::HttpResponsePtr captured;
     HealthController controller;
     controller.ready(drogon::HttpRequest::newHttpRequest(),
                      [&captured](const drogon::HttpResponsePtr &resp) { captured = resp; });
-    if (!captured)
-    {
-        return -1;
-    }
+    if (!captured) return -1;
     const auto json = captured->getJsonObject();
-    if (!json || !json->isMember("checks") || !(*json)["checks"].isMember("database"))
-    {
+    if (!json || !json->isMember("checks") || !(*json)["checks"].isMember("database")) {
         return -1;
     }
     return (*json)["checks"]["database"].asBool() ? 1 : 0;
@@ -82,43 +124,97 @@ DROGON_TEST(HealthReadyProbeReportsTableExists)
 {
     auto store = std::make_shared<FakeAccountStore>();
     store->tableExists = true;
-    HealthController::setDbProbe(store);
+    auto useCase = installHealthUseCase(store);
 
     CHECK(readyDatabaseFlag() == 1);
-    // 探针必须真的被调用过——否则「恒返回 true」的实现也能骗过上一条断言。
     CHECK(store->isTableExistCalls == 1);
 
-    HealthController::setDbProbe(nullptr);
+    HealthController::setUseCase(nullptr);
 }
 
 DROGON_TEST(HealthReadyProbeReportsTableMissing)
 {
     auto store = std::make_shared<FakeAccountStore>();
     store->tableExists = false;
-    HealthController::setDbProbe(store);
+    auto useCase = installHealthUseCase(store);
 
     CHECK(readyDatabaseFlag() == 0);
     CHECK(store->isTableExistCalls == 1);
 
-    HealthController::setDbProbe(nullptr);
+    HealthController::setUseCase(nullptr);
 }
 
-// 漏注入时的降级语义：不崩溃，database 判 false。
-// 这正是 check_startup_wiring.py 要拦的那种「静默故障」，此处固化其行为。
-DROGON_TEST(HealthReadyWithoutProbeDegradesToFalse)
+DROGON_TEST(HealthReadyWithoutUseCaseDegradesToFalse)
 {
-    HealthController::setDbProbe(nullptr);
+    HealthController::setUseCase(nullptr);
     CHECK(readyDatabaseFlag() == 0);
 }
 
-// 探针抛异常时必须被吞掉并判 false，而不是把异常泄漏到 drogon 的请求处理链。
+DROGON_TEST(HealthReadyUsesInjectedProviderRegistry)
+{
+    auto registry = std::make_unique<FakeProviderRegistry>();
+    registry->provider = std::make_shared<FakeProvider>();
+    auto useCase = installHealthUseCase(nullptr, registry.get());
+
+    drogon::HttpResponsePtr captured;
+    HealthController controller;
+    controller.ready(drogon::HttpRequest::newHttpRequest(),
+                     [&captured](const drogon::HttpResponsePtr& resp) { captured = resp; });
+    REQUIRE(captured != nullptr);
+    const auto json = captured->getJsonObject();
+    REQUIRE(json != nullptr);
+    CHECK((*json)["checks"]["provider"].asBool());
+
+    HealthController::setUseCase(nullptr);
+}
+
+DROGON_TEST(HealthReadyCountsInjectedAccountCatalog)
+{
+    auto catalog = std::make_unique<FakeAccountCatalog>();
+    catalog->accounts["chaynsapi"]["alice"] = std::make_shared<Accountinfo_st>();
+    catalog->accounts["retoolapi"]["bob"] = std::make_shared<Accountinfo_st>();
+    auto useCase = installHealthUseCase(nullptr, nullptr, catalog.get());
+
+    drogon::HttpResponsePtr captured;
+    HealthController controller;
+    controller.ready(drogon::HttpRequest::newHttpRequest(),
+                     [&captured](const drogon::HttpResponsePtr& resp) { captured = resp; });
+    REQUIRE(captured != nullptr);
+    const auto json = captured->getJsonObject();
+    REQUIRE(json != nullptr);
+    CHECK((*json)["checks"]["account"].asBool());
+    CHECK((*json)["checks"]["account_count"].asUInt64() == 2);
+    CHECK(catalog->listCalls == 1);
+
+    HealthController::setUseCase(nullptr);
+}
+
+DROGON_TEST(HealthReadyContainsInjectedAccountCatalogFailure)
+{
+    auto catalog = std::make_unique<FakeAccountCatalog>();
+    catalog->throwOnList = true;
+    auto useCase = installHealthUseCase(nullptr, nullptr, catalog.get());
+
+    drogon::HttpResponsePtr captured;
+    HealthController controller;
+    controller.ready(drogon::HttpRequest::newHttpRequest(),
+                     [&captured](const drogon::HttpResponsePtr& resp) { captured = resp; });
+    REQUIRE(captured != nullptr);
+    const auto json = captured->getJsonObject();
+    REQUIRE(json != nullptr);
+    CHECK(!(*json)["checks"]["account"].asBool());
+    CHECK((*json)["checks"]["account_count"].asUInt64() == 0);
+
+    HealthController::setUseCase(nullptr);
+}
+
 DROGON_TEST(HealthReadyProbeThrowIsContained)
 {
     auto store = std::make_shared<FakeAccountStore>();
     store->throwOnCall = true;
-    HealthController::setDbProbe(store);
+    auto useCase = installHealthUseCase(store);
 
     CHECK(readyDatabaseFlag() == 0);
 
-    HealthController::setDbProbe(nullptr);
+    HealthController::setUseCase(nullptr);
 }

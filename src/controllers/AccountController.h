@@ -2,6 +2,7 @@
 
 #include <controllers/AdminAuthFilter.h>
 #include <drogon/HttpController.h>
+#include <domain/port/IAccountAdminUseCase.h>
 
 /**
  * @brief 账号管理 Controller
@@ -21,6 +22,7 @@
 class AccountController : public drogon::HttpController<AccountController>
 {
   public:
+    static void setUseCase(IAccountAdminUseCase* accounts);
     METHOD_LIST_BEGIN
     ADD_METHOD_TO(AccountController::accountAdd,           "/aichat/account/add",             drogon::Post, "AdminAuthFilter");
     ADD_METHOD_TO(AccountController::accountDelete,        "/aichat/account/delete",          drogon::Post, "AdminAuthFilter");
@@ -44,4 +46,7 @@ class AccountController : public drogon::HttpController<AccountController>
     void accountDbInfo(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountSettingsGet(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void accountSettingsUpdate(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+
+  private:
+    static IAccountAdminUseCase* accounts_;
 };

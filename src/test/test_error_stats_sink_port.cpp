@@ -16,11 +16,8 @@
 // （那属于 ErrorStatsDbManager 自己的职责，需要真实库）。
 //
 // 承载力说明：aiapi_test 链接真实的 ErrorStatsService.cpp，不是桩。
-// 谁把 setSink/flushEvents/flushRequestAgg 改坏，这个文件就会变红。
-//
-// 单例约束：ErrorStatsService 是进程级单例且 init() 有 initialized_ 幂等门，
-// 因此全流程集中在一个用例里按 setSink -> init -> record -> flush -> shutdown
-// 顺序走一遍，避免跨用例的初始化顺序依赖。
+// 谁把构造注入/flushEvents/flushRequestAgg 改坏，这个文件就会变红。
+// 服务是测试局部对象，避免依赖跨用例的 singleton 初始化顺序。
 
 namespace
 {
@@ -84,8 +81,7 @@ DROGON_TEST(ErrorStatsSinkPortContract)
 {
     auto fake = std::make_shared<FakeErrorStatsSink>();
 
-    auto& service = metrics::ErrorStatsService::getInstance();
-    service.setSink(fake);
+    metrics::ErrorStatsService service(fake);
 
     metrics::ErrorStatsConfig config;
     config.enabled = true;
@@ -99,8 +95,8 @@ DROGON_TEST(ErrorStatsSinkPortContract)
 
     service.init(config);
 
-    // init() 必须使用已注入的 sink，而不是回退到 ErrorStatsDbManager 默认单例。
-    // 这一条断言是整个依赖倒置改造的核心判据：若回退分支写反，此处即为 0。
+    // init() 必须使用构造时注入的 sink；不存在 ErrorStatsDbManager singleton
+    // fallback。若构造注入被绕过，此处即为 0。
     REQUIRE(fake->initCalls == 1);
 
     service.recordError(metrics::Domain::INTERNAL,

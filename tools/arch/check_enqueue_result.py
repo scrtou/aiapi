@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""BackgroundTaskQueue 入队结果处理门禁（退出码 4）。
+"""Background executor 提交结果处理门禁（退出码 4）。
 
-动因（P4-W1 / C7）：`enqueue()` 已改为返回 `[[nodiscard]] EnqueueResult`。
+动因（P4-W1 / C7）：队列 `enqueue()` 与注入端口 `submit()` 都返回
+`[[nodiscard]]` 的分态结果。
 但 `[[nodiscard]]` 只能拦住「完全丢弃返回值」这一种写法，拦不住
 `const auto r = ...enqueue(...);` 之后再也不读 `r` —— 编译器至多给
 一条 -Wunused-variable，而项目未开 -Werror，绿色照旧。
 
-退化路径是真实的：C4~C6 逐层把 23 处调用点从 bool shim 改成显式处理，
-只要有人图省事写 `const auto ignored = ...enqueue(...)` 就地退回静默丢弃，
+退化路径是真实的：C4~C6 逐层把调用点从 bool shim 改成显式处理。P5-W3 把
+调用从队列具体实现改为 `IBackgroundExecutor::submit()` 后，仍必须守同一个
+不变量：只要有人图省事写 `const auto ignored = ...submit(...)` 就地退回静默丢弃，
 队列满 / 停机中的失败重新变成「请求已受理」的假象，且无任何测试会红。
 
 判据（两条，都必须过）：
-  A. 声明处仍带 `[[nodiscard]]`——防止有人为了消警告把属性删掉。
-  B. 每个生产调用点绑定的变量，在其后必须被真正读取：
+  A. queue 与 port 的声明处仍带 `[[nodiscard]]`——防止有人为了消警告把属性删掉。
+  B. 每个生产 `enqueue()/submit()` 调用点绑定的变量，在其后必须被真正读取：
      出现在 `if` / `switch` / 比较 / 传参 / `!=` / `== EnqueueResult::` 等位置。
      只写不读即判 FAIL。
 
@@ -24,13 +26,14 @@ import os
 import re
 import sys
 
-HEADER = 'src/utils/BackgroundTaskQueue.h'
+QUEUE_HEADER = 'src/utils/BackgroundTaskQueue.h'
+PORT_HEADER = 'src/domain/port/IBackgroundExecutor.h'
 SRC_DIR = 'src'
 EXCLUDE_DIRS = {'test'}
 FAIL = 4
 
-ENQ_RE = re.compile(r'\.enqueue\s*\(')
-BIND_RE = re.compile(r'(?:const\s+)?(?:auto|EnqueueResult)\s+(\w+)\s*=\s*$')
+SUBMIT_RE = re.compile(r'(?:\.|->)\s*(?:enqueue|submit)\s*\(')
+BIND_RE = re.compile(r'\b(?:const\s+)?(?:auto|EnqueueResult|TaskSubmitResult)\s+(\w+)\s*=\s*[^;{}]*$')
 INLINE_RE = re.compile(r'(?:if|while|switch|return|==|!=|&&|\|\||\breturn\b)')
 STMT_BOUNDARY = ';{}'
 
@@ -51,10 +54,14 @@ def production_sources():
 
 
 def check_nodiscard(errors):
-    text = read(HEADER)
+    text = read(QUEUE_HEADER)
     if not re.search(r'\[\[nodiscard\]\]\s*EnqueueResult\s+enqueue\s*\(', text):
         errors.append(
-            HEADER + ': enqueue() 缺少 [[nodiscard]] EnqueueResult 声明')
+            QUEUE_HEADER + ': enqueue() 缺少 [[nodiscard]] EnqueueResult 声明')
+    text = read(PORT_HEADER)
+    if not re.search(r'\[\[nodiscard\]\]\s*virtual\s+TaskSubmitResult\s+submit\s*\(', text):
+        errors.append(
+            PORT_HEADER + ': submit() 缺少 [[nodiscard]] TaskSubmitResult 声明')
 
 
 def statement_prefix(text, pos):
@@ -80,14 +87,11 @@ def check_call_sites(errors):
     total = 0
     for path in production_sources():
         text = read(path)
-        for m in ENQ_RE.finditer(text):
+        for m in SUBMIT_RE.finditer(text):
             total += 1
             line = text[:m.start()].count('\n') + 1
             prefix = statement_prefix(text, m.start())
-            bind = BIND_RE.search(prefix.replace('\n', ' ').rstrip()
-                                  [:len(prefix)] if False else
-                                  re.sub(r'[^\S\n]+', ' ', prefix).strip()
-                                  .rsplit('=', 1)[0] + '=')
+            bind = BIND_RE.search(re.sub(r'\s+', ' ', prefix).strip())
             if bind:
                 var = bind.group(1)
                 tail = function_tail(text, m.end())
@@ -97,13 +101,13 @@ def check_call_sites(errors):
                               re.escape(var) + r'\b', tail)
                 if not used:
                     errors.append(
-                        '%s:%d: enqueue() 结果 `%s` 绑定后从未被读取'
+                        '%s:%d: executor 提交结果 `%s` 绑定后从未被读取'
                         % (path, line, var))
             elif INLINE_RE.search(prefix):
                 continue  # 就地判断，如 `if (...enqueue(...) != Accepted)`
             else:
                 errors.append(
-                    '%s:%d: enqueue() 返回值被整体丢弃' % (path, line))
+                    '%s:%d: executor 提交返回值被整体丢弃' % (path, line))
     return total
 
 
@@ -112,12 +116,12 @@ def main():
     check_nodiscard(errors)
     total = check_call_sites(errors)
     if errors:
-        print('FAIL 入队结果处理门禁')
+        print('FAIL executor 提交结果处理门禁')
         for e in errors:
             print('  ' + e)
         return FAIL
-    print(f'OK   {total}/{total} 生产调用点显式处理 EnqueueResult；'
-          '声明保留 [[nodiscard]]')
+    print(f'OK   {total}/{total} 生产 enqueue()/submit() 调用点显式处理结果；'
+          'queue/port 声明均保留 [[nodiscard]]')
     return 0
 
 

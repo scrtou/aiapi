@@ -1,7 +1,7 @@
 # P04-W3 · deadline / cancellation / shutdown
 
-> 状态：DOING（D1 现状刻画完成）
-> 最近更新：2026-08-10 —— D1：五处 owner 停机链与 14 处阻塞边界 inventory 定稿。
+> 状态：DONE（D2～D7 已完成）
+> 最近更新：2026-08-13 —— 五类部署级 SIGTERM harness、三构建验证和门禁收口完成。
 > 计划锚点：`migration-plan.md` 4.3 取消链路 / 4.4 停机顺序 / 阶段 4 退出门禁
 > 退出门禁（本工作项）：正常 SIGTERM 全部 join；deadline 超时路径不析构活动线程所访问对象；空闲/阻塞 HTTP/轮询/积压/断连五种停机集成测试通过
 
@@ -384,3 +384,42 @@ T2 一并证明 BTQ 侧三个新用例**不含**空断言（`acceptingTasks()`/`
 > 与 §8.1 教训同源、第四次应验：「形参已存在」不证明语义生效，「断言已存在」
 > 同样不证明行为被覆盖。两者的可信证据都只有一种形式——**指定一个预期会红的
 > 位置，破坏它，看它是否真的在那里红。**
+
+## 10. D2～D7 收口记录（2026-08-13）
+
+### 10.1 实现结果
+
+| 步 | 落地内容 | 状态 |
+|---|---|---|
+| D2 | `platform::CancellationSource` 统一停机取消；`ThreadCompletion` 复用同一套无丢失唤醒原语 | ✅ |
+| D3 | AccountManager 四条 worker、Session cleaner、Reaper、BackgroundTaskQueue、ErrorStats 均为每线程一次性 completion；`joinUntil` 超预算不 join、不 detach，保留残局供无参收割 | ✅ |
+| D4 | 五个 owner 闭包把同一绝对 deadline 传入限时 stop；队列先限时观测 idle，再以同一 deadline drain+join | ✅ |
+| D5 | 新增 Session cleaner deadline 回归；ErrorStats 注入长睡 sink 验证 `false` 与 1s 时间上界；部署级五类 SIGTERM harness 覆盖空闲、阻塞 HTTP、轮询、积压、断连 | ✅ |
+| D6 | 新增 `tools/arch/check_shutdown_deadline.py`，并在 CI 加入正向门禁与「恢复无参 stop」负向探针 | ✅ |
+| D7 | Debug/ASan/TSan 三构建、全量测试、架构门禁和五类 SIGTERM harness 收口 | ✅ |
+
+关键不变式：限时超支时 owner 不析构仍可能被 worker 访问的对象；`running_ == false`
+不再被当作线程已退出的证据，ErrorStats 以 `hasPendingWorker()`、Session 以
+`hasPendingCleaner()` 暴露待收割状态。
+
+### 10.2 验证结果
+
+- Debug 全量：**334/334 用例通过**；
+- ASan 全量：**334/334 用例通过**；
+- 架构门禁：`check_shutdown_deadline.py`、`check_app_context.py`、startup wiring、enqueue、target layers、source ownership、test registration 均通过；include 门禁同时修复了两处测试相对 include；
+- TSan 全量：**334/334 用例、1737 断言通过**，data race=0（第三方已知告警仅统计为 warning）；五类 SIGTERM harness 和停机专项均通过。
+
+### 10.3 回滚
+
+D2 原语、D3 owner completion、D4 接线、D5 harness 和 D6 门禁可按独立提交回滚。若线上发现
+某个 owner 的上游不可取消边界超过进程宽限期，保留无参 stop 作为静态析构前的二次
+收割路径；禁止以 `detach()` 作为快捷回滚，因为 worker 仍捕获 owner 对象，会违反
+「超预算路径不得析构活动线程所访问对象」退出门禁。
+
+### 10.4 P4-W3 退出结论
+
+P4-W3 的退出门禁全部满足：正常 SIGTERM 五类场景均能退出并保留逆序标记；阻塞
+HTTP 场景验证超预算返回后线程仍可安全二次收割；积压场景验证 drain 后再退出；
+polling/disconnect 场景验证取消通知打断等待；Debug、ASan、TSan 与架构门禁均通过。
+阶段推进到 P5-W1，后续重构目标转为 ProviderRegistry/Router 注入，P4 的 runtime
+lifecycle 语义保持冻结。

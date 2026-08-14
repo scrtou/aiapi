@@ -128,6 +128,10 @@ DROGON_TEST(Sinks_ResponsesJson_TextResponse)
     CHECK(cap.body["id"].asString() == "resp_1");
     CHECK(cap.body["output"].isArray());
     CHECK(cap.body["output"][0]["content"][0]["text"].asString() == "abc");
+    const auto record = sink.responseRecord();
+    REQUIRE(record.has_value());
+    CHECK(record->responseId == "resp_1");
+    CHECK(record->serializedJson.find("resp_1") != std::string::npos);
 }
 
 DROGON_TEST(Sinks_ResponsesJson_ToolCalls)
@@ -258,6 +262,10 @@ DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
     CHECK(stream.find("filesystem__read_file") == std::string::npos);
     CHECK(stream.find("\"tool_calls\"") == std::string::npos);
     CHECK(stream.find("\"type\":\"message\"") == std::string::npos);
+    const auto record = sink.responseRecord();
+    REQUIRE(record.has_value());
+    CHECK(record->responseId == "resp_codex_sse");
+    CHECK(record->serializedJson.find("function_call") != std::string::npos);
 }
 
 DROGON_TEST(Sinks_ChatSse_CloseOnStreamFailure_OnlyOnce)

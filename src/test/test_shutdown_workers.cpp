@@ -2,13 +2,13 @@
 
 #include <accountManager/accountManager.h>
 #include <apipoint/chaynsapi/chaynsThreadReaper.h>
-#include <apiManager/ApiManager.h>
 #include <apipoint/chaynsapi/ChaynsHttpTransport.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
+#include <infrastructure/provider/ProviderRegistry.h>
 #include <sessionManager/core/Session.h>
 
-#include "chayns_thread_stub_control.h"
+#include <test/chayns_thread_stub_control.h>
 
 #include <atomic>
 #include <chrono>
@@ -25,7 +25,7 @@ DROGON_TEST(ShutdownWorkers_LongWaitsAreInterruptibleAndStopsAreIdempotent)
         return duration_cast<milliseconds>(steady_clock::now() - start).count() < 1000;
     };
 
-    auto& accounts = AccountManager::getInstance();
+    AccountManager accounts;
     accounts.waitUpdateAccountTokenThread();
     accounts.checkAccountTypeThread();
     auto started = steady_clock::now();
@@ -33,17 +33,20 @@ DROGON_TEST(ShutdownWorkers_LongWaitsAreInterruptibleAndStopsAreIdempotent)
     CHECK(stoppedFast(started));
     accounts.stopBackgroundThreads();
 
-    auto *sessions = chatSession::getInstance();
-    sessions->setCleanupIntervalSeconds(3600);
-    sessions->startClearExpiredSession();
+    chatSession sessions;
+    sessions.setCleanupIntervalSeconds(3600);
+    sessions.startClearExpiredSession();
     started = steady_clock::now();
-    sessions->stopClearExpiredSession();
+    sessions.stopClearExpiredSession();
     CHECK(stoppedFast(started));
-    sessions->stopClearExpiredSession();
+    sessions.stopClearExpiredSession();
 
     chaynsThreadReaper::Options options;
     options.scanIntervalSeconds = 3600;
-    auto& reaper = chaynsThreadReaper::getInstance();
+    auto ledger = std::make_shared<chaynsThreadDbManager>();
+    chaynsThreadReaper reaper(ledger);
+    provider::ProviderRegistry registry;
+    reaper.setProviderRegistry(&registry);
     reaper.start(options);
     started = steady_clock::now();
     reaper.stop();
@@ -51,34 +54,37 @@ DROGON_TEST(ShutdownWorkers_LongWaitsAreInterruptibleAndStopsAreIdempotent)
     reaper.stop();
 }
 
-// 弱用例，如实标注其边界：本用例只能证明 stop(deadline) 的开关与幂等性，
-// 不能证明 deadline 被遵守——因为 reaper 的 deadline 语义按设计就只是一条告警，
-// 控制流全由 stopRequested_ 驱动（见 chaynsThreadReaper.h 的说明）。
-// 变异验证记录：把 stop(deadline) 改为忽略 deadline，本用例仍通过，这是预期的，
-// 因为此时两者行为确实等价。若日后 deadline 被赋予真实控制流，必须改强本用例。
+// 本用例覆盖 reaper 限时 stop 的正常路径、过期 deadline 的快速返回和二次收割。
+// 不可撤回的上游 DELETE 由独立的 spacing 用例覆盖；本用例不把网络时序混入断言。
 DROGON_TEST(ShutdownWorkers_ReaperDeadlineOverloadStopsAndIsIdempotent)
 {
     using namespace std::chrono;
 
     chaynsThreadReaper::Options options;
     options.scanIntervalSeconds = 3600;  // 若唤醒失效，join 会挂满一小时
-    auto& reaper = chaynsThreadReaper::getInstance();
+    auto ledger = std::make_shared<chaynsThreadDbManager>();
+    chaynsThreadReaper reaper(ledger);
+    provider::ProviderRegistry registry;
+    reaper.setProviderRegistry(&registry);
     reaper.start(options);
 
     const auto started = steady_clock::now();
-    reaper.stop(started + seconds(7));
+    (void)reaper.stop(started + seconds(7));
     CHECK(duration_cast<milliseconds>(steady_clock::now() - started).count() < 1000);
 
     // 已停机后重复调用（两个重载混用）都必须直接返回，不得二次 join。
-    reaper.stop(steady_clock::now() + seconds(7));
+    (void)reaper.stop(steady_clock::now() + seconds(7));
     reaper.stop();
 
     // 已超支的 deadline 是真实场景（前面几段吃光了预算）：不得把负数丢进等待原语，
     // 也不得因为超支就跳过 join 而泄漏线程。
     reaper.start(options);
     const auto second = steady_clock::now();
-    reaper.stop(second - seconds(3));
+    (void)reaper.stop(second - seconds(3));
     CHECK(duration_cast<milliseconds>(steady_clock::now() - second).count() < 1000);
+    // 过期预算可能在 worker 收到唤醒前就耗尽；限时路径会刻意留下
+    // joinable 线程，此处必须显式用无参重载收割，避免把残局带入后续用例。
+    reaper.stop();
 }
 
 namespace {
@@ -151,7 +157,8 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     // runOnce() 第一道闸门是 isEnabled()，它是头文件内联函数，
     // 链接期桩替换覆盖不到，且 enabled_ 默认 false。
     // 不打开它，删除循环永远不可达（这正是 D4 变异杀不死的根因）。
-    chaynsThreadDbManager::getInstance()->setEnabled(true);
+    auto threadDb = std::make_shared<chaynsThreadDbManager>();
+    threadDb->setEnabled(true);
 
     auto accountStore = std::make_shared<ReaperAccountStore>();
     Accountinfo_st account;
@@ -164,13 +171,15 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     account.status = AccountStatus::ACTIVE;
     accountStore->rows = {account};
 
-    auto& accounts = AccountManager::getInstance();
+    AccountManager accounts;
     accounts.setStore(accountStore);
     accounts.loadAccount();
 
     auto transport = std::make_shared<InstantDeleteTransport>();
-    auto provider = std::make_shared<chaynsapi>(transport);
-    ApiManager::getInstance().addApiInfo(std::make_shared<ApiInfo>("chaynsapi", provider));
+    auto provider = std::make_shared<chaynsapi>(
+        accounts, transport, chayns::makeRealChaynsClock(), threadDb);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerProvider("chaynsapi", provider));
 
     std::vector<chaynsThreadDbManager::ThreadRow> rows;
     for (int i = 0; i < 6; ++i) {
@@ -185,7 +194,8 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     options.scanIntervalSeconds = 3600;
     options.batchLimit = 10;
     options.deleteSpacingMs = 3000;  // 不可中断时单轮 ≥ 15s
-    auto& reaper = chaynsThreadReaper::getInstance();
+    chaynsThreadReaper reaper(threadDb);
+    reaper.setProviderRegistry(&registry);
     reaper.start(options);
 
     std::atomic<bool> passDone{false};
@@ -203,7 +213,7 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     REQUIRE(!chaynsThreadStubControl::instance().deletedIds().empty());
 
     const auto started = steady_clock::now();
-    reaper.stop(started + seconds(7));
+    (void)reaper.stop(started + seconds(7));
     pass.join();
     const auto elapsed = duration_cast<milliseconds>(steady_clock::now() - started);
 
@@ -211,7 +221,7 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     CHECK(elapsed.count() < 2000);
     CHECK(chaynsThreadStubControl::instance().deletedIds().size() < rows.size());
 
-    chaynsThreadDbManager::getInstance()->setEnabled(false);
+    threadDb->setEnabled(false);
     chaynsThreadStubControl::instance().reset();
 }
 
@@ -251,17 +261,15 @@ class CountingAccountTransport final : public account::IAccountHttpTransport
  *   · 但少了循环头检查，第一轮会先把 3 个探测路径全发出去才走到 break，
  *     transport 调用次数就从 0 变成 3。计数是唯一能分辨两者的观测点。
  *
- * 本用例无法建立「未停机时 calls > 0」的对照组：backgroundStopRequested_ 是
- * 单向粘滞标志（只在 stopBackgroundThreads 里 exchange(true)，全仓无复位路径），
- * 而同文件首个用例已经置位过它，整个测试二进制此后都处于停机态。
- * 非空转性因此只能靠变异验证保证，见文件末尾的记录。
+ * backgroundStopRequested_ 是单向粘滞标志，因此本用例先在自己的局部
+ * AccountManager 上请求停机，再观察循环不会再发出探测请求。
  */
 DROGON_TEST(ShutdownWorkers_ServerReachabilityRetryLoopStopsImmediately)
 {
     using namespace std::chrono;
 
-    auto& accounts = AccountManager::getInstance();
-    // 幂等调用，只为确保停机标志已置位——不依赖用例间的执行顺序。
+    AccountManager accounts;
+    // 幂等调用，只为确保本地 manager 的停机标志已置位。
     accounts.stopBackgroundThreads();
 
     auto transport = std::make_shared<CountingAccountTransport>();
@@ -309,7 +317,7 @@ DROGON_TEST(ShutdownWorkers_AccountTypeRefreshLoopStopsImmediately)
         store->rows.push_back(account);
     }
 
-    auto& accounts = AccountManager::getInstance();
+    AccountManager accounts;
     accounts.setStore(store);
     accounts.loadAccount();
     accounts.setHttpTransport(std::make_shared<CountingAccountTransport>());

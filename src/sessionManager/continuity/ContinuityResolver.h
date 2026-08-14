@@ -4,6 +4,7 @@
 #include <string>
 #include <sessionManager/contracts/GenerationRequest.h>
 #include <sessionManager/contracts/LegacySessionData.h>
+#include <domain/port/IResponseIndex.h>
 /**
  * @brief 会话连续性决策结果
  */
@@ -29,6 +30,9 @@ struct ContinuityDecision {
  */
 class ContinuityResolver {
 public:
+    ContinuityResolver(IResponseIndex& responseIndex, SessionTrackingMode mode)
+        : responseIndex_(responseIndex), mode_(mode) {}
+
     ContinuityDecision resolve(const GenerationRequest& req) const;
 
     static std::string generateNewSessionId();  // 生成格式：sess_<时间戳>_<随机串>
@@ -36,6 +40,8 @@ public:
 private:
     static std::string resolveHashSessionId(const GenerationRequest& req);
     static std::string resolveZeroWidthSessionId(const GenerationRequest& req);
+    IResponseIndex& responseIndex_;
+    SessionTrackingMode mode_;
 };
 
 #endif // 头文件保护结束

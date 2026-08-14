@@ -1,7 +1,6 @@
 #include <managedAccount/backends/ClassicProviderAccountBackend.h>
 
 #include <accountManager/AccountJsonCodec.h>
-#include <accountManager/accountManager.h>
 
 namespace
 {
@@ -20,10 +19,17 @@ bool splitClassicId(const std::string& id, std::string& apiName, std::string& us
 }
 }  // namespace
 
+ClassicProviderAccountBackend::ClassicProviderAccountBackend(
+    IAccountCatalog& accounts,
+    IAccountAdminCommands& commands)
+    : accounts_(&accounts), commands_(&commands)
+{
+}
+
 std::vector<ManagedAccountRecord> ClassicProviderAccountBackend::list()
 {
     std::vector<ManagedAccountRecord> records;
-    const auto accountList = AccountManager::getInstance().getAccountList();
+    const auto accountList = accounts_->listAccounts();
     for (const auto& [apiName, users] : accountList)
     {
         for (const auto& [userName, account] : users)
@@ -50,12 +56,18 @@ std::optional<ManagedAccountRecord> ClassicProviderAccountBackend::get(const std
     {
         return std::nullopt;
     }
-    std::shared_ptr<Accountinfo_st> account;
-    AccountManager::getInstance().getAccountByUserName(apiName, userName, account);
-    if (!account)
+    const auto accountList = accounts_->listAccounts();
+    const auto apiIt = accountList.find(apiName);
+    if (apiIt == accountList.end())
     {
         return std::nullopt;
     }
+    const auto accountIt = apiIt->second.find(userName);
+    if (accountIt == apiIt->second.end() || !accountIt->second)
+    {
+        return std::nullopt;
+    }
+    const auto& account = accountIt->second;
     ManagedAccountRecord record;
     record.id = id;
     record.kind = ManagedAccountKind::ClassicProviderAccount;
@@ -75,7 +87,7 @@ bool ClassicProviderAccountBackend::disable(const std::string& id, std::string* 
         if (errorMessage) *errorMessage = "invalid classic account id";
         return false;
     }
-    if (!AccountManager::getInstance().deleteAccountbyPost(apiName, userName))
+    if (!commands_->deleteAccountbyPost(apiName, userName))
     {
         if (errorMessage) *errorMessage = "classic account not found or failed to disable";
         return false;

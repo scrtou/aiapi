@@ -1,5 +1,5 @@
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <domain/port/IBackgroundExecutor.h>
 #include <algorithm>
 #include <sstream>
 
@@ -7,21 +7,18 @@ namespace {
 constexpr const char* kLogTag = "[chayns线程台账]";
 }
 
-std::shared_ptr<chaynsThreadDbManager> chaynsThreadDbManager::getInstance()
+void chaynsThreadDbManager::initialize()
 {
-    static std::shared_ptr<chaynsThreadDbManager> instance;
-    if (instance == nullptr) {
-        instance = std::make_shared<chaynsThreadDbManager>();
-        try {
-            instance->dbClient_ = drogon::app().getDbClient("aichatpg");
-            instance->detectDbType();
-            instance->enabled_ = (instance->dbClient_ != nullptr);
-        } catch (const std::exception& ex) {
-            LOG_WARN << kLogTag << " 获取数据库客户端失败，线程台账降级为纯内存: " << ex.what();
-            instance->enabled_ = false;
-        }
+    if (initialized_) return;
+    initialized_ = true;
+    try {
+        dbClient_ = drogon::app().getDbClient("aichatpg");
+        detectDbType();
+        enabled_ = (dbClient_ != nullptr);
+    } catch (const std::exception& ex) {
+        LOG_WARN << kLogTag << " 获取数据库客户端失败，线程台账降级为纯内存: " << ex.what();
+        enabled_ = false;
     }
-    return instance;
 }
 
 void chaynsThreadDbManager::detectDbType()
@@ -333,75 +330,86 @@ int chaynsThreadDbManager::purgeExhaustedThreads(int maxAttempts, std::string* e
     }
 }
 
-// ========================= 异步写穿入口 =========================
+// ========================= 异步写穿入口（injected executor）=========================
+
+void chaynsThreadDbManager::submitWrite(const char* taskName, std::function<void()> task)
+{
+    if (!executor_) {
+        // A missing executor is a wiring error, not a reason to revive the
+        // old global queue.  Preserve the request-path nonblocking contract
+        // and make the lost write explicit in logs.
+        LOG_ERROR << "[chayns线程DB] executor 未注入，数据未落盘：" << taskName;
+        return;
+    }
+    const auto result = executor_->submit(taskName, std::move(task));
+    if (result != TaskSubmitResult::Accepted) {
+        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(result)
+                  << ")，数据未落盘：" << taskName;
+    }
+}
 
 void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow& row)
 {
     if (!enabled_ || row.threadId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.upsert", [self, row]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘：chaynsThread.upsert";
+        return;
+    }
+    submitWrite("chaynsThread.upsert", [self, row]() {
         self->upsertThread(row);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：chaynsThread.upsert";
-    }
 }
 
 void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string& sessionId)
 {
     if (!enabled_ || sessionId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.detach", [self, sessionId]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘：chaynsThread.detach";
+        return;
+    }
+    submitWrite("chaynsThread.detach", [self, sessionId]() {
         self->detachThreadBySessionId(sessionId);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：chaynsThread.detach";
-    }
 }
 
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string& oldSessionId,
                                                        const std::string& newSessionId)
 {
     if (!enabled_ || oldSessionId.empty() || newSessionId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.rotateSession", [self, oldSessionId, newSessionId]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘：chaynsThread.rotateSession";
+        return;
+    }
+    submitWrite("chaynsThread.rotateSession", [self, oldSessionId, newSessionId]() {
         self->updateThreadSessionId(oldSessionId, newSessionId);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：chaynsThread.rotateSession";
-    }
 }
 
 void chaynsThreadDbManager::asyncTouchThreadBySessionId(const std::string& sessionId, int64_t nowEpochSeconds)
 {
     if (!enabled_ || sessionId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.touch", [self, sessionId, nowEpochSeconds]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘：chaynsThread.touch";
+        return;
+    }
+    submitWrite("chaynsThread.touch", [self, sessionId, nowEpochSeconds]() {
         self->touchThreadBySessionId(sessionId, nowEpochSeconds);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：chaynsThread.touch";
-    }
 }
 
 void chaynsThreadDbManager::asyncDeleteThread(const std::string& threadId)
 {
     if (!enabled_ || threadId.empty()) return;
-    auto self = getInstance();
-    const auto r = BackgroundTaskQueue::instance().enqueue("chaynsThread.delete", [self, threadId]() {
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘：chaynsThread.delete";
+        return;
+    }
+    submitWrite("chaynsThread.delete", [self, threadId]() {
         self->deleteThread(threadId);
     });
-    if (r != EnqueueResult::Accepted) {
-        // 写穿任务被丢弃：内存态已变更而磁盘态未跟进，必须可观测。
-        LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(r)
-                  << ")，数据未落盘：chaynsThread.delete";
-    }
 }

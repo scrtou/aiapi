@@ -46,13 +46,61 @@ bool isDuplicateColumnError(std::string message)
 }
 }  // namespace
 
+void RetoolWorkspaceDbManager::initialize()
+{
+    if (initialized_)
+    {
+        return;
+    }
+    initialized_ = true;
+
+    try
+    {
+        dbClient_ = drogon::app().getDbClient("aichatpg");
+        detectDbType();
+        if (!dbClient_)
+        {
+            LOG_ERROR << "[RetoolWorkspaceDbManager] 获取数据库客户端失败";
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        dbClient_.reset();
+        LOG_ERROR << "[RetoolWorkspaceDbManager] 初始化数据库客户端失败: " << ex.what();
+    }
+}
+
+bool RetoolWorkspaceDbManager::hasDbClient(std::string* errorMessage) const
+{
+    if (dbClient_)
+    {
+        return true;
+    }
+
+    if (errorMessage)
+    {
+        *errorMessage = initialized_
+                            ? "RetoolWorkspaceDbManager database client is unavailable"
+                            : "RetoolWorkspaceDbManager must be initialized by AppWiring before use";
+    }
+    return false;
+}
+
 void RetoolWorkspaceDbManager::detectDbType()
 {
-    auto customConfig = drogon::app().getCustomConfig();
     std::string dbTypeStr = "postgresql";
-    if (customConfig.isMember("dbtype"))
+    try
     {
-        dbTypeStr = customConfig["dbtype"].asString();
+        const auto customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isMember("dbtype"))
+        {
+            dbTypeStr = customConfig["dbtype"].asString();
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        LOG_WARN << "[RetoolWorkspaceDbManager] 读取数据库类型配置失败，使用 PostgreSQL 默认值: "
+                 << ex.what();
     }
     std::transform(dbTypeStr.begin(), dbTypeStr.end(), dbTypeStr.begin(), ::tolower);
     if (dbTypeStr == "sqlite3" || dbTypeStr == "sqlite")
@@ -172,6 +220,11 @@ std::string RetoolWorkspaceDbManager::createTableSql() const
 
 bool RetoolWorkspaceDbManager::ensureTable(std::string* errorMessage)
 {
+    if (!hasDbClient(errorMessage))
+    {
+        return false;
+    }
+
     try
     {
         dbClient_->execSqlSync(createTableSql());

@@ -131,15 +131,6 @@ CREATE TABLE IF NOT EXISTS request_agg_hour (
 )
 )";
 
-std::shared_ptr<ErrorStatsDbManager> ErrorStatsDbManager::getInstance() {
-    static std::shared_ptr<ErrorStatsDbManager> instance = []() {
-        auto inst = std::make_shared<ErrorStatsDbManager>();
-        inst->init();
-        return inst;
-    }();
-    return instance;
-}
-
 void ErrorStatsDbManager::detectDbType() {
     auto customConfig = drogon::app().getCustomConfig();
     std::string dbTypeStr = "postgresql";

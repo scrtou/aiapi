@@ -2,10 +2,15 @@
 
 #include <controllers/RateLimitFilter.h>
 #include <drogon/HttpController.h>
+#include <domain/port/IAiApiUseCase.h>
 
 class AiApiController : public drogon::HttpController<AiApiController>
 {
   public:
+    // Drogon owns controller instances, so AppWiring publishes the one
+    // controller-facing use case as a non-owning static binding.
+    static void setUseCase(aiapi::IAiApiUseCase* useCase);
+
     METHOD_LIST_BEGIN
     // AI 核心 API（不添加 AdminAuthFilter，保持原有认证方式）
     ADD_METHOD_TO(AiApiController::chaynsapichat, "/chaynsapi/v1/chat/completions", drogon::Post, "RateLimitFilter");
@@ -27,7 +32,6 @@ class AiApiController : public drogon::HttpController<AiApiController>
     ADD_METHOD_TO(AiApiController::responsesDelete, "/retoolapi/v1/responses/{1}", drogon::Delete);
     METHOD_LIST_END
 
-
     void chaynsapichat(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void chaynsapimodels(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void retiredNexos(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
@@ -37,7 +41,9 @@ class AiApiController : public drogon::HttpController<AiApiController>
     void responsesGet(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback, std::string responseId);
     void responsesDelete(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback, std::string responseId);
 
-
     std::string generateClientId(const drogon::HttpRequestPtr &req);
     bool isCreateNewSession(const drogon::HttpRequestPtr &req);
+
+  private:
+    static aiapi::IAiApiUseCase* useCase_;
 };

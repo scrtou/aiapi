@@ -5,9 +5,14 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <platform/ThreadJoin.h>
+#include <domain/port/IProviderRegistry.h>
+
+class chaynsThreadDbManager;
 
 /**
  * @brief chayns 上游线程回收器
@@ -36,7 +41,14 @@ public:
         int deleteSpacingMs     = 200;   ///< 相邻上游删除请求间隔，避免触发风控
     };
 
-    static chaynsThreadReaper& getInstance();
+    /// Thread ledger is supplied by the composition root.  The reaper never
+    /// performs a static store lookup, so its lifetime is explicit and test
+    /// fixtures can use an isolated ledger instance.
+    explicit chaynsThreadReaper(std::shared_ptr<chaynsThreadDbManager> threadDb);
+    ~chaynsThreadReaper();
+
+    /// Composition-root injection; the reaper never performs a static lookup.
+    void setProviderRegistry(IProviderRegistry* registry) { providerRegistry_ = registry; }
 
     /// 幂等：重复调用只会启动一个线程
     void start(const Options& options);
@@ -51,17 +63,17 @@ public:
      * 独享的时长——若各段各自 now()+X，总时长就会累加成 N 倍。
      *
      * 能保证的：睡眠中的 worker 立即被唤醒；逐行删除循环在下一行前退出；
-     * 相邻删除之间的限速等待可被打断。以上三者都由 stopRequested_ 驱动，
-     * 与 stop() 完全一致——deadline 本身不参与控制流。
+     * 相邻删除之间的限速等待可被打断；停机侧以完成通知和 joinUntil
+     * 共享同一个绝对 deadline，不会无限 join。
      * 不能保证的：一次已发出的上游 DELETE 无法撤回，它最长占用
      * chayns::kUpstreamRequestTimeoutSeconds（30s）。预算小于该值时本函数会告警，
      * 让超支在日志里留痕，而不是假装守住了预算。
      *
-     * 因此本重载相对 stop() 的唯一实际差异就是那条告警。曾经还有一个
-     * 「删除循环额外检查 now() 是否越过 deadline」的分支，已删除：deadline 只可能
-     * 与 stopRequested_ 在同一把锁内同时置位，该分支永远不会独立成立，是死代码。
+     * 因此本重载相对 stop() 的实际差异是限时汇合：超预算返回 false、保持线程
+     * joinable，调用方可稍后用无参 stop() 安全收割；那条不可撤回的上游 DELETE
+     * 仍会按其自身硬上限完成，不会被 detach。
      */
-    void stop(std::chrono::steady_clock::time_point deadline);
+    [[nodiscard]] bool stop(std::chrono::steady_clock::time_point deadline);
 
     /// 立即执行一轮回收（同步），返回成功删除的上游线程数；供测试与运维触发
     int runOnce();
@@ -69,15 +81,13 @@ public:
     Options getOptions() const;
 
 private:
-    chaynsThreadReaper() = default;
-    ~chaynsThreadReaper();
     chaynsThreadReaper(const chaynsThreadReaper&) = delete;
     chaynsThreadReaper& operator=(const chaynsThreadReaper&) = delete;
 
     void loop();
 
     /// stop() 与 stop(deadline) 的共同实现；nullopt 表示不限时。
-    void stopInternal(std::optional<std::chrono::steady_clock::time_point> deadline);
+    [[nodiscard]] bool stopInternal(std::optional<std::chrono::steady_clock::time_point> deadline);
 
     /// 限速等待：可被停机唤醒打断，替代裸 sleep_for。
     void interruptibleSleepFor(std::chrono::milliseconds duration);
@@ -89,6 +99,9 @@ private:
     std::condition_variable wakeCv_;
     std::atomic<bool>       running_{false};
     std::atomic<bool>       stopRequested_{false};
+    platform::ThreadCompletionPtr workerDone_;
+    IProviderRegistry* providerRegistry_ = nullptr;
+    std::shared_ptr<chaynsThreadDbManager> threadDb_;
 };
 
 #endif  // CHAYNS_THREAD_REAPER_H

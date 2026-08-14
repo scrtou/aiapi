@@ -93,8 +93,8 @@ P03-production-targets.md
 5. 将过程产物及时写入 `work-products/Pxx-*.md`；
 6. 每个代码切片执行对应单测、全量测试和架构门禁；
 7. 在工作产物中记录实际命令、结果、遗留问题和回滚方式；
-8. 只有阶段退出门禁全部通过，才把工作项标为 `DONE`；
-9. 最后修改 `migration-plan.md` 和 `refactor-workbook.md`的当前阶段，进入下一阶段。
+8. 只有阶段退出门禁全部通过，才把工作项标为 `DONE`，并进行本次git提交；
+9. 最后修改 `migration-plan.md` 和 `refactor-workbook.md`的当前阶段，，进入下一阶段。
 
 ## 4. 文档冲突时的优先级
 

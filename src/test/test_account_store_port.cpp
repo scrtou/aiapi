@@ -62,9 +62,10 @@ DROGON_TEST(AccountStorePortReadUsesInjectedStore)
 {
     auto fake = std::make_shared<FakeAccountStore>();
     fake->statusToReturn = AccountStatus::REGISTERING;
-    AccountManager::getInstance().setStore(fake);
+    AccountManager manager;
+    manager.setStore(fake);
 
-    CHECK(AccountManager::getInstance().isAccountRegisteringByUsername("__port_user__") == true);
+    CHECK(manager.isAccountRegisteringByUsername("__port_user__") == true);
     // Nicht nur der Rueckgabewert: der Aufruf muss wirklich beim Fake ankommen.
     CHECK(fake->statusByUsernameCalls == 1);
     CHECK(fake->lastUserName == "__port_user__");
@@ -72,7 +73,7 @@ DROGON_TEST(AccountStorePortReadUsesInjectedStore)
 
     // Der Wert wird tatsaechlich uebernommen, nicht zufaellig gleich.
     fake->statusToReturn = "active";
-    CHECK(AccountManager::getInstance().isAccountRegisteringByUsername("__port_user__") == false);
+    CHECK(manager.isAccountRegisteringByUsername("__port_user__") == false);
     CHECK(fake->statusByUsernameCalls == 2);
 }
 
@@ -80,8 +81,9 @@ DROGON_TEST(AccountStorePortReadUsesInjectedStore)
 // Pendant zu ChannelStorePortFallsBackWhenNotInjected aus Pilot B.
 DROGON_TEST(AccountStorePortFallsBackWhenNotInjected)
 {
-    AccountManager::getInstance().setStore(nullptr);
-    CHECK(AccountManager::getInstance().isAccountRegisteringByUsername("__no_store__") == false);
+    AccountManager manager;
+    manager.setStore(nullptr);
+    CHECK(manager.isAccountRegisteringByUsername("__no_store__") == false);
 }
 
 
@@ -127,10 +129,11 @@ class FakeChannelStoreForAccount : public IChannelStore
 DROGON_TEST(AccountManagerUsesInjectedChannelStore)
 {
     auto fake = std::make_shared<FakeChannelStoreForAccount>();
-    AccountManager::getInstance().setChannelStore(fake);
+    AccountManager manager;
+    manager.setChannelStore(fake);
 
     // 空列表 -> 必定走「未找到渠道」早退，不会触达 autoRegisterAccount。
-    AccountManager::getInstance().checkChannelAccountCount("__kein_kanal__");
+    manager.checkChannelAccountCount("__kein_kanal__");
 
     CHECK(fake->listCalls == 1);
 }
@@ -138,7 +141,8 @@ DROGON_TEST(AccountManagerUsesInjectedChannelStore)
 // 未注入 channelStore 时安全退化：不崩溃，且不误入补注册路径。
 DROGON_TEST(AccountManagerChannelStoreFallsBackWhenNotInjected)
 {
-    AccountManager::getInstance().setChannelStore(nullptr);
-    AccountManager::getInstance().checkChannelAccountCount("__kein_kanal__");
+    AccountManager manager;
+    manager.setChannelStore(nullptr);
+    manager.checkChannelAccountCount("__kein_kanal__");
     CHECK(true);   // 走到这里即证明未崩溃
 }

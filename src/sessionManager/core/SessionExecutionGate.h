@@ -7,6 +7,7 @@
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 /**
  * @brief 会话执行门控
@@ -20,60 +21,9 @@
  * 参考设计文档: plans/aiapi-refactor-design.md 第 9 节
  */
 
+#include <domain/port/IExecutionGate.h>
+
 namespace session {
-
-/**
- * @brief 取消令牌
- * 
- * 用于请求级取消标记。请求执行过程中可以检查是否已被取消。
- */
-class CancellationToken {
-public:
-    CancellationToken() : cancelled_(false) {}
-    
-    /**
-     * @brief 请求取消
-     */
-    void cancel() {
-        cancelled_.store(true, std::memory_order_release);
-    }
-    
-    /**
-     * @brief 检查是否已取消
-     */
-    bool isCancelled() const {
-        return cancelled_.load(std::memory_order_acquire);
-    }
-    
-    /**
-     * @brief 重置取消状态
-     */
-    void reset() {
-        cancelled_.store(false, std::memory_order_release);
-    }
-    
-private:
-    std::atomic<bool> cancelled_;
-};
-
-using CancellationTokenPtr = std::shared_ptr<CancellationToken>;
-
-/**
- * @brief 并发策略
- */
-enum class ConcurrencyPolicy {
-    RejectConcurrent,   // 拒绝并发请求
-    CancelPrevious      // 取消之前的请求
-};
-
-/**
- * @brief 执行门控结果
- */
-enum class GateResult {
-    Acquired,           // 成功获取执行权
-    Rejected,           // 被拒绝（已有请求在执行）
-    Cancelled           // 之前的请求被取消
-};
 
 /**
  * @brief 会话执行槽位
@@ -93,18 +43,12 @@ using SessionSlotPtr = std::shared_ptr<SessionSlot>;
 /**
  * @brief 会话执行门控
  * 
- * 单例模式，管理所有会话的执行状态
+ * 由 composition root 持有，管理所有会话的执行状态。
  */
-class SessionExecutionGate {
+class SessionExecutionGate final : public IExecutionGate {
 public:
-    /**
-     * @brief 获取单例实例
-     */
-    static SessionExecutionGate& getInstance() {
-        static SessionExecutionGate instance;
-        return instance;
-    }
-    
+    SessionExecutionGate() = default;
+    ~SessionExecutionGate() override = default;
     /**
      * @brief 尝试获取执行权
      * 
@@ -117,7 +61,7 @@ public:
         const std::string& sessionKey,
         ConcurrencyPolicy policy,
         CancellationTokenPtr& outToken
-    ) {
+    ) override {
         SessionSlotPtr slot = getOrCreateSlot(sessionKey);
         
         // 尝试获取槽位锁
@@ -151,7 +95,7 @@ public:
      * 
      * @param sessionKey 会话标识
      */
-    void release(const std::string& sessionKey) {
+    void release(const std::string& sessionKey) override {
         std::lock_guard<std::mutex> mapLock(mapMutex_);
         auto it = slots_.find(sessionKey);
         if (it != slots_.end()) {
@@ -166,7 +110,7 @@ public:
      * @param sessionKey 会话标识
      * @return true 正在执行
      */
-    bool isExecuting(const std::string& sessionKey) const {
+    bool isExecuting(const std::string& sessionKey) const override {
         std::lock_guard<std::mutex> mapLock(mapMutex_);
         auto it = slots_.find(sessionKey);
         if (it != slots_.end()) {
@@ -200,8 +144,6 @@ public:
     }
     
 private:
-    SessionExecutionGate() = default;
-    ~SessionExecutionGate() = default;
     
     // 禁用拷贝
     SessionExecutionGate(const SessionExecutionGate&) = delete;
@@ -233,18 +175,17 @@ private:
 class ExecutionGuard {
 public:
     ExecutionGuard(
+        IExecutionGate& gate,
         const std::string& sessionKey,
         ConcurrencyPolicy policy = ConcurrencyPolicy::RejectConcurrent
-    ) : sessionKey_(sessionKey), acquired_(false) {
-        result_ = SessionExecutionGate::getInstance().tryAcquire(
-            sessionKey, policy, token_
-        );
+    ) : gate_(gate), sessionKey_(sessionKey), acquired_(false) {
+        result_ = gate_.tryAcquire(sessionKey, policy, token_);
         acquired_ = (result_ == GateResult::Acquired);
     }
     
     ~ExecutionGuard() {
         if (acquired_) {
-            SessionExecutionGate::getInstance().release(sessionKey_);
+            gate_.release(sessionKey_);
         }
     }
     
@@ -254,7 +195,8 @@ public:
     
     // 允许移动
     ExecutionGuard(ExecutionGuard&& other) noexcept
-        : sessionKey_(std::move(other.sessionKey_)),
+        : gate_(other.gate_),
+          sessionKey_(std::move(other.sessionKey_)),
           token_(std::move(other.token_)),
           result_(other.result_),
           acquired_(other.acquired_) {
@@ -284,6 +226,7 @@ public:
     }
     
 private:
+    IExecutionGate& gate_;
     std::string sessionKey_;
     CancellationTokenPtr token_;
     GateResult result_;

@@ -1,31 +1,42 @@
 #include <controllers/ChannelController.h>
 #include <controllers/codecs/ChannelJsonCodec.h>
 #include <controllers/ControllerUtils.h>
-#include <channelManager/channelManager.h>
-#include <accountManager/accountManager.h>
-#include <utils/BackgroundTaskQueue.h>
-#include <domain/policy/RetiredProviderPolicy.h>
 
 using namespace drogon;
 
+IChannelAdminUseCase* ChannelController::useCase_ = nullptr;
+
+void ChannelController::setUseCase(IChannelAdminUseCase* channels)
+{
+    useCase_ = channels;
+}
+
 namespace {
 
-bool isBuiltInChannelName(const std::string& name)
+void logRecountRejection(const char* operation, const ChannelAdminResult& result)
 {
-    return name == "chaynsapi" || name == "retoolapi";
+    if (result.succeeded() && result.recountSubmission != TaskSubmitResult::Accepted) {
+        // The channel write is already committed.  Preserve that successful
+        // HTTP result while surfacing the follow-up reconciliation rejection.
+        LOG_WARN << "[渠道Ctrl] " << operation << "后账号数核算任务入队被拒("
+                 << toString(result.recountSubmission) << ")，渠道已写入："
+                 << result.channel.channelName;
+    }
 }
 
 }  // namespace
 
 void ChannelController::channelList(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
 {
+    (void)req;
     LOG_INFO << "[渠道Ctrl] 获取渠道信息";
 
     try {
-        auto channelList = ChannelManager::getInstance().getChannelList();
+        const auto channelList = useCase_ ? useCase_->listChannels()
+                                          : std::list<Channelinfo_st>{};
         Json::Value response(Json::arrayValue);
 
-        for (auto &channel : channelList) {
+        for (const auto &channel : channelList) {
             response.append(channelcodec::toJson(channel, true));
         }
 
@@ -54,45 +65,27 @@ void ChannelController::channelAdd(const HttpRequestPtr &req, std::function<void
         }
 
         Json::Value response(Json::arrayValue);
-
         for (const auto &reqBody : reqItems)
         {
-            Channelinfo_st channelInfo = channelcodec::fromJson(reqBody);
+            const Channelinfo_st channel = channelcodec::fromJson(reqBody);
+            const ChannelAdminResult result = useCase_ ? useCase_->add(channel)
+                                                       : ChannelAdminResult{};
 
             Json::Value responseItem;
-            responseItem["channelname"] = channelInfo.channelName;
-
-            if (retired_provider::isRetiredProviderKey(channelInfo.channelName) ||
-                retired_provider::isRetiredProviderKey(channelInfo.channelType)) {
+            responseItem["channelname"] = channel.channelName;
+            if (result.outcome == ChannelAdminOutcome::ProviderRetired) {
                 responseItem["status"] = "failed";
                 responseItem["code"] = "provider_retired";
                 responseItem["message"] = "Retired provider channels cannot be created";
-            } else if (ChannelManager::getInstance().addChannel(channelInfo)) {
+            } else if (result.succeeded()) {
                 responseItem["status"] = "success";
                 responseItem["message"] = "Channel added successfully";
+                logRecountRejection("创建渠道", result);
             } else {
                 responseItem["status"] = "failed";
                 responseItem["message"] = "Failed to add channel";
             }
             response.append(responseItem);
-        }
-
-        for (const auto &reqBody : reqItems)
-        {
-            const auto channelName = reqBody.get("channelname", "").asString();
-            if (!channelName.empty())
-            {
-                // 渠道已成功入库，账号数核算只是附带的后台修正；入队失败
-                // 不影响本次创建结果，故仅告警，不改写响应状态。
-                const auto counted = BackgroundTaskQueue::instance().enqueue(
-                    "channelAdd_checkCounts_" + channelName, [channelName](){
-                        AccountManager::getInstance().checkChannelAccountCount(channelName);
-                    });
-                if (counted != EnqueueResult::Accepted) {
-                    LOG_WARN << "[渠道Ctrl] 账号数核算任务入队被拒("
-                             << toString(counted) << ")，渠道已创建：" << channelName;
-                }
-            }
         }
 
         ctl::sendJson(callback, response);
@@ -110,58 +103,31 @@ void ChannelController::channelUpdate(const HttpRequestPtr &req, std::function<v
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
 
     try {
-        const auto& reqBody = *jsonPtr;
-        Json::Value response;
+        const Channelinfo_st channel = channelcodec::fromJson(*jsonPtr);
+        const ChannelAdminResult result = useCase_ ? useCase_->update(channel)
+                                                   : ChannelAdminResult{};
 
-        // 解析渠道信息
-        Channelinfo_st channelInfo = channelcodec::fromJson(reqBody);
-
-        if (retired_provider::isRetiredProviderKey(channelInfo.channelName) ||
-            retired_provider::isRetiredProviderKey(channelInfo.channelType)) {
+        if (result.outcome == ChannelAdminOutcome::ProviderRetired) {
             ctl::sendError(callback, k410Gone, "provider_retired",
                            "Retired provider channels cannot be updated");
             return;
         }
-
-        if (isBuiltInChannelName(channelInfo.channelName)) {
-            Channelinfo_st existing;
-            bool found = false;
-            for (const auto& channel : ChannelManager::getInstance().getChannelList()) {
-                if (channel.channelName == channelInfo.channelName) {
-                    existing = channel;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                ctl::sendError(callback, k404NotFound, "not_found", "Built-in channel not found");
-                return;
-            }
-
-            channelInfo.channelType = existing.channelType;
-            channelInfo.channelUrl = existing.channelUrl;
-            channelInfo.channelKey = existing.channelKey;
-
-            LOG_INFO << "[渠道Ctrl] 内置渠道仅更新部分字段: " << channelInfo.channelName;
+        if (result.outcome == ChannelAdminOutcome::ServiceUnavailable) {
+            ctl::sendError(callback, k503ServiceUnavailable, "service_unavailable",
+                           "Channel service is not available");
+            return;
+        }
+        if (result.outcome == ChannelAdminOutcome::BuiltInChannelNotFound) {
+            ctl::sendError(callback, k404NotFound, "not_found", "Built-in channel not found");
+            return;
         }
 
-        // 更新数据库
-        if (ChannelManager::getInstance().updateChannel(channelInfo)) {
+        Json::Value response;
+        if (result.succeeded()) {
             response["status"] = "success";
             response["message"] = "Channel updated successfully";
-            response["id"] = channelInfo.id;
-
-            // 同上：更新已提交，核算任务被拒不改写响应。
-            const auto counted = BackgroundTaskQueue::instance().enqueue(
-                "channelUpdate_checkCounts_" + channelInfo.channelName,
-                [channelName = channelInfo.channelName](){
-                    AccountManager::getInstance().checkChannelAccountCount(channelName);
-                });
-            if (counted != EnqueueResult::Accepted) {
-                LOG_WARN << "[渠道Ctrl] 账号数核算任务入队被拒("
-                         << toString(counted) << ")，渠道已更新：" << channelInfo.channelName;
-            }
+            response["id"] = result.channel.id;
+            logRecountRejection("更新渠道", result);
         } else {
             response["status"] = "failed";
             response["message"] = "Failed to update channel";
@@ -193,15 +159,15 @@ void ChannelController::channelDelete(const HttpRequestPtr &req, std::function<v
         }
 
         Json::Value response(Json::arrayValue);
-
         for (const auto &reqBody : reqItems)
         {
-            int channelId = reqBody["id"].asInt();
+            const int channelId = reqBody["id"].asInt();
+            const ChannelAdminResult result = useCase_ ? useCase_->remove(channelId)
+                                                       : ChannelAdminResult{};
 
             Json::Value responseItem;
             responseItem["id"] = channelId;
-
-            if (ChannelManager::getInstance().deleteChannel(channelId)) {
+            if (result.succeeded()) {
                 responseItem["status"] = "success";
                 responseItem["message"] = "Channel deleted successfully";
             } else {
@@ -225,17 +191,19 @@ void ChannelController::channelUpdateStatus(const HttpRequestPtr &req, std::func
     if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
 
     try {
-        std::string channelName = (*jsonPtr)["channelname"].asString();
-        bool status = (*jsonPtr)["status"].asBool();
+        const std::string channelName = (*jsonPtr)["channelname"].asString();
+        const bool status = (*jsonPtr)["status"].asBool();
+        const ChannelAdminResult result = useCase_
+            ? useCase_->updateStatus(channelName, status) : ChannelAdminResult{};
 
-        if (retired_provider::isRetiredProviderKey(channelName)) {
+        if (result.outcome == ChannelAdminOutcome::ProviderRetired) {
             ctl::sendError(callback, k410Gone, "provider_retired",
                            "Retired provider channel status cannot be updated");
             return;
         }
 
         Json::Value response;
-        if (ChannelManager::getInstance().updateChannelStatus(channelName, status)) {
+        if (result.succeeded()) {
             response["status"] = "success";
             response["message"] = "Channel status updated successfully";
         } else {

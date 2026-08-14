@@ -5,6 +5,8 @@
 #include <sessionManager/contracts/LegacySessionData.h>
 #include <drogon/HttpRequest.h>
 #include <json/json.h>
+#include <domain/port/IAccountSettingsQuery.h>
+#include <domain/model/AiApiData.h>
 
 /**
  * @brief 请求适配器
@@ -16,6 +18,9 @@
  */
 class RequestAdapters {
 public:
+    static void setTrackingMode(SessionTrackingMode mode) { trackingMode_ = mode; }
+    static void setAccountSettingsQuery(IAccountSettingsQuery* query)
+    { accountSettings_ = query; }
     /**
      * @brief 从 Chat Completions API 请求构建 GenerationRequest
      * 
@@ -30,6 +35,13 @@ public:
      */
     static GenerationRequest buildGenerationRequestFromChat(
         const drogon::HttpRequestPtr& req
+    );
+
+    /// Same normalization entry point for the controller-facing AI use case.
+    /// HTTP metadata is copied into a value object before background admission.
+    static GenerationRequest buildGenerationRequestFromChat(
+        const Json::Value& requestBody,
+        const aiapi::RequestHeaders& headers
     );
     
     /**
@@ -49,15 +61,22 @@ public:
     static GenerationRequest buildGenerationRequestFromResponses(
         const drogon::HttpRequestPtr& req
     );
+
+    static GenerationRequest buildGenerationRequestFromResponses(
+        const Json::Value& requestBody,
+        const aiapi::RequestHeaders& headers
+    );
     
 private:
+    static SessionTrackingMode trackingMode_;
+    static IAccountSettingsQuery* accountSettings_;
     /**
      * @brief 从 HTTP 请求中提取客户端信息
      * 
      * @param req HTTP 请求
      * @return Json::Value 客户端信息
      */
-    static Json::Value extractClientInfo(const drogon::HttpRequestPtr& req);
+    static Json::Value extractClientInfo(const aiapi::RequestHeaders& headers);
     
     /**
      * @brief 解析 Chat API 的 messages 数组

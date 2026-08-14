@@ -21,7 +21,7 @@
  * - Completed.usage -> 记录 usage（如果有）
  * - Error -> 构建 error 响应并设置 HTTP 状态码
  */
-class ResponsesJsonSink : public IResponseSink {
+class ResponsesJsonSink : public IResponseSink, public IResponsePersistenceSink {
 public:
     using ResponseCallback = std::function<void(const Json::Value&, int statusCode)>;
 
@@ -47,6 +47,10 @@ public:
     std::string getSinkType() const override { return "ResponsesJsonSink"; }
 
     const std::string& getCollectedText() const { return collectedText_; }
+    std::optional<ResponsePersistenceRecord> responseRecord() const override
+    {
+        return responseRecord_;
+    }
 
 private:
     Json::Value buildResponse();
@@ -71,6 +75,7 @@ private:
     std::string errorType_;
 
     bool closed_ = false;
+    std::optional<ResponsePersistenceRecord> responseRecord_;
 };
 
 #endif // 头文件保护结束

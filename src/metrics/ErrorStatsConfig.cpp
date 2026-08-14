@@ -1,12 +1,7 @@
 #include <metrics/ErrorStatsConfig.h>
 #include <drogon/drogon.h>
-#include <mutex>
 
 namespace metrics {
-
-// 全局配置实例
-static ErrorStatsConfig g_config;
-static std::once_flag g_initFlag;
 
 ErrorStatsConfig ErrorStatsConfig::loadFromJson(const Json::Value& config) {
     ErrorStatsConfig cfg;
@@ -90,21 +85,6 @@ ErrorStatsConfig ErrorStatsConfig::loadFromJson(const Json::Value& config) {
              << ", queueCapacity=" << cfg.queueCapacity;
     
     return cfg;
-}
-
-ErrorStatsConfig& ErrorStatsConfig::getInstance() {
-    return g_config;
-}
-
-void ErrorStatsConfig::initFromApp() {
-    std::call_once(g_initFlag, []() {
-        const auto& customConfig = drogon::app().getCustomConfig();
-        if (customConfig.isMember("error_stats")) {
-            g_config = loadFromJson(customConfig["error_stats"]);
-        } else {
-            LOG_WARN << "[错误统计配置] custom_config.error_stats 未找到，使用默认配置";
-        }
-    });
 }
 
 } // 命名空间结束

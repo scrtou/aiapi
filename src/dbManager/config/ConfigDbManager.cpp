@@ -1,13 +1,51 @@
 #include <dbManager/config/ConfigDbManager.h>
 #include <algorithm>
 
+void ConfigDbManager::initialize()
+{
+    if (initialized_) {
+        return;
+    }
+    initialized_ = true;
+
+    try {
+        dbClient_ = drogon::app().getDbClient("aichatpg");
+        detectDbType();
+        if (!dbClient_) {
+            LOG_ERROR << "[ConfigDbManager] 获取数据库客户端失败";
+        }
+    } catch (const std::exception& ex) {
+        dbClient_.reset();
+        LOG_ERROR << "[ConfigDbManager] 初始化数据库客户端失败: " << ex.what();
+    }
+}
+
+bool ConfigDbManager::hasDbClient(std::string* errorMessage) const
+{
+    if (dbClient_) {
+        return true;
+    }
+
+    if (errorMessage) {
+        *errorMessage = initialized_
+                            ? "ConfigDbManager database client is unavailable"
+                            : "ConfigDbManager must be initialized by AppWiring before use";
+    }
+    return false;
+}
+
 void ConfigDbManager::detectDbType()
 {
-    auto customConfig = drogon::app().getCustomConfig();
     std::string dbTypeStr = "postgresql";
 
-    if (customConfig.isMember("dbtype")) {
-        dbTypeStr = customConfig["dbtype"].asString();
+    try {
+        const auto customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isMember("dbtype")) {
+            dbTypeStr = customConfig["dbtype"].asString();
+        }
+    } catch (const std::exception& ex) {
+        LOG_WARN << "[ConfigDbManager] 读取数据库类型配置失败，使用 PostgreSQL 默认值: "
+                 << ex.what();
     }
 
     std::transform(dbTypeStr.begin(), dbTypeStr.end(), dbTypeStr.begin(), ::tolower);
@@ -54,10 +92,7 @@ std::string ConfigDbManager::getCreateTableSql() const
 
 bool ConfigDbManager::ensureTable(std::string* errorMessage)
 {
-    if (!dbClient_) {
-        if (errorMessage) {
-            *errorMessage = "未获取到数据库客户端";
-        }
+    if (!hasDbClient(errorMessage)) {
         return false;
     }
 
@@ -74,10 +109,7 @@ bool ConfigDbManager::ensureTable(std::string* errorMessage)
 
 std::optional<std::string> ConfigDbManager::getValue(const std::string& key, std::string* errorMessage)
 {
-    if (!dbClient_) {
-        if (errorMessage) {
-            *errorMessage = "未获取到数据库客户端";
-        }
+    if (!hasDbClient(errorMessage)) {
         return std::nullopt;
     }
 
@@ -99,10 +131,7 @@ std::optional<std::string> ConfigDbManager::getValue(const std::string& key, std
 
 bool ConfigDbManager::setValue(const std::string& key, const std::string& value, std::string* errorMessage)
 {
-    if (!dbClient_) {
-        if (errorMessage) {
-            *errorMessage = "未获取到数据库客户端";
-        }
+    if (!hasDbClient(errorMessage)) {
         return false;
     }
 

@@ -15,9 +15,8 @@
 // getAccountList() lieferte den Geistereintrag an alle Konsumenten (u. a. account_count
 // der Health-Probe) aus.
 //
-// AccountManager ist ein Singleton (ctor/dtor privat), daher laeuft der Test wie
-// test_account_store_port.cpp ueber getInstance(). Jeder Testfall setzt seinen eigenen
-// Store und startet mit einem vollen loadAccount(), ist also nicht von Vorlaeufern abhaengig.
+// AccountManager ist ein explizit konstruiertes Lifecycle-Objekt. Jeder Testfall
+// besitzt daher seinen eigenen Manager und Store und ist nicht von Vorlaeufern abhaengig.
 //
 // Der Test injiziert ueber setStore() und faehrt zwei Ladezyklen: erst mit einem Account,
 // dann mit leerer Datenbank. Vor dem Fix ist die zweite Assertion rot.
@@ -79,7 +78,7 @@ class ReloadFakeAccountStore : public IAccountStore
 DROGON_TEST(AccountReloadDropsRemovedDatabaseRowFromIndex)
 {
     auto store = std::make_shared<ReloadFakeAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
 
     store->rows = {makeAccount("free")};
@@ -105,7 +104,7 @@ DROGON_TEST(AccountReloadDropsRemovedDatabaseRowFromIndex)
 DROGON_TEST(AccountReloadWithEmptyDatabaseClearsIndex)
 {
     auto store = std::make_shared<ReloadFakeAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
 
     store->rows = {makeAccount("free")};

@@ -14,11 +14,8 @@
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
 #include <sessionManager/actionProtocol/ActionProtocolAdapter.h>
-#include <apiManager/ApiManager.h>
 #include <domain/model/ProviderResult.h>
 #include <tools/ZeroWidthEncoder.h>
-#include <channelManager/channelManager.h>
-#include <metrics/ErrorStatsService.h>
 #include <domain/model/ErrorEvent.h>
 #include <drogon/drogon.h>
 #include <algorithm>
@@ -954,7 +951,7 @@ void GenerationService::emitResultEvents(const session_st& session, IResponseSin
     // 【特殊处理】
     // 对于 tool_calls 场景，部分客户端在收到 finish_reason="tool_calls" 后
     // 会停止处理后续内容，因此必须在 tool_calls 事件前发送会话ID。
-    auto& sessionManager = *chatSession::getInstance();
+    auto& sessionManager = *sessionStore_;
 
     // 优先使用预生成的 next会话Id；若为空则回退到 conversationId
     const std::string& sessionIdToEmbed =
@@ -1034,9 +1031,11 @@ std::string GenerationService::sanitizeOutput(
     return ClientOutputSanitizer::sanitize(clientInfo, text);
 }
 
-bool GenerationService::getChannelSupportsToolCalls(const std::string& channelName) {
+bool GenerationService::getChannelSupportsToolCalls(const std::string& channelName) const {
     // ： 从 渠道Manager 内存缓存获取，避免每次请求查数据库
-    auto result = ChannelManager::getInstance().getSupportsToolCalls(channelName);
+    auto result = channelCatalog_
+        ? channelCatalog_->supportsToolCalls(channelName)
+        : std::optional<bool>{};
     if (result.has_value()) {
         LOG_INFO << "[生成服务] 通道 " << channelName
                   << " supportsToolCalls: " << result.value();

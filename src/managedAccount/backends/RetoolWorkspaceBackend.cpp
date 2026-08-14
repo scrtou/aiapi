@@ -1,12 +1,16 @@
 #include <managedAccount/backends/RetoolWorkspaceBackend.h>
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
+RetoolWorkspaceBackend::RetoolWorkspaceBackend(
+    workspace::IRetoolWorkspaceUseCase& workspaces)
+    : workspaces_(&workspaces)
+{
+}
 
 std::vector<ManagedAccountRecord> RetoolWorkspaceBackend::list()
 {
     std::vector<ManagedAccountRecord> records;
-    auto items = RetoolWorkspaceManager::getInstance().listWorkspaces();
+    auto items = workspaces_->list();
     for (const auto& item : items)
     {
         ManagedAccountRecord record;
@@ -23,7 +27,7 @@ std::vector<ManagedAccountRecord> RetoolWorkspaceBackend::list()
 
 std::optional<ManagedAccountRecord> RetoolWorkspaceBackend::get(const std::string& id)
 {
-    auto workspace = RetoolWorkspaceManager::getInstance().getWorkspace(id);
+    auto workspace = workspaces_->get(id, nullptr);
     if (!workspace)
     {
         return std::nullopt;
@@ -41,14 +45,14 @@ std::optional<ManagedAccountRecord> RetoolWorkspaceBackend::get(const std::strin
 
 bool RetoolWorkspaceBackend::disable(const std::string& id, std::string* errorMessage)
 {
-    return RetoolWorkspaceManager::getInstance().disableWorkspace(id, errorMessage);
+    return workspaces_->disable(id, errorMessage);
 }
 
 std::optional<ManagedExecutionContext> RetoolWorkspaceBackend::buildExecutionContext(
     const std::string& id,
     std::string* errorMessage)
 {
-    auto workspace = RetoolWorkspaceManager::getInstance().getWorkspace(id, errorMessage);
+    auto workspace = workspaces_->get(id, errorMessage);
     if (!workspace)
     {
         return std::nullopt;

@@ -211,6 +211,12 @@ list<Channelinfo_st> ChannelManager::getChannelList()
     return channelCache_;
 }
 
+std::list<Channelinfo_st> ChannelManager::listChannels() const
+{
+    std::shared_lock<std::shared_mutex> lock(cacheMutex_);
+    return channelCache_;
+}
+
 bool ChannelManager::updateChannelStatus(string channelName, bool status)
 {
     if (retired_provider::isRetiredProviderKey(channelName)) {

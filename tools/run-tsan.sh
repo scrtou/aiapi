@@ -2,7 +2,7 @@
 # ThreadSanitizer 本地回归脚本（不进 CI，理由见 doc 与本文件末尾说明）。
 #
 # 用法:
-#   tools/run-tsan.sh              # 配置(如需) + 构建 + 全量单测 + 停机专项 + 信号夹具
+#   tools/run-tsan.sh              # 配置(如需) + 构建 + 全量单测 + 停机专项 + 五类信号夹具
 #   tools/run-tsan.sh --repeat 10  # 指定停机专项/夹具的重复次数(默认 5)
 #
 # 退出码: 0 全绿; 1 有测试失败或出现未被抑制的 TSan 竞态告警。
@@ -81,13 +81,14 @@ for t in BackgroundTaskQueue_ShutdownIsIrreversible \
   if [ "$bad" -eq 0 ]; then echo "  ok  $t ($REPEAT/$REPEAT)"; else echo "  FAIL $t"; fail=1; fi
 done
 
-echo "===== [4/4] 信号夹具 x$REPEAT ====="
+echo "===== [4/4] 五类信号夹具 x$REPEAT ====="
 # 顺序标记是这道检查的全部意义：仅看退出码会把「排空顺序错乱但仍退出 0」
 # 判成通过。READY 由 loop 定时器发出，保证 SIGTERM handler 已安装。
-MARKERS='READY REAPER ACCOUNTS SESSION QUEUE EXIT'
-for r in $(seq 1 "$REPEAT"); do
-  log="$LOGDIR/fixture.$r.log"
-  "$FIXTURE_BIN" > "$log" 2>&1 &
+for mode in idle http polling backlog disconnect; do
+  bad=0
+  for r in $(seq 1 "$REPEAT"); do
+    log="$LOGDIR/fixture.$mode.$r.log"
+    "$FIXTURE_BIN" "$mode" > "$log" 2>&1 &
   pid=$!
   for _ in $(seq 1 200); do grep -q READY "$log" 2>/dev/null && break; sleep 0.05; done
   sleep 0.2
@@ -97,13 +98,22 @@ for r in $(seq 1 "$REPEAT"); do
   ( sleep "$TIMEOUT_CASE"; kill -9 "$pid" 2>/dev/null ) & wd=$!
   wait "$pid"; frc=$?
   kill -9 "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
-  missing=""
-  for m in $MARKERS; do grep -qx "$m" "$log" || missing="$missing $m"; done
-  if [ "$frc" -eq 0 ] && [ -z "$missing" ]; then
-    echo "  ok  run$r rc=0 标记齐全"
-  else
-    echo "  FAIL run$r rc=$frc 缺失标记:${missing:- 无}"; fail=1
-  fi
+    expected=''
+    case "$mode" in
+      idle) expected='' ;;
+      http) expected='SCENARIO_TIMEOUT' ;;
+      polling) expected='POLL_INTERRUPTED' ;;
+      backlog) expected='BACKLOG_DRAINED' ;;
+      disconnect) expected='DISCONNECT_INTERRUPTED' ;;
+    esac
+    missing=""
+    for m in READY REAPER ACCOUNTS SESSION QUEUE EXIT; do grep -qx "$m" "$log" || missing="$missing $m"; done
+    [ -n "$expected" ] && grep -qx "$expected" "$log" || [ -z "$expected" ] || missing="$missing $expected"
+    if [ "$frc" -ne 0 ] || [ -n "$missing" ]; then
+      echo "  FAIL $mode run$r rc=$frc 缺失标记:${missing:- 无}"; bad=1
+    fi
+  done
+  if [ "$bad" -eq 0 ]; then echo "  ok  $mode ($REPEAT/$REPEAT)"; else fail=1; fi
 done
 
 echo

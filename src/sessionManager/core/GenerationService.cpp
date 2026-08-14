@@ -12,12 +12,9 @@
 #include <sessionManager/tooling/ToolDefinitionEncoder.h>
 #include <sessionManager/tooling/BridgeProtocolCodec.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
-#include <apiManager/ApiManager.h>
 #include <domain/model/ProviderResult.h>
 #include <sessionManager/core/ProviderResultCodec.h>
 #include <tools/ZeroWidthEncoder.h>
-#include <channelManager/channelManager.h>
-#include <metrics/ErrorStatsService.h>
 #include <domain/model/ErrorEvent.h>
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
@@ -153,7 +150,10 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
              << ", 策略: " << (policy == ConcurrencyPolicy::RejectConcurrent ? "拒绝并发" : "取消前一个");
     
     // 使用 RAII 执行守卫，确保异常或提前返回时自动释放门控
-    ExecutionGuard guard(sessionKey, policy);
+    if (!executionGate_ || !sessionStore_ || !responseIndex_) {
+        return AppError::internal("生成服务依赖未注入");
+    }
+    ExecutionGuard guard(*executionGate_, sessionKey, policy);
     
     if (!guard.isAcquired()) {
         GateResult result = guard.getResult();
@@ -176,7 +176,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
     LOG_INFO << "[生成服务] 已获取执行门控, 会话: " << sessionKey;
     
 	    try {
-	        auto& sessionManager = *chatSession::getInstance();
+	        auto& sessionManager = *sessionStore_;
 	        // 每次请求独立字段：仅对当前上游调用有效，进入新请求前必须清空。
 	        session.provider.toolBridgeTrigger.clear();
 	        session.provider.toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
@@ -210,7 +210,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             session.response.responseId = chatSession::generateResponseId();
         }
         if (session.isResponseApi() && !session.response.responseId.empty()) {
-            ResponseIndex::instance().bind(session.response.responseId, session.state.conversationId);
+            responseIndex_->bind(session.response.responseId, session.state.conversationId);
         }
 
         // 2. 发送 已开始 事件（Responses 使用 响应.； 使用 会话Id，仅用于链路标识）
@@ -382,11 +382,11 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
         sessionManager.coverSessionresponse(session);
         if (session.isResponseApi() && !session.response.responseId.empty()) {
             // 会话转移后 conversationId 已更新为 next会话Id，重新绑定 响应Id
-            ResponseIndex::instance().bind(session.response.responseId, session.state.conversationId);
+            responseIndex_->bind(session.response.responseId, session.state.conversationId);
         }
         
         // 8. 执行上游响应后处理
-        auto api = ApiManager::getInstance().getApiByApiName(session.request.api);
+        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
         if (api) {
             api->afterResponseProcess(session);
         }
@@ -437,9 +437,9 @@ std::optional<AppError> GenerationService::runGuarded(
     session_st session = materializeSession(req);
     
     // 2. 解析 会话Id 并 getOr创建（必须先于门控）
-    auto& sessionManager = *chatSession::getInstance();
+    auto& sessionManager = *sessionStore_;
 
-    ContinuityResolver resolver;
+    ContinuityResolver resolver(*responseIndex_, sessionManager.getTrackingMode());
     const ContinuityDecision decision = resolver.resolve(req);
 
     LOG_INFO << "[生成服务] 连续性决策"
@@ -465,7 +465,7 @@ std::optional<AppError> GenerationService::runGuarded(
 bool GenerationService::executeProvider(session_st& session) {
     LOG_INFO << "[生成服务] 执行提供者: " << session.request.api;
     
-    auto api = ApiManager::getInstance().getApiByApiName(session.request.api);
+    auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
     if (!api) {
         LOG_ERROR << "[生成服务] 未找到提供者: " << session.request.api;
         session.response.message["error"] = "未找到上游提供者: " + session.request.api;

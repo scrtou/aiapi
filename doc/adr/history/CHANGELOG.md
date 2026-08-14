@@ -6,6 +6,105 @@
 
 ---
 
+## P5-W3 收口 · AiApiController use-case facade（2026-08-14）
+
+- 新增纯值 `aiapi::GenerationInput` / result DTO 与 `IAiApiUseCase` domain port。Controller 只复制影响
+  语义的请求头并以序列化 JSON 穿过端口，因此 domain 不引入 Drogon 或 JsonCpp。
+- 新增 `sessionManager/core/AiApiUseCase`：它是唯一的 legacy-generation composition seam，负责
+  RequestAdapters 规范化、executor admission、入队时的 provider/session/response/gate/channel/executor
+  snapshot、`GenerationService` 执行、provider model catalog，以及 Responses index 的读、删和成功响应持久化。
+- `AiApiController` 删除六个 provider/session/gate/executor/GenerationService collaborator binding，只保留
+  一个非 owning `IAiApiUseCase*`。它现在只负责 HTTP/JSON 校验、路径 provider 推断和 JSON/SSE sink 适配。
+  Responses JSON/SSE sink 在成功关闭时提供 persistence record，持久化编排不再回流到 Controller。
+- AppWiring 创建并发布 facade，AppContext 持有其生命周期；rollback/shutdown 先
+  `AiApiController::setUseCase(nullptr)`，随后销毁其借用协作者。新增 Controller injection、facade
+  catalog/index workflow、SSE/JSON persistence-record 与 AppContext ownership 回归。
+- `check_controller_services.py` 和 `check_lifecycle_services.py` 扩展为冻结这条边界、runtime 接线和
+  撤销顺序。验证：Debug configure/build、374/374 `ctest`、直接 runner（374 cases / 1934 assertions）、
+  architecture audit、cycle/layer、strict registration、ownership/include/target、enqueue、AppContext/
+  deadline 及所有 P5 增量门禁均通过。
+- P5-W3 标记 `DONE`，阶段 5 的工作项全部完成；下一项为 P6-W1 Result/Error/ProviderBase 基础。
+
+---
+
+## P5-W3 增量 · 五个 concrete DB store 与管理 facade 收口（2026-08-14）
+
+- `AccountDbManager`、`AccountBackupDbManager`、`ChannelDbManager`、`ConfigDbManager` 与
+  `RetoolWorkspaceDbManager` 现均删除 lazy `getInstance()`：构造无 Drogon 全局查找，AppWiring
+  在其 Manager/facade `init()` 前显式 `initialize()` 并发布同一实例到 AppContext。
+- AppContext 现同时拥有五个 concrete DB store、Account/Channel manager，以及 Account/Channel/
+  Health/Metrics/Workspace-admin controller-facing facade；扩展 ownership 回归以确认丢弃局部
+  `shared_ptr` 后，context 仍是唯一生命周期根。
+- `check_startup_wiring.py` 与 `check_lifecycle_services.py` 冻结五个 store 的显式初始化、publish
+  顺序和无 singleton fallback；后者也要求 `AiApiController` 在 rollback/shutdown 前撤销全部静态
+  raw bindings，并冻结已接纳 generation task 对 collaborator snapshot 的使用。管理 Controller gate
+  继续要求每个 Controller 只发布一个 use case。
+- 验证：Debug build、直接 runner（372 cases / 1912 assertions）、严格注册与 `ctest`（372/372），
+  architecture audit、cycle/layer、ownership/include/target、enqueue、AppContext/deadline 及全部
+  P5 增量门禁通过。
+- **当时** P5-W3 仍为 `DOING`：`AiApiController` 还直接协调 GenerationService 及其 Provider/session/
+  gate/executor collaborators。这条 seam 已由上方同日 `IAiApiUseCase` facade 收口；P7 只会在该
+  Controller 边界之后拆解遗留 GenerationService pipeline。
+
+---
+
+## P5-W3 增量 · Workspace concrete store 显式生命周期（2026-08-14）
+
+- `RetoolWorkspaceDbManager` 删除 lazy `getInstance()`。构造不再触碰 Drogon 全局 app；
+  `initialize()` 只由 AppWiring 在配置可用后调用，未初始化的持久化操作会返回诊断错误，
+  不会空解引用或暗中建立第二个全局 owner。
+- AppContext 新增 concrete workspace store ownership，并按析构依赖把 store 放在
+  manager/provisioner/use case 之前；AppWiring 只构造一次 store、显式初始化并将同一实例传给
+  Workspace manager、provisioner 与 use case。
+- 新增 concrete store 的 AppContext ownership 和“必须显式 runtime 初始化”回归；
+  `check_lifecycle_services.py` / `check_startup_wiring.py` 现同时冻结该 store 的无 singleton、
+  context publish 与初始化先后关系。
+- 验证：Debug configure/build 通过，严格注册与 `ctest` 均为 366/366。
+- **当时**剩余 concrete DB singleton：`AccountDbManager`、`AccountBackupDbManager`、
+  `ChannelDbManager`、`ConfigDbManager`；该遗留已由上方同日后续增量收口，P5-W3 仍因
+  `AiApiController` transport seam 保持 `DOING`。
+
+---
+
+## P5-W3 增量 · Workspace facade/provisioner 显式生命周期（2026-08-14）
+
+- `RetoolWorkspaceManager` 与 `RetoolWorkspaceService` 删除 `getInstance()`；二者改为构造时接收
+  `IRetoolWorkspaceStore`。Manager 的诊断性 Null store 现在随每个局部对象所有，Service 对空 store
+  立即拒绝构造，因而不存在可从生产路径重新定位的 process-global fallback。
+- AppContext 显式持有 Workspace manager、provisioner port 与 use case。AppWiring 只创建一次同一
+  store 并将其传给三个对象；AccountManager 和 RetoolWorkspaceController 只借用端口。新增 rollback/
+  shutdown unpublish owner，先清除这两个 raw port，再进入 account worker 的停机路径。
+- Workspace store-port 测试改为局部 fixture，新增 provisioner constructor 与 AppContext ownership
+  回归。`check_lifecycle_services.py`、`check_startup_wiring.py` 和 managed-account gate 均扩展为
+  约束构造注入、context ownership 和启动顺序；CI startup-wiring selftest 同步使用已迁移的
+  `channels->setStore()/init()` 探针形状；deadline gate 同步识别 context-owned
+  `accounts->stopBackgroundThreads(deadline)` 调用。
+- 验证：Debug configure/build 通过，严格注册与 `ctest` 均为 364/364；architecture audit、cycle/layer、
+  ownership/include/target、enqueue、AppContext/deadline 及 P5 增量门禁通过。
+- **当时**`RetoolWorkspaceDbManager` 与其余四个 concrete DB manager 尚未迁移；五者已由上方
+  同日后续增量迁为 context-owned。当时 P5-W3 仍受 `AiApiController` transport seam 阻塞；该边界
+  已由上方同日 `IAiApiUseCase` facade 收口并标记 `DONE`。
+
+---
+
+## P5-W3 增量 · Metrics 显式生命周期（2026-08-14）
+
+- `ErrorStatsService`、`ErrorStatsDbManager`、`StatusDbManager` 与 `ErrorStatsConfig` 的
+  singleton/延迟 fallback 已删除。AppContext 显式持有两个 metrics store 和 worker；worker 的
+  构造函数强制接收 `IErrorStatsSink`，不再有 `setSink()` 的先后顺序陷阱或全局 DB 回退。
+- AppWiring 从 `custom_config.error_stats` 解析值对象配置，初始化同一 store 后将 query port
+  注入 Metrics Controller、将 worker 注入 bridge telemetry。停机 owner 先清除这些非 owning
+  指针，再以 deadline 停止 worker。
+- 为 context-owned service 注销定时清理 timer；回调以 weak capture 取回 service，避免 event
+  loop 持有悬垂 `[this]`。
+- `check_lifecycle_services.py` 扩展为检查 metrics ownership、构造注入和禁止 singleton 恢复；
+  原 `check_startup_wiring.py` 的 ErrorStats `setSink` 规则已取代。db include 棘轮从 11 个旧
+  allowlist 收紧到 5 个实际直连文件。
+- 验证：Debug 构建通过，严格注册 361/361，`ctest` 361/361 通过；architecture audit、cycle/layer、
+  ownership/include/target 及 P5 增量门禁全部通过。
+
+---
+
 ## P04 续 · ErrorStats 落库端口倒置与启动接线门禁（2026-08-10）
 
 - `ErrorStatsService` 不再自取 `ErrorStatsDbManager`，改为依赖 `IErrorStatsSink` 端口，

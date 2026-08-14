@@ -10,6 +10,7 @@
         "controllers",
         "dbManager",
         "metrics",
+        "application",
         "platform",
         "retoolWorkspace",
         "runtime",
@@ -21,10 +22,17 @@
     "domain": {
       "allow_out": []
     },
+    "application": {
+      "allow_out": [
+        "domain"
+      ]
+    },
     "utils": {
       "allow_out": [
+        "domain",
         "platform"
-      ]
+      ],
+      "role": "P5-W3 transitional exception: utils/BackgroundTaskQueue is the concrete implementation of domain IBackgroundExecutor. It must not gain reverse dependencies; final placement belongs with infrastructure during legacy cleanup."
     },
     "tools": {
       "allow_out": []
@@ -64,6 +72,7 @@
     "managedAccount": {
       "allow_out": [
         "accountManager",
+        "domain",
         "retoolWorkspace"
       ]
     },
@@ -80,7 +89,6 @@
     },
     "apipoint": {
       "allow_out": [
-        "accountManager",
         "apiManager",
         "channelManager",
         "dbManager",
@@ -108,12 +116,8 @@
     },
     "sessionManager": {
       "allow_out": [
-        "accountManager",
         "apiManager",
-        "channelManager",
-        "dbManager",
         "domain",
-        "metrics",
         "platform",
         "tools"
       ]
@@ -121,11 +125,14 @@
     "runtime": {
       "allow_out": [
         "accountManager",
-        "apiManager",
+        "application",
         "apipoint",
         "channelManager",
         "controllers",
         "dbManager",
+        "domain",
+        "infrastructure",
+        "managedAccount",
         "metrics",
         "platform",
         "retoolWorkspace",

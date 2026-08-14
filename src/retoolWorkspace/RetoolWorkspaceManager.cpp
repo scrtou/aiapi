@@ -4,10 +4,71 @@
 #include <domain/port/IRetoolWorkspaceStore.h>
 #include <trantor/utils/Logger.h>
 
+#include <utility>
+
+namespace
+{
+// An unconfigured manager remains diagnosable for unit tests, but the
+// fallback is owned by that one manager instance.  It is not a process-wide
+// service that production code can rediscover.
+class NullRetoolWorkspaceStore final : public IRetoolWorkspaceStore
+{
+  public:
+    bool ensureTable(std::string* error) override { return fail(error); }
+    bool upsertWorkspace(const RetoolWorkspaceInfo&, std::string* error) override
+    {
+        return fail(error);
+    }
+    bool deleteWorkspace(const std::string&, std::string* error) override
+    {
+        return fail(error);
+    }
+    std::optional<RetoolWorkspaceInfo> getWorkspace(const std::string&, std::string* error) override
+    {
+        fail(error);
+        return std::nullopt;
+    }
+    std::vector<RetoolWorkspaceInfo> listWorkspaces(std::string* error) override
+    {
+        fail(error);
+        return {};
+    }
+    bool updateWorkspaceStatus(const std::string&, const std::string&, const std::string&,
+                               std::string* error) override
+    {
+        return fail(error);
+    }
+    bool updateWorkspaceUsage(const std::string&, int, bool, std::string* error) override
+    {
+        return fail(error);
+    }
+
+  private:
+    static bool fail(std::string* error)
+    {
+        if (error != nullptr)
+        {
+            *error = "RetoolWorkspaceManager: store was not supplied to the constructor";
+        }
+        return false;
+    }
+};
+
+std::shared_ptr<IRetoolWorkspaceStore> makeNullRetoolWorkspaceStore()
+{
+    return std::make_shared<NullRetoolWorkspaceStore>();
+}
+}  // namespace
+
+RetoolWorkspaceManager::RetoolWorkspaceManager(std::shared_ptr<IRetoolWorkspaceStore> store)
+    : store_(store ? std::move(store) : makeNullRetoolWorkspaceStore())
+{
+}
+
 void RetoolWorkspaceManager::init()
 {
     std::string error;
-    if (!requireStore()->ensureTable(&error))
+    if (!store_->ensureTable(&error))
     {
         LOG_ERROR << "[RetoolWorkspaceManager] 初始化失败: " << error;
     }
@@ -15,23 +76,23 @@ void RetoolWorkspaceManager::init()
 
 bool RetoolWorkspaceManager::upsertWorkspace(const RetoolWorkspaceInfo& info, std::string* errorMessage)
 {
-    return requireStore()->upsertWorkspace(info, errorMessage);
+    return store_->upsertWorkspace(info, errorMessage);
 }
 
 bool RetoolWorkspaceManager::deleteWorkspace(const std::string& workspaceId, std::string* errorMessage)
 {
-    return requireStore()->deleteWorkspace(workspaceId, errorMessage);
+    return store_->deleteWorkspace(workspaceId, errorMessage);
 }
 
 std::optional<RetoolWorkspaceInfo> RetoolWorkspaceManager::getWorkspace(const std::string& workspaceId,
                                                                         std::string* errorMessage)
 {
-    return requireStore()->getWorkspace(workspaceId, errorMessage);
+    return store_->getWorkspace(workspaceId, errorMessage);
 }
 
 std::vector<RetoolWorkspaceInfo> RetoolWorkspaceManager::listWorkspaces(std::string* errorMessage)
 {
-    return requireStore()->listWorkspaces(errorMessage);
+    return store_->listWorkspaces(errorMessage);
 }
 
 bool RetoolWorkspaceManager::updateWorkspaceStatus(const std::string& workspaceId,
@@ -39,7 +100,7 @@ bool RetoolWorkspaceManager::updateWorkspaceStatus(const std::string& workspaceI
                                                    const std::string& verifyStatus,
                                                    std::string* errorMessage)
 {
-    return requireStore()->updateWorkspaceStatus(
+    return store_->updateWorkspaceStatus(
         workspaceId, status, verifyStatus, errorMessage);
 }
 
@@ -51,7 +112,7 @@ bool RetoolWorkspaceManager::markWorkspaceUsageStarted(const std::string& worksp
         return false;
     }
     const int nextCount = std::max(0, workspace->inUseCount) + 1;
-    return requireStore()->updateWorkspaceUsage(
+    return store_->updateWorkspaceUsage(
         workspaceId, nextCount, true, errorMessage);
 }
 
@@ -63,66 +124,11 @@ bool RetoolWorkspaceManager::markWorkspaceUsageFinished(const std::string& works
         return false;
     }
     const int nextCount = std::max(0, workspace->inUseCount - 1);
-    return requireStore()->updateWorkspaceUsage(
+    return store_->updateWorkspaceUsage(
         workspaceId, nextCount, true, errorMessage);
 }
 
 bool RetoolWorkspaceManager::disableWorkspace(const std::string& workspaceId, std::string* errorMessage)
 {
     return updateWorkspaceStatus(workspaceId, "disabled", "unknown", errorMessage);
-}
-
-// ---------------------------------------------------------------------------
-// R4 依赖倒置支撑代码
-// ---------------------------------------------------------------------------
-namespace
-{
-// 未注入实现时的 Null Object：不崩溃，返回失败并给出可诊断的错误信息。
-class NullRetoolWorkspaceStore : public IRetoolWorkspaceStore
-{
-  public:
-    bool ensureTable(std::string* e) override { return fail(e); }
-    bool upsertWorkspace(const RetoolWorkspaceInfo&, std::string* e) override { return fail(e); }
-    bool deleteWorkspace(const std::string&, std::string* e) override { return fail(e); }
-    std::optional<RetoolWorkspaceInfo> getWorkspace(const std::string&, std::string* e) override
-    {
-        fail(e);
-        return std::nullopt;
-    }
-    std::vector<RetoolWorkspaceInfo> listWorkspaces(std::string* e) override
-    {
-        fail(e);
-        return {};
-    }
-    bool updateWorkspaceStatus(const std::string&, const std::string&, const std::string&, std::string* e) override
-    {
-        return fail(e);
-    }
-    bool updateWorkspaceUsage(const std::string&, int, bool, std::string* e) override { return fail(e); }
-
-  private:
-    static bool fail(std::string* e)
-    {
-        if (e != nullptr)
-        {
-            *e = "RetoolWorkspaceManager: store 未注入（应由 main.cc 调 setStore）";
-        }
-        return false;
-    }
-};
-}  // namespace
-
-void RetoolWorkspaceManager::setStore(std::shared_ptr<IRetoolWorkspaceStore> store)
-{
-    store_ = std::move(store);
-}
-
-IRetoolWorkspaceStore* RetoolWorkspaceManager::requireStore()
-{
-    if (store_ != nullptr)
-    {
-        return store_.get();
-    }
-    static NullRetoolWorkspaceStore nullStore;
-    return &nullStore;
 }

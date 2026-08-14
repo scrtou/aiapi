@@ -5,16 +5,16 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <utility>
 
 #include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
-#include <apiManager/ApiManager.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 
-chaynsThreadReaper& chaynsThreadReaper::getInstance()
+chaynsThreadReaper::chaynsThreadReaper(
+    std::shared_ptr<chaynsThreadDbManager> threadDb)
+    : threadDb_(std::move(threadDb))
 {
-    static chaynsThreadReaper instance;
-    return instance;
 }
 
 chaynsThreadReaper::~chaynsThreadReaper()
@@ -49,7 +49,14 @@ void chaynsThreadReaper::start(const Options& options)
     }
 
     stopRequested_ = false;
-    worker_ = std::thread([this]() { loop(); });
+    workerDone_ = std::make_shared<platform::ThreadCompletion>();
+    worker_ = std::thread([this, done = workerDone_]() {
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
+        loop();
+    });
 
     const Options applied = getOptions();
     LOG_INFO << "[chayns线程回收] 已启动：扫描间隔=" << applied.scanIntervalSeconds
@@ -60,12 +67,12 @@ void chaynsThreadReaper::start(const Options& options)
 
 void chaynsThreadReaper::stop()
 {
-    stopInternal(std::nullopt);
+    (void)stopInternal(std::nullopt);
 }
 
-void chaynsThreadReaper::stop(std::chrono::steady_clock::time_point deadline)
+bool chaynsThreadReaper::stop(std::chrono::steady_clock::time_point deadline)
 {
-    stopInternal(deadline);
+    return stopInternal(deadline);
 }
 
 void chaynsThreadReaper::interruptibleSleepFor(std::chrono::milliseconds duration)
@@ -79,12 +86,10 @@ void chaynsThreadReaper::interruptibleSleepFor(std::chrono::milliseconds duratio
     wakeCv_.wait_for(lock, duration, [this]() { return stopRequested_.load(); });
 }
 
-void chaynsThreadReaper::stopInternal(
+bool chaynsThreadReaper::stopInternal(
     std::optional<std::chrono::steady_clock::time_point> deadline)
 {
-    if (!running_.load()) {
-        return;
-    }
+    if (!running_.load() && !worker_.joinable()) return true;
     if (deadline) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             *deadline - std::chrono::steady_clock::now());
@@ -108,10 +113,22 @@ void chaynsThreadReaper::stopInternal(
         stopRequested_.store(true);
     }
     wakeCv_.notify_all();
+    bool joined = true;
     if (worker_.joinable()) {
-        worker_.join();
+        if (deadline && workerDone_) {
+            joined = platform::joinUntil(worker_, *workerDone_, *deadline);
+        } else {
+            worker_.join();
+        }
+    }
+    if (!joined) {
+        LOG_WARN << "[chayns线程回收] 后台线程未在停机预算内退出，未 join、未 detach，"
+                 << "等待后续收割";
+        return false;
     }
     running_ = false;
+    workerDone_.reset();
+    return true;
 }
 
 void chaynsThreadReaper::loop()
@@ -147,7 +164,7 @@ void chaynsThreadReaper::loop()
 
 int chaynsThreadReaper::runOnce()
 {
-    auto threadDb = chaynsThreadDbManager::getInstance();
+    const auto threadDb = threadDb_;
     if (!threadDb || !threadDb->isEnabled()) {
         return 0;
     }
@@ -175,7 +192,11 @@ int chaynsThreadReaper::runOnce()
         return 0;
     }
 
-    auto api = ApiManager::getInstance().getApiByApiName("chaynsapi");
+    if (!providerRegistry_) {
+        LOG_WARN << "[chayns线程回收] ProviderRegistry 未注入，跳过本轮上游删除";
+        return 0;
+    }
+    auto api = providerRegistry_->findProvider("chaynsapi");
     auto chayns = std::dynamic_pointer_cast<chaynsapi>(api);
     if (!chayns) {
         // 台账存在但 chaynsapi 未注册（例如该实例关闭了 chayns 渠道）：

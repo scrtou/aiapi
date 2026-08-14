@@ -3,7 +3,6 @@
 #include <accountManager/AccountClock.h>
 #include <accountManager/AccountHttpTransport.h>
 #include <accountManager/accountManager.h>
-#include <channelManager/channelManager.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
 
@@ -145,8 +144,6 @@ std::shared_ptr<LifecycleChannelStore> installActiveChaynsChannel()
     channel.channelName = "chaynsapi";
     channel.channelStatus = true;
     channels->rows.push_back(channel);
-    ChannelManager::getInstance().setStore(channels);
-    ChannelManager::getInstance().init();
     return channels;
 }
 
@@ -179,7 +176,7 @@ Json::Value registrationSucceeded()
 DROGON_TEST(AccountLifecycle_InMemoryAddUpdateDeleteCharacterization)
 {
     auto store = std::make_shared<LifecycleAccountStore>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
     manager.loadAccount();
 
@@ -213,7 +210,7 @@ DROGON_TEST(AccountLifecycle_CheckTokenUsesFakeHttpAndInvalidatesPool)
     store->rows.push_back(accountRow("chaynsapi", "token-user"));
     auto transport = std::make_shared<LifecycleHttpTransport>();
     transport->push(401);
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
     manager.setHttpTransport(transport);
     manager.setClock(std::make_shared<LifecycleClock>());
@@ -235,13 +232,14 @@ DROGON_TEST(AccountLifecycle_CheckTokenUsesFakeHttpAndInvalidatesPool)
 
 DROGON_TEST(AccountLifecycle_AutoRegisterHttpFailureRollsBackWaitingRow)
 {
-    installActiveChaynsChannel();
+    auto channels = installActiveChaynsChannel();
     auto store = std::make_shared<LifecycleAccountStore>();
     auto transport = std::make_shared<LifecycleHttpTransport>();
     transport->push(503);
     auto clock = std::make_shared<LifecycleClock>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
+    manager.setChannelStore(channels);
     manager.setHttpTransport(transport);
     manager.setClock(clock);
 
@@ -258,14 +256,15 @@ DROGON_TEST(AccountLifecycle_AutoRegisterHttpFailureRollsBackWaitingRow)
 
 DROGON_TEST(AccountLifecycle_AutoRegisterSuccessActivatesAndLoadsAccount)
 {
-    installActiveChaynsChannel();
+    auto channels = installActiveChaynsChannel();
     auto store = std::make_shared<LifecycleAccountStore>();
     auto transport = std::make_shared<LifecycleHttpTransport>();
     transport->push(200, registrationCreated());
     transport->push(200, registrationSucceeded());
     auto clock = std::make_shared<LifecycleClock>();
-    auto& manager = AccountManager::getInstance();
+    AccountManager manager;
     manager.setStore(store);
+    manager.setChannelStore(channels);
     manager.setHttpTransport(transport);
     manager.setClock(clock);
     manager.loadAccount();

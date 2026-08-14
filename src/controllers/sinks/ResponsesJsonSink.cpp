@@ -102,8 +102,13 @@ void ResponsesJsonSink::onClose() {
     if (closed_) return;
     closed_ = true;
 
+    Json::Value response = buildResponse();
+    if (statusCode_ == 200 && !response.isMember("error") &&
+        response.isMember("id") && response["id"].isString()) {
+        responseRecord_ = ResponsePersistenceRecord{
+            response["id"].asString(), response.toStyledString()};
+    }
     if (responseCallback_) {
-        Json::Value response = buildResponse();
         responseCallback_(response, statusCode_);
     }
 }

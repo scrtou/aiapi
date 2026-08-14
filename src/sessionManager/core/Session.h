@@ -27,12 +27,13 @@ namespace drogon {
 
 // session_st / SessionTrackingMode / ApiType 已迁至 domain/model/SessionData.h
 #include <sessionManager/contracts/LegacySessionData.h>
+#include <platform/ThreadJoin.h>
+#include <domain/port/IProviderRegistry.h>
+#include <domain/port/IResponseIndex.h>
+#include <domain/port/ISessionPersistence.h>
 class chatSession
 {
   private:
-    chatSession();
-    ~chatSession();
-    static chatSession *instance;
     std::mutex mutex_;
     std::unordered_map<std::string, session_st> session_map;
     std::unordered_map<std::string, std::string> context_map;//上下文会话id与会话id的映射
@@ -51,15 +52,24 @@ class chatSession
     /// 让停机不必等满一个 cleanupIntervalSeconds_（默认 1 小时）的睡眠周期。
     std::atomic<bool> stopClearExpiredLoop_{false};
     std::thread clearExpiredThread_;
+    /// 每次 startClearExpiredSession() 重建：ThreadCompletion 是一次性信号
+    /// （signal 后永久为真）。复用同一实例会让第二次限时停机看到上一条线程
+    /// 留下的「已完成」而立刻去 join 一条仍在运行的新线程 —— 限时汇合静默
+    /// 退化成无限阻塞。
+    platform::ThreadCompletionPtr clearExpiredDone_;
+    /// 两个 stop 重载的共同实现。deadline 为 nullptr 即无限等待。
+    bool stopClearExpiredWithin(const std::chrono::steady_clock::time_point* deadline);
     std::mutex clearExpiredWakeMutex_;
     std::condition_variable clearExpiredWakeCv_;
+    IProviderRegistry* providerRegistry_ = nullptr;
+    IResponseIndex* responseIndex_ = nullptr;
+    ISessionPersistence* persistence_ = nullptr;
 public:
-    static chatSession *getInstance()
-    {
-        static chatSession instance;
-        return &instance;
-    }
-    
+    chatSession();
+    ~chatSession();
+    chatSession(const chatSession&) = delete;
+    chatSession& operator=(const chatSession&) = delete;
+
     // ========== 会话追踪模式相关方法 ==========
     /**
      * @brief 设置会话追踪模式
@@ -104,6 +114,9 @@ public:
      * @return true 如果使用零宽字符模式
      */
     bool isZeroWidthMode() const { return trackingMode_ == SessionTrackingMode::ZeroWidth; }
+    void setProviderRegistry(IProviderRegistry* registry) { providerRegistry_ = registry; }
+    void setResponseIndex(IResponseIndex* index) { responseIndex_ = index; }
+    void setPersistence(ISessionPersistence* persistence) { persistence_ = persistence; }
     
     // ========== 基础会话操作方法 ==========
     void addSession(const std::string &ConversationId,session_st &session);
@@ -115,7 +128,29 @@ public:
     /// N4: 停止过期清理线程并 join。幂等；未启动时直接返回。
     /// 必须在进程退出前调用，否则线程会在 static 析构期间被强行截断，
     /// 可能正持有 mutex_ 或 DB 连接。
+    /// 停止清理线程并【无上限】等待其退出。语义与 P4-W1 起完全一致。
+    /// 亦是收割上一轮限时停机超预算后残留线程的路径。
     void stopClearExpiredSession();
+
+    /**
+     * @brief 限时停止清理线程（P4-W3 / D6）。
+     *
+     * @return true  线程已在 deadline 前退出并被 join；
+     *         false 预算耗尽，线程仍在运行且**未 detach**，仍由本对象持有。
+     *
+     * 为何会真的超预算：清理循环的睡眠可被 notify 立即打断，但循环体内
+     * deleteSessionsOlderThan() 是同步 DB 调用，不可中断。停机信号若在它
+     * 执行期间到达，线程要等该调用返回才会检查退出标志。
+     *
+     * 超预算时刻意不 detach、不清理成员：线程仍在访问本对象的 session_map，
+     * 放手会让它在对象销毁后继续写已析构的内存。调用方可稍后用无参
+     * stopClearExpiredSession() 重新收割。
+     */
+    bool stopClearExpiredSession(std::chrono::steady_clock::time_point deadline);
+
+    /// 是否仍有未被 join 的清理线程（限时停机超预算后的残局标志）。
+    /// 线程收割干净后转为 false 且不再回真。
+    bool hasPendingCleaner() const { return clearExpiredThread_.joinable(); }
     bool sessionIsExist(const std::string &ConversationId);
     bool sessionIsExist(session_st &sessio);
 
@@ -315,7 +350,7 @@ private:
     // 解析单个图片项
     static void parseImageItem(const Json::Value& item, std::vector<ImageInfo>& images);
     // 将 转换为字符串，同时提取图片
-    static std::string getContentAsString(const Json::Value& content, std::vector<ImageInfo>& images);
+    std::string getContentAsString(const Json::Value& content, std::vector<ImageInfo>& images);
     
     // ========== 会话创建/更新辅助方法（消除重复代码）==========
     /**

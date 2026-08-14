@@ -1,8 +1,10 @@
 #include <drogon/drogon_test.h>
 
-#include <apiManager/ApiManager.h>
-#include <channelManager/channelManager.h>
-#include <domain/port/IChannelStore.h>
+#include <domain/port/IChannelCatalog.h>
+#include <infrastructure/provider/ProviderRegistry.h>
+#include <sessionManager/continuity/ResponseIndex.h>
+#include <sessionManager/core/SessionExecutionGate.h>
+#include <sessionManager/core/Session.h>
 #include <sessionManager/contracts/IResponseSink.h>
 #include <sessionManager/core/GenerationService.h>
 
@@ -13,23 +15,17 @@
 
 namespace {
 
-class FakeChannelStore final : public IChannelStore
+class FakeChannelCatalog final : public IChannelCatalog
 {
   public:
     std::list<Channelinfo_st> rows;
+    std::list<Channelinfo_st> listChannels() const override { return rows; }
     bool addChannel(Channelinfo_st row) override { rows.push_back(std::move(row)); return true; }
     bool updateChannel(Channelinfo_st) override { return true; }
     bool deleteChannel(int) override { return true; }
-    bool getChannel(std::string name, Channelinfo_st& out) override
-    {
-        for (const auto& row : rows) if (row.channelName == name) { out = row; return true; }
-        return false;
-    }
-    std::list<Channelinfo_st> getChannelList() override { return rows; }
-    bool isTableExist() override { return true; }
-    void createTable() override {}
-    void checkAndUpgradeTable() override {}
     bool updateChannelStatus(std::string, bool) override { return true; }
+    std::optional<bool> supportsToolCalls(const std::string& name) const override
+    { for (const auto& row : rows) if (row.channelName == name) return row.supportsToolCalls; return std::nullopt; }
 };
 
 class CapturingProvider final : public APIinterface
@@ -113,16 +109,15 @@ Json::Value pingTool()
     return tools;
 }
 
-void installChannel(const std::string& name, bool supportsTools)
+FakeChannelCatalog makeChannel(const std::string& name, bool supportsTools)
 {
-    auto channels = std::make_shared<FakeChannelStore>();
+    FakeChannelCatalog channels;
     Channelinfo_st channel;
     channel.channelName = name;
     channel.channelStatus = true;
     channel.supportsToolCalls = supportsTools;
-    channels->rows.push_back(channel);
-    ChannelManager::getInstance().setStore(channels);
-    ChannelManager::getInstance().init();
+    channels.rows.push_back(channel);
+    return channels;
 }
 
 GenerationRequest makeRequest(const std::string& provider, Json::Value tools)
@@ -145,15 +140,19 @@ GenerationRequest makeRequest(const std::string& provider, Json::Value tools)
 
 DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
 {
-    installChannel("bridge-fixture", false);
+    auto channels = makeChannel("bridge-fixture", false);
 
     auto provider = std::make_shared<CapturingProvider>();
-    ApiManager::getInstance().addApiInfo(std::make_shared<ApiInfo>("bridge-fixture", provider));
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerProvider("bridge-fixture", provider));
 
     auto request = makeRequest("bridge-fixture", fixtureTools());
 
     CollectingSink sink;
-    GenerationService service;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
     const auto error = service.runGuarded(request, sink);
 
     CHECK(!error.has_value());
@@ -171,13 +170,16 @@ DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
 
 DROGON_TEST(GenerationService_BridgeCodecAndEmitOrderRunThroughProductionPipeline)
 {
-    installChannel("bridge-emit-fixture", false);
+    auto channels = makeChannel("bridge-emit-fixture", false);
     auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::BridgeToolCall);
-    ApiManager::getInstance().addApiInfo(
-        std::make_shared<ApiInfo>("bridge-emit-fixture", provider));
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerProvider("bridge-emit-fixture", provider));
     auto request = makeRequest("bridge-emit-fixture", fixtureTools());
     CollectingSink sink;
-    GenerationService service;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
     CHECK(!service.runGuarded(request, sink).has_value());
 
     REQUIRE(sink.events.size() >= 3);
@@ -202,13 +204,16 @@ DROGON_TEST(GenerationService_BridgeCodecAndEmitOrderRunThroughProductionPipelin
 
 DROGON_TEST(GenerationService_NativeToolArgumentsAreNormalizedBeforeEmit)
 {
-    installChannel("native-emit-fixture", true);
+    auto channels = makeChannel("native-emit-fixture", true);
     auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::NativeEmptyArguments);
-    ApiManager::getInstance().addApiInfo(
-        std::make_shared<ApiInfo>("native-emit-fixture", provider));
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerProvider("native-emit-fixture", provider));
     auto request = makeRequest("native-emit-fixture", pingTool());
     CollectingSink sink;
-    GenerationService service;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
     CHECK(!service.runGuarded(request, sink).has_value());
 
     REQUIRE(sink.events.size() == 3);
@@ -221,14 +226,17 @@ DROGON_TEST(GenerationService_NativeToolArgumentsAreNormalizedBeforeEmit)
 
 DROGON_TEST(GenerationService_RequiredToolFallbackRunsInsideEmitResultEvents)
 {
-    installChannel("forced-tool-fixture", false);
+    auto channels = makeChannel("forced-tool-fixture", false);
     auto provider = std::make_shared<CapturingProvider>();
-    ApiManager::getInstance().addApiInfo(
-        std::make_shared<ApiInfo>("forced-tool-fixture", provider));
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerProvider("forced-tool-fixture", provider));
     auto request = makeRequest("forced-tool-fixture", pingTool());
     request.toolChoice = R"({"type":"function","function":{"name":"ping"}})";
     CollectingSink sink;
-    GenerationService service;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
     CHECK(!service.runGuarded(request, sink).has_value());
 
     bool foundPing = false;

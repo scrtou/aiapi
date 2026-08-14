@@ -7,11 +7,6 @@
 
 namespace metrics {
 
-std::shared_ptr<StatusDbManager> StatusDbManager::getInstance() {
-    static std::shared_ptr<StatusDbManager> instance = std::make_shared<StatusDbManager>();
-    return instance;
-}
-
 void StatusDbManager::init() {
     // 延迟初始化：只在首次需要时获取数据库客户端
 }

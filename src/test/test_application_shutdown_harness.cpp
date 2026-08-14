@@ -44,7 +44,7 @@ bool readUntilReady(int fd, std::string& output)
     return false;
 }
 
-ChildResult runSignalFixture()
+ChildResult runSignalFixture(const std::string& mode = "idle")
 {
     ChildResult result;
     int outputPipe[2];
@@ -58,7 +58,7 @@ ChildResult runSignalFixture()
         ::dup2(outputPipe[1], STDOUT_FILENO);
         ::close(outputPipe[0]);
         ::close(outputPipe[1]);
-        ::execl(executable.c_str(), executable.c_str(), nullptr);
+        ::execl(executable.c_str(), executable.c_str(), mode.c_str(), nullptr);
         ::_exit(127);
     }
     ::close(outputPipe[1]);
@@ -95,6 +95,28 @@ ChildResult runSignalFixture()
     }
     ::close(outputPipe[0]);
     return result;
+}
+
+bool hasCommonShutdownMarkers(const ChildResult& result)
+{
+    if (!result.ready || !result.exited || result.exitCode != 0) return false;
+    const auto reaper = result.output.find("REAPER\n");
+    const auto accounts = result.output.find("ACCOUNTS\n");
+    const auto session = result.output.find("SESSION\n");
+    const auto queue = result.output.find("QUEUE\n");
+    const auto exit = result.output.find("EXIT\n");
+    if (reaper == std::string::npos || accounts == std::string::npos ||
+        session == std::string::npos || queue == std::string::npos ||
+        exit == std::string::npos) return false;
+    return reaper < accounts && accounts < session && session < queue && queue < exit;
+}
+
+bool hasScenario(const std::string& mode, const std::string& marker)
+{
+    const auto result = runSignalFixture(mode);
+    return hasCommonShutdownMarkers(result) &&
+           result.output.find("MODE " + mode + "\n") != std::string::npos &&
+           result.output.find(marker + "\n") != std::string::npos;
 }
 
 }  // namespace
@@ -151,22 +173,27 @@ DROGON_TEST(ApplicationShutdown_PastDeadlineStillStopsEveryOwner)
 DROGON_TEST(ApplicationShutdown_IdleProcessHandlesSigtermInProductionOrder)
 {
     const auto result = runSignalFixture();
-    CHECK(result.ready);
-    CHECK(result.exited);
-    CHECK(result.exitCode == 0);
+    CHECK(hasCommonShutdownMarkers(result));
+}
 
-    const auto reaper = result.output.find("REAPER\n");
-    const auto accounts = result.output.find("ACCOUNTS\n");
-    const auto session = result.output.find("SESSION\n");
-    const auto queue = result.output.find("QUEUE\n");
-    const auto exit = result.output.find("EXIT\n");
-    REQUIRE(reaper != std::string::npos);
-    REQUIRE(accounts != std::string::npos);
-    REQUIRE(session != std::string::npos);
-    REQUIRE(queue != std::string::npos);
-    REQUIRE(exit != std::string::npos);
-    CHECK(reaper < accounts);
-    CHECK(accounts < session);
-    CHECK(session < queue);
-    CHECK(queue < exit);
+DROGON_TEST(ApplicationShutdown_BlockingHttpHonoursDeadline)
+{
+    // 已发出的 HTTP 请求不可撤回：限时 shutdown 必须先返回并记录超时，
+    // 然后在进程退出前安全二次收割，而不是 detach 活跃线程。
+    CHECK(hasScenario("http", "SCENARIO_TIMEOUT"));
+}
+
+DROGON_TEST(ApplicationShutdown_PollingWaitIsInterrupted)
+{
+    CHECK(hasScenario("polling", "POLL_INTERRUPTED"));
+}
+
+DROGON_TEST(ApplicationShutdown_BacklogDrainsBeforeExit)
+{
+    CHECK(hasScenario("backlog", "BACKLOG_DRAINED"));
+}
+
+DROGON_TEST(ApplicationShutdown_ClientDisconnectInterruptsWorker)
+{
+    CHECK(hasScenario("disconnect", "DISCONNECT_INTERRUPTED"));
 }

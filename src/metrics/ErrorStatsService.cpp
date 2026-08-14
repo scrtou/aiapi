@@ -1,17 +1,13 @@
 #include <metrics/ErrorStatsService.h>
 #include <metrics/ErrorEventJsonDecoder.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
 #include <drogon/drogon.h>
+#include <trantor/net/EventLoop.h>
 
 namespace metrics {
 
-ErrorStatsService& ErrorStatsService::getInstance() {
-    static ErrorStatsService instance;
-    return instance;
-}
-
-void ErrorStatsService::setSink(std::shared_ptr<IErrorStatsSink> sink) {
-    dbManager_ = std::move(sink);
+ErrorStatsService::ErrorStatsService(std::shared_ptr<IErrorStatsSink> sink)
+    : sink_(std::move(sink))
+{
 }
 
 ErrorStatsService::~ErrorStatsService() {
@@ -28,17 +24,24 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
     
     config_ = config;
     
-    if (!config_.enabled) {
-        LOG_INFO << "[错误统计服务] 配置已禁用，跳过初始化";
+    if (!sink_) {
+        // 构造器要求显式 sink；保留这一层运行时防御是为了避免一个错误的
+        // nullptr 注入把 eventQueue_ 变成永远无人消费的内存黑洞。
+        LOG_ERROR << "[错误统计服务] 未注入 IErrorStatsSink，禁用错误统计";
+        config_.enabled = false;
         initialized_ = true;
         return;
     }
-    
 
-    if (!dbManager_) {
-        dbManager_ = ErrorStatsDbManager::getInstance();
+    // Metrics 查询端点依赖同一 store。即使事件采集在配置中关闭，也保持
+    // 建表/迁移初始化，维持旧接线中 MetricsController 可查询的行为。
+    sink_->init();
+
+    if (!config_.enabled) {
+        LOG_INFO << "[错误统计服务] 配置已禁用，跳过 worker 启动";
+        initialized_ = true;
+        return;
     }
-    dbManager_->init();
     
     // 启动后台线程
     running_ = true;
@@ -54,30 +57,19 @@ void ErrorStatsService::init(const ErrorStatsConfig& config) {
     });
     
     // 启动定时清理任务（每小时执行一次）
-    drogon::app().getLoop()->runEvery(std::chrono::hours(1), [this]() {
-        if (!running_ || !dbManager_) return;
-        
-        LOG_INFO << "[错误统计] 开始执行定时清理任务";
-        int totalCleaned = 0;
-        
-        // 清理过期的明细事件
-        if (config_.retentionDaysDetail > 0) {
-            int cleaned = dbManager_->cleanupOldEvents(config_.retentionDaysDetail);
-            totalCleaned += cleaned;
-            LOG_INFO << "[错误统计] 已清理明细事件 " << cleaned << " 条（保留 "
-                     << config_.retentionDaysDetail << " 天）";
-        }
-        
-        // 清理过期的聚合数据
-        if (config_.retentionDaysAgg > 0) {
-            int cleaned = dbManager_->cleanupOldAgg(config_.retentionDaysAgg);
-            totalCleaned += cleaned;
-            LOG_INFO << "[错误统计] 已清理聚合数据 " << cleaned << " 条（保留 "
-                     << config_.retentionDaysAgg << " 天）";
-        }
-        
-        LOG_INFO << "[错误统计] 清理任务完成，总计清理 " << totalCleaned << " 条记录";
-    });
+    // Runtime always creates this service in a shared_ptr owned by AppContext.
+    // A weak capture makes the callback harmless for stack-local test fixtures
+    // and, more importantly, prevents an EventLoop timer from retaining a raw
+    // pointer after AppContext has torn down the service.
+    const auto weakSelf = weak_from_this();
+    if (!weakSelf.expired()) {
+        cleanupLoop_ = drogon::app().getLoop();
+        cleanupTimerId_ = cleanupLoop_->runEvery(std::chrono::hours(1), [weakSelf] {
+            if (const auto self = weakSelf.lock()) {
+                self->runScheduledCleanup();
+            }
+        });
+    }
     
     initialized_ = true;
     LOG_INFO << "[错误统计服务] 初始化完成，batch_size=" << config_.asyncBatchSize
@@ -99,6 +91,9 @@ bool ErrorStatsService::shutdownWithin(const std::chrono::steady_clock::time_poi
     // 注意判据不能只看 running_：上一次限时汇合超预算时会留下一个仍 joinable
     // 的线程，那种状态下必须允许再次进入并把它收割掉。
     if (!running_ && !workerThread_.joinable()) {
+        // 配置关闭时没有 worker；仍需让同一个显式对象可在测试或受控
+        // 重建场景中再次 init，而不是沿用旧 singleton 的永久空壳状态。
+        initialized_ = false;
         return true;
     }
 
@@ -114,6 +109,16 @@ bool ErrorStatsService::shutdownWithin(const std::chrono::steady_clock::time_poi
             running_ = false;
         }
         cv_.notify_all();
+    }
+
+    // Stop future cleanup callbacks before waiting on the flush worker.  A
+    // callback that was already executing keeps a shared self reference via
+    // its weak lock, so the store remains valid; cancelling here only prevents
+    // new database work from starting after shutdown has been requested.
+    if (cleanupLoop_ != nullptr && cleanupTimerId_ != trantor::InvalidTimerId) {
+        cleanupLoop_->invalidateTimer(cleanupTimerId_);
+        cleanupTimerId_ = trantor::InvalidTimerId;
+        cleanupLoop_ = nullptr;
     }
 
     bool joined = true;
@@ -208,6 +213,35 @@ void ErrorStatsService::recordError(
               << " | req=" << requestId << " | " << message;
 }
 
+void ErrorStatsService::record(const ErrorEvent& event)
+{
+    auto sanitized = event;
+    sanitized.rawSnippet = truncateRawSnippet(sanitized.rawSnippet);
+    recordEvent(sanitized);
+    if (sanitized.severity == Severity::ERROR) {
+        LOG_ERROR << "[错误统计]" << ErrorEvent::domainToString(sanitized.domain)
+                  << "." << sanitized.type << " | req=" << sanitized.requestId
+                  << " | " << sanitized.message;
+    } else {
+        LOG_WARN << "[错误统计]" << ErrorEvent::domainToString(sanitized.domain)
+                 << "." << sanitized.type << " | req=" << sanitized.requestId
+                 << " | " << sanitized.message;
+    }
+}
+
+void ErrorStatsService::recordRequestCompleted(const RequestCompletedEvent& event)
+{
+    RequestCompletedData data;
+    data.provider = event.provider;
+    data.model = event.model;
+    data.clientType = event.clientType;
+    data.apiKind = event.apiKind;
+    data.stream = event.stream;
+    data.httpStatus = event.httpStatus;
+    data.ts = event.ts;
+    recordRequestCompleted(data);
+}
+
 void ErrorStatsService::recordWarn(
     Domain domain,
     const std::string& type,
@@ -300,16 +334,16 @@ void ErrorStatsService::flushEvents() {
     if (batch.empty()) return;
     
     // 写入明细表
-    if (config_.persistDetail && dbManager_) {
-        if (!dbManager_->insertEvents(batch)) {
+    if (config_.persistDetail && sink_) {
+        if (!sink_->insertEvents(batch)) {
             LOG_ERROR << "[错误统计] 写入明细事件失败，批大小=" << batch.size();
             droppedCount_ += batch.size();
         }
     }
     
     // 更新聚合表
-    if (config_.persistAgg && dbManager_) {
-        if (!dbManager_->upsertErrorAggHour(batch)) {
+    if (config_.persistAgg && sink_) {
+        if (!sink_->upsertErrorAggHour(batch)) {
             LOG_ERROR << "[错误统计] 写入错误聚合数据失败";
         }
     }
@@ -328,7 +362,7 @@ void ErrorStatsService::flushRequestAgg() {
     
     if (batch.empty()) return;
     
-    if (config_.persistRequestAgg && dbManager_) {
+    if (config_.persistRequestAgg && sink_) {
         for (const auto& data : batch) {
             RequestAggData aggData;
             aggData.provider = data.provider;
@@ -339,7 +373,7 @@ void ErrorStatsService::flushRequestAgg() {
             aggData.httpStatus = data.httpStatus;
             aggData.ts = data.ts;
             
-            if (!dbManager_->upsertRequestAggHour(aggData)) {
+            if (!sink_->upsertRequestAggHour(aggData)) {
                 LOG_ERROR << "[错误统计] 写入请求聚合数据失败";
             }
         }
@@ -352,14 +386,23 @@ void ErrorStatsService::flushNow() {
 }
 
 int ErrorStatsService::runCleanup() {
-    if (!dbManager_) return 0;
+    if (!sink_) return 0;
     
     int total = 0;
-    total += dbManager_->cleanupOldEvents(config_.retentionDaysDetail);
-    total += dbManager_->cleanupOldAgg(config_.retentionDaysAgg);
+    total += sink_->cleanupOldEvents(config_.retentionDaysDetail);
+    total += sink_->cleanupOldAgg(config_.retentionDaysAgg);
     
     LOG_INFO << "[错误统计] 手动清理完成，总计 " << total << " 条记录";
     return total;
+}
+
+void ErrorStatsService::runScheduledCleanup()
+{
+    if (!running_ || !sink_) return;
+
+    LOG_INFO << "[错误统计] 开始执行定时清理任务";
+    const int totalCleaned = runCleanup();
+    LOG_INFO << "[错误统计] 清理任务完成，总计清理 " << totalCleaned << " 条记录";
 }
 
 void ErrorStatsService::updatePrometheusCounters(const ErrorEvent& event) {

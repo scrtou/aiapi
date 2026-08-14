@@ -13,6 +13,7 @@
 #include <optional>
 #include <drogon/drogon.h>
 
+#include <domain/port/IBackgroundExecutor.h>
 #include <platform/ThreadJoin.h>
 
 /**
@@ -45,14 +46,14 @@ inline const char* toString(EnqueueResult r)
  *
  * 固定数量工作线程消费任务，支持优雅停机（drain + join）。
  *
- * 用法:
- *   auto r = BackgroundTaskQueue::instance().enqueue("taskName", []{});
- *   调用方必须处理 r != EnqueueResult::Accepted 的情形。
+ * 用法（由 AppContext 构造并注入 IBackgroundExecutor）:
+ *   auto r = executor.submit("taskName", []{});
+ *   调用方必须处理 r != TaskSubmitResult::Accepted 的情形。
  *
  * 停机:
- *   BackgroundTaskQueue::instance().shutdown();  // drain 后 join 所有线程
+ *   queue.shutdown();  // drain 后 join 所有线程
  */
-class BackgroundTaskQueue
+class BackgroundTaskQueue final : public IBackgroundExecutor
 {
 public:
     static constexpr size_t kDefaultWorkerThreads = 8;
@@ -71,13 +72,18 @@ public:
      */
     enum class State { Fresh, Running, Draining, Stopped };
 
-    static BackgroundTaskQueue& instance()
-    {
-        static BackgroundTaskQueue inst;
-        return inst;
-    }
+    /**
+     * AppContext-owned executor.
+     *
+     * P5-W3 intentionally makes this a normal constructible object rather
+     * than a process singleton: a queue's worker lifetime, shutdown deadline,
+     * and all users of its IBackgroundExecutor port must have one explicit
+     * composition-root owner.
+     */
+    explicit BackgroundTaskQueue(size_t capacity = kDefaultCapacity)
+        : capacity_(capacity) {}
 
-    /// 初始化工作线程（如未手动调用，enqueue 时会自动初始化）
+    /// 初始化工作线程；仅 composition root 可决定何时启动。
     void start(size_t numThreads = kDefaultWorkerThreads)
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -151,6 +157,22 @@ public:
         cv_.notify_one();
         LOG_INFO << "[后台任务队列] 任务入队：" << name;
         return EnqueueResult::Accepted;
+    }
+
+    /// IBackgroundExecutor adapter on the concrete, context-owned queue.
+    /// Keeping the result conversion here removes the former function-static
+    /// BackgroundExecutorAdapter and ensures every injected executor is the
+    /// same object that AppContext starts and stops.
+    [[nodiscard]] TaskSubmitResult submit(const std::string& name,
+                                          std::function<void()> task) override
+    {
+        switch (enqueue(name, std::move(task))) {
+            case EnqueueResult::Accepted: return TaskSubmitResult::Accepted;
+            case EnqueueResult::QueueFull: return TaskSubmitResult::QueueFull;
+            case EnqueueResult::ShuttingDown: return TaskSubmitResult::ShuttingDown;
+            case EnqueueResult::Stopped: return TaskSubmitResult::Stopped;
+        }
+        return TaskSubmitResult::Stopped;
     }
 
     /// 优雅停机：拒绝新任务，等待队列排空，然后 join 所有线程。
@@ -242,11 +264,11 @@ public:
     }
 
     /**
-     * 测试专用工厂：返回一个独立实例，不复用进程级单例。
+     * 测试专用工厂：返回一个独立实例。
      *
-     * 单例的状态机是单向不可逆的（Fresh->Running->Draining->Stopped），
-     * 这正是 N2 要保证的不变量；因此任何调用 shutdown() 的用例都会永久
-     * 污染同进程内后续用例。测试必须各自持有独立实例，而不是靠
+     * 队列状态机是单向不可逆的（Fresh->Running->Draining->Stopped），
+     * 这正是 N2 要保证的不变量；因此任何调用 shutdown() 的用例都必须
+     * 自己持有独立实例，而不是靠
      * 「shutdown 后能重新 start」来复位——那恰恰是被修复掉的缺陷。
      */
     static std::unique_ptr<BackgroundTaskQueue> createForTesting(
@@ -261,9 +283,6 @@ public:
     BackgroundTaskQueue& operator=(const BackgroundTaskQueue&) = delete;
 
 private:
-    explicit BackgroundTaskQueue(size_t capacity = kDefaultCapacity)
-        : capacity_(capacity) {}
-
     bool shutdownImpl(std::optional<std::chrono::steady_clock::time_point> deadline)
     {
         {

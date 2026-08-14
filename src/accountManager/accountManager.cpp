@@ -1,6 +1,5 @@
 #include <accountManager/accountManager.h>
 #include<drogon/drogon.h>
-#include <apiManager/ApiManager.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/DbClient.h>
 #include <algorithm>
@@ -9,11 +8,7 @@
 #include <optional>
 #include <chrono>
 #include <thread>
-#include <dbManager/config/ConfigDbManager.h>
 #include <dbManager/channel/channelDbManager.h>
-#include <channelManager/channelManager.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <retoolWorkspace/RetoolWorkspaceService.h>
 #include <utils/LoginResponseLogSummary.h>
 #include <domain/policy/RetiredProviderPolicy.h>
 #include <accountManager/RetoolProvisionHealth.h>
@@ -28,37 +23,6 @@ using retoolProvision::persistRetoolProvisionHealth;
 using retoolProvision::isRetoolProvisionCoolingDown;
 using retoolProvision::markRetoolProvisionSuccess;
 using retoolProvision::markRetoolProvisionFailure;
-
-// Adapter binding the narrow IKeyValueConfigStore port to the concrete ConfigDbManager.
-// It lives HERE on purpose: accountManager.cpp is already on the db-include ratchet
-// list, so the extraction introduces no NEW file with a direct dbManager dependency.
-namespace {
-class ConfigDbKeyValueStore : public IKeyValueConfigStore
-{
-  public:
-    bool ensureTable(std::string* errorMessage = nullptr) override
-    {
-        return ConfigDbManager::getInstance()->ensureTable(errorMessage);
-    }
-    std::optional<std::string> getValue(const std::string& key,
-                                        std::string* errorMessage = nullptr) override
-    {
-        return ConfigDbManager::getInstance()->getValue(key, errorMessage);
-    }
-    bool setValues(const std::map<std::string, std::string>& entries,
-                   std::string* errorMessage = nullptr) override
-    {
-        return ConfigDbManager::getInstance()->setValues(entries, errorMessage);
-    }
-};
-
-IKeyValueConfigStore& retoolConfigStore()
-{
-    static ConfigDbKeyValueStore store;
-    return store;
-}
-}  // namespace
-
 
 namespace {
 
@@ -133,7 +97,7 @@ bool isRetoolWorkspaceActive(const RetoolWorkspaceInfo& workspace) {
 }
 
 
-bool saveAccountAutomationSettingsToDb(const std::shared_ptr<ConfigDbManager>& configDbManager,
+bool saveAccountAutomationSettingsToDb(IKeyValueConfigStore* configDbManager,
                                        const AccountAutomationSettings& settings,
                                        std::string* errorMessage) {
     return configDbManager->setValues({
@@ -316,6 +280,17 @@ class NullChannelStoreForAccount : public IChannelStore
     bool updateChannelStatus(std::string, bool) override { complain(); return false; }
 };
 
+class NullConfigStoreForAccount : public IKeyValueConfigStore
+{
+  public:
+    bool ensureTable(std::string* error) override
+    { if (error) *error = "AccountManager: config store 未注入"; return false; }
+    std::optional<std::string> getValue(const std::string&, std::string*) override
+    { return std::nullopt; }
+    bool setValues(const std::map<std::string, std::string>&, std::string* error) override
+    { if (error) *error = "AccountManager: config store 未注入"; return false; }
+};
+
 }  // namespace（NullAccountStore 专用）
 
 void AccountManager::setStore(std::shared_ptr<IAccountStore> store)
@@ -342,6 +317,19 @@ void AccountManager::setRetoolProvisionClock(
     std::shared_ptr<retoolProvision::IRetoolProvisionClock> clock)
 {
     if (clock) retoolProvisionClock_ = std::move(clock);
+}
+
+void AccountManager::setConfigStore(std::shared_ptr<IKeyValueConfigStore> store)
+{
+    configStore_ = std::move(store);
+}
+
+void AccountManager::setRetoolWorkspaceServices(
+    workspace::IRetoolWorkspaceUseCase* useCase,
+    workspace::IRetoolWorkspaceProvisioner* provisioner)
+{
+    workspaceUseCase_ = useCase;
+    workspaceProvisioner_ = provisioner;
 }
 
 account::HttpResult AccountManager::sendHttpRequest(
@@ -382,7 +370,9 @@ AccountManager::AccountManager()
     : httpTransport_(account::makeDrogonAccountHttpTransport()),
       clock_(account::makeRealAccountClock())
 {
-
+    static NullConfigStoreForAccount nullConfig;
+    configStore_ = std::shared_ptr<IKeyValueConfigStore>(
+        &nullConfig, [](IKeyValueConfigStore*) {});
 }
 bool AccountManager::backgroundSleep(std::chrono::milliseconds duration)
 {
@@ -396,14 +386,18 @@ bool AccountManager::backgroundSleep(std::chrono::milliseconds duration)
 
 void AccountManager::stopBackgroundThreads()
 {
+    (void)stopBackgroundThreads(std::chrono::steady_clock::time_point::max());
+}
+
+bool AccountManager::stopBackgroundThreads(std::chrono::steady_clock::time_point deadline)
+{
     // 修改等待谓词时与 backgroundSleep() 使用同一把锁，避免以下丢失唤醒：
     // worker 已检查谓词但尚未真正进入 wait，stop 线程在此窗口 notify。
-    // 幂等：exchange 仍保证并发下只有第一次真正执行停机与 join。
+    // 置位是幂等的，但不能在已经请求过停机时直接 return：上一次限时停机
+    // 可能留下 joinable 线程，后续调用必须仍能把它收割掉。
     {
         std::lock_guard<std::mutex> lock(backgroundWakeMutex_);
-        if (backgroundStopRequested_.exchange(true)) {
-            return;
-        }
+        backgroundStopRequested_.store(true);
     }
 
     // 两组唤醒缺一不可：
@@ -416,16 +410,37 @@ void AccountManager::stopBackgroundThreads()
         accountListNeedUpdateCondition.notify_all();
     }
 
-    auto joinIfRunning = [](std::thread& t, const char* name) {
+    bool allJoined = true;
+    auto joinIfRunning = [&](std::thread& t,
+                             const platform::ThreadCompletionPtr& done,
+                             const char* name) {
         if (t.joinable()) {
-            t.join();
-            LOG_INFO << "[账户管理] 后台线程已回收: " << name;
+            bool joined = true;
+            if (deadline != std::chrono::steady_clock::time_point::max() && done) {
+                joined = platform::joinUntil(t, *done, deadline);
+            } else {
+                t.join();
+            }
+            if (joined) {
+                LOG_INFO << "[账户管理] 后台线程已回收: " << name;
+            } else {
+                allJoined = false;
+                LOG_WARN << "[账户管理] 后台线程未在停机预算内退出，未 join、未 detach: "
+                         << name;
+            }
         }
     };
-    joinIfRunning(tokenCheckThread_,   "令牌巡检");
-    joinIfRunning(tokenUpdateWorker_,  "令牌更新工作线程");
-    joinIfRunning(accountCountThread_, "账号数量巡检");
-    joinIfRunning(accountTypeThread_,  "账号类型巡检");
+    joinIfRunning(tokenCheckThread_, tokenCheckDone_, "令牌巡检");
+    joinIfRunning(tokenUpdateWorker_, tokenUpdateDone_, "令牌更新工作线程");
+    joinIfRunning(accountCountThread_, accountCountDone_, "账号数量巡检");
+    joinIfRunning(accountTypeThread_, accountTypeDone_, "账号类型巡检");
+    if (allJoined) {
+        tokenCheckDone_.reset();
+        tokenUpdateDone_.reset();
+        accountCountDone_.reset();
+        accountTypeDone_.reset();
+    }
+    return allJoined;
 }
 
 AccountManager::~AccountManager()
@@ -439,7 +454,7 @@ void AccountManager::loadAccountAutomationSettings()
     const auto defaultSettings = loadAccountAutomationSettingsFromCustomConfig(drogon::app().getCustomConfig());
     AccountAutomationSettings settings = defaultSettings;
 
-    auto configDbManager = ConfigDbManager::getInstance();
+    auto* configDbManager = configStore_.get();
     std::string errorMessage;
     bool loadedFromDb = false;
 
@@ -542,7 +557,7 @@ bool AccountManager::updateAccountAutomationSettings(const AccountAutomationSett
     }
 
     if (persistToConfig) {
-        auto configDbManager = ConfigDbManager::getInstance();
+        auto* configDbManager = configStore_.get();
         if (!configDbManager->ensureTable(errorMessage)) {
             return false;
         }
@@ -953,7 +968,9 @@ bool AccountManager::getEligibleAccount(const string& apiName,
     return true;
 }
 
-void AccountManager::getAccountByUserName(string apiName, string userName, shared_ptr<Accountinfo_st>& account)
+void AccountManager::getAccountByUserName(const string& apiName,
+                                          const string& userName,
+                                          shared_ptr<Accountinfo_st>& account)
 {
     std::lock_guard<std::mutex> lock(accountListMutex);
     if (accountList.find(apiName) != accountList.end() &&
@@ -1232,7 +1249,12 @@ void AccountManager::checkUpdateTokenthread()
     }
     // N4: 原为 [&] 捕获——在成员函数里捕获 this 之外的栈引用本就危险，
     // 改为显式 this，语义等价但不再依赖已退栈的局部作用域。
-    tokenCheckThread_ = std::thread([this]{
+    tokenCheckDone_ = std::make_shared<platform::ThreadCompletion>();
+    tokenCheckThread_ = std::thread([this, done = tokenCheckDone_]{
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
         while (!backgroundStopRequested_.load())
         {
             checkToken();
@@ -1434,7 +1456,14 @@ void AccountManager::waitUpdateAccountTokenThread()
         LOG_WARN << "[账户管理] 令牌更新工作线程已在运行，忽略重复启动";
         return;
     }
-    tokenUpdateWorker_ = std::thread(&AccountManager::waitUpdateAccountToken, this);
+    tokenUpdateDone_ = std::make_shared<platform::ThreadCompletion>();
+    tokenUpdateWorker_ = std::thread([this, done = tokenUpdateDone_] {
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
+        waitUpdateAccountToken();
+    });
 }
 
 void AccountManager::checkAccountCountThread()
@@ -1443,7 +1472,12 @@ void AccountManager::checkAccountCountThread()
         LOG_WARN << "[账户管理] 账号数量巡检线程已在运行，忽略重复启动";
         return;
     }
-    accountCountThread_ = std::thread([this](){
+    accountCountDone_ = std::make_shared<platform::ThreadCompletion>();
+    accountCountThread_ = std::thread([this, done = accountCountDone_]{
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
         while (!backgroundStopRequested_.load())
         {
             LOG_INFO << "[账户管理] 开始检查各渠道账号数量";
@@ -1503,7 +1537,7 @@ void AccountManager::checkChannelAccountCount(string apiName)
             LOG_ERROR << "[账户管理] Retool provision clock 未注入，跳过自动补注册";
             return;
         }
-        const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
+        const auto health = loadRetoolProvisionHealth(*configStore_, nullptr);
         if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
         {
             LOG_WARN << "[账户管理] Retool 渠道处于冷却期，跳过自动补注册。cooldownUntil="
@@ -1511,7 +1545,8 @@ void AccountManager::checkChannelAccountCount(string apiName)
             return;
         }
 
-        auto workspaces = RetoolWorkspaceManager::getInstance().listWorkspaces();
+        auto workspaces = workspaceUseCase_ ? workspaceUseCase_->list()
+                                            : std::vector<RetoolWorkspaceInfo>{};
         int currentCount = 0;
         for (const auto& workspace : workspaces)
         {
@@ -1614,7 +1649,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
         return false;
     }
 
-    for (const auto& channel : ChannelManager::getInstance().getChannelList())
+    for (const auto& channel : requireChannelStore()->getChannelList())
     {
         if (channel.channelName == apiName && !channel.channelStatus)
         {
@@ -1630,7 +1665,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
             LOG_ERROR << "[自动注册] Retool provision clock 未注入";
             return false;
         }
-        const auto health = loadRetoolProvisionHealth(retoolConfigStore(), nullptr);
+        const auto health = loadRetoolProvisionHealth(*configStore_, nullptr);
         if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
         {
             LOG_WARN << "[自动注册] Retool 渠道处于冷却期，跳过自动注册。cooldownUntil="
@@ -1647,24 +1682,30 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
         try
         {
-            std::string error;
-            auto workspace = RetoolWorkspaceService::getInstance().provisionWorkspace(requestBody, &error);
+            if (!workspaceProvisioner_)
+            {
+                throw std::runtime_error("Retool workspace provisioner 未注入");
+            }
+            Json::StreamWriterBuilder writer;
+            writer["indentation"] = "";
+            auto workspace = workspaceProvisioner_->provision(
+                Json::writeString(writer, requestBody));
             if (workspace.workspaceId.empty())
             {
-                const auto reason = error.empty() ? std::string("unknown error") : error;
+                const auto reason = std::string("unknown error");
                 markRetoolProvisionFailure(
-                    retoolConfigStore(), reason, *retoolProvisionClock_);
+                    *configStore_, reason, *retoolProvisionClock_);
                 LOG_ERROR << "[自动注册] Retool workspace 创建失败: " << reason;
                 return false;
             }
-            markRetoolProvisionSuccess(retoolConfigStore());
+            markRetoolProvisionSuccess(*configStore_);
             LOG_INFO << "[自动注册] Retool workspace 创建成功: " << workspace.workspaceId;
             return true;
         }
         catch (const std::exception& ex)
         {
             markRetoolProvisionFailure(
-                retoolConfigStore(), ex.what(), *retoolProvisionClock_);
+                *configStore_, ex.what(), *retoolProvisionClock_);
             LOG_ERROR << "[自动注册] Retool workspace 创建异常: " << ex.what();
             return false;
         }
@@ -2214,7 +2255,12 @@ void AccountManager::checkAccountTypeThread()
         LOG_WARN << "[账户管理] 账号类型巡检线程已在运行，忽略重复启动";
         return;
     }
-    accountTypeThread_ = std::thread([this]() {
+    accountTypeDone_ = std::make_shared<platform::ThreadCompletion>();
+    accountTypeThread_ = std::thread([this, done = accountTypeDone_] {
+        struct Signaler {
+            platform::ThreadCompletionPtr done;
+            ~Signaler() { done->signal(); }
+        } signaler{done};
         // 启动后先静默一段时间再执行第一次检查，让系统稳定
         // （注释原写“5 分钟”而代码是 1 分钟，以代码为准并修正描述）
         if (!backgroundSleep(std::chrono::minutes(1))) {
@@ -2273,7 +2319,8 @@ void AccountManager::cleanExpiredAccounts()
     
     // 获取当前所有账号的快照
     auto currentAccountMap = getAccountList();
-    auto currentRetoolWorkspaces = RetoolWorkspaceManager::getInstance().listWorkspaces();
+    auto currentRetoolWorkspaces = workspaceUseCase_ ? workspaceUseCase_->list()
+                                                     : std::vector<RetoolWorkspaceInfo>{};
     
     list<Accountinfo_st> expiredAccounts;
     std::vector<std::string> expiredRetoolWorkspaceIds;
@@ -2415,7 +2462,7 @@ void AccountManager::cleanExpiredAccounts()
     for (const auto& workspaceId : expiredRetoolWorkspaceIds)
     {
         std::string workspaceError;
-        if (RetoolWorkspaceManager::getInstance().disableWorkspace(workspaceId, &workspaceError))
+        if (workspaceUseCase_ && workspaceUseCase_->disable(workspaceId, &workspaceError))
         {
             LOG_INFO << "[自动清理] Retool workspace 已禁用: " << workspaceId;
         }

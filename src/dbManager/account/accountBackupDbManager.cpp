@@ -31,13 +31,29 @@ const char* kBackupTableSql = R"(
 
 }  // namespace
 
-AccountBackupDbManager::AccountBackupDbManager()
+bool AccountBackupDbManager::initialize(std::string* errorMessage)
 {
+    if (initialized_)
+    {
+        return dbClient_ != nullptr;
+    }
+    initialized_ = true;
+
     try {
         dbClient_ = DbClient::newSqlite3Client(kBackupDbConnInfo, 1);
+        if (!dbClient_)
+        {
+            if (errorMessage) *errorMessage = "AccountBackupDbManager database client is unavailable";
+            LOG_ERROR << "[备份数据库] 获取 SQLite 备份库客户端失败";
+            return false;
+        }
         LOG_INFO << "[备份数据库] 已初始化 SQLite 备份库: ./data/account_backup.db";
+        return true;
     } catch (const std::exception& e) {
+        dbClient_.reset();
+        if (errorMessage) *errorMessage = e.what();
         LOG_ERROR << "[备份数据库] 初始化失败: " << e.what();
+        return false;
     }
 }
 

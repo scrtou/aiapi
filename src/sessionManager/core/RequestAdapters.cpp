@@ -1,5 +1,4 @@
 #include <sessionManager/core/RequestAdapters.h>
-#include <accountManager/accountManager.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <drogon/drogon.h>
 #include <drogon/utils/Utilities.h>
@@ -43,16 +42,39 @@ std::string normalizeIncomingRequestId(const std::string& value)
     return normalized;
 }
 
-std::string requestIdFromHeaders(const HttpRequestPtr& req)
+std::string requestIdFromHeaders(const aiapi::RequestHeaders& headers)
 {
-    std::string requestId = normalizeIncomingRequestId(req->getHeader("x-request-id"));
+    std::string requestId = normalizeIncomingRequestId(headers.requestId);
     if (requestId.empty()) {
-        requestId = normalizeIncomingRequestId(req->getHeader("x-correlation-id"));
+        requestId = normalizeIncomingRequestId(headers.correlationId);
     }
     if (requestId.empty()) {
         requestId = "req_" + drogon::utils::getUuid();
     }
     return requestId;
+}
+
+aiapi::RequestHeaders requestHeadersFromHttp(const HttpRequestPtr& req)
+{
+    aiapi::RequestHeaders headers;
+    if (!req) {
+        return headers;
+    }
+    headers.requestId = req->getHeader("x-request-id");
+    headers.correlationId = req->getHeader("x-correlation-id");
+    headers.userAgent = req->getHeader("user-agent");
+    headers.originator = req->getHeader("originator");
+    headers.codexWindowId = req->getHeader("x-codex-window-id");
+    headers.threadId = req->getHeader("thread-id");
+    headers.sessionId = req->getHeader("session-id");
+    headers.sessionIdUnderscore = req->getHeader("session_id");
+    headers.conversationId = req->getHeader("conversation-id");
+    headers.conversationIdUnderscore = req->getHeader("conversation_id");
+    headers.authorization = req->getHeader("authorization");
+    if (headers.authorization.empty()) {
+        headers.authorization = req->getHeader("Authorization");
+    }
+    return headers;
 }
 
 bool assignClientSessionId(Json::Value& clientInfo,
@@ -371,19 +393,26 @@ bool isResponsesModelOutputBoundary(const Json::Value& item)
 GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     const HttpRequestPtr& req
 ) {
+    const auto headers = requestHeadersFromHttp(req);
+    const auto json = req ? req->getJsonObject() : nullptr;
+    return buildGenerationRequestFromChat(
+        json ? *json : Json::Value(), headers);
+}
+
+GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
+    const Json::Value& reqBody,
+    const aiapi::RequestHeaders& headers
+) {
     LOG_INFO << "[请求适配器] 从 API 请求构建 Generation请求";
     
     GenerationRequest genReq;
     genReq.endpointType = EndpointType::ChatCompletions;
-    genReq.requestId = requestIdFromHeaders(req);
+    genReq.requestId = requestIdFromHeaders(headers);
     
-    auto jsonPtr = req->getJsonObject();
-    if (!jsonPtr) {
+    if (!reqBody.isObject()) {
         LOG_WARN << "[请求适配器] API 请求体无效";
         return genReq;
     }
-    
-    const Json::Value& reqBody = *jsonPtr;
     
     // 1. 提取基本参数
     genReq.model = reqBody.get("model", "").asString();
@@ -418,7 +447,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     }
     
     // 2. 提取客户端信息
-    genReq.clientInfo = extractClientInfo(req);
+    genReq.clientInfo = extractClientInfo(headers);
     if (reqBody.isMember("workspaceId") && reqBody["workspaceId"].isString()) {
         genReq.clientInfo["workspace_id"] = reqBody["workspaceId"].asString();
     } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
@@ -475,19 +504,26 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
 GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     const HttpRequestPtr& req
 ) {
+    const auto headers = requestHeadersFromHttp(req);
+    const auto json = req ? req->getJsonObject() : nullptr;
+    return buildGenerationRequestFromResponses(
+        json ? *json : Json::Value(), headers);
+}
+
+GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
+    const Json::Value& reqBody,
+    const aiapi::RequestHeaders& headers
+) {
     LOG_INFO << "[请求适配器] 从 Responses API 请求构建 Generation请求";
     
     GenerationRequest genReq;
     genReq.endpointType = EndpointType::Responses;
-    genReq.requestId = requestIdFromHeaders(req);
+    genReq.requestId = requestIdFromHeaders(headers);
     
-    auto jsonPtr = req->getJsonObject();
-    if (!jsonPtr) {
+    if (!reqBody.isObject()) {
         LOG_WARN << "[请求适配器] Responses API 请求体无效";
         return genReq;
     }
-    
-    const Json::Value& reqBody = *jsonPtr;
     
     // 1. 提取基本参数
     genReq.model = reqBody.get("model", "GPT-4o").asString();
@@ -500,7 +536,8 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     Json::Value normalizedTools(Json::arrayValue);
     std::unordered_set<std::string> seenTools;
     const bool namespaceBridgeEnabled =
-        AccountManager::getInstance().getAccountAutomationSettings().namespaceToolBridgeEnabled;
+        !accountSettings_ ||
+        accountSettings_->getAccountAutomationSettings().namespaceToolBridgeEnabled;
     appendToolDefinitions(
         reqBody["tools"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
     collectAdditionalTools(
@@ -542,7 +579,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
              << ", parallel_tool_calls=" << genReq.parallelToolCalls;
     
     // 2. 提取客户端信息
-    genReq.clientInfo = extractClientInfo(req);
+    genReq.clientInfo = extractClientInfo(headers);
     if (reqBody.isMember("workspaceId") && reqBody["workspaceId"].isString()) {
         genReq.clientInfo["workspace_id"] = reqBody["workspaceId"].asString();
     } else if (reqBody.isMember("workspace_id") && reqBody["workspace_id"].isString()) {
@@ -638,13 +675,13 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     return genReq;
 }
 
-Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
+Json::Value RequestAdapters::extractClientInfo(const aiapi::RequestHeaders& headers) {
     Json::Value clientInfo;
     
     // 提取客户端标识。User-Agent 只能用于协议适配，不能用于鉴权。
-    const std::string userAgent = req->getHeader("user-agent");
-    const std::string originator = req->getHeader("originator");
-    const std::string codexWindowId = req->getHeader("x-codex-window-id");
+    const std::string& userAgent = headers.userAgent;
+    const std::string& originator = headers.originator;
+    const std::string& codexWindowId = headers.codexWindowId;
     // Only enable the Codex protocol adapter for an explicitly identified
     // Codex client. x-codex-window-id is also sent by some Codex-compatible
     // clients and is therefore insufficient evidence of native Responses SSE
@@ -657,12 +694,12 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     if (isCodex) {
         clientType = "Codex";
         clientInfo["client_variant"] = "codex-tui";
-        if (!assignClientSessionId(clientInfo, req->getHeader("thread-id"), "header.thread-id") &&
-            !assignClientSessionId(clientInfo, req->getHeader("session-id"), "header.session-id") &&
-            !assignClientSessionId(clientInfo, req->getHeader("session_id"), "header.session_id") &&
-            !assignClientSessionId(clientInfo, req->getHeader("conversation-id"), "header.conversation-id")) {
+        if (!assignClientSessionId(clientInfo, headers.threadId, "header.thread-id") &&
+            !assignClientSessionId(clientInfo, headers.sessionId, "header.session-id") &&
+            !assignClientSessionId(clientInfo, headers.sessionIdUnderscore, "header.session_id") &&
+            !assignClientSessionId(clientInfo, headers.conversationId, "header.conversation-id")) {
             assignClientSessionId(clientInfo,
-                                  req->getHeader("conversation_id"),
+                                  headers.conversationIdUnderscore,
                                   "header.conversation_id");
         }
     } else if (userAgent.find("Kilo-Code") != std::string::npos) {
@@ -677,10 +714,7 @@ Json::Value RequestAdapters::extractClientInfo(const HttpRequestPtr& req) {
     }
     
 
-    std::string auth = req->getHeader("authorization");
-    if (auth.empty()) {
-        auth = req->getHeader("Authorization");
-    }
+    std::string auth = headers.authorization;
     
 
     auto stripBearer = [](std::string& s) {
@@ -726,7 +760,7 @@ void RequestAdapters::parseChatMessages(
     }
     
     // 检查是否使用零宽字符模式
-    bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
+    const bool isZeroWidthMode = trackingMode_ == SessionTrackingMode::ZeroWidth;
     
     // 用于临时存储历史消息中的图片（不加入当前请求图片）
     std::vector<ImageInfo> tempImages;
@@ -801,7 +835,7 @@ void RequestAdapters::parseResponseInput(
     std::vector<ImageInfo>& images
 ) {
     // 检查是否使用零宽字符模式
-    const bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
+    const bool isZeroWidthMode = trackingMode_ == SessionTrackingMode::ZeroWidth;
 
     if (input.isString()) {
         // 简单字符串输入
@@ -1029,7 +1063,7 @@ void RequestAdapters::parseResponseInputItems(
 ) {
     if (!inputItems.isArray()) return;
 
-    const bool isZeroWidthMode = chatSession::getInstance()->isZeroWidthMode();
+    const bool isZeroWidthMode = trackingMode_ == SessionTrackingMode::ZeroWidth;
 
     // input_items 也可能是完整转录的退化形式。它没有 messages 输出参数可供
     // 重放历史，因此只保留最后一次模型输出后的增量。
@@ -1255,3 +1289,5 @@ ImageInfo RequestAdapters::parseImageUrl(const std::string& url) {
     
     return imgInfo;
 }
+SessionTrackingMode RequestAdapters::trackingMode_ = SessionTrackingMode::Hash;
+IAccountSettingsQuery* RequestAdapters::accountSettings_ = nullptr;

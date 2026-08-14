@@ -2,10 +2,12 @@
 #define RETOOLAPI_H
 
 #include <domain/port/APIinterface.h>
+#include <domain/port/IChannelCatalog.h>
+#include <domain/port/IRetoolWorkspaceUseCase.h>
+#include <managedAccount/contracts/ManagedAccount.h>
 #include <sessionManager/contracts/LegacySessionData.h>
 #include <apipoint/retoolapi/RetoolClock.h>
 #include <apipoint/retoolapi/RetoolHttpTransport.h>
-#include <apiManager/ApiFactory.h>
 #include <drogon/HttpResponse.h>
 #include <memory>
 #include <mutex>
@@ -16,12 +18,12 @@
 class retoolapi : public APIinterface
 {
   public:
-    static void* createApi();
 
-    retoolapi();
-    explicit retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport);
     retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
-              std::shared_ptr<retool::IRetoolClock> clock);
+              std::shared_ptr<retool::IRetoolClock> clock,
+              IManagedAccountContextResolver& accounts,
+              workspace::IRetoolWorkspaceUseCase& workspaces,
+              IChannelCatalog& channels);
     ~retoolapi() override;
 
     provider::ProviderResult generate(session_st& session) override;
@@ -34,8 +36,6 @@ class retoolapi : public APIinterface
     void transferThreadContext(const std::string& oldId, const std::string& newId) override;
 
   private:
-    DEClARE_RUNTIME(retoolapi);
-
     provider::ProviderResult requestWorkflow(session_st& session);
     provider::ProviderResult requestAgent(session_st& session);
 
@@ -76,6 +76,9 @@ class retoolapi : public APIinterface
     std::unordered_map<std::string, std::string> conversationWorkspaceMap_;
     std::shared_ptr<retool::IRetoolHttpTransport> transport_;
     std::shared_ptr<retool::IRetoolClock> clock_;
+    IManagedAccountContextResolver* accounts_ = nullptr;
+    workspace::IRetoolWorkspaceUseCase* workspaces_ = nullptr;
+    IChannelCatalog* channels_ = nullptr;
 };
 
 #endif

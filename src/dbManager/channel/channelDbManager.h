@@ -5,31 +5,26 @@
 #include <string>
 #include <list>
 #include <memory>
-#include <dbManager/account/accountDbManager.h>  // 引入 DbType 枚举
+#include <dbManager/DbType.h>
 #include <domain/port/IChannelStore.h>
 #include <domain/model/ChannelInfo.h>  // Channelinfo_st 已搬迁至 domain/model（R4 试点 B）
 
 using std::list;
-using std::make_shared;
 using std::shared_ptr;
 using std::string;
-using drogon::app;
 
 
 class ChannelDbManager : public IChannelStore
 {
 public:
-    static shared_ptr<ChannelDbManager> getInstance()
-    {
-        static shared_ptr<ChannelDbManager> instance;
-        if(instance == nullptr)
-        {
-            instance = make_shared<ChannelDbManager>();
-            instance->dbClient = app().getDbClient("aichatpg");
-            instance->detectDbType();
-        }
-        return instance;
-    }
+    // The composition root owns this concrete store.  Construction itself
+    // must not reach into the process-global Drogon app.
+    ChannelDbManager() = default;
+    ChannelDbManager(const ChannelDbManager&) = delete;
+    ChannelDbManager& operator=(const ChannelDbManager&) = delete;
+
+    /// Bind the configured DB client before ChannelManager performs table work.
+    bool initialize(std::string* errorMessage = nullptr);
     
     void init();
     bool addChannel(struct Channelinfo_st channelinfo);
@@ -47,6 +42,7 @@ private:
     void detectDbType();
     shared_ptr<drogon::orm::DbClient> dbClient;
     DbType dbType = DbType::PostgreSQL;
+    bool initialized_ = false;
 };
 
 #endif

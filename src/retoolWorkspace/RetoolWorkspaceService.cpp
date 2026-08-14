@@ -8,11 +8,31 @@
 
 #include <drogon/drogon.h>
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <stdexcept>
-#include <utils/BackgroundTaskQueue.h>
+#include <utility>
 
 using namespace drogon;
+
+RetoolWorkspaceService::RetoolWorkspaceService(
+    std::shared_ptr<IRetoolWorkspaceStore> workspaceStore)
+    : workspaceStore_(std::move(workspaceStore))
+{
+    if (!workspaceStore_)
+    {
+        throw std::invalid_argument("RetoolWorkspaceService requires an injected workspace store");
+    }
+}
+
+RetoolWorkspaceInfo RetoolWorkspaceService::provision(const std::string& requestJson)
+{
+    Json::Value request;
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream input(requestJson);
+    if (!Json::parseFromStream(builder, input, &request, &errors))
+        throw std::runtime_error("invalid workspace provision request: " + errors);
+    return provisionWorkspace(request);
+}
 
 namespace
 {
@@ -30,7 +50,9 @@ std::string shellEscape(const std::string& value)
     return escaped;
 }
 
-RetoolWorkspaceInfo persistWorkspaceFromRoot(const Json::Value& root, std::string* errorMessage)
+RetoolWorkspaceInfo persistWorkspaceFromRoot(
+    const Json::Value& root, IRetoolWorkspaceStore* store,
+    std::string* errorMessage)
 {
     RetoolWorkspaceInfo info = retoolworkspacecodec::fromJson(root["data"]["workspace"]);
     if (info.workspaceId.empty())
@@ -39,7 +61,7 @@ RetoolWorkspaceInfo persistWorkspaceFromRoot(const Json::Value& root, std::strin
     }
     info.status = "ready";
     info.verifyStatus = "passed";
-    if (!RetoolWorkspaceManager::getInstance().upsertWorkspace(info, errorMessage))
+    if (!store || !store->upsertWorkspace(info, errorMessage))
     {
         throw std::runtime_error(errorMessage ? *errorMessage : "failed to persist retool workspace");
     }
@@ -159,32 +181,5 @@ RetoolWorkspaceInfo RetoolWorkspaceService::provisionWorkspace(const Json::Value
         throw std::runtime_error(message);
     }
 
-    return persistWorkspaceFromRoot(root, errorMessage);
-}
-
-void RetoolWorkspaceService::provisionWorkspaceAsync(const Json::Value& requestBody, ProvisionCallback callback)
-{
-    // lambda 会 move 走 callback，失败路径需提前留副本。
-    auto callbackCopy = callback;
-    const auto enqueued = BackgroundTaskQueue::instance().enqueue(
-        "retool_workspace_create",
-        [requestBody, callback = std::move(callback)]() mutable {
-            try
-            {
-                std::string error;
-                auto info = RetoolWorkspaceService::getInstance().provisionWorkspace(requestBody, &error);
-                callback(info, "");
-            }
-            catch (const std::exception& ex)
-            {
-                callback(std::nullopt, ex.what());
-            }
-        });
-    if (enqueued != EnqueueResult::Accepted) {
-        // 任务从未入队，callback 永远不会被 worker 调用；此处必须由调用线程
-        // 亲自兑现回调契约，否则请求方将永久挂起等待一个不存在的结果。
-        LOG_ERROR << "[Retool工作区] 异步开通任务入队被拒：" << toString(enqueued);
-        callbackCopy(std::nullopt,
-                     std::string("workspace provision rejected: ") + toString(enqueued));
-    }
+    return persistWorkspaceFromRoot(root, workspaceStore_.get(), errorMessage);
 }

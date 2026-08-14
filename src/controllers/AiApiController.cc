@@ -1,37 +1,32 @@
 #include <controllers/AiApiController.h>
-#include <controllers/codecs/ProviderModelCatalogJsonCodec.h>
-#include <drogon/HttpResponse.h>
-#include <json/json.h>
-#include <drogon/drogon.h>
-#include <unistd.h>
-#include <random>
-#include <unordered_map>
-#include <apiManager/ApiManager.h>
-#include <controllers/RetiredProviderTombstone.h>
-#include <sessionManager/core/Session.h>
-#include <sessionManager/core/ClientOutputSanitizer.h>
-#include <sessionManager/core/GenerationService.h>
-#include <sessionManager/contracts/GenerationRequest.h>
-#include <sessionManager/contracts/IResponseSink.h>
-#include <sessionManager/core/SessionExecutionGate.h>
-#include <sessionManager/core/Errors.h>
-#include <sessionManager/core/RequestAdapters.h>
-#include <sessionManager/continuity/ResponseIndex.h>
-#include <utils/BackgroundTaskQueue.h>
-#include <utils/IoLoopResponseStream.h>
+
 #include <controllers/ControllerUtils.h>
-#include <controllers/sinks/ChatSseSink.h>
+#include <controllers/RetiredProviderTombstone.h>
+#include <controllers/codecs/ProviderModelCatalogJsonCodec.h>
 #include <controllers/sinks/ChatJsonSink.h>
-#include <controllers/sinks/ResponsesSseSink.h>
+#include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ResponsesJsonSink.h>
-#include <vector>
-#include <ctime>
-#include <optional>
-#include <cstring>
-#include <algorithm>
+#include <controllers/sinks/ResponsesSseSink.h>
+#include <utils/IoLoopResponseStream.h>
+
+#include <drogon/HttpResponse.h>
+#include <drogon/drogon.h>
+#include <json/json.h>
+
+#include <functional>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <utility>
+
 using namespace drogon;
 
 namespace {
+
+struct JsonResponseState {
+    HttpResponsePtr response;
+    int status = 200;
+};
 
 std::string inferProviderFromPath(const HttpRequestPtr& req)
 {
@@ -45,7 +40,7 @@ std::string inferProviderFromPath(const HttpRequestPtr& req)
 void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
 {
     if (!req) {
-        LOG_INFO << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+        LOG_INFO << "[AI] : endpoint=" << endpoint
                   << ", requestPresent=false";
         return;
     }
@@ -56,7 +51,7 @@ void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
     const auto cookie = req->getHeader("cookie");
     const char* contentTypeKind = contentType.empty() ? "absent" :
         (contentType.find("application/json") != std::string::npos ? "json" : "other");
-    LOG_INFO << "[AI接口控制器] 请求元数据: endpoint=" << endpoint
+    LOG_INFO << "[AI] : endpoint=" << endpoint
               << ", method=" << req->methodString()
               << ", path=" << req->path()
               << ", bodyPresent=" << (!body.empty())
@@ -67,224 +62,244 @@ void logSafeRequestMetadata(const HttpRequestPtr& req, const char* endpoint)
               << ", cookiePresent=" << (!cookie.empty());
 }
 
-generation::ErrorCode toGenerationErrorCode(error::ErrorCode code)
+aiapi::RequestHeaders requestHeaders(const HttpRequestPtr& req)
 {
-    switch (code) {
-        case error::ErrorCode::BadRequest:   return generation::ErrorCode::BadRequest;
-        case error::ErrorCode::Unauthorized: return generation::ErrorCode::Unauthorized;
-        case error::ErrorCode::Forbidden:    return generation::ErrorCode::Forbidden;
-        case error::ErrorCode::NotFound:     return generation::ErrorCode::NotFound;
-        case error::ErrorCode::Conflict:     return generation::ErrorCode::Conflict;
-        case error::ErrorCode::RateLimited:  return generation::ErrorCode::RateLimited;
-        case error::ErrorCode::Timeout:      return generation::ErrorCode::Timeout;
-        case error::ErrorCode::ProviderError:return generation::ErrorCode::ProviderError;
-        case error::ErrorCode::Cancelled:    return generation::ErrorCode::Cancelled;
-        case error::ErrorCode::None:
-        case error::ErrorCode::Internal:
-        default:
-            return generation::ErrorCode::Internal;
+    aiapi::RequestHeaders headers;
+    if (!req) {
+        return headers;
     }
+    headers.requestId = req->getHeader("x-request-id");
+    headers.correlationId = req->getHeader("x-correlation-id");
+    headers.userAgent = req->getHeader("user-agent");
+    headers.originator = req->getHeader("originator");
+    headers.codexWindowId = req->getHeader("x-codex-window-id");
+    headers.threadId = req->getHeader("thread-id");
+    headers.sessionId = req->getHeader("session-id");
+    headers.sessionIdUnderscore = req->getHeader("session_id");
+    headers.conversationId = req->getHeader("conversation-id");
+    headers.conversationIdUnderscore = req->getHeader("conversation_id");
+    headers.authorization = req->getHeader("authorization");
+    if (headers.authorization.empty()) {
+        headers.authorization = req->getHeader("Authorization");
+    }
+    return headers;
 }
 
-void emitAppErrorToSink(const error::AppError& appError, IResponseSink& sink)
+aiapi::GenerationInput generationInput(aiapi::Endpoint endpoint,
+                                       const HttpRequestPtr& req,
+                                       const Json::Value& body)
 {
-    generation::Error errorEvent;
-    errorEvent.code = toGenerationErrorCode(appError.code);
-    errorEvent.message = appError.message.empty() ? "Internal server error" : appError.message;
-    errorEvent.detail = appError.detail;
-    errorEvent.providerCode = appError.providerCode;
-    sink.onEvent(errorEvent);
+    aiapi::GenerationInput input;
+    input.endpoint = endpoint;
+    input.provider = inferProviderFromPath(req);
+    input.headers = requestHeaders(req);
+    if (req && !req->getBody().empty()) {
+        input.jsonBody = req->getBody();
+    } else {
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        input.jsonBody = Json::writeString(writer, body);
+    }
+    return input;
 }
 
-class FanoutSink final : public IResponseSink
+HttpResponsePtr makeUseCaseError(const aiapi::Error& error)
 {
-public:
-    FanoutSink(IResponseSink& left, IResponseSink& right)
-        : left_(left), right_(right)
-    {
+    auto response = ctl::makeError(
+        static_cast<HttpStatusCode>(error.httpStatus),
+        error.type.empty() ? "internal_error" : error.type,
+        error.message.empty() ? "Internal server error" : error.message,
+        error.code);
+    if (error.retryAfterSeconds > 0) {
+        response->addHeader("Retry-After", std::to_string(error.retryAfterSeconds));
     }
-
-    void onEvent(const generation::GenerationEvent& event) override
-    {
-        left_.onEvent(event);
-        right_.onEvent(event);
-    }
-
-    void onClose() override
-    {
-        left_.onClose();
-        right_.onClose();
-    }
-
-    bool isValid() const override
-    {
-        return left_.isValid() && right_.isValid();
-    }
-
-    std::string getSinkType() const override
-    {
-        return left_.getSinkType() + "+" + right_.getSinkType();
-    }
-
-private:
-    IResponseSink& left_;
-    IResponseSink& right_;
-};
-
+    return response;
 }
 
-
-
-void AiApiController::chaynsapichat(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+HttpResponsePtr unavailableResponse()
 {
-    LOG_INFO << "[AI接口控制器] 收到聊天补全请求";
-    logSafeRequestMetadata(req, "chat.completions");
+    aiapi::Error error;
+    error.httpStatus = 503;
+    error.type = "service_unavailable";
+    error.message = "Server is shutting down";
+    error.code = "shutting_down";
+    return makeUseCaseError(error);
+}
 
-    std::shared_ptr<Json::Value> jsonPtr;
-    if (!ctl::parseJsonOrError(req, callback, jsonPtr)) return;
-    auto& reqbody = *jsonPtr;
+generation::ErrorCode toGenerationErrorCode(const aiapi::Error& error)
+{
+    if (error.httpStatus == 400) return generation::ErrorCode::BadRequest;
+    if (error.httpStatus == 401) return generation::ErrorCode::Unauthorized;
+    if (error.httpStatus == 403) return generation::ErrorCode::Forbidden;
+    if (error.httpStatus == 404) return generation::ErrorCode::NotFound;
+    if (error.httpStatus == 409) return generation::ErrorCode::Conflict;
+    if (error.httpStatus == 429) return generation::ErrorCode::RateLimited;
+    if (error.httpStatus == 504 || error.httpStatus == 408) return generation::ErrorCode::Timeout;
+    if (error.httpStatus == 502) return generation::ErrorCode::ProviderError;
+    if (error.httpStatus == 499) return generation::ErrorCode::Cancelled;
+    return generation::ErrorCode::Internal;
+}
 
-    auto& reqmessages = reqbody["messages"];
-    if (reqmessages.empty()) {
-        ctl::sendError(callback, k400BadRequest, "invalid_request_error", "Messages array cannot be empty");
+void emitUseCaseErrorToSink(const aiapi::Error& error, IResponseSink& sink)
+{
+    generation::Error event;
+    event.code = toGenerationErrorCode(error);
+    event.message = error.message.empty() ? "Internal server error" : error.message;
+    event.detail = error.detail;
+    event.providerCode = error.providerCode;
+    sink.onEvent(event);
+}
+
+void finishJsonGeneration(
+    const std::shared_ptr<std::function<void(const HttpResponsePtr&)>>& callback,
+    const std::shared_ptr<JsonResponseState>& state,
+    const aiapi::GenerationResult& result)
+{
+    if (!result.succeeded()) {
+        ctl::respondInLoop(callback, makeUseCaseError(*result.error));
         return;
     }
-    
-    const bool stream = reqbody["stream"].asBool();
-    LOG_INFO << "[AI接口控制器] 聊天补全 stream=" << stream;
-    
-    // 通过 RequestAdapters 构建 GenerationRequest
-    LOG_INFO << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
-    GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromChat(req);
-    
+    if (state && state->response) {
+        state->response->setStatusCode(static_cast<HttpStatusCode>(state->status));
+        state->response->setContentTypeString("application/json; charset=utf-8");
+        ctl::respondInLoop(callback, state->response);
+        return;
+    }
+    ctl::respondInLoop(callback, ctl::makeError(
+        k500InternalServerError, "internal_error", "Failed to generate response"));
+}
 
-    genReq.provider = inferProviderFromPath(req);
-    
+bool parseStoredResponse(const std::string& serialized, Json::Value& out)
+{
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream stream(serialized);
+    return Json::parseFromStream(builder, stream, &out, &errors);
+}
+
+}  // namespace
+
+aiapi::IAiApiUseCase* AiApiController::useCase_ = nullptr;
+
+void AiApiController::setUseCase(aiapi::IAiApiUseCase* useCase)
+{
+    useCase_ = useCase;
+}
+
+void AiApiController::chaynsapichat(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[AI] ";
+    logSafeRequestMetadata(req, "chat.completions");
+
+    std::shared_ptr<Json::Value> json;
+    if (!ctl::parseJsonOrError(req, callback, json)) return;
+    if ((*json)["messages"].empty()) {
+        ctl::sendError(callback, k400BadRequest, "invalid_request_error",
+                       "Messages array cannot be empty");
+        return;
+    }
+
+    const bool stream = (*json).get("stream", false).asBool();
+    const auto input = generationInput(aiapi::Endpoint::ChatCompletions, req, *json);
+    auto* const useCase = useCase_;
 
     if (!stream) {
-        LOG_INFO << "[AI接口控制器] 非流式聊天补全入队后台执行";
-
         auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
             std::move(callback));
+        if (!useCase) {
+            ctl::respondInLoop(cb, unavailableResponse());
+            return;
+        }
 
-        const auto enqueued = BackgroundTaskQueue::instance().enqueue(
-            "chat_nonstream_generation",
-            [genReq, cb]() mutable {
-                auto jsonResp   = std::make_shared<HttpResponsePtr>();
-                auto httpStatus = std::make_shared<int>(200);
-
-                ChatJsonSink jsonSink(
-                    [jsonResp, httpStatus](const Json::Value& response, int status) {
-                        *jsonResp   = HttpResponse::newHttpJsonResponse(response);
-                        *httpStatus = status;
+        auto state = std::make_shared<JsonResponseState>();
+        const auto submission = useCase->submitGeneration(
+            input,
+            [state](const aiapi::GenerationPresentation& presentation)
+                -> std::shared_ptr<IResponseSink> {
+                return std::make_shared<ChatJsonSink>(
+                    [state](const Json::Value& response, int status) {
+                        state->response = HttpResponse::newHttpJsonResponse(response);
+                        state->status = status;
                     },
-                    genReq.model
-                );
-
-                GenerationService genService;
-                auto err = genService.runGuarded(
-                    genReq, jsonSink,
-                    session::ConcurrencyPolicy::RejectConcurrent
-                );
-
-                if (err.has_value()) {
-                    ctl::respondInLoop(cb, ctl::makeError(
-                        static_cast<HttpStatusCode>(err->httpStatus()),
-                        err->type(), err->message));
-                    return;
-                }
-
-                if (*jsonResp) {
-                    (*jsonResp)->setStatusCode(static_cast<HttpStatusCode>(*httpStatus));
-                    (*jsonResp)->setContentTypeString("application/json; charset=utf-8");
-                    ctl::respondInLoop(cb, *jsonResp);
-                } else {
-                    ctl::respondInLoop(cb, ctl::makeError(
-                        k500InternalServerError, "internal_error",
-                        "Failed to generate response"));
-                }
+                    presentation.model);
+            },
+            [cb, state](const aiapi::GenerationResult& result,
+                        const std::shared_ptr<IResponseSink>&) {
+                finishJsonGeneration(cb, state, result);
             });
-
-        if (auto rejection = ctl::makeEnqueueRejection(enqueued)) {
-            ctl::respondInLoop(cb, rejection);
+        if (!submission.accepted()) {
+            ctl::respondInLoop(cb, makeUseCaseError(*submission.error));
         }
         return;
     }
-    
 
-    LOG_INFO << "[AI接口控制器] 进入流式响应模式";
-    LOG_INFO << "[AI接口控制器] previousResponseId："
-              << (genReq.previousResponseId.has_value() ? *genReq.previousResponseId : "");
-
-    auto resp = HttpResponse::newAsyncStreamResponse(
-        [genReq](ResponseStreamPtr stream) mutable {
-            if (!stream) {
-                LOG_WARN << "[AI接口控制器] 流对象为空，终止处理";
+    auto response = HttpResponse::newAsyncStreamResponse(
+        [input, useCase](ResponseStreamPtr streamResponse) mutable {
+            if (!streamResponse) {
+                LOG_WARN << "[AI] ";
                 return;
             }
-
-            auto streamBridge = IoLoopResponseStream::create(std::move(stream));
+            const auto streamBridge = IoLoopResponseStream::create(std::move(streamResponse));
             if (!streamBridge) {
-                LOG_WARN << "[AI接口控制器] 无法绑定聊天流到当前 IO 事件循环";
+                LOG_WARN << "[AI] IO ";
                 return;
             }
-            const auto streamEnqueued = BackgroundTaskQueue::instance().enqueue("chat_stream_generation", [streamBridge, genReq]() mutable {
-                ChatSseSink sseSink(
-                    [streamBridge](const std::string& chunk) {
-                        return streamBridge->send(chunk);
-                    },
-                    [streamBridge]() {
-                        streamBridge->close();
-                    },
-                    genReq.model
-                );
-
-                GenerationService genService;
-                auto runErr = genService.runGuarded(
-                    genReq,
-                    sseSink,
-                    session::ConcurrencyPolicy::RejectConcurrent
-                );
-
-                if (runErr.has_value() && sseSink.isValid()) {
-                    emitAppErrorToSink(*runErr, sseSink);
-                    sseSink.onClose();
-                }
-            });
-
-            // SSE 响应头与 200 状态码在 newAsyncStreamResponse 返回时即已提交，
-            // 此刻再改状态码为时已晚。入队被拒时唯一诚实的处置是立即关流，
-            // 让客户端拿到一个干净结束的空流，而不是无限等待永不到来的 token。
-            if (streamEnqueued != EnqueueResult::Accepted) {
-                LOG_WARN << "[AI接口控制器] 聊天流入队被拒("
-                         << toString(streamEnqueued) << ")，立即关闭流";
+            if (!useCase) {
                 streamBridge->close();
                 return;
             }
-        },
-        true
-    );
 
-    resp->setContentTypeString("text/event-stream; charset=utf-8");
-    resp->addHeader("Cache-Control", "no-cache");
-    resp->addHeader("Connection", "keep-alive");
-    resp->addHeader("X-Accel-Buffering", "no");
-    resp->addHeader("Keep-Alive", "timeout=60");
-    callback(resp);
-    LOG_INFO << "[AI接口控制器] 聊天流响应已开始发送";
+            const auto submission = useCase->submitGeneration(
+                std::move(input),
+                [streamBridge](const aiapi::GenerationPresentation& presentation)
+                    -> std::shared_ptr<IResponseSink> {
+                    return std::make_shared<ChatSseSink>(
+                        [streamBridge](const std::string& chunk) {
+                            return streamBridge->send(chunk);
+                        },
+                        [streamBridge] { streamBridge->close(); },
+                        presentation.model);
+                },
+                [](const aiapi::GenerationResult& result,
+                   const std::shared_ptr<IResponseSink>& sink) {
+                    if (!result.succeeded() && sink && sink->isValid()) {
+                        emitUseCaseErrorToSink(*result.error, *sink);
+                        sink->onClose();
+                    }
+                });
+            if (!submission.accepted()) {
+                LOG_WARN << "[AI] ("
+                         << static_cast<int>(submission.outcome) << ")，";
+                streamBridge->close();
+            }
+        },
+        true);
+
+    response->setContentTypeString("text/event-stream; charset=utf-8");
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("Connection", "keep-alive");
+    response->addHeader("X-Accel-Buffering", "no");
+    response->addHeader("Keep-Alive", "timeout=60");
+    callback(response);
 }
 
-void AiApiController::chaynsapimodels(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+void AiApiController::chaynsapimodels(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    LOG_INFO << "[AI接口控制器] 获取模型列表";
-    const auto providerName = inferProviderFromPath(req);
-    auto provider = ApiManager::getInstance().getApiByApiName(providerName);
-    if (!provider) {
-        ctl::sendError(callback, k500InternalServerError, "provider_not_found", "Provider not found: " + providerName);
+    LOG_INFO << "[AI] ";
+    const auto provider = inferProviderFromPath(req);
+    auto* const useCase = useCase_;
+    const auto result = useCase ? useCase->modelCatalog(provider)
+                                : aiapi::ModelCatalogResult{};
+    if (!result.found()) {
+        ctl::sendError(callback, k500InternalServerError, "provider_not_found",
+                       "Provider not found: " + provider);
         return;
     }
-    Json::Value response = providermodelcodec::toJson(provider->getModels());
-    ctl::sendJson(callback, response);
+    ctl::sendJson(callback, providermodelcodec::toJson(result.catalog));
 }
 
 void AiApiController::retiredNexos(
@@ -302,215 +317,160 @@ void AiApiController::retiredNexosWithId(
     retired_provider::respondNexosTombstone(req, std::move(callback));
 }
 
-// ===========================================================
-
-// ===========================================================
-
-void AiApiController::responsesCreate(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback)
+void AiApiController::responsesCreate(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback)
 {
-    LOG_INFO << "[AI接口控制器] 收到 Responses 创建请求";
+    LOG_INFO << "[AI] Responses ";
     logSafeRequestMetadata(req, "responses.create");
 
-    std::shared_ptr<Json::Value> jsonPtr;
-    if (!ctl::parseJsonOrError(req, callback, jsonPtr, "invalid_json", "Invalid JSON in request body")) return;
-
-    auto& reqBody = *jsonPtr;
-    const bool stream = reqBody.get("stream", false).asBool();
-
-    LOG_INFO << "[AI接口控制器] 通过 RequestAdapters 构建 GenerationRequest";
-    GenerationRequest genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
-    genReq.provider = inferProviderFromPath(req);
-    const bool nativeResponsesToolItems =
-        genReq.clientInfo.isObject() &&
-        genReq.clientInfo.get("client_type", "").asString() == "Codex";
-
-    if (genReq.currentInput.empty() && genReq.messages.empty()) {
+    std::shared_ptr<Json::Value> json;
+    if (!ctl::parseJsonOrError(req, callback, json, "invalid_json",
+                               "Invalid JSON in request body")) return;
+    if ((*json).get("input", Json::Value()).empty() &&
+        (*json).get("messages", Json::Value()).empty()) {
         ctl::sendError(callback, k400BadRequest, "missing_input", "Input cannot be empty");
         return;
     }
 
-    if (!stream) {
-        LOG_INFO << "[AI接口控制器] 非流式 Responses 入队后台执行";
+    const bool stream = (*json).get("stream", false).asBool();
+    const auto input = generationInput(aiapi::Endpoint::Responses, req, *json);
+    auto* const useCase = useCase_;
 
+    if (!stream) {
         auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
             std::move(callback));
-        const int inputTokensEstimated = static_cast<int>(genReq.currentInput.length() / 4);
+        if (!useCase) {
+            ctl::respondInLoop(cb, unavailableResponse());
+            return;
+        }
 
-        const auto enqueued = BackgroundTaskQueue::instance().enqueue(
-            "responses_nonstream_generation",
-            [genReq, cb, nativeResponsesToolItems, inputTokensEstimated]() mutable {
-                auto jsonResp   = std::make_shared<HttpResponsePtr>();
-                auto httpStatus = std::make_shared<int>(200);
-
-                ResponsesJsonSink jsonSink(
-                    [jsonResp, httpStatus](const Json::Value& builtResponse, int status) {
-                        if (status == 200 && !builtResponse.isMember("error") &&
-                            builtResponse.isMember("id") && builtResponse["id"].isString()) {
-                            ResponseIndex::instance().storeResponse(
-                                builtResponse["id"].asString(), builtResponse);
-                        }
-
-                        *jsonResp   = HttpResponse::newHttpJsonResponse(builtResponse);
-                        *httpStatus = status;
+        auto state = std::make_shared<JsonResponseState>();
+        const auto submission = useCase->submitGeneration(
+            input,
+            [state](const aiapi::GenerationPresentation& presentation)
+                -> std::shared_ptr<IResponseSink> {
+                return std::make_shared<ResponsesJsonSink>(
+                    [state](const Json::Value& response, int status) {
+                        state->response = HttpResponse::newHttpJsonResponse(response);
+                        state->status = status;
                     },
-                    genReq.model,
-                    inputTokensEstimated,
-                    nativeResponsesToolItems
-                );
-
-                GenerationService genService;
-                auto gateErr = genService.runGuarded(
-                    genReq, jsonSink,
-                    session::ConcurrencyPolicy::RejectConcurrent
-                );
-
-                if (gateErr.has_value()) {
-                    ctl::respondInLoop(cb, ctl::makeError(
-                        static_cast<HttpStatusCode>(gateErr->httpStatus()),
-                        gateErr->type(), gateErr->message, "concurrent_request"));
-                    return;
-                }
-
-                if (*jsonResp) {
-                    (*jsonResp)->setStatusCode(static_cast<HttpStatusCode>(*httpStatus));
-                    (*jsonResp)->setContentTypeString("application/json; charset=utf-8");
-                    ctl::respondInLoop(cb, *jsonResp);
-                } else {
-                    ctl::respondInLoop(cb, ctl::makeError(
-                        k500InternalServerError, "internal_error",
-                        "Failed to generate response"));
-                }
+                    presentation.model,
+                    presentation.inputTokensEstimated,
+                    presentation.nativeResponsesToolItems);
+            },
+            [cb, state](const aiapi::GenerationResult& result,
+                        const std::shared_ptr<IResponseSink>&) {
+                finishJsonGeneration(cb, state, result);
             });
-
-        if (auto rejection = ctl::makeEnqueueRejection(enqueued)) {
-            ctl::respondInLoop(cb, rejection);
+        if (!submission.accepted()) {
+            ctl::respondInLoop(cb, makeUseCaseError(*submission.error));
         }
         return;
     }
 
-    LOG_INFO << "[AI接口控制器] Responses 进入流式响应模式"
-             << ", nativeToolItems=" << nativeResponsesToolItems;
-
-    auto resp = HttpResponse::newAsyncStreamResponse(
-        [genReq, nativeResponsesToolItems](ResponseStreamPtr stream) mutable {
-            if (!stream) {
-                LOG_WARN << "[AI接口控制器] Responses 流对象为空，终止处理";
+    auto response = HttpResponse::newAsyncStreamResponse(
+        [input, useCase](ResponseStreamPtr streamResponse) mutable {
+            if (!streamResponse) {
+                LOG_WARN << "[AI] Responses ";
                 return;
             }
-
-            auto streamBridge = IoLoopResponseStream::create(std::move(stream));
+            const auto streamBridge = IoLoopResponseStream::create(std::move(streamResponse));
             if (!streamBridge) {
-                LOG_WARN << "[AI接口控制器] 无法绑定 Responses 流到当前 IO 事件循环";
+                LOG_WARN << "[AI] Responses IO ";
                 return;
             }
-            const auto streamEnqueued = BackgroundTaskQueue::instance().enqueue(
-                "responses_stream_generation",
-                [streamBridge, genReq, nativeResponsesToolItems]() mutable {
-                    CollectorSink collector;
-                    ResponsesSseSink sseSink(
-                        [streamBridge](const std::string& chunk) {
-                            return streamBridge->send(chunk);
-                        },
-                        [streamBridge]() {
-                            streamBridge->close();
-                        },
-                        genReq.model,
-                        nativeResponsesToolItems
-                    );
-
-                    FanoutSink fanout(sseSink, collector);
-                    GenerationService genService;
-                    auto runErr = genService.runGuarded(
-                        genReq,
-                        fanout,
-                        session::ConcurrencyPolicy::RejectConcurrent
-                    );
-
-                    if (runErr.has_value()) {
-                        if (sseSink.isValid()) {
-                            emitAppErrorToSink(*runErr, sseSink);
-                            sseSink.onClose();
-                        }
-                        return;
-                    }
-
-                    Json::Value builtResponse;
-                    int builtStatus = 200;
-                    ResponsesJsonSink jsonBuilder(
-                        [&builtResponse, &builtStatus](const Json::Value& built, int status) {
-                            builtResponse = built;
-                            builtStatus = status;
-                        },
-                        genReq.model,
-                        static_cast<int>(genReq.currentInput.length() / 4),
-                        nativeResponsesToolItems
-                    );
-                    for (const auto& ev : collector.getEvents()) {
-                        jsonBuilder.onEvent(ev);
-                    }
-                    jsonBuilder.onClose();
-
-                    if (builtStatus == 200 && !builtResponse.isMember("error") &&
-                        builtResponse.isMember("id") && builtResponse["id"].isString()) {
-                        ResponseIndex::instance().storeResponse(builtResponse["id"].asString(), builtResponse);
-                    }
-                }
-            );
-
-            // SSE 响应头与 200 状态码在 newAsyncStreamResponse 返回时即已提交，
-            // 此刻再改状态码为时已晚。入队被拒时唯一诚实的处置是立即关流，
-            // 让客户端拿到一个干净结束的空流，而不是无限等待永不到来的 token。
-            if (streamEnqueued != EnqueueResult::Accepted) {
-                LOG_WARN << "[AI接口控制器] Responses 流入队被拒("
-                         << toString(streamEnqueued) << ")，立即关闭流";
+            if (!useCase) {
                 streamBridge->close();
                 return;
             }
-        },
-        true
-    );
 
-    resp->setContentTypeString("text/event-stream; charset=utf-8");
-    resp->addHeader("Cache-Control", "no-cache");
-    resp->addHeader("Connection", "keep-alive");
-    resp->addHeader("X-Accel-Buffering", "no");
-    resp->addHeader("Keep-Alive", "timeout=60");
-    callback(resp);
+            const auto submission = useCase->submitGeneration(
+                std::move(input),
+                [streamBridge](const aiapi::GenerationPresentation& presentation)
+                    -> std::shared_ptr<IResponseSink> {
+                    return std::make_shared<ResponsesSseSink>(
+                        [streamBridge](const std::string& chunk) {
+                            return streamBridge->send(chunk);
+                        },
+                        [streamBridge] { streamBridge->close(); },
+                        presentation.model,
+                        presentation.nativeResponsesToolItems,
+                        presentation.inputTokensEstimated);
+                },
+                [](const aiapi::GenerationResult& result,
+                   const std::shared_ptr<IResponseSink>& sink) {
+                    if (!result.succeeded() && sink && sink->isValid()) {
+                        emitUseCaseErrorToSink(*result.error, *sink);
+                        sink->onClose();
+                    }
+                });
+            if (!submission.accepted()) {
+                LOG_WARN << "[AI] Responses ("
+                         << static_cast<int>(submission.outcome) << ")，";
+                streamBridge->close();
+            }
+        },
+        true);
+
+    response->setContentTypeString("text/event-stream; charset=utf-8");
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("Connection", "keep-alive");
+    response->addHeader("X-Accel-Buffering", "no");
+    response->addHeader("Keep-Alive", "timeout=60");
+    callback(response);
 }
 
-void AiApiController::responsesGet(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string responseId)
+void AiApiController::responsesGet(
+    const HttpRequestPtr &,
+    std::function<void(const HttpResponsePtr &)> &&callback,
+    std::string responseId)
 {
-    LOG_INFO << "[AI接口控制器] ResponsesGet - ID：" << responseId;
-
-    Json::Value stored;
-    if (!ResponseIndex::instance().tryGetResponse(responseId, stored)) {
-        ctl::sendError(callback, k404NotFound, "invalid_request_error", "Response not found", "response_not_found");
+    LOG_INFO << "[AI] ResponsesGet - ID：" << responseId;
+    auto* const useCase = useCase_;
+    const auto result = useCase ? useCase->getResponse(responseId)
+                                : aiapi::StoredResponseResult{};
+    if (result.outcome == aiapi::StoredResponseOutcome::NotFound) {
+        ctl::sendError(callback, k404NotFound, "invalid_request_error", "Response not found",
+                       "response_not_found");
+        return;
+    }
+    if (result.outcome != aiapi::StoredResponseOutcome::Found) {
+        ctl::sendError(callback, k500InternalServerError, "internal_error",
+                       "Stored response is invalid");
         return;
     }
 
+    Json::Value stored;
+    if (!parseStoredResponse(result.jsonBody, stored)) {
+        ctl::sendError(callback, k500InternalServerError, "internal_error",
+                       "Stored response is invalid");
+        return;
+    }
     ctl::sendJson(callback, stored);
 }
 
-void AiApiController::responsesDelete(const HttpRequestPtr &req, std::function<void(const HttpResponsePtr &)> &&callback, std::string responseId)
+void AiApiController::responsesDelete(
+    const HttpRequestPtr &,
+    std::function<void(const HttpResponsePtr &)> &&callback,
+    std::string responseId)
 {
-    LOG_INFO << "[AI接口控制器] Responses删除 - ID：" << responseId;
-
-    if (!ResponseIndex::instance().erase(responseId)) {
-        ctl::sendError(callback, k404NotFound, "invalid_request_error", "Response not found", "response_not_found");
+    LOG_INFO << "[AI] Responses - ID：" << responseId;
+    auto* const useCase = useCase_;
+    const auto result = useCase ? useCase->deleteResponse(responseId)
+                                : aiapi::DeleteResponseResult{};
+    if (!result.deleted()) {
+        ctl::sendError(callback, k404NotFound, "invalid_request_error", "Response not found",
+                       "response_not_found");
         return;
     }
-    
+
     Json::Value response;
     response["id"] = responseId;
     response["object"] = "response";
     response["deleted"] = true;
-    
     ctl::sendJson(callback, response);
-    
-    LOG_INFO << "[AI接口控制器] Responses删除 完成，ID：" << responseId;
 }
-
-
 
 std::string AiApiController::generateClientId(const HttpRequestPtr &req)
 {
@@ -521,9 +481,6 @@ std::string AiApiController::generateClientId(const HttpRequestPtr &req)
 
 bool AiApiController::isCreateNewSession(const HttpRequestPtr &req)
 {
-    auto jsonPtr = req->getJsonObject();
-    if (jsonPtr && jsonPtr->isMember("new_session")) {
-        return (*jsonPtr)["new_session"].asBool();
-    }
-    return false;
+    auto json = req->getJsonObject();
+    return json && json->isMember("new_session") && (*json)["new_session"].asBool();
 }

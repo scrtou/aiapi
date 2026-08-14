@@ -63,14 +63,49 @@ std::string createChannelTableSqlite3 = R"(
     );
 )";
 
+bool ChannelDbManager::initialize(std::string* errorMessage)
+{
+    if (initialized_)
+    {
+        return dbClient != nullptr;
+    }
+    initialized_ = true;
+
+    try
+    {
+        dbClient = drogon::app().getDbClient("aichatpg");
+        if (!dbClient)
+        {
+            if (errorMessage) *errorMessage = "ChannelDbManager database client is unavailable";
+            LOG_ERROR << "[渠道数据库] 获取数据库客户端失败";
+            return false;
+        }
+        detectDbType();
+        return true;
+    }
+    catch (const std::exception& ex)
+    {
+        dbClient.reset();
+        if (errorMessage) *errorMessage = ex.what();
+        LOG_ERROR << "[渠道数据库] 初始化数据库客户端失败: " << ex.what();
+        return false;
+    }
+}
+
 void ChannelDbManager::detectDbType()
 {
     // 从配置文件的 custom_config 读取数据库类型
-    auto customConfig = drogon::app().getCustomConfig();
     std::string dbTypeStr = "postgresql";  // 默认值
-    
-    if (customConfig.isMember("dbtype")) {
-        dbTypeStr = customConfig["dbtype"].asString();
+    try
+    {
+        const auto customConfig = drogon::app().getCustomConfig();
+        if (customConfig.isMember("dbtype")) {
+            dbTypeStr = customConfig["dbtype"].asString();
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        LOG_WARN << "[渠道数据库] 读取数据库类型配置失败，使用 PostgreSQL 默认值: " << ex.what();
     }
     
     // 转换为小写进行比较
@@ -91,7 +126,10 @@ void ChannelDbManager::detectDbType()
 void ChannelDbManager::init()
 {
     LOG_INFO << "[渠道数据库] 初始化开始";
-    detectDbType();
+    if (!initialize())
+    {
+        return;
+    }
     if (!isTableExist())
     {
         LOG_INFO << "[渠道数据库] 渠道表不存在, 正在创建表...";
