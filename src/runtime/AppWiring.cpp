@@ -350,14 +350,21 @@ StartupResult stepProviderRegistry(
                                      "failed to register chaynsapi provider");
     }
 
-    auto retoolProvider = std::make_shared<retoolapi>(
+    auto retoolProvider = provider::makeProductionProvider<retoolapi>(
         retool::makeDrogonRetoolHttpTransport(),
         retool::makeRealRetoolClock(),
         *managedAccounts,
         *workspaceUseCase,
         *channels);
-    retoolProvider->init();
-    if (!registry->registerProvider("retoolapi", retoolProvider)) {
+    const auto retoolInitialization = retoolProvider->initialize();
+    if (!retoolInitialization) {
+        return StartupResult::failed(
+            StartupError::OwnerStartFailed,
+            "failed to initialize retoolapi provider: " +
+                retoolInitialization.error().message);
+    }
+    if (!registry->registerChatProvider(
+            "retoolapi", retoolProvider, retoolProvider, retoolProvider)) {
         return StartupResult::failed(StartupError::OwnerStartFailed,
                                      "failed to register retoolapi provider");
     }

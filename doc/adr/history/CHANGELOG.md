@@ -6,6 +6,29 @@
 
 ---
 
+## P6-W3 收口 · Retool Provider 垂直切片（2026-08-14）
+
+- `retoolapi` 由 `APIinterface` 迁为 `ProviderBase` + `IProviderModelCatalog` +
+  `IProviderThreadContext`；启动改为 `initialize() -> Result<void>`，workflow/agent 统一从
+  `doGenerate(ProviderRequest, ProviderCallContext)` 返回 `Result<ProviderResponse>`。Provider 不再接收
+  `session_st`、clientInfo JSON bag 或写 `session.response`，workspace/thread affinity 保持为私有状态。
+- Application 仅复制显式 `workspace_id/workspaceId` 到 string-only `ProviderRequest::routingHints`；Retool
+  的每次 HTTP timeout 由 context 剩余 deadline 剪裁，workflow/agent polling 与 sleep 在阻塞边界检查只读
+  cancellation。新增取消发生于 poll 返回后时不再发下一 poll 的离线回归。
+- `ProviderRegistry` 删除 legacy storage、`registerProvider()` 与 `findProvider()`；`APIinterface.h` 删除，
+  AppWiring 使用 `makeProductionProvider<retoolapi>()`、显式 `initialize()`，再以 narrow chat/model/thread
+  registration 发布两家活跃 Provider。GenerationService、AiApiUseCase、Session、Health 同步去掉 fallback，
+  无业务语义的 `afterResponseProcess()` 调用删除。
+- 新增 `check_retool_provider_slice.py`（含内存 mutation selftest）并接入 CI；`check_chayns_provider_slice.py`
+  与 `check_provider_registry.py` 更新为 P6 完成态，layer rule 明确仅 Chayns/Retool 两个 Provider header 可
+  在迁移期间从 apipoint include infrastructure ProviderBase。ADR-05/ADR-07、计划、workbook、work product、
+  tools README 与根 README 同步更新。
+- 验证：Debug configure/build、392/392 `ctest`、直接 runner 392 cases / 2042 assertions、严格 test
+  registration、P6 Chayns/Retool gate 及 selftest 和全量 architecture gates 通过；P6-W3 标记 DONE，下一项为
+  P7-W1 Generation pipeline 重写。
+
+---
+
 ## P6-W2 收口 · Chayns Provider 垂直切片（2026-08-14）
 
 - `chaynsapi` 由 `APIinterface` 迁为 `ProviderBase` + `IProviderModelCatalog` +

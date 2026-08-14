@@ -2,7 +2,7 @@
 #include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
 
 #include <drogon/drogon.h>
-#include <sessionManager/continuity/HistoryReplayBudget.h>
+#include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <cstring>
@@ -121,14 +121,53 @@ class ScopedWorkspaceUsage
     std::string workspaceId_;
     bool active_ = false;
 };
+
+std::optional<platform::Error> interruptionError(
+    const provider::ProviderCallContext& context)
+{
+    if (context.isCancelled()) {
+        return platform::Error::cancelled("Retool provider request cancelled");
+    }
+    if (context.deadlineExceeded()) {
+        return platform::Error::timeout("Retool provider request deadline exceeded");
+    }
+    return std::nullopt;
+}
+
+size_t configuredHistoryLimit(const char* key, size_t fallback)
+{
+    constexpr size_t kMaximumConfiguredBytes = 8 * 1024 * 1024;
+    const auto& customConfig = drogon::app().getCustomConfig();
+    if (!customConfig.isObject() ||
+        !customConfig.isMember("history_replay") ||
+        !customConfig["history_replay"].isObject()) {
+        return fallback;
+    }
+
+    const auto& value = customConfig["history_replay"][key];
+    if (value.isUInt64()) {
+        return static_cast<size_t>(std::min<Json::UInt64>(
+            value.asUInt64(), static_cast<Json::UInt64>(kMaximumConfiguredBytes)));
+    }
+    if (value.isInt()) {
+        const int configured = value.asInt();
+        if (configured >= 0) {
+            return static_cast<size_t>(std::min<int>(
+                configured, static_cast<int>(kMaximumConfiguredBytes)));
+        }
+    }
+    return fallback;
+}
 }  // namespace
 
 retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
                      std::shared_ptr<retool::IRetoolClock> clock,
                      IManagedAccountContextResolver& accounts,
                      workspace::IRetoolWorkspaceUseCase& workspaces,
-                     IChannelCatalog& channels)
-    : transport_(std::move(transport)), clock_(std::move(clock))
+                     IChannelCatalog& channels,
+                     provider::ProviderBase::FailureObserver failureObserver)
+    : provider::ProviderBase(std::move(failureObserver)),
+      transport_(std::move(transport)), clock_(std::move(clock))
 {
     if (!transport_)
     {
@@ -145,13 +184,13 @@ retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
 
 retoolapi::~retoolapi() = default;
 
-void retoolapi::init()
+platform::Result<void> retoolapi::initialize()
 {
+    modelCatalog_.models.clear();
     auto appendModel = [this](const std::string& id) {
-        modelInfo info;
-        info.modelName = id;
-        info.status = true;
-        ModelInfoMap[id] = info;
+        ProviderModel model;
+        model.id = id;
+        modelCatalog_.models.push_back(std::move(model));
     };
 
     appendModel("gpt-4o-mini");
@@ -169,69 +208,60 @@ void retoolapi::init()
     appendModel("agent-claude-sonnet-4-6");
     appendModel("agent-claude-sonnet-4-5-20250929");
     appendModel("agent-claude-opus-4-5-20251101");
+    return platform::Result<void>::success();
 }
 
-void retoolapi::checkAlivableTokens()
+provider::ProviderCapabilities retoolapi::capabilities() const noexcept
 {
-}
-
-void retoolapi::checkModels()
-{
+    return provider::ProviderCapabilities{/*nativeToolCalls=*/false,
+                                          /*upstreamHistory=*/true,
+                                          /*supportsImages=*/false};
 }
 
 ProviderModelCatalog retoolapi::getModels()
 {
-    ProviderModelCatalog catalog;
-    for (const auto& entry : ModelInfoMap)
-    {
-        if (!entry.second.status) continue;
-        ProviderModel model;
-        model.id = entry.second.modelName;
-        catalog.models.push_back(std::move(model));
-    }
-    return catalog;
+    return modelCatalog_;
 }
 
-std::string retoolapi::requireWorkspaceId(const session_st& session) const
+std::string retoolapi::requireWorkspaceId(
+    const provider::ProviderRequest& request) const
 {
-    if (session.provider.clientInfo.isMember("workspace_id"))
-    {
-        return session.provider.clientInfo["workspace_id"].asString();
-    }
-    if (session.provider.clientInfo.isMember("workspaceId"))
-    {
-        return session.provider.clientInfo["workspaceId"].asString();
+    for (const char* key : {"workspace_id", "workspaceId"}) {
+        const auto it = request.routingHints.find(key);
+        if (it != request.routingHints.end() && !it->second.empty()) {
+            return it->second;
+        }
     }
     return "";
 }
 
-std::string retoolapi::resolveWorkspaceId(session_st& session, bool requireAgent, std::string* errorMessage) const
+std::string retoolapi::resolveWorkspaceId(const provider::ProviderRequest& request,
+                                          bool requireAgent,
+                                          std::string* errorMessage)
 {
     if (!workspaces_)
     {
         if (errorMessage) *errorMessage = "retool workspace service unavailable";
         return "";
     }
-    auto explicitId = requireWorkspaceId(session);
+    auto explicitId = requireWorkspaceId(request);
     if (!explicitId.empty())
     {
-        auto* self = const_cast<retoolapi*>(this);
-        std::lock_guard<std::mutex> lock(self->threadMutex_);
-        self->conversationWorkspaceMap_[session.state.conversationId] = explicitId;
+        std::lock_guard<std::mutex> lock(threadMutex_);
+        conversationWorkspaceMap_[request.conversationId] = explicitId;
         LOG_INFO << "[retoolapi] workspace selection: source=explicit"
-                 << ", conversation=" << session.state.conversationId
+                 << ", conversation=" << request.conversationId
                  << ", workspace=" << explicitId;
         return explicitId;
     }
 
     {
-        std::lock_guard<std::mutex> lock(const_cast<retoolapi*>(this)->threadMutex_);
-        auto affinityIt = conversationWorkspaceMap_.find(session.state.conversationId);
+        std::lock_guard<std::mutex> lock(threadMutex_);
+        auto affinityIt = conversationWorkspaceMap_.find(request.conversationId);
         if (affinityIt != conversationWorkspaceMap_.end() && !affinityIt->second.empty())
         {
-            session.provider.clientInfo["workspace_id"] = affinityIt->second;
             LOG_INFO << "[retoolapi] workspace selection: source=conversation_affinity"
-                     << ", conversation=" << session.state.conversationId
+                     << ", conversation=" << request.conversationId
                      << ", workspace=" << affinityIt->second;
             return affinityIt->second;
         }
@@ -273,14 +303,12 @@ std::string retoolapi::resolveWorkspaceId(session_st& session, bool requireAgent
     const auto selectedId = !candidates.front().workspaceId.empty()
         ? candidates.front().workspaceId
         : candidates.front().subdomain;
-    session.provider.clientInfo["workspace_id"] = selectedId;
     {
-        auto* self = const_cast<retoolapi*>(this);
-        std::lock_guard<std::mutex> lock(self->threadMutex_);
-        self->conversationWorkspaceMap_[session.state.conversationId] = selectedId;
+        std::lock_guard<std::mutex> lock(threadMutex_);
+        conversationWorkspaceMap_[request.conversationId] = selectedId;
     }
     LOG_INFO << "[retoolapi] workspace selection: source=pool"
-             << ", conversation=" << session.state.conversationId
+             << ", conversation=" << request.conversationId
              << ", workspace=" << selectedId
              << ", email=" << candidates.front().email
              << ", baseUrl=" << candidates.front().baseUrl
@@ -330,44 +358,41 @@ Json::Value retoolapi::parseJsonResponse(const HttpResponsePtr& resp) const
     return Json::Value(Json::nullValue);
 }
 
-provider::ProviderError retoolapi::classifyHttpError(int httpStatus, const std::string& message) const
+platform::Error retoolapi::classifyHttpError(
+    int httpStatus, const std::string& message) const
 {
-    if (httpStatus == 401 || httpStatus == 403)
-    {
-        auto err = provider::ProviderError::auth(message);
-        err.httpStatusCode = httpStatus;
-        return err;
+    platform::ErrorCode code = platform::ErrorCode::ProviderError;
+    if (httpStatus == 401) {
+        code = platform::ErrorCode::Unauthorized;
+    } else if (httpStatus == 403) {
+        code = platform::ErrorCode::Forbidden;
+    } else if (httpStatus == 400 || httpStatus == 404 || httpStatus == 422) {
+        code = platform::ErrorCode::BadRequest;
+    } else if (httpStatus == 408 || httpStatus == 504) {
+        code = platform::ErrorCode::Timeout;
+    } else if (httpStatus == 429) {
+        code = platform::ErrorCode::RateLimited;
     }
-    if (httpStatus == 404)
-    {
-        provider::ProviderError err;
-        err.code = provider::ProviderErrorCode::InvalidRequest;
-        err.httpStatusCode = httpStatus;
-        err.message = message;
-        return err;
+    return platform::Error(code, message, {}, {}, httpStatus);
+}
+
+retool::HttpResult retoolapi::sendWithinContext(
+    const provider::ProviderCallContext& context,
+    const std::string& baseUrl,
+    const HttpRequestPtr& request,
+    double maximumTimeoutSeconds) const
+{
+    const auto remaining = context.remaining();
+    const double remainingSeconds = static_cast<double>(remaining.count()) / 1000.0;
+    const double timeoutSeconds = std::min(maximumTimeoutSeconds, remainingSeconds);
+    if (timeoutSeconds <= 0.0 || context.isCancelled()) {
+        return {ReqResult::BadResponse, nullptr};
     }
-    if (httpStatus == 408 || httpStatus == 504)
-    {
-        return provider::ProviderError::timeout(message);
-    }
-    if (httpStatus == 429)
-    {
-        return provider::ProviderError::rateLimited(message);
-    }
-    if (httpStatus >= 500)
-    {
-        provider::ProviderError err = provider::ProviderError::internal(message);
-        err.httpStatusCode = httpStatus;
-        return err;
-    }
-    provider::ProviderError err;
-    err.code = provider::ProviderErrorCode::Unknown;
-    err.httpStatusCode = httpStatus;
-    err.message = message;
-    return err;
+    return transport_->send(baseUrl, request, timeoutSeconds);
 }
 
 HttpResponsePtr retoolapi::sendJsonRequest(
+    const provider::ProviderCallContext& context,
     const std::string& baseUrl,
     HttpMethod method,
     const std::string& path,
@@ -384,7 +409,10 @@ HttpResponsePtr retoolapi::sendJsonRequest(
     req->addHeader("x-retool-client-version", "3.356.0-f7a1e09 (Build 313746)");
     req->addHeader("user-agent", "Mozilla/5.0");
     req->addHeader("cookie", buildCookieHeader(workspaceJson));
-    auto [result, resp] = transport_->send(baseUrl, req, timeoutSeconds);
+    auto [result, resp] = sendWithinContext(context, baseUrl, req, timeoutSeconds);
+    if (interruptionError(context)) {
+        return nullptr;
+    }
     if (result != ReqResult::Ok || !resp)
     {
         return nullptr;
@@ -392,57 +420,50 @@ HttpResponsePtr retoolapi::sendJsonRequest(
     return resp;
 }
 
-std::string retoolapi::contentToText(const Json::Value& content) const
+bool retoolapi::sleepWithinContext(
+    const provider::ProviderCallContext& context,
+    std::chrono::milliseconds duration) const
 {
-    if (content.isString()) return content.asString();
-    if (content.isArray())
-    {
-        std::string out;
-        for (const auto& item : content)
-        {
-            if (item.isObject() && item.get("type", "").asString() == "text" && item.isMember("text"))
-            {
-                if (!out.empty()) out += "\n";
-                out += item["text"].asString();
-            }
-        }
-        return out;
-    }
-    return "";
+    if (interruptionError(context)) return false;
+    const auto remaining = context.remaining();
+    const auto sleepFor = std::min(duration, remaining);
+    if (sleepFor <= std::chrono::milliseconds::zero()) return false;
+    clock_->sleepFor(sleepFor);
+    return !interruptionError(context).has_value();
 }
 
-std::string retoolapi::buildTranscriptPrompt(const session_st& session) const
+std::string retoolapi::buildTranscriptPrompt(
+    const provider::ProviderRequest& request) const
 {
-    std::string systemText = session.request.systemPrompt;
+    std::string systemText = request.systemPrompt;
     std::string convoText;
-    for (const auto& msg : session.provider.messageContext)
+    for (const auto& message : request.messages)
     {
-        if (!msg.isObject()) continue;
-        const auto role = msg.get("role", "user").asString();
-        if (role == "system")
+        if (message.role == provider::ProviderMessageRole::System)
         {
-            const auto text = contentToText(msg["content"]);
-            if (!text.empty())
+            if (!message.text.empty())
             {
                 if (!systemText.empty()) systemText += "\n";
-                systemText += text;
+                systemText += message.text;
             }
             continue;
         }
-        if (role == "user" || role == "assistant")
+        if (message.role == provider::ProviderMessageRole::User ||
+            message.role == provider::ProviderMessageRole::Assistant)
         {
-            const auto text = contentToText(msg["content"]);
-            if (!text.empty())
+            if (!message.text.empty())
             {
                 if (!convoText.empty()) convoText += "\n";
-                convoText += role + ": " + text;
+                convoText += message.role == provider::ProviderMessageRole::User
+                    ? "user: " + message.text
+                    : "assistant: " + message.text;
             }
         }
     }
-    if (!session.request.message.empty())
+    if (!request.input.empty())
     {
         if (!convoText.empty()) convoText += "\n";
-        convoText += "user: " + session.request.message;
+        convoText += "user: " + request.input;
     }
     std::string prompt = "You are responding in a chat API. Continue the conversation naturally.";
     if (!systemText.empty()) prompt += "\n\nSystem instructions:\n" + systemText;
@@ -450,19 +471,13 @@ std::string retoolapi::buildTranscriptPrompt(const session_st& session) const
     return prompt;
 }
 
-std::string retoolapi::lastUserContent(const session_st& session) const
+std::string retoolapi::lastUserContent(
+    const provider::ProviderRequest& request) const
 {
-    if (!session.request.message.empty()) return session.request.message;
-    const auto& ctx = session.provider.messageContext;
-    if (ctx.isArray())
-    {
-        for (Json::ArrayIndex idx = ctx.size(); idx > 0; --idx)
-        {
-            const auto& item = ctx[idx - 1];
-            if (item.isObject() && item.get("role", "").asString() == "user")
-            {
-                return contentToText(item["content"]);
-            }
+    if (!request.input.empty()) return request.input;
+    for (auto it = request.messages.rbegin(); it != request.messages.rend(); ++it) {
+        if (it->role == provider::ProviderMessageRole::User && !it->text.empty()) {
+            return it->text;
         }
     }
     return "";
@@ -502,7 +517,10 @@ Json::Value retoolapi::resolveRetoolProviderBinding(const Json::Value& workspace
     return binding;
 }
 
-bool retoolapi::populateProviderResources(const std::string& workspaceId, Json::Value& workspaceJson) const
+bool retoolapi::populateProviderResources(
+    const provider::ProviderCallContext& context,
+    const std::string& workspaceId,
+    Json::Value& workspaceJson) const
 {
     const auto baseUrl = workspaceJson.get("baseUrl", "").asString();
     if (baseUrl.empty())
@@ -510,7 +528,8 @@ bool retoolapi::populateProviderResources(const std::string& workspaceId, Json::
         return false;
     }
 
-    auto resourcesResp = sendJsonRequest(baseUrl, Get, "/api/resources", nullptr, workspaceJson, 30.0);
+    auto resourcesResp = sendJsonRequest(
+        context, baseUrl, Get, "/api/resources", nullptr, workspaceJson, 30.0);
     if (!resourcesResp || resourcesResp->statusCode() >= 400)
     {
         return false;
@@ -586,10 +605,12 @@ bool retoolapi::replaceFirstRegex(std::string& input, const std::regex& pattern,
     return true;
 }
 
-Json::Value retoolapi::buildAnthropicWorkflowTemplate(const Json::Value& destinationWorkflow,
-                                                      const Json::Value& workspaceJson,
-                                                      const std::string& prompt,
-                                                      const std::string& model) const
+Json::Value retoolapi::buildAnthropicWorkflowTemplate(
+    const provider::ProviderCallContext& context,
+    const Json::Value& destinationWorkflow,
+    const Json::Value& workspaceJson,
+    const std::string& prompt,
+    const std::string& model) const
 {
     const auto sourceBaseUrl = envOrDefault("RETOOL2_BASE_URL", "");
     const auto sourceAccessToken = envOrDefault("RETOOL2_ACCESS_TOKEN", "");
@@ -610,6 +631,7 @@ Json::Value retoolapi::buildAnthropicWorkflowTemplate(const Json::Value& destina
     sourceWorkspace["xsrfToken"] = sourceXsrfToken;
 
     auto sourceResp = sendJsonRequest(
+        context,
         sourceWorkspace.get("baseUrl", "").asString(),
         Get,
         "/api/workflow/" + sourceWorkflowId,
@@ -760,638 +782,700 @@ Json::Value retoolapi::patchAgentTemplate(const Json::Value& workflow, const Jso
     return patched;
 }
 
-provider::ProviderResult retoolapi::requestWorkflow(session_st& session)
+platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
+    const provider::ProviderRequest& request,
+    provider::ProviderCallContext& context)
 {
+    using Result = platform::Result<provider::ProviderResponse>;
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+
     std::string resolveError;
-    const auto workspaceId = resolveWorkspaceId(session, false, &resolveError);
-    if (workspaceId.empty())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::auth(resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
+    const auto workspaceId = resolveWorkspaceId(request, false, &resolveError);
+    if (workspaceId.empty()) {
+        return Result::failure(platform::Error::unauthorized(
+            resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
     ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
+
     std::string error;
-    if (!accounts_)
-    {
-        return provider::ProviderResult::fail(
-            provider::ProviderError::internal("managed account service unavailable"));
+    if (!accounts_) {
+        return Result::failure(platform::Error::internal(
+            "managed account service unavailable"));
     }
-    auto ctx = accounts_->buildExecutionContext(
+    auto accountContext = accounts_->buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, workspaceId, &error);
-    if (!ctx)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::auth(error.empty() ? "retool workspace not found" : error));
+    if (!accountContext) {
+        return Result::failure(platform::Error::unauthorized(
+            error.empty() ? "retool workspace not found" : error));
     }
-    Json::Value workspace = ctx->data;
+
+    Json::Value workspace = accountContext->data;
     const std::string baseUrl = workspace.get("baseUrl", "").asString();
     const std::string workflowId = workspace.get("workflowId", "").asString();
-    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << session.state.conversationId
+    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << request.conversationId
              << ", workspace=" << workspaceId
              << ", email=" << workspace.get("email", "").asString()
              << ", baseUrl=" << baseUrl
              << ", route=workflow";
-    if (baseUrl.empty() || workflowId.empty())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::internal("retool workspace is missing workflow configuration"));
+    if (baseUrl.empty() || workflowId.empty()) {
+        return Result::failure(platform::Error::internal(
+            "retool workspace is missing workflow configuration"));
     }
 
-    auto workflowResp = sendJsonRequest(baseUrl, Get, "/api/workflow/" + workflowId, nullptr, workspace);
-    if (!workflowResp)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::network("failed to fetch retool workflow"));
+    auto workflowResp = sendJsonRequest(
+        context, baseUrl, Get, "/api/workflow/" + workflowId, nullptr, workspace);
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (!workflowResp) {
+        return Result::failure(platform::Error::providerError(
+            "failed to fetch retool workflow"));
     }
     auto workflowJson = parseJsonResponse(workflowResp);
-    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow"))
-    {
-        return provider::ProviderResult::fail(classifyHttpError(static_cast<int>(workflowResp->statusCode()), std::string(workflowResp->getBody())));
+    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow")) {
+        if (workflowResp->statusCode() == k200OK) {
+            return Result::failure(platform::Error::providerError(
+                "Retool workflow response is invalid", {},
+                static_cast<int>(workflowResp->statusCode())));
+        }
+        return Result::failure(classifyHttpError(
+            static_cast<int>(workflowResp->statusCode()),
+            std::string(workflowResp->getBody())));
     }
 
-    const std::string requestedModel = session.request.model.empty() ? "gpt-4o-mini" : session.request.model;
+    const std::string requestedModel = request.model.empty() ? "gpt-4o-mini" : request.model;
     auto binding = resolveRetoolProviderBinding(workspace, requestedModel);
-    if (!binding.isObject())
-    {
-        populateProviderResources(workspaceId, workspace);
+    if (!binding.isObject()) {
+        populateProviderResources(context, workspaceId, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
         binding = resolveRetoolProviderBinding(workspace, requestedModel);
     }
-    if (!binding.isObject())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::internal("matching retool provider resource not found for requested model"));
+    if (!binding.isObject()) {
+        return Result::failure(platform::Error::providerError(
+            "matching retool provider resource not found for requested model"));
     }
 
-    const auto prompt = buildTranscriptPrompt(session);
+    const auto prompt = buildTranscriptPrompt(request);
     Json::Value patched;
-    if (isAnthropicModelName(requestedModel))
-    {
-        patched = buildAnthropicWorkflowTemplate(workflowJson["workflow"], workspace, prompt, requestedModel);
+    if (isAnthropicModelName(requestedModel)) {
+        patched = buildAnthropicWorkflowTemplate(
+            context, workflowJson["workflow"], workspace, prompt, requestedModel);
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
     }
-    if (!patched.isObject())
-    {
+    if (!patched.isObject()) {
         patched = patchWorkflowTemplate(
-            workflowJson["workflow"],
-            workspace,
-            prompt,
-            requestedModel);
+            workflowJson["workflow"], workspace, prompt, requestedModel);
     }
-    auto saveResp = sendJsonRequest(baseUrl, Post, "/api/workflow/" + workflowId, &patched, workspace, 60.0);
-    if (!saveResp || saveResp->statusCode() >= 400)
-    {
-        return provider::ProviderResult::fail(
-            classifyHttpError(saveResp ? static_cast<int>(saveResp->statusCode()) : 503,
-                              saveResp ? std::string(saveResp->getBody()) : std::string("failed to save retool workflow")));
+
+    auto saveResp = sendJsonRequest(
+        context, baseUrl, Post, "/api/workflow/" + workflowId, &patched, workspace, 60.0);
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (!saveResp || saveResp->statusCode() >= 400) {
+        return Result::failure(saveResp
+            ? classifyHttpError(static_cast<int>(saveResp->statusCode()),
+                                std::string(saveResp->getBody()))
+            : platform::Error::providerError("failed to save retool workflow"));
     }
 
     Json::Value runBody(Json::objectValue);
     runBody["workflowId"] = workflowId;
-    auto runResp = sendJsonRequest(baseUrl, Post, "/api/workflow/run", &runBody, workspace);
-    if (!runResp)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::network("failed to start retool workflow run"));
+    auto runResp = sendJsonRequest(
+        context, baseUrl, Post, "/api/workflow/run", &runBody, workspace);
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (!runResp) {
+        return Result::failure(platform::Error::providerError(
+            "failed to start retool workflow run"));
     }
     auto runJson = parseJsonResponse(runResp);
-    if (runResp->statusCode() >= 400 || !runJson.isMember("id"))
-    {
-        return provider::ProviderResult::fail(classifyHttpError(static_cast<int>(runResp->statusCode()), std::string(runResp->getBody())));
+    if (runResp->statusCode() >= 400 || !runJson.isMember("id")) {
+        if (runResp->statusCode() < 400) {
+            return Result::failure(platform::Error::providerError(
+                "Retool workflow run response is invalid", {},
+                static_cast<int>(runResp->statusCode())));
+        }
+        return Result::failure(classifyHttpError(
+            static_cast<int>(runResp->statusCode()), std::string(runResp->getBody())));
     }
+
     const std::string runId = runJson["id"].asString();
-    for (int i = 0; i < 120; ++i)
-    {
-        auto pollResp = sendJsonRequest(baseUrl, Get, "/api/workflowRun/getBlockLevelLogs?runId=" + runId, nullptr, workspace);
-        if (!pollResp)
-        {
-            return provider::ProviderResult::fail(provider::ProviderError::network("failed to poll retool workflow run"));
+    for (int i = 0; i < 120; ++i) {
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
+        auto pollResp = sendJsonRequest(
+            context, baseUrl, Get,
+            "/api/workflowRun/getBlockLevelLogs?runId=" + runId,
+            nullptr, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
+        if (!pollResp) {
+            return Result::failure(platform::Error::providerError(
+                "failed to poll retool workflow run"));
+        }
+        if (pollResp->statusCode() >= 400) {
+            return Result::failure(classifyHttpError(
+                static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
         }
         auto pollJson = parseJsonResponse(pollResp);
         const auto code1 = pollJson["blockLevelLogs"]["code1"];
         const auto status = code1.get("status", "").asString();
-        if (status == "SUCCESS")
-        {
-            std::string content = jsonToStringOrCompactJson(code1["output"]["data"], "");
-            auto result = provider::ProviderResult::success(trimCopy(content));
-            result.meta = buildRetoolMeta(workspaceId, "workflow", workflowId, binding, requestedModel);
-            return result;
+        if (status == "SUCCESS") {
+            provider::ProviderResponse response;
+            response.text = trimCopy(jsonToStringOrCompactJson(code1["output"]["data"], ""));
+            response.meta = buildRetoolMeta(
+                workspaceId, "workflow", workflowId, binding, requestedModel);
+            return Result::success(std::move(response));
         }
-        if (status == "FAILED")
-        {
-            return provider::ProviderResult::fail(provider::ProviderError::internal(
+        if (status == "FAILED") {
+            return Result::failure(platform::Error::providerError(
                 jsonToStringOrCompactJson(code1["output"]["error"], "workflow failed")));
         }
-        clock_->sleepFor(std::chrono::seconds(1));
+        if (!sleepWithinContext(context, std::chrono::seconds(1))) {
+            if (const auto interrupted = interruptionError(context)) {
+                return Result::failure(*interrupted);
+            }
+            return Result::failure(platform::Error::timeout(
+                "retool workflow run timed out"));
+        }
     }
-    return provider::ProviderResult::fail(provider::ProviderError::timeout("retool workflow run timed out"));
+    return Result::failure(platform::Error::timeout("retool workflow run timed out"));
 }
 
-provider::ProviderResult retoolapi::requestAgent(session_st& session)
+platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
+    const provider::ProviderRequest& request,
+    provider::ProviderCallContext& context)
 {
+    using Result = platform::Result<provider::ProviderResponse>;
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+
     std::string resolveError;
-    const auto workspaceId = resolveWorkspaceId(session, true, &resolveError);
-    if (workspaceId.empty())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::auth(resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
+    const auto workspaceId = resolveWorkspaceId(request, true, &resolveError);
+    if (workspaceId.empty()) {
+        return Result::failure(platform::Error::unauthorized(
+            resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
     ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
+
     std::string error;
-    if (!accounts_)
-    {
-        return provider::ProviderResult::fail(
-            provider::ProviderError::internal("managed account service unavailable"));
+    if (!accounts_) {
+        return Result::failure(platform::Error::internal(
+            "managed account service unavailable"));
     }
-    auto ctx = accounts_->buildExecutionContext(
+    auto accountContext = accounts_->buildExecutionContext(
         ManagedAccountKind::RetoolWorkspace, workspaceId, &error);
-    if (!ctx)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::auth(error.empty() ? "retool workspace not found" : error));
+    if (!accountContext) {
+        return Result::failure(platform::Error::unauthorized(
+            error.empty() ? "retool workspace not found" : error));
     }
-    Json::Value workspace = ctx->data;
+
+    Json::Value workspace = accountContext->data;
     const std::string baseUrl = workspace.get("baseUrl", "").asString();
     const std::string agentId = workspace.get("agentId", "").asString();
-    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << session.state.conversationId
+    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << request.conversationId
              << ", workspace=" << workspaceId
              << ", email=" << workspace.get("email", "").asString()
              << ", baseUrl=" << baseUrl
              << ", route=agent";
-    if (baseUrl.empty() || agentId.empty())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::internal("retool workspace is missing agent configuration"));
+    if (baseUrl.empty() || agentId.empty()) {
+        return Result::failure(platform::Error::internal(
+            "retool workspace is missing agent configuration"));
     }
 
-    auto workflowResp = sendJsonRequest(baseUrl, Get, "/api/workflow/" + agentId, nullptr, workspace);
-    if (!workflowResp)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::network("failed to fetch retool agent workflow"));
+    auto workflowResp = sendJsonRequest(
+        context, baseUrl, Get, "/api/workflow/" + agentId, nullptr, workspace);
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (!workflowResp) {
+        return Result::failure(platform::Error::providerError(
+            "failed to fetch retool agent workflow"));
     }
     auto workflowJson = parseJsonResponse(workflowResp);
-    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow"))
-    {
-        return provider::ProviderResult::fail(classifyHttpError(static_cast<int>(workflowResp->statusCode()), std::string(workflowResp->getBody())));
+    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow")) {
+        if (workflowResp->statusCode() == k200OK) {
+            return Result::failure(platform::Error::providerError(
+                "Retool agent workflow response is invalid", {},
+                static_cast<int>(workflowResp->statusCode())));
+        }
+        return Result::failure(classifyHttpError(
+            static_cast<int>(workflowResp->statusCode()),
+            std::string(workflowResp->getBody())));
     }
 
-    std::string requestedModel = session.request.model;
-    if (requestedModel.rfind("agent-", 0) == 0)
-    {
+    std::string requestedModel = request.model;
+    if (requestedModel.rfind("agent-", 0) == 0) {
         requestedModel = requestedModel.substr(6);
     }
-    if (requestedModel.empty())
-    {
+    if (requestedModel.empty()) {
         requestedModel = "gpt-5.4";
     }
     auto binding = resolveRetoolProviderBinding(workspace, requestedModel);
-    if (!binding.isObject())
-    {
-        populateProviderResources(workspaceId, workspace);
+    if (!binding.isObject()) {
+        populateProviderResources(context, workspaceId, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
         binding = resolveRetoolProviderBinding(workspace, requestedModel);
     }
-    if (!binding.isObject())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::internal("matching retool provider resource not found for requested model"));
+    if (!binding.isObject()) {
+        return Result::failure(platform::Error::providerError(
+            "matching retool provider resource not found for requested model"));
     }
     auto patched = patchAgentTemplate(workflowJson["workflow"], workspace, requestedModel);
-    auto saveResp = sendJsonRequest(baseUrl, Post, "/api/workflow/" + agentId, &patched, workspace, 60.0);
-    if (!saveResp || saveResp->statusCode() >= 400)
-    {
-        return provider::ProviderResult::fail(
-            classifyHttpError(saveResp ? static_cast<int>(saveResp->statusCode()) : 503,
-                              saveResp ? std::string(saveResp->getBody()) : std::string("failed to save retool agent workflow")));
+    auto saveResp = sendJsonRequest(
+        context, baseUrl, Post, "/api/workflow/" + agentId, &patched, workspace, 60.0);
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (!saveResp || saveResp->statusCode() >= 400) {
+        return Result::failure(saveResp
+            ? classifyHttpError(static_cast<int>(saveResp->statusCode()),
+                                std::string(saveResp->getBody()))
+            : platform::Error::providerError("failed to save retool agent workflow"));
     }
 
-    auto createThread = [&](bool persistMapping) -> std::optional<std::string> {
+    auto createThread = [&]() -> platform::Result<std::string> {
+        if (const auto interrupted = interruptionError(context)) {
+            return platform::Result<std::string>::failure(*interrupted);
+        }
         Json::Value threadBody(Json::objectValue);
         threadBody["name"] = "aiapi-thread";
         threadBody["timezone"] = "UTC";
-        auto threadResp = sendJsonRequest(baseUrl, Post, "/api/agents/" + agentId + "/threads", &threadBody, workspace);
-        if (!threadResp)
-        {
-            LOG_ERROR << "[retoolapi] createThread failed: no response, workspace=" << workspaceId
-                      << ", conversation=" << session.state.conversationId;
-            return std::nullopt;
+        auto threadResp = sendJsonRequest(
+            context, baseUrl, Post, "/api/agents/" + agentId + "/threads",
+            &threadBody, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return platform::Result<std::string>::failure(*interrupted);
+        }
+        if (!threadResp) {
+            return platform::Result<std::string>::failure(platform::Error::providerError(
+                "failed to create retool agent thread"));
         }
         auto threadJson = parseJsonResponse(threadResp);
-        if (threadResp->statusCode() >= 400 || !threadJson.isMember("id"))
-        {
-            LOG_ERROR << "[retoolapi] createThread failed: status=" << static_cast<int>(threadResp->statusCode())
-                      << ", body=" << threadResp->getBody()
-                      << ", workspace=" << workspaceId
-                      << ", conversation=" << session.state.conversationId;
-            return std::nullopt;
+        if (threadResp->statusCode() >= 400 || !threadJson.isMember("id")) {
+            if (threadResp->statusCode() < 400) {
+                return platform::Result<std::string>::failure(platform::Error::providerError(
+                    "Retool agent thread response is invalid", {},
+                    static_cast<int>(threadResp->statusCode())));
+            }
+            return platform::Result<std::string>::failure(classifyHttpError(
+                static_cast<int>(threadResp->statusCode()), std::string(threadResp->getBody())));
         }
         const auto newThreadId = threadJson["id"].asString();
+        if (newThreadId.empty()) {
+            return platform::Result<std::string>::failure(platform::Error::providerError(
+                "Retool agent thread response has an empty id"));
+        }
         LOG_INFO << "[retoolapi] createThread success: workspace=" << workspaceId
-                 << ", conversation=" << session.state.conversationId
-                 << ", threadId=" << newThreadId
-                 << ", persistMapping=" << (persistMapping ? 1 : 0);
-        if (persistMapping)
+                 << ", conversation=" << request.conversationId
+                 << ", threadId=" << newThreadId;
         {
             std::lock_guard<std::mutex> lock(threadMutex_);
-            agentThreadMap_[session.state.conversationId] = newThreadId;
+            agentThreadMap_[request.conversationId] = newThreadId;
         }
-        return newThreadId;
+        return platform::Result<std::string>::success(newThreadId);
     };
 
     auto sendThreadTextMessage = [&](const std::string& targetThreadId,
-                                     const std::string& text) -> HttpResponsePtr {
+                                     const std::string& text)
+        -> platform::Result<HttpResponsePtr> {
+        if (const auto interrupted = interruptionError(context)) {
+            return platform::Result<HttpResponsePtr>::failure(*interrupted);
+        }
         Json::Value messageBody(Json::objectValue);
         messageBody["type"] = "text";
         messageBody["text"] = text;
         messageBody["timezone"] = "UTC";
-        return sendJsonRequest(
-            baseUrl,
-            Post,
-            "/api/agents/" + agentId + "/threads/" + targetThreadId + "/messages",
-            &messageBody,
-            workspace);
+        auto response = sendJsonRequest(
+            context, baseUrl,
+            Post, "/api/agents/" + agentId + "/threads/" + targetThreadId + "/messages",
+            &messageBody, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return platform::Result<HttpResponsePtr>::failure(*interrupted);
+        }
+        if (!response) {
+            return platform::Result<HttpResponsePtr>::failure(platform::Error::providerError(
+                "failed to send retool agent message"));
+        }
+        return platform::Result<HttpResponsePtr>::success(std::move(response));
     };
 
-    auto waitForAgentRun = [&](const std::string& runId, std::string* errorMessage) -> bool {
-        for (int i = 0; i < 180; ++i)
-        {
+    auto waitForAgentRun = [&](const std::string& runId) -> platform::Result<void> {
+        for (int i = 0; i < 180; ++i) {
+            if (const auto interrupted = interruptionError(context)) {
+                return platform::Result<void>::failure(*interrupted);
+            }
             auto pollResp = sendJsonRequest(
-                baseUrl,
-                Get,
+                context, baseUrl, Get,
                 "/api/agents/" + agentId +
-                    "/logs/" + runId + "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
-                nullptr,
-                workspace);
-            if (!pollResp)
-            {
-                if (errorMessage) *errorMessage = "failed to poll retool agent logs during thread replay";
-                return false;
+                    "/logs/" + runId +
+                    "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
+                nullptr, workspace);
+            if (const auto interrupted = interruptionError(context)) {
+                return platform::Result<void>::failure(*interrupted);
+            }
+            if (!pollResp) {
+                return platform::Result<void>::failure(platform::Error::providerError(
+                    "failed to poll retool agent logs during thread replay"));
+            }
+            if (pollResp->statusCode() >= 400) {
+                return platform::Result<void>::failure(classifyHttpError(
+                    static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
             }
             auto pollJson = parseJsonResponse(pollResp);
             const auto status = pollJson.get("status", "").asString();
-            if (status == "COMPLETED")
-            {
-                return true;
+            if (status == "COMPLETED") {
+                return platform::Result<void>::success();
             }
-            if (status == "FAILED")
-            {
+            if (status == "FAILED") {
                 std::string message = "agent replay failed";
                 const auto trace = pollJson["trace"];
-                if (trace.isArray() && !trace.empty())
-                {
+                if (trace.isArray() && !trace.empty()) {
                     const auto last = trace[static_cast<int>(trace.size()) - 1];
                     message = last["data"].get("error", message).asString();
                 }
-                if (errorMessage) *errorMessage = message;
-                return false;
+                return platform::Result<void>::failure(platform::Error::providerError(message));
             }
-            clock_->sleepFor(std::chrono::seconds(1));
+            if (!sleepWithinContext(context, std::chrono::seconds(1))) {
+                if (const auto interrupted = interruptionError(context)) {
+                    return platform::Result<void>::failure(*interrupted);
+                }
+                return platform::Result<void>::failure(platform::Error::timeout(
+                    "retool agent replay timed out"));
+            }
         }
-        if (errorMessage) *errorMessage = "retool agent replay timed out";
-        return false;
+        return platform::Result<void>::failure(platform::Error::timeout(
+            "retool agent replay timed out"));
     };
 
-    auto replayHistoryToThread = [&](const std::string& targetThreadId, std::string* errorMessage) -> bool {
+    auto replayHistoryToThread = [&](const std::string& targetThreadId)
+        -> platform::Result<void> {
         int replayedSystem = 0;
         int replayedUser = 0;
         int replayedAssistant = 0;
-        const auto bootstrapSystem = trimCopy(session.request.systemPrompt);
+        const auto bootstrapSystem = trimCopy(request.systemPrompt);
         const auto bootstrapSystemMaxChars = maxRetoolAgentBootstrapSystemPromptChars();
         if (!bootstrapSystem.empty() &&
-            (bootstrapSystemMaxChars == 0 || bootstrapSystem.size() <= bootstrapSystemMaxChars))
-        {
+            (bootstrapSystemMaxChars == 0 || bootstrapSystem.size() <= bootstrapSystemMaxChars)) {
             LOG_INFO << "[retoolapi] replay bootstrap system prompt: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
+                     << ", conversation=" << request.conversationId
                      << ", threadId=" << targetThreadId
                      << ", chars=" << bootstrapSystem.size();
-            auto bootstrapResp = sendThreadTextMessage(
+            auto bootstrap = sendThreadTextMessage(
                 targetThreadId,
-                "Session bootstrap. Treat the following as durable system instructions for this conversation.\n\n" + bootstrapSystem);
-            if (!bootstrapResp)
-            {
-                if (errorMessage) *errorMessage = "failed to bootstrap system prompt into recreated retool thread";
-                return false;
-            }
+                "Session bootstrap. Treat the following as durable system instructions for this conversation.\n\n" +
+                    bootstrapSystem);
+            if (!bootstrap) return platform::Result<void>::failure(bootstrap.error());
+            const auto& bootstrapResp = bootstrap.value();
             auto bootstrapJson = parseJsonResponse(bootstrapResp);
-            if (bootstrapResp->statusCode() >= 400)
-            {
-                if (errorMessage) *errorMessage = std::string(bootstrapResp->getBody());
-                return false;
+            if (bootstrapResp->statusCode() >= 400) {
+                return platform::Result<void>::failure(classifyHttpError(
+                    static_cast<int>(bootstrapResp->statusCode()),
+                    std::string(bootstrapResp->getBody())));
             }
             const std::string bootstrapRunId =
                 bootstrapJson.get("agentRunId", "").asString().empty()
                     ? bootstrapJson["content"].get("runId", "").asString()
                     : bootstrapJson.get("agentRunId", "").asString();
-            if (!bootstrapRunId.empty() && !waitForAgentRun(bootstrapRunId, errorMessage))
-            {
-                return false;
+            if (!bootstrapRunId.empty()) {
+                const auto waited = waitForAgentRun(bootstrapRunId);
+                if (!waited) return waited;
             }
-            replayedSystem++;
-        }
-        else if (!bootstrapSystem.empty())
-        {
-            LOG_WARN << "[retoolapi] skip bootstrap system prompt because it is too long: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
+            ++replayedSystem;
+        } else if (!bootstrapSystem.empty()) {
+            LOG_WARN << "[retoolapi] skip bootstrap system prompt because it is too long: workspace="
+                     << workspaceId << ", conversation=" << request.conversationId
                      << ", threadId=" << targetThreadId
                      << ", chars=" << bootstrapSystem.size()
                      << ", maxChars=" << bootstrapSystemMaxChars;
         }
 
-        const size_t replayMessageBudget = continuity::historyReplayMaxMessageBytes();
-        const std::string currentHistoryMessage = session.request.rawMessage.empty()
-            ? session.request.message
-            : session.request.rawMessage;
-        const auto historySelection = continuity::selectRecentHistory(
-            session.provider.messageContext,
-            continuity::historyReplayMaxRequestBytes(),
-            replayMessageBudget,
-            true,
-            currentHistoryMessage
-        );
-        LOG_INFO << "[retoolapi] recreated thread history budget: workspace=" << workspaceId
-                 << ", conversation=" << session.state.conversationId
-                 << ", threadId=" << targetThreadId
-                 << ", original=" << historySelection.originalMessages
-                 << ", selected=" << historySelection.selectedMessages
-                 << ", selectedTurns=" << historySelection.selectedTurns
-                 << ", selectedBytes=" << historySelection.selectedBytes
-                 << ", replacedOversize=" << historySelection.skippedOversizeMessages
-                 << ", normalizedTools=" << historySelection.normalizedToolMessages
-                 << ", skippedForBudget=" << historySelection.skippedForBudget
-                 << ", omissionNotice=" << historySelection.omissionNoticeAdded
-                 << ", skippedUnsupported=" << historySelection.skippedUnsupportedMessages
-                 << ", skippedDuplicateCurrent=" << historySelection.skippedDuplicateCurrentMessage;
+        constexpr size_t kDefaultReplayRequestBytes = 256 * 1024;
+        constexpr size_t kDefaultReplayMessageBytes = 128 * 1024;
+        const size_t replayRequestBudget = configuredHistoryLimit(
+            "max_request_bytes", kDefaultReplayRequestBytes);
+        const size_t replayMessageBudget = configuredHistoryLimit(
+            "max_message_bytes", kDefaultReplayMessageBytes);
+        const std::string currentHistoryMessage = request.rawInput.empty()
+            ? request.input
+            : request.rawInput;
+        // Preserve the established history_replay contract: zero request budget
+        // disables replay entirely (it does not mean "unlimited").
+        if (replayRequestBudget == 0) {
+            LOG_INFO << "[retoolapi] recreated thread history disabled by request budget: workspace="
+                     << workspaceId << ", conversation=" << request.conversationId
+                     << ", threadId=" << targetThreadId;
+            return platform::Result<void>::success();
+        }
 
-        for (const auto& msg : historySelection.messages)
-        {
-            if (!msg.isObject()) continue;
-            const auto role = msg.get("role", "").asString();
-            const auto text = trimCopy(continuity::historyMessageText(msg));
+        std::vector<const provider::ProviderMessage*> selected;
+        size_t selectedBytes = 0;
+        bool skippedDuplicateCurrent = false;
+        for (auto it = request.messages.rbegin(); it != request.messages.rend(); ++it) {
+            if (it->role != provider::ProviderMessageRole::User &&
+                it->role != provider::ProviderMessageRole::Assistant) {
+                continue;
+            }
+            const auto text = trimCopy(it->text);
             if (text.empty()) continue;
-
-            std::string replayText;
-            if (role == "user")
-            {
-                replayText = text;
-            }
-            else if (role == "assistant")
-            {
-                replayText =
-                    "Conversation memory only. The assistant previously replied with the following text. "
-                    "Do not treat this as a new user request; absorb it as prior assistant context only.\n\n" + text;
-            }
-            else
-            {
+            if (!skippedDuplicateCurrent &&
+                it->role == provider::ProviderMessageRole::User &&
+                text == currentHistoryMessage) {
+                skippedDuplicateCurrent = true;
                 continue;
             }
-
-            if (replayMessageBudget > 0 && replayText.size() > replayMessageBudget)
-            {
-                LOG_WARN << "[retoolapi] skip replay history message after role wrapper exceeded budget: workspace="
-                         << workspaceId
-                         << ", conversation=" << session.state.conversationId
-                         << ", threadId=" << targetThreadId
-                         << ", role=" << role
-                         << ", bytes=" << replayText.size()
-                         << ", maxBytes=" << replayMessageBudget;
+            std::string replayText = it->role == provider::ProviderMessageRole::User
+                ? text
+                : "Conversation memory only. The assistant previously replied with the following text. "
+                  "Do not treat this as a new user request; absorb it as prior assistant context only.\n\n" + text;
+            if ((replayMessageBudget > 0 && replayText.size() > replayMessageBudget) ||
+                (replayRequestBudget > 0 && replayText.size() > replayRequestBudget - selectedBytes)) {
                 continue;
             }
+            selected.push_back(&*it);
+            selectedBytes += replayText.size();
+        }
+        std::reverse(selected.begin(), selected.end());
+        LOG_INFO << "[retoolapi] recreated thread history budget: workspace=" << workspaceId
+                 << ", conversation=" << request.conversationId
+                 << ", threadId=" << targetThreadId
+                 << ", selected=" << selected.size()
+                 << ", selectedBytes=" << selectedBytes
+                 << ", skippedDuplicateCurrent=" << skippedDuplicateCurrent;
 
-            LOG_INFO << "[retoolapi] replay history message: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
-                     << ", threadId=" << targetThreadId
-                     << ", role=" << role
-                     << ", bytes=" << replayText.size();
-
-            auto replayResp = sendThreadTextMessage(targetThreadId, replayText);
-            if (!replayResp)
-            {
-                if (errorMessage) *errorMessage = "failed to replay history into recreated retool thread";
-                return false;
-            }
-            if (static_cast<int>(replayResp->statusCode()) == 413)
-            {
+        for (const auto* message : selected) {
+            const auto role = message->role;
+            const auto text = trimCopy(message->text);
+            std::string replayText = role == provider::ProviderMessageRole::User
+                ? text
+                : "Conversation memory only. The assistant previously replied with the following text. "
+                  "Do not treat this as a new user request; absorb it as prior assistant context only.\n\n" + text;
+            auto replay = sendThreadTextMessage(targetThreadId, replayText);
+            if (!replay) return platform::Result<void>::failure(replay.error());
+            const auto& replayResp = replay.value();
+            if (static_cast<int>(replayResp->statusCode()) == 413) {
                 LOG_WARN << "[retoolapi] skip replay history message after upstream HTTP 413: workspace="
-                         << workspaceId
-                         << ", conversation=" << session.state.conversationId
+                         << workspaceId << ", conversation=" << request.conversationId
                          << ", threadId=" << targetThreadId
-                         << ", role=" << role
                          << ", bytes=" << replayText.size();
                 continue;
             }
-
-            auto replayJson = parseJsonResponse(replayResp);
-            if (replayResp->statusCode() >= 400)
-            {
-                if (errorMessage) *errorMessage = std::string(replayResp->getBody());
-                return false;
+            if (replayResp->statusCode() >= 400) {
+                return platform::Result<void>::failure(classifyHttpError(
+                    static_cast<int>(replayResp->statusCode()),
+                    std::string(replayResp->getBody())));
             }
+            const auto replayJson = parseJsonResponse(replayResp);
             const std::string replayRunId =
                 replayJson.get("agentRunId", "").asString().empty()
                     ? replayJson["content"].get("runId", "").asString()
                     : replayJson.get("agentRunId", "").asString();
-            if (!replayRunId.empty() && !waitForAgentRun(replayRunId, errorMessage))
-            {
-                return false;
+            if (!replayRunId.empty()) {
+                const auto waited = waitForAgentRun(replayRunId);
+                if (!waited) return waited;
             }
-
-            if (role == "user") replayedUser++;
-            if (role == "assistant") replayedAssistant++;
+            if (role == provider::ProviderMessageRole::User) ++replayedUser;
+            if (role == provider::ProviderMessageRole::Assistant) ++replayedAssistant;
         }
         LOG_INFO << "[retoolapi] replayHistoryToThread finished: workspace=" << workspaceId
-                 << ", conversation=" << session.state.conversationId
+                 << ", conversation=" << request.conversationId
                  << ", threadId=" << targetThreadId
                  << ", replayedSystem=" << replayedSystem
                  << ", replayedUser=" << replayedUser
                  << ", replayedAssistant=" << replayedAssistant;
-        return true;
+        return platform::Result<void>::success();
     };
 
     std::string threadId;
     bool reusedThread = false;
-    const bool disableThreadReuse = false;
-    if (!disableThreadReuse)
     {
         std::lock_guard<std::mutex> lock(threadMutex_);
-        auto it = agentThreadMap_.find(session.state.conversationId);
-        if (it != agentThreadMap_.end())
-        {
+        const auto it = agentThreadMap_.find(request.conversationId);
+        if (it != agentThreadMap_.end()) {
             threadId = it->second;
             reusedThread = !threadId.empty();
             LOG_INFO << "[retoolapi] reuse cached thread: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
+                     << ", conversation=" << request.conversationId
                      << ", threadId=" << threadId;
         }
     }
-
-    if (threadId.empty())
-    {
-        auto newThreadId = createThread(!disableThreadReuse);
-        if (!newThreadId)
-        {
-            return provider::ProviderResult::fail(provider::ProviderError::network("failed to create retool agent thread"));
-        }
-        threadId = *newThreadId;
-        if (disableThreadReuse)
-        {
-            std::string replayError;
-            if (!replayHistoryToThread(threadId, &replayError))
-            {
-                LOG_ERROR << "[retoolapi] replay before bridge-mode request failed: workspace=" << workspaceId
-                          << ", conversation=" << session.state.conversationId
-                          << ", threadId=" << threadId
-                          << ", error=" << replayError;
-                return provider::ProviderResult::fail(provider::ProviderError::internal(
-                    replayError.empty() ? "failed to replay history into fresh retool bridge thread" : replayError));
-            }
-        }
+    if (threadId.empty()) {
+        const auto created = createThread();
+        if (!created) return Result::failure(created.error());
+        threadId = created.value();
     }
 
-    const auto currentUserText = lastUserContent(session);
-    auto messageResp = sendThreadTextMessage(threadId, currentUserText);
-    if (!messageResp)
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::network("failed to send retool agent message"));
-    }
-    if (reusedThread && messageResp->statusCode() == k404NotFound)
-    {
-        const auto body = std::string(messageResp->getBody());
-        if (body.find("Thread not found") != std::string::npos)
+    const auto currentUserText = lastUserContent(request);
+    auto message = sendThreadTextMessage(threadId, currentUserText);
+    if (!message) return Result::failure(message.error());
+    HttpResponsePtr messageResp = message.value();
+    if (reusedThread && messageResp->statusCode() == k404NotFound &&
+        std::string(messageResp->getBody()).find("Thread not found") != std::string::npos) {
+        LOG_WARN << "[retoolapi] cached thread missing upstream, recreating: workspace=" << workspaceId
+                 << ", conversation=" << request.conversationId
+                 << ", oldThreadId=" << threadId;
         {
-            LOG_WARN << "[retoolapi] cached thread missing upstream, recreating: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
-                     << ", oldThreadId=" << threadId;
-            if (!disableThreadReuse)
-            {
-                std::lock_guard<std::mutex> lock(threadMutex_);
-                agentThreadMap_.erase(session.state.conversationId);
-            }
-            auto replacementThreadId = createThread(!disableThreadReuse);
-            if (!replacementThreadId)
-            {
-                return provider::ProviderResult::fail(provider::ProviderError::network("failed to recreate missing retool agent thread"));
-            }
-            threadId = *replacementThreadId;
-            LOG_INFO << "[retoolapi] recreated missing thread: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
-                     << ", newThreadId=" << threadId;
-            std::string replayError;
-            if (!replayHistoryToThread(threadId, &replayError))
-            {
-                LOG_ERROR << "[retoolapi] replay after thread recreation failed: workspace=" << workspaceId
-                          << ", conversation=" << session.state.conversationId
-                          << ", threadId=" << threadId
-                          << ", error=" << replayError;
-                return provider::ProviderResult::fail(provider::ProviderError::internal(
-                    replayError.empty() ? "failed to replay history into recreated retool thread" : replayError));
-            }
-            messageResp = sendThreadTextMessage(threadId, currentUserText);
-            if (!messageResp)
-            {
-                return provider::ProviderResult::fail(provider::ProviderError::network("failed to resend retool agent message after recreating thread"));
-            }
-            LOG_INFO << "[retoolapi] resent current message after thread recreation: workspace=" << workspaceId
-                     << ", conversation=" << session.state.conversationId
-                     << ", threadId=" << threadId
-                     << ", chars=" << currentUserText.size();
+            std::lock_guard<std::mutex> lock(threadMutex_);
+            agentThreadMap_.erase(request.conversationId);
         }
-    }
-    auto messageJson = parseJsonResponse(messageResp);
-    if (messageResp->statusCode() >= 400)
-    {
-        return provider::ProviderResult::fail(classifyHttpError(static_cast<int>(messageResp->statusCode()), std::string(messageResp->getBody())));
-    }
-    const std::string runId =
-        messageJson.get("agentRunId", "").asString().empty()
-            ? messageJson["content"].get("runId", "").asString()
-            : messageJson.get("agentRunId", "").asString();
-    if (runId.empty())
-    {
-        return provider::ProviderResult::fail(provider::ProviderError::internal("missing retool agent run id"));
+        const auto replacement = createThread();
+        if (!replacement) return Result::failure(replacement.error());
+        threadId = replacement.value();
+        const auto replay = replayHistoryToThread(threadId);
+        if (!replay) return Result::failure(replay.error());
+        message = sendThreadTextMessage(threadId, currentUserText);
+        if (!message) return Result::failure(message.error());
+        messageResp = message.value();
+        LOG_INFO << "[retoolapi] resent current message after thread recreation: workspace="
+                 << workspaceId << ", conversation=" << request.conversationId
+                 << ", threadId=" << threadId
+                 << ", chars=" << currentUserText.size();
     }
 
-    for (int i = 0; i < 180; ++i)
-    {
+    if (messageResp->statusCode() >= 400) {
+        return Result::failure(classifyHttpError(
+            static_cast<int>(messageResp->statusCode()), std::string(messageResp->getBody())));
+    }
+    const auto messageJson = parseJsonResponse(messageResp);
+    const std::string runId = messageJson.get("agentRunId", "").asString().empty()
+        ? messageJson["content"].get("runId", "").asString()
+        : messageJson.get("agentRunId", "").asString();
+    if (runId.empty()) {
+        return Result::failure(platform::Error::providerError(
+            "missing retool agent run id"));
+    }
+
+    for (int i = 0; i < 180; ++i) {
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
+        }
         auto pollResp = sendJsonRequest(
-            baseUrl,
-            Get,
+            context, baseUrl, Get,
             "/api/agents/" + agentId +
-                "/logs/" + runId + "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
-            nullptr,
-            workspace);
-        if (!pollResp)
-        {
-            return provider::ProviderResult::fail(provider::ProviderError::network("failed to poll retool agent logs"));
+                "/logs/" + runId +
+                "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
+            nullptr, workspace);
+        if (const auto interrupted = interruptionError(context)) {
+            return Result::failure(*interrupted);
         }
-        auto pollJson = parseJsonResponse(pollResp);
+        if (!pollResp) {
+            return Result::failure(platform::Error::providerError(
+                "failed to poll retool agent logs"));
+        }
+        if (pollResp->statusCode() >= 400) {
+            return Result::failure(classifyHttpError(
+                static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
+        }
+        const auto pollJson = parseJsonResponse(pollResp);
         const auto status = pollJson.get("status", "").asString();
-        if (status == "COMPLETED")
-        {
+        if (status == "COMPLETED") {
+            provider::ProviderResponse response;
             const auto trace = pollJson["trace"];
-            if (trace.isArray() && !trace.empty())
-            {
+            if (trace.isArray() && !trace.empty()) {
                 const auto last = trace[static_cast<int>(trace.size()) - 1];
-                const auto content = last["data"]["data"].get("content", "").asString();
-                auto result = provider::ProviderResult::success(trimCopy(content));
-                result.meta = buildRetoolMeta(workspaceId, "agent", agentId, binding, requestedModel);
-                return result;
+                response.text = trimCopy(last["data"]["data"].get("content", "").asString());
             }
-            auto result = provider::ProviderResult::success("");
-            result.meta = buildRetoolMeta(workspaceId, "agent", agentId, binding, requestedModel);
-            return result;
+            response.meta = buildRetoolMeta(
+                workspaceId, "agent", agentId, binding, requestedModel);
+            return Result::success(std::move(response));
         }
-        if (status == "FAILED")
-        {
+        if (status == "FAILED") {
             const auto trace = pollJson["trace"];
-            std::string message = "agent failed";
-            if (trace.isArray() && !trace.empty())
-            {
+            std::string messageText = "agent failed";
+            if (trace.isArray() && !trace.empty()) {
                 const auto last = trace[static_cast<int>(trace.size()) - 1];
-                message = last["data"].get("error", message).asString();
+                messageText = last["data"].get("error", messageText).asString();
             }
-            return provider::ProviderResult::fail(provider::ProviderError::internal(message));
+            return Result::failure(platform::Error::providerError(messageText));
         }
-        clock_->sleepFor(std::chrono::seconds(1));
-    }
-    return provider::ProviderResult::fail(provider::ProviderError::timeout("retool agent run timed out"));
-}
-
-provider::ProviderResult retoolapi::generate(session_st& session)
-{
-    if (!channels_)
-    {
-        return provider::ProviderResult::fail(
-            provider::ProviderError::internal("channel catalog unavailable"));
-    }
-    for (const auto& channel : channels_->listChannels())
-    {
-        if (channel.channelName == "retoolapi" && !channel.channelStatus)
-        {
-            return provider::ProviderResult::fail(
-                provider::ProviderError::auth("retoolapi channel is disabled"));
+        if (!sleepWithinContext(context, std::chrono::seconds(1))) {
+            if (const auto interrupted = interruptionError(context)) {
+                return Result::failure(*interrupted);
+            }
+            return Result::failure(platform::Error::timeout(
+                "retool agent run timed out"));
         }
     }
-
-    const std::string requestedModel = session.request.model;
-    if (requestedModel.rfind("agent-", 0) == 0)
-    {
-        return requestAgent(session);
-    }
-    return requestWorkflow(session);
+    return Result::failure(platform::Error::timeout("retool agent run timed out"));
 }
 
-void retoolapi::afterResponseProcess(session_st&)
+platform::Result<provider::ProviderResponse> retoolapi::doGenerate(
+    const provider::ProviderRequest& request,
+    provider::ProviderCallContext& context)
 {
+    using Result = platform::Result<provider::ProviderResponse>;
+    if (const auto interrupted = interruptionError(context)) {
+        return Result::failure(*interrupted);
+    }
+    if (modelCatalog_.models.empty()) {
+        return Result::failure(platform::Error::internal(
+            "retoolapi provider has not been initialized"));
+    }
+    if (!channels_) {
+        return Result::failure(platform::Error::internal("channel catalog unavailable"));
+    }
+    for (const auto& channel : channels_->listChannels()) {
+        if (channel.channelName == "retoolapi" && !channel.channelStatus) {
+            return Result::failure(platform::Error::unauthorized(
+                "retoolapi channel is disabled"));
+        }
+    }
+
+    if (request.model.rfind("agent-", 0) == 0) {
+        return requestAgent(request, context);
+    }
+    return requestWorkflow(request, context);
 }
 
-void retoolapi::eraseChatinfoMap(std::string conversationId)
+platform::Result<void> retoolapi::eraseThreadContext(
+    const std::string& conversationId)
 {
     std::lock_guard<std::mutex> lock(threadMutex_);
     agentThreadMap_.erase(conversationId);
     conversationWorkspaceMap_.erase(conversationId);
+    return platform::Result<void>::success();
 }
 
-void retoolapi::transferThreadContext(const std::string& oldId, const std::string& newId)
+platform::Result<void> retoolapi::transferThreadContext(
+    const std::string& oldId, const std::string& newId)
 {
-    if (oldId.empty() || newId.empty() || oldId == newId) return;
+    if (oldId.empty() || newId.empty() || oldId == newId) {
+        return platform::Result<void>::success();
+    }
     std::lock_guard<std::mutex> lock(threadMutex_);
-    auto it = agentThreadMap_.find(oldId);
-    if (it != agentThreadMap_.end())
-    {
+    const auto it = agentThreadMap_.find(oldId);
+    if (it != agentThreadMap_.end()) {
         agentThreadMap_[newId] = it->second;
         agentThreadMap_.erase(it);
     }
-    auto workspaceIt = conversationWorkspaceMap_.find(oldId);
-    if (workspaceIt != conversationWorkspaceMap_.end())
-    {
+    const auto workspaceIt = conversationWorkspaceMap_.find(oldId);
+    if (workspaceIt != conversationWorkspaceMap_.end()) {
         conversationWorkspaceMap_[newId] = workspaceIt->second;
         conversationWorkspaceMap_.erase(workspaceIt);
     }
+    return platform::Result<void>::success();
+}
+
+platform::Result<void> retoolapi::deleteUpstreamThread(
+    const std::string&, const std::string&, const std::string&, const std::string&)
+{
+    // Retool does not expose a stable remote-thread deletion contract. Session
+    // cleanup still clears this provider's local affinity through
+    // eraseThreadContext(); callers that require remote reaping get an
+    // explicit capability failure instead of a silent no-op.
+    return platform::Result<void>::failure(platform::Error::notFound(
+        "Retool does not expose upstream thread deletion"));
 }

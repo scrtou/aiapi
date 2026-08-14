@@ -45,9 +45,6 @@ void transferProviderThreadContext(IProviderRegistry* registry,
         }
         return;
     }
-    if (const auto legacy = registry->findProvider(providerName)) {
-        legacy->transferThreadContext(oldId, newId);
-    }
 }
 
 void eraseProviderThreadContext(IProviderRegistry* registry,
@@ -62,9 +59,6 @@ void eraseProviderThreadContext(IProviderRegistry* registry,
                      << result.error().type();
         }
         return;
-    }
-    if (const auto legacy = registry->findProvider(providerName)) {
-        legacy->eraseChatinfoMap(conversationId);
     }
 }
 }  // namespace

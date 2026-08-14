@@ -11,33 +11,29 @@
 
 namespace {
 
-class FakeProvider final : public APIinterface
+class FakeProviderCatalog final : public provider::IProviderModelCatalog
 {
   public:
-    provider::ProviderResult generate(session_st&) override
-    {
-        return provider::ProviderResult::success("unused");
-    }
-    void checkAlivableTokens() override {}
-    void checkModels() override {}
     ProviderModelCatalog getModels() override
     {
         ProviderModel model;
         model.id = "facade-model";
         return ProviderModelCatalog{{model}};
     }
-    void init() override {}
-    void afterResponseProcess(session_st&) override {}
-    void eraseChatinfoMap(std::string) override {}
-    void transferThreadContext(const std::string&, const std::string&) override {}
 };
 
 class FakeProviderRegistry final : public IProviderRegistry
 {
   public:
-    std::shared_ptr<APIinterface> provider;
+    std::shared_ptr<provider::IProviderModelCatalog> provider;
 
-    std::shared_ptr<APIinterface> findProvider(const std::string&) const override
+    std::shared_ptr<provider::IChatProvider> findChatProvider(const std::string&) const override
+    {
+        return nullptr;
+    }
+
+    std::shared_ptr<provider::IProviderModelCatalog> findModelCatalog(
+        const std::string&) const override
     {
         return provider;
     }
@@ -73,7 +69,7 @@ class FakeResponseIndex final : public IResponseIndex
 DROGON_TEST(AiApiUseCaseOwnsCatalogAndResponsesIndexWorkflows)
 {
     FakeProviderRegistry providers;
-    providers.provider = std::make_shared<FakeProvider>();
+    providers.provider = std::make_shared<FakeProviderCatalog>();
     FakeResponseIndex responses;
     responses.responses["resp_ok"] = R"({"id":"resp_ok","object":"response"})";
     responses.responses["resp_corrupt"] = "not json";

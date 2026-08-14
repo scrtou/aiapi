@@ -12,8 +12,6 @@
 #include <sessionManager/tooling/ToolDefinitionEncoder.h>
 #include <sessionManager/tooling/BridgeProtocolCodec.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
-#include <domain/model/ProviderResult.h>
-#include <sessionManager/core/ProviderResultCodec.h>
 #include <tools/ZeroWidthEncoder.h>
 #include <domain/model/ErrorEvent.h>
 #include <drogon/drogon.h>
@@ -389,13 +387,7 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             responseIndex_->bind(session.response.responseId, session.state.conversationId);
         }
         
-        // 8. 执行上游响应后处理
-        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
-        if (api) {
-            api->afterResponseProcess(session);
-        }
-        
-        // 9. 记录请求完成（成功分支）
+        // 8. 记录请求完成（成功分支）
         recordRequestCompletedStat(session, 200);
         
     } catch (const std::exception& e) {
@@ -482,6 +474,15 @@ provider::ProviderRequest GenerationService::providerRequestFromSession(
     request.toolChoice = session.request.toolChoice;
     request.parallelToolCalls = session.request.parallelToolCalls;
     request.requestId = session.state.requestId;
+
+    if (session.provider.clientInfo.isObject()) {
+        for (const char* key : {"workspace_id", "workspaceId"}) {
+            const auto& value = session.provider.clientInfo[key];
+            if (value.isString() && !value.asString().empty()) {
+                request.routingHints.emplace(key, value.asString());
+            }
+        }
+    }
 
     if (session.provider.messageContext.isArray()) {
         request.messages.reserve(session.provider.messageContext.size());
@@ -599,32 +600,7 @@ std::optional<platform::Error> GenerationService::executeProvider(
         return std::nullopt;
     }
 
-    // Retool is intentionally still on this fallback until P6-W3.  Chayns is
-    // never registered here, so it cannot silently regain session side effects.
-    const auto legacyProvider = providerRegistry_->findProvider(session.request.api);
-    if (!legacyProvider) {
-        return platform::Error::notFound("未找到上游提供者: " + session.request.api);
-    }
-
-    const provider::ProviderResult result = legacyProvider->generate(session);
-    if (!result.isSuccess()) {
-        auto error = provider::toPlatformError(result.error);
-        if (!error.hasError()) {
-            error = platform::Error::providerError(
-                "Provider returned an invalid failure result", {}, result.statusCode);
-        } else if (error.upstreamHttpStatus == 0) {
-            error.upstreamHttpStatus = result.statusCode;
-        }
-        return error;
-    }
-
-    provider::ProviderResponse response;
-    response.text = result.text;
-    response.usage = result.usage;
-    response.toolCalls = result.toolCalls;
-    response.meta = result.meta;
-    applyProviderResponse(session, response);
-    return std::nullopt;
+    return platform::Error::notFound("未找到上游提供者: " + session.request.api);
 }
 
 /**

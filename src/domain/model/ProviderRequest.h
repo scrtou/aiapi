@@ -2,6 +2,7 @@
 
 #include <domain/model/ImageInfo.h>
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,16 @@ struct ProviderRequest {
     bool parallelToolCalls = true;
     std::string requestId;
     std::string traceId;
+
+    /**
+     * Small, string-only routing selectors supplied by the application.
+     *
+     * This is deliberately not the legacy JsonCpp clientInfo bag: callers
+     * copy only provider-relevant, non-secret values (currently the Retool
+     * `workspace_id` selector). The provider never receives the session
+     * aggregate or HTTP headers merely to choose an upstream target.
+     */
+    std::map<std::string, std::string> routingHints;
 };
 
 }  // namespace provider

@@ -37,7 +37,7 @@
 
 - ✅ OpenAI Chat Completions API 兼容（流式/非流式）
 - ✅ OpenAI Responses API 兼容（流式/非流式，含 previous_response_id 续聊）
-- ✅ 活跃 Provider：chaynsapi / retoolapi（可扩展工厂模式）
+- ✅ 活跃 Provider：chaynsapi / retoolapi（ProviderBase + 注入式窄 Registry）
 - ✅ Retool Workspace Provider（对外 HTTP：`/retoolapi/v1/*`）
 - ✅ 退役兼容边界：历史 `/nexosapi/v1/*` 路由稳定返回 HTTP 410；具体 Nexos/OpenAiProvider 实现已删除
 - ✅ 工具调用（Tool Calls）完整支持
@@ -127,11 +127,12 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Provider 层                                 │
 │  ┌─────────────┐     ┌─────────────────────────────────────┐   │
-│  │ProviderReg- │ ──▶ │         APIinterface                │   │
-│  │istry (注入) │     │  - generate()                       │   │
-│  │ 构造后冻结   │     │  - ProviderResult                   │   │
+│  │ProviderReg- │ ──▶ │ IChatProvider / ProviderBase        │   │
+│  │istry (注入) │     │ - generate(ProviderRequest, Context)│   │
+│  │ 构造后冻结   │     │ - Result<ProviderResponse>          │   │
 │  └─────────────┘     └─────────────────────────────────────┘   │
-│        │                                                        │
+│        │                 ├─ IProviderModelCatalog              │
+│        │                 └─ IProviderThreadContext              │
 │        ├── chaynsapi (Chayns AI Provider)                       │
 │        └── retoolapi (Retool Workspace Provider)                │
 └─────────────────────────────────────────────────────────────────┘
@@ -160,7 +161,10 @@
 ```text
 src/
 ├── controllers/             HTTP 控制器、过滤器及 Chat/Responses Sink
-├── apiManager/              Provider 工厂与 API 管理
+├── domain/                  Provider 值 DTO 与窄 port（IChatProvider 等）
+├── infrastructure/provider/ ProviderBase、Registry 与 production factory
+├── apipoint/                Chayns / Retool Provider 协议实现
+├── apiManager/              仅保留历史 ApiChannel 公共枚举（无 Provider 工厂/定位器）
 ├── accountManager/          传统账号池管理
 ├── managedAccount/          统一 ManagedAccount 抽象及后端实现
 ├── channelManager/          渠道状态、并发和路由管理
@@ -267,18 +271,21 @@ aiapi/
     │       ├── StrictClientRules.h/cpp      # 严格客户端规则
     │       └── BridgeHelpers.h/cpp          # 桥接辅助函数
     │
-    ├── apipoint/                   # Provider 抽象与实现
-    │   ├── APIinterface.h          # Provider 接口（generate / getModels）
-    │   ├── ProviderResult.h        # Provider 结果结构
+    ├── domain/
+    │   ├── model/                  # ProviderRequest/Response/CallContext 等值对象
+    │   └── port/                   # IChatProvider、模型/线程/Registry 窄能力
+    │
+    ├── apipoint/                   # Provider 协议实现（均继承 ProviderBase）
     │   ├── chaynsapi/              # Chayns Provider 实现
     │   │   └── chaynsapi.h/cpp
     │   └── retoolapi/              # Retool Workspace Provider 实现
     │       └── retoolapi.h/cpp
     │
-    ├── infrastructure/provider/    # Provider 运行时注册表
-    │   └── ProviderRegistry.h/cpp  # 显式注册、发布前冻结、只读查找
+    ├── infrastructure/provider/    # ProviderBase、生产 factory 与运行时注册表
+    │   ├── ProviderBase.h/cpp       # final NVI、取消/截止/错误边界
+    │   └── ProviderRegistry.h/cpp   # 显式窄注册、发布前冻结、只读能力查找
     ├── apiManager/
-    │   └── Apicomn.h               # 待随 P6 宽接口拆分迁移的公共定义
+    │   └── Apicomn.h               # 历史 ApiChannel 公共枚举（无 Provider 宽接口）
     │
     ├── accountManager/             # 账号池管理
     │   └── accountManager.h/cpp    # 账号 CRUD + Token 刷新 + 自动注册

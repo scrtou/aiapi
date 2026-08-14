@@ -155,7 +155,7 @@ protected:
 
 `ProviderBase::generate()` 的公共实现负责 cancellation/deadline 前置检查、异常转换、tracing/metrics、结果合法性检查和单次错误上报。ProviderBase 不保存请求级可变成员，也不包含 `buildRequest → send → parseChunk` 固定模板；Retry、轮询、账号选择、错误映射和 HTTP timeout 由具体 Provider 组合。
 
-聊天、模型目录、生命周期和上游会话映射分开，避免重建当前多职责 `APIinterface`。
+聊天、模型目录、生命周期和上游会话映射分开，避免重建已删除的多职责 `APIinterface`。
 
 ## 5. GenerationEventSink
 

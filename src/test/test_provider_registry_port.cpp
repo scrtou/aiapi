@@ -1,7 +1,7 @@
 #include <drogon/drogon_test.h>
 
-#include <infrastructure/provider/ProviderRegistry.h>
 #include <infrastructure/provider/ProviderBase.h>
+#include <infrastructure/provider/ProviderRegistry.h>
 #include <sessionManager/core/Session.h>
 
 #include <memory>
@@ -9,28 +9,6 @@
 #include <vector>
 
 namespace {
-
-class FakeProvider final : public APIinterface
-{
-  public:
-    provider::ProviderResult generate(session_st&) override
-    {
-        return provider::ProviderResult::success("fake");
-    }
-
-    void checkAlivableTokens() override {}
-    void checkModels() override {}
-    ProviderModelCatalog getModels() override
-    {
-        ProviderModel model;
-        model.id = "fake-model";
-        return ProviderModelCatalog{{model}};
-    }
-    void init() override {}
-    void afterResponseProcess(session_st&) override {}
-    void eraseChatinfoMap(std::string) override {}
-    void transferThreadContext(const std::string&, const std::string&) override {}
-};
 
 class NarrowProvider final : public provider::ProviderBase,
                              public provider::IProviderModelCatalog,
@@ -80,7 +58,9 @@ class NarrowProvider final : public provider::ProviderBase,
         const provider::ProviderRequest&,
         provider::ProviderCallContext&) override
     {
-        return platform::Result<provider::ProviderResponse>::success({});
+        provider::ProviderResponse response;
+        response.text = "fake";
+        return platform::Result<provider::ProviderResponse>::success(std::move(response));
     }
 
     std::string_view providerName() const noexcept override { return "narrow"; }
@@ -91,22 +71,22 @@ class NarrowProvider final : public provider::ProviderBase,
 DROGON_TEST(ProviderRegistryPort_ResolvesProviderWithoutLegacyLookupCoupling)
 {
     provider::ProviderRegistry registry;
-    auto provider = std::make_shared<FakeProvider>();
-    REQUIRE(registry.registerProvider("fake", provider));
+    auto provider = std::make_shared<NarrowProvider>();
+    REQUIRE(registry.registerChatProvider("fake", provider));
 
-    CHECK(registry.findProvider("fake") == provider);
-    CHECK(registry.findProvider("missing") == nullptr);
+    CHECK(registry.findChatProvider("fake") == provider);
+    CHECK(registry.findChatProvider("missing") == nullptr);
 }
 
 DROGON_TEST(ProviderRegistryPort_FreezesPublishedSnapshot)
 {
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("first", std::make_shared<FakeProvider>()));
+    REQUIRE(registry.registerChatProvider("first", std::make_shared<NarrowProvider>()));
     registry.freeze();
 
     CHECK(registry.isFrozen());
-    CHECK(!registry.registerProvider("late", std::make_shared<FakeProvider>()));
-    CHECK(registry.findProvider("late") == nullptr);
+    CHECK(!registry.registerChatProvider("late", std::make_shared<NarrowProvider>()));
+    CHECK(registry.findChatProvider("late") == nullptr);
     CHECK(registry.providerNames() == std::vector<std::string>{"first"});
 }
 
@@ -116,11 +96,10 @@ DROGON_TEST(ProviderRegistryPort_ResolvesNarrowCapabilitiesWithoutLegacyFallback
     auto narrow = std::make_shared<NarrowProvider>();
     REQUIRE(registry.registerChatProvider("chaynsapi", narrow, narrow, narrow));
 
-    CHECK(registry.findProvider("chaynsapi") == nullptr);
     CHECK(registry.findChatProvider("chaynsapi") == narrow);
     CHECK(registry.findModelCatalog("chaynsapi") == narrow);
     CHECK(registry.findThreadContext("chaynsapi") == narrow);
-    CHECK(!registry.registerProvider("chaynsapi", std::make_shared<FakeProvider>()));
+    CHECK(!registry.registerChatProvider("chaynsapi", std::make_shared<NarrowProvider>()));
     CHECK(registry.providerNames() == std::vector<std::string>{"chaynsapi"});
 }
 

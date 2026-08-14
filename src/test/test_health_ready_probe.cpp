@@ -47,28 +47,26 @@ class FakeAccountStore : public IAccountStore
     std::string getAccountStatusByUsername(std::string, std::string) override { return {}; }
 };
 
-class FakeProvider final : public APIinterface
+class FakeProvider final : public provider::IChatProvider
 {
   public:
-    provider::ProviderResult generate(session_st&) override
+    platform::Result<provider::ProviderResponse> generate(
+        const provider::ProviderRequest&,
+        provider::ProviderCallContext&) override
     {
-        return provider::ProviderResult::success("fake");
+        provider::ProviderResponse response;
+        response.text = "fake";
+        return platform::Result<provider::ProviderResponse>::success(std::move(response));
     }
-    void checkAlivableTokens() override {}
-    void checkModels() override {}
-    ProviderModelCatalog getModels() override { return {}; }
-    void init() override {}
-    void afterResponseProcess(session_st&) override {}
-    void eraseChatinfoMap(std::string) override {}
-    void transferThreadContext(const std::string&, const std::string&) override {}
+    provider::ProviderCapabilities capabilities() const noexcept override { return {}; }
 };
 
 class FakeProviderRegistry final : public IProviderRegistry
 {
   public:
-    std::shared_ptr<APIinterface> provider;
+    std::shared_ptr<provider::IChatProvider> provider;
 
-    std::shared_ptr<APIinterface> findProvider(const std::string&) const override
+    std::shared_ptr<provider::IChatProvider> findChatProvider(const std::string&) const override
     {
         return provider;
     }

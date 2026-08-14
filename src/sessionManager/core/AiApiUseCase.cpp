@@ -251,13 +251,6 @@ aiapi::ModelCatalogResult AiApiUseCase::modelCatalog(const std::string& provider
         return result;
     }
 
-    // Retool remains on the temporary wide port until P6-W3.
-    const auto legacy = providers_->findProvider(provider);
-    if (!legacy) {
-        return result;
-    }
-    result.outcome = aiapi::ModelCatalogOutcome::Found;
-    result.catalog = legacy->getModels();
     return result;
 }
 

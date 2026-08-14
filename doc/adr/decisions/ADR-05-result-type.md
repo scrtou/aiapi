@@ -2,8 +2,8 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，部分实施（P6-W2：Chayns 已切片） |
-| 当前版本 | v3.1 |
+| 状态 | 已接受，部分实施（P6-W3：两家活跃 Provider 已切片） |
+| 当前版本 | v3.2 |
 
 ## 决策范围
 
@@ -55,8 +55,12 @@ P6-W2 已完成 Chayns 的真实切片：它通过 `ProviderBase` 返回
 `platform::defaultHttpStatus` 做语义 HTTP 映射。请求 gate 持有 `CancellationSource`，Provider 仅得到
 只读 token；Chayns 在账号等待、HTTP 返回、重试和 polling 边界检查取消/绝对 deadline。
 
-Retool 仍经暂时保留的 `APIinterface/session_st&` fallback，属于 P6-W3；阶段 6 不能因 Chayns 已完成而
-标为全部实施。
+P6-W3 已完成 Retool 的同一路径：它经 `ProviderBase` 返回 `Result<ProviderResponse>`，workflow/agent
+的 HTTP、polling 和 sleep 均受只读 cancellation/absolute deadline 约束；只复制非敏感 workspace selector
+到 `ProviderRequest::routingHints`，不再接收 session aggregate。`APIinterface`、`findProvider()`、
+`registerProvider()` 与 registry legacy storage 已删除，两家活跃 Provider 都仅以 chat/model/thread 窄能力
+发布。P7 仍需拆除 GenerationService 内保留的 event/session JSON materialization，因此 ADR-05 作为全系统
+跨层 Result 迁移仍是“部分实施”。
 
 ## 迁移顺序
 
@@ -66,7 +70,7 @@ Retool 仍经暂时保留的 `APIinterface/session_st&` fallback，属于 P6-W3�
 2. chayns Provider port 出口；
 3. 对应 application use case；
 4. 对应 transport 错误映射；
-5. retool 重复同一路径；
+5. [完成] Retool 重复同一路径并删除 legacy registry lane；
 6. DB/account/session ports 随被修改的 use case 逐步迁移；
 7. 删除旧 bool+出参、session 副作用和重复错误类型。
 

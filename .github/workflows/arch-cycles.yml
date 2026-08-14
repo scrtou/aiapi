@@ -162,15 +162,23 @@ jobs:
       - name: P6 - Result/Error and ProviderBase foundation
         run: python3 tools/arch/check_provider_foundation.py
 
-      # P6-W2：Chayns 已迁入窄 ProviderBase/Result lane。Retool 尚保留宽
-      # APIinterface fallback，因此必须机械防止 Chayns 悄悄接回 legacy
-      # session/registry/singleton 路径；同时检查 cancellation lease 与
-      # thread/model capability 接线。
+      # P6-W2：Chayns 保持在 ProviderBase/Result 窄 lane；P6-W3 已删除
+      # APIinterface fallback。该 gate 同时固定 session/reaper capability 与
+      # CancelPrevious lease，防止 Chayns 重新引入宽端口或 singleton 路径。
       - name: P6 - Chayns Provider vertical slice
         run: python3 tools/arch/check_chayns_provider_slice.py
 
       - name: P6 - Chayns Provider vertical slice gate selftest
         run: python3 tools/arch/check_chayns_provider_slice.py --selftest
+
+      # P6-W3：Retool workflow/agent 已接入同一 ProviderBase/Result contract。
+      # 禁止重新出现 session aggregate、APIinterface 或 registry legacy lane；
+      # 验证 HTTP deadline/cancellation 与窄 model/thread capability 接线。
+      - name: P6 - Retool Provider vertical slice
+        run: python3 tools/arch/check_retool_provider_slice.py
+
+      - name: P6 - Retool Provider vertical slice gate selftest
+        run: python3 tools/arch/check_retool_provider_slice.py --selftest
 
       # 这道门禁既检查结构也检查 [[nodiscard]] 的 C++ 诊断。先真的删掉
       # 泛型 Result 的属性，再断言其以本门禁约定的 rc=4 失败；trap 保证本地

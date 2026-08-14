@@ -2,9 +2,9 @@
 
 > 本计划不包含工期。阶段按依赖关系推进；只有退出门禁全部满足后才进入下一阶段。
 >
-> 源码事实以 [`source-audit-2026-08.md`](../audits/source-audit-2026-08.md) 为准。该审计确认当前实现仍是
-> 单 executable、宽 `APIinterface`、JsonCpp domain、多个业务 singleton 和无界队列；因此下面的
-> “已落地”只表示安全修复或门禁，不表示目标架构已经实现。
+> 开工时的源码事实以 [`source-audit-2026-08.md`](../audits/source-audit-2026-08.md) 为准：该审计记录了
+> 单 executable、宽 `APIinterface`、JsonCpp domain、多个业务 singleton 和无界队列。后续工作包会逐项
+> 更新当前态；“已落地”只表示其对应的退出门禁已满足，不等同于整个目标架构已经完成。
 >
 > 目标文件树、类方法目录和流程调用链分别见 [`target-architecture.md`](../design/target-architecture.md)、
 > [`module-catalog.md`](../design/module-catalog.md) 和 [`flow-contracts.md`](../design/flow-contracts.md)。每个工作包
@@ -30,11 +30,11 @@
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
-| Provider 瘦端口 | 🔄 | P6-W2 已将 Chayns 迁入 Result/ProviderBase 窄端口；仅 Retool 的 `APIinterface/session_st&` 待 P6-W3 删除 |
+| Provider 瘦端口 | ✅ | P6-W2/W3 已将 Chayns 与 Retool 迁入 Result/ProviderBase 窄端口；`APIinterface`、legacy registry lane 与 Provider session aggregate 出口均已删除 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 6（Provider 与 Result 垂直切片）；P6-W1/P6-W2 已完成，当前工作项 P6-W3（Retool Provider 垂直切片）。**
+**当前执行阶段：阶段 7（拆解 GenerationService 与 AccountManager）；P6-W1～P6-W3 已完成，当前工作项 P7-W1（Generation pipeline 重写）。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
@@ -85,6 +85,16 @@ token/absolute deadline 约束。Retool 是唯一保留宽端口 fallback 的 Pr
 `check_chayns_provider_slice.py`（含内存变异 selftest）防止 Chayns 回接旧 lane。Debug build、390/390
 `ctest`、直接 runner 390 cases / 2031 assertions 与全量架构门禁通过；产物见
 [`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md)。
+
+P6-W3 已收口：Retool 直接继承 `ProviderBase` 并同时实现
+`IProviderModelCatalog/IProviderThreadContext`；workflow/agent 都改为
+`Result<ProviderResponse>`，workspace/thread affinity 保持为 provider 私有状态。Application 仅从 legacy
+session 中复制 `workspace_id/workspaceId` 到 string-only `routingHints`，不再把 session aggregate 或 client
+headers 交给 Provider。每次 Retool HTTP timeout 受 context 剩余 deadline 限制，workflow/agent polling 与
+sleep 在下一阻塞边界前观察 cancellation。runtime 经 production factory 初始化后将两家 Provider 都通过
+`registerChatProvider` 发布；`APIinterface`、`findProvider()`、`registerProvider()` 和全部 legacy registry
+storage 均已删除。新增 `check_retool_provider_slice.py`（含内存变异 selftest），并将 Chayns gate 更新为
+P6 完成态。产物见 [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md)。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 
@@ -166,7 +176,7 @@ ctest --test-dir build --output-on-failure
 
 | 流程 | 生产入口 | 必须锁定的副作用 |
 |---|---|---|
-| Chat/Responses 生成 | `GenerationService::runGuarded` → `executeProvider` → `APIinterface::generate` | session 连续性、ResponseIndex、tool bridge、sink 事件顺序 |
+| Chat/Responses 生成 | `GenerationService::runGuarded` → `executeProvider` → `IChatProvider::generate` | session 连续性、ResponseIndex、tool bridge、sink 事件顺序 |
 | Chayns 上游 | `chaynsapi::postChatMessage` | 账号租约、thread create/message、轮询 deadline、换账号、台账 |
 | Retool 上游 | `retoolapi::requestWorkflow/requestAgent` | workspace 亲和、usage 计数、workflow/agent wire 格式 |
 | 账号生命周期 | `AccountManager::{add,delete,checkToken,autoRegister}` | store 事务、状态转换、失败回滚、后台任务 |
@@ -409,22 +419,24 @@ P8 执行 `--require-no-legacy` 最终删除。
 - [x] 开启 nodiscard 门禁；
 - [x] 保留 ErrorEvent 为独立观测模型。
 
-`IChatProvider`、不可变 Provider request/response 与薄 `ProviderBase` 同属本基础包；它们尚未替换
-legacy provider 出口，故阶段 6 的总退出门禁仍待 P6-W2/P6-W3。
+`IChatProvider`、不可变 Provider request/response 与薄 `ProviderBase` 同属本基础包；P6-W2/P6-W3
+现已用它们替换两家活跃 Provider 的旧出口，阶段 6 的 Provider 退出门禁已满足。
 
-### 6.2 chayns 切片
+### 6.2 chayns 切片（P6-W2 已完成）
 
-1. 建不可变 ProviderRequest 和结构化 ProviderResponse；
-2. 现有 chayns 通过 adapter 实现 IChatProvider；
-3. ProviderCallContext 传入 deadline/token/sink；
-4. application 使用 Result；
-5. transport 统一映射 Error；
-6. 删除 chayns 对 `session.response` 的写入/回读；
-7. 契约与覆盖报告验证行为不变。
+1. [x] 建不可变 ProviderRequest 和结构化 ProviderResponse；
+2. [x] chayns 直接继承 `ProviderBase` 并实现 `IChatProvider`；
+3. [x] ProviderCallContext 传入 deadline/token；
+4. [x] application 使用 Result；
+5. [x] transport 统一映射 Error；
+6. [x] 删除 chayns 对 `session.response` 的写入/回读；
+7. [x] 契约与覆盖报告验证行为不变。
 
-### 6.3 retool 切片
+### 6.3 retool 切片（P6-W3 已完成）
 
-重复同一 port contract；workflow/agent 差异留在实现内部，不为迎合 chayns 制造空钩子。
+Retool 直接复用同一 port contract：workflow/agent 差异留在实现内部，不为迎合 Chayns 制造空钩子。
+它接收仅含非敏感 workspace selector 的 string-only `routingHints`，私有维护 workspace/thread
+亲和；每个 HTTP、轮询和 sleep 边界观察只读 cancellation 与绝对 deadline。
 
 ### 6.4 ProviderBase 与真实共性
 
@@ -432,26 +444,26 @@ legacy provider 出口，故阶段 6 的总退出门禁仍待 P6-W2/P6-W3。
 
 Retry、timeout、error mapping、metrics、polling 的协议细节继续使用独立 policy/decorator。不得因为继承要求而制造空钩子。
 
-### 退出门禁
+### 退出门禁（P6-W3 已满足）
 
-- 旧 `APIinterface::generate(session_st&)` 删除；
-- Provider 的 session 副作用和项目单例访问为 0；
-- 两家通过同一 contract suite；
-- 所有阻塞边界受 deadline/cancellation 控制；
-- Error → HTTP 只有一个 transport 出口。
+- [x] 旧 `APIinterface::generate(session_st&)` 及接口文件删除；
+- [x] Provider 的 session 副作用和项目单例访问为 0；
+- [x] 两家通过同一 `ProviderBase` / `IChatProvider` contract；
+- [x] 所有阻塞边界受 deadline/cancellation 控制；
+- [x] Error → HTTP 仍只有一个 transport 出口。
 
-#### 6.5 Provider 方法拆分清单
+#### 6.5 已删除 Provider 方法的归属
 
-旧 `APIinterface` 的方法必须逐个归属，禁止在新端口上保留空实现：
+已删除的 `APIinterface` 方法均已有所有者，未在新端口保留空实现：
 
 | 旧方法 | 新所有者 |
 |---|---|
 | `generate(session_st&)` | `IChatProvider::generate(ProviderRequest, ProviderCallContext)` |
-| `getModels/checkModels` | `IModelCatalog`（只读快照/刷新策略） |
-| `checkAlivableTokens` | `IProviderHealth` 或 Account token workflow |
-| `init` | `ProviderFactory`/`AppContext::build`，失败返回 Result |
-| `afterResponseProcess` | application `ProviderResponseFinalizer`（仅保留确有业务语义的步骤） |
-| `eraseChatinfoMap/transferThreadContext` | `IProviderThreadContext`，由 SessionCommitter 显式调用 |
+| `getModels/checkModels` | `IProviderModelCatalog`（只读快照/刷新策略） |
+| `checkAlivableTokens` | Account token workflow（不再属于 chat Provider） |
+| `init` | `AppWiring` 的 `initialize() -> Result<void>` |
+| `afterResponseProcess` | 已删除（没有独立业务语义） |
+| `eraseChatinfoMap/transferThreadContext` | `IProviderThreadContext`，由 Session 显式调用 |
 
 迁移完成的 Provider 不得再 include `sessionManager/core/Session.h`，不得访问 ApiManager、AccountManager
 或任何 DB singleton。
@@ -507,7 +519,7 @@ characterization 通过后允许整体替换，但必须保持同一 port contra
 
 - 运行 `check_target_layers.py --require-no-legacy` 和
   `check_source_ownership.py --require-no-legacy`，删除 legacy target/source list；
-- 删除旧 APIinterface、重复 ErrorCode、无效配置和过渡 allowlist；
+- 删除届时仍存在的 ProviderResult compatibility codec、重复 ErrorCode、无效配置和过渡 allowlist；
 - 删除所有已归零 layer debt；
 - 重新生成干净发布基线；
 - clean build、全量测试、coverage、ASan/TSan、架构门禁、SIGTERM 集成测试通过；

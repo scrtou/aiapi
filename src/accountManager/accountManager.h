@@ -13,7 +13,6 @@
 #include <list>
 #include <set>
 #include <cstdint>
-#include <domain/port/APIinterface.h>
 using namespace std;
 
 // 纯数据类型（Accountinfo_st / AccountCompare / AccountAutomationSettings /
@@ -128,7 +127,6 @@ class AccountManager : public IAccountCatalog,
     void updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo);
     bool checkChaynsToken(string token);
     Json::Value getChaynsToken(string username,string passwd);
-    void registerAPIinterface(string apiName,shared_ptr<APIinterface> apiInterface);
     void refreshAccountQueue(string apiName);
     void printAccountPoolMap();
     void checkUpdateTokenthread();

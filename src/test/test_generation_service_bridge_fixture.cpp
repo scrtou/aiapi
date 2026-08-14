@@ -28,45 +28,50 @@ class FakeChannelCatalog final : public IChannelCatalog
     { for (const auto& row : rows) if (row.channelName == name) return row.supportsToolCalls; return std::nullopt; }
 };
 
-class CapturingProvider final : public APIinterface
+class CapturingProvider final : public provider::IChatProvider
 {
   public:
     enum class Mode { PlainText, BridgeToolCall, NativeEmptyArguments };
     explicit CapturingProvider(Mode mode = Mode::PlainText) : mode_(mode) {}
 
-    provider::ProviderResult generate(session_st& session) override
+    platform::Result<provider::ProviderResponse> generate(
+        const provider::ProviderRequest& request,
+        provider::ProviderCallContext&) override
     {
-        captured = session;
+        captured = request;
         ++calls;
         if (mode_ == Mode::BridgeToolCall)
         {
-            return provider::ProviderResult::success(
-                session.provider.toolBridgeTrigger +
+            provider::ProviderResponse response;
+            response.text = request.input +
                 "\n<function_calls><function_call><tool>read_file</tool>"
                 "<args_json><![CDATA[{\"path\":\"synthetic.txt\"}]]></args_json>"
-                "</function_call></function_calls>");
+                "</function_call></function_calls>";
+            return platform::Result<provider::ProviderResponse>::success(
+                std::move(response));
         }
         if (mode_ == Mode::NativeEmptyArguments)
         {
-            auto result = provider::ProviderResult::success("");
+            provider::ProviderResponse response;
             provider::ToolCall call;
             call.id = "call-synthetic";
             call.name = "ping";
             call.arguments = "";
-            result.toolCalls.push_back(call);
-            return result;
+            response.toolCalls.push_back(std::move(call));
+            return platform::Result<provider::ProviderResponse>::success(
+                std::move(response));
         }
-        return provider::ProviderResult::success("synthetic bridge answer");
+        provider::ProviderResponse response;
+        response.text = "synthetic bridge answer";
+        return platform::Result<provider::ProviderResponse>::success(std::move(response));
     }
-    void checkAlivableTokens() override {}
-    void checkModels() override {}
-    ProviderModelCatalog getModels() override { return {}; }
-    void init() override {}
-    void afterResponseProcess(session_st&) override {}
-    void eraseChatinfoMap(std::string) override {}
-    void transferThreadContext(const std::string&, const std::string&) override {}
 
-    session_st captured;
+    provider::ProviderCapabilities capabilities() const noexcept override
+    {
+        return provider::ProviderCapabilities{};
+    }
+
+    provider::ProviderRequest captured;
     int calls = 0;
   private:
     Mode mode_;
@@ -144,7 +149,7 @@ DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
 
     auto provider = std::make_shared<CapturingProvider>();
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("bridge-fixture", provider));
+    REQUIRE(registry.registerChatProvider("bridge-fixture", provider));
 
     auto request = makeRequest("bridge-fixture", fixtureTools());
 
@@ -157,14 +162,12 @@ DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
 
     CHECK(!error.has_value());
     CHECK(provider->calls == 1);
-    CHECK(provider->captured.request.message.find("<tool_instructions>") != std::string::npos);
-    CHECK(provider->captured.request.message.find("read_file") != std::string::npos);
-    // The bridge consumes the structured list before the provider call; the
-    // raw snapshot is retained for response diagnostics and codec selection.
-    CHECK(provider->captured.request.tools.isNull());
-    CHECK(provider->captured.request.toolsRaw.isArray());
-    CHECK(provider->captured.provider.toolBridgeTrigger.empty() == false);
-    CHECK(provider->captured.provider.toolBridgeFormat != toolcall::BridgeWireFormat::Unset);
+    CHECK(provider->captured.input.find("<tool_instructions>") != std::string::npos);
+    CHECK(provider->captured.input.find("read_file") != std::string::npos);
+    // The provider receives the normalized value DTO rather than the legacy
+    // session bag; tool definitions are still available for native providers.
+    CHECK(provider->captured.tools.size() == 1);
+    CHECK(provider->captured.tools[0].name == "read_file");
     CHECK(sink.closed);
 }
 
@@ -173,7 +176,7 @@ DROGON_TEST(GenerationService_BridgeCodecAndEmitOrderRunThroughProductionPipelin
     auto channels = makeChannel("bridge-emit-fixture", false);
     auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::BridgeToolCall);
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("bridge-emit-fixture", provider));
+    REQUIRE(registry.registerChatProvider("bridge-emit-fixture", provider));
     auto request = makeRequest("bridge-emit-fixture", fixtureTools());
     CollectingSink sink;
     ResponseIndex responseIndex;
@@ -207,7 +210,7 @@ DROGON_TEST(GenerationService_NativeToolArgumentsAreNormalizedBeforeEmit)
     auto channels = makeChannel("native-emit-fixture", true);
     auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::NativeEmptyArguments);
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("native-emit-fixture", provider));
+    REQUIRE(registry.registerChatProvider("native-emit-fixture", provider));
     auto request = makeRequest("native-emit-fixture", pingTool());
     CollectingSink sink;
     ResponseIndex responseIndex;
@@ -229,7 +232,7 @@ DROGON_TEST(GenerationService_RequiredToolFallbackRunsInsideEmitResultEvents)
     auto channels = makeChannel("forced-tool-fixture", false);
     auto provider = std::make_shared<CapturingProvider>();
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("forced-tool-fixture", provider));
+    REQUIRE(registry.registerChatProvider("forced-tool-fixture", provider));
     auto request = makeRequest("forced-tool-fixture", pingTool());
     request.toolChoice = R"({"type":"function","function":{"name":"ping"}})";
     CollectingSink sink;

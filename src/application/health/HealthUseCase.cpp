@@ -39,8 +39,7 @@ HealthReadiness HealthUseCase::readiness() const
 
     try {
         result.provider = providers_ &&
-                          (providers_->findChatProvider("chaynsapi") != nullptr ||
-                           providers_->findProvider("chaynsapi") != nullptr);
+                          providers_->findChatProvider("chaynsapi") != nullptr;
     } catch (...) {
         result.provider = false;
     }

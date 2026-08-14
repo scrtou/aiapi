@@ -38,11 +38,12 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 4 | check_test_registration | 测试文件未在 CMake 注册 |
 | 4 | check_enqueue_result | queue `enqueue()` / executor `submit()` 丢属性，或调用点绑定后不读结果 |
 | 4 | check_app_context | 组装根形状被破坏：build() 结果被丢弃、addOwner 逃出步骤、shutdown 收相对时长、main.cc 直接注入 |
-| 4 | check_provider_registry | P5-W1 Provider 静态工厂/管理器复活，或显式注册/冻结接线缺失 |
+| 4 | check_provider_registry | P5/P6 Provider 静态工厂/管理器、`APIinterface` 或 legacy registry lane 复活，或两家 Provider 的显式窄注册/冻结接线缺失 |
 | 4 | check_session_services | P5-W2 ResponseIndex/ExecutionGate 单例复活，或 application/transport 重新定位 chatSession |
 | 4 | check_lifecycle_services | P5-W3 queue/session/thread/metrics、五个 concrete DB store、Workspace/Account/Channel 或 AI facade 生命周期 singleton fallback 复活，或 AppContext ownership/构造接线缺失 |
 | 4 | check_provider_foundation | P6-W1 Result/Error/Deadline/CancellationToken、ProviderCallContext、薄 ProviderBase NVI、生产继承约束或 Result `[[nodiscard]]` compile probe 被破坏 |
-| 4 | check_chayns_provider_slice | P6-W2 Chayns 重回 `APIinterface/session_st`、singleton、legacy registry lane，或丢失 Result/cancellation/thread/model capability 接线 |
+| 4 | check_chayns_provider_slice | P6-W2 Chayns 重回 `session_st`、singleton 或旧 Provider lane，或丢失 Result/cancellation/thread/model capability 接线 |
+| 4 | check_retool_provider_slice | P6-W3 Retool 重回 `APIinterface/session_st`、ProviderResult/ProviderError、singleton 或 legacy registry lane，或丢失 workflow/agent/cancellation/narrow capability 接线 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -292,8 +293,25 @@ python3 tools/arch/check_chayns_provider_slice.py --selftest
 它冻结 Chayns 的 `ProviderBase` NVI、`IProviderModelCatalog` 与
 `IProviderThreadContext` 能力；生产目录不得再出现 `session_st`、`APIinterface`、
 `Session.h`、`session.response` 或项目 singleton 查询。运行时必须由 production factory
-构造并仅通过 `registerChatProvider("chaynsapi", ...)` 发布，GenerationService 必须优先走
-`IChatProvider`，session/reaper 必须走窄 thread capability，Retool 的宽 port fallback 则仍被
-明确保留到 P6-W3。它还检查 CancelPrevious 的 lease identity，避免被取消的旧请求释放新请求。
+构造并仅通过 `registerChatProvider("chaynsapi", ...)` 发布，GenerationService 必须只走
+`IChatProvider`，session/reaper 必须走窄 thread capability。P6-W3 删除的宽 port fallback
+不得复活；该 gate 也检查 CancelPrevious 的 lease identity，避免被取消的旧请求释放新请求。
 
 `--selftest` 不写工作树：在内存中破坏 Chayns 的 `ProviderBase` 继承，再要求同一判据拒绝它。
+
+### `check_retool_provider_slice.py`
+
+P6-W3 Retool vertical-slice gate:
+
+```bash
+python3 tools/arch/check_retool_provider_slice.py
+python3 tools/arch/check_retool_provider_slice.py --selftest
+```
+
+它冻结 Retool 的 `ProviderBase` NVI、模型目录和 thread-context 能力，以及 workflow/agent
+两条真实协议路径。生产目录不得重新出现 `session_st`、`APIinterface`、`ProviderResult` /
+`ProviderError` 或项目 singleton；每个 HTTP 调用、polling sleep 均须观察只读 cancellation 和
+absolute deadline。runtime 必须经 production factory 初始化并以 `registerChatProvider("retoolapi",
+...)` 发布；registry 与 GenerationService 不得保留 `findProvider()` / `registerProvider()` fallback。
+
+`--selftest` 在内存中破坏 Retool 的 `ProviderBase` 继承，并验证 gate 返回 rc=4；不写工作树。

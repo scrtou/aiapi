@@ -4,8 +4,8 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，部分实施（P6-W2：Chayns 已切片） |
-| 当前版本 | v3.1 |
+| 状态 | 已接受，部分实施（P6-W3：两家活跃 Provider 已切片） |
+| 当前版本 | v3.2 |
 
 ## Provider 范围
 
@@ -90,17 +90,23 @@ deadline 内，并在账号单飞等待、重试和 polling 边界观察只读 c
 
 `SessionExecutionGate` 保有 `CancellationSource`；CancelPrevious 安装新 lease 时取消旧 source，旧 guard
 之后完成也不能释放新 lease。GenerationService、session cleanup/transfer、model catalog 与 reaper 已分别
-通过 chat/model/thread 窄能力接线。Retool 仍经明确的 legacy `APIinterface` fallback，必须由 P6-W3 切片，
-不得以永久 adapter 双轨替代。
+通过 chat/model/thread 窄能力接线。
+
+P6-W3 已让 `retoolapi` 直接继承 `ProviderBase`，实现同一模型目录和 thread-context capability；workflow/
+agent 均从 `doGenerate(ProviderRequest, ProviderCallContext)` 返回 `Result<ProviderResponse>`。workspace/
+thread affinity 为 adapter 私有状态，调用方只能通过 string-only `routingHints` 提供显式 workspace selector。
+所有 Retool HTTP timeout 由 context 剩余 deadline 剪裁，polling/sleep 在下一阻塞边界检查 cancellation。
+composition root 用 `makeProductionProvider<retoolapi>()`、`initialize()` 与 `registerChatProvider()` 接线；
+`APIinterface`、`findProvider()`、`registerProvider()` 及 legacy registry lane 已删除。
 
 ## 迁移顺序
 
 1. [完成] 为活跃 Chayns 建立离线 transport/continuation/Pro/timeout/cancellation 契约测试；
 2. [完成] 让 Chayns 直接满足瘦 port，并删除其 session 副作用出口；
 3. [完成] 切换 application、model catalog、thread cleanup/reaper 与 transport Error 接线；
-4. 迁移 Retool；
+4. [完成] 迁移 Retool 并删除旧 registry lane；
 5. 比较两家真实重复代码，再抽公共策略；
-6. 删除旧 `APIinterface` 和名称硬判断。
+6. [完成] 删除旧 `APIinterface`；名称硬判断随 P7/P8 继续收口。
 
 不再迁移准备删除的 OpenAiProvider/nexos 作为样板。
 

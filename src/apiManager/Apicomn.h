@@ -4,10 +4,6 @@
 #include <json/json.h>
 
 
-struct session_st;
-
-class APIinterface;
-
 enum class ApiChannel {
    ChaynsApi
 };

@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P6（阶段 6，Provider 与 Result 垂直切片）**；P6-W1、P6-W2 已 DONE，
-**下一工作项为 P6-W3 Retool Provider 垂直切片**。
+当前是 **P7（阶段 7，拆解 GenerationService 与 AccountManager）**；P6-W1～P6-W3 已 DONE，
+**下一工作项为 P7-W1 Generation pipeline 重写**。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -70,6 +70,16 @@ JSON-free `ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider` 
 直接 runner 385 cases / 1995 assertions 与全部门禁通过，详见
 [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md)。
 
+P6-W3 已收口：Retool 已直接继承 `ProviderBase` 并实现模型目录和 thread-context 窄能力；workflow/agent
+都通过 `Result<ProviderResponse>` 返回，workspace selector 只经 string-only `routingHints` 进入 Provider，
+thread/workspace affinity 留在 Provider 私有状态。每个 Retool HTTP timeout 由绝对 deadline 剪裁，轮询和
+sleep 在阻塞边界检查只读 cancellation。AppWiring 用 production factory + `initialize()` 后以
+`registerChatProvider` 发布 Retool；`APIinterface`、`findProvider()`、`registerProvider()` 与 legacy registry
+storage 已删除。新增 Retool fixture cancellation/model/thread coverage、`check_retool_provider_slice.py` 及
+selftest，Chayns gate 同步转为 P6 完成态；详见
+[`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md)。P6 退出门禁全部满足，阶段
+推进到 P7-W1。
+
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
 持线程单例经 `addOwner` 显式登记（G7 停机相关部分闭环）。新增门禁 `check_app_context.py`（A1～A5），
@@ -106,7 +116,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P5-W3 | 阶段 5 | Account/Channel/Workspace/Metrics 注入 | Controller 只依赖 use case | DONE |
 | P6-W1 | 阶段 6 | Result/Error/ProviderBase 基础 | [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md) | DONE |
 | P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | [`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md) | DONE |
-| P6-W3 | 阶段 6 | Retool Provider 垂直切片 | workflow/agent contract 通过 | TODO |
+| P6-W3 | 阶段 6 | Retool Provider 垂直切片 | [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md) | DONE |
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | stage contract、旧实现删除、R1 归零 | TODO |
 | P7-W2 | 阶段 7 | Account workflows 重写 | selector/state machine/workers/回滚测试 | TODO |
 | P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | clean baseline、完整发布验证 | TODO |

@@ -13,6 +13,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -137,6 +138,7 @@ class FixtureRetoolTransport final : public retool::IRetoolHttpTransport
             response = drogon::HttpResponse::newHttpJsonResponse(exchange.response.get("body", Json::Value(Json::objectValue)));
         }
         response->setStatusCode(status);
+        if (afterSend) afterSend(request->getPath());
         return {drogon::ReqResult::Ok, response};
     }
 
@@ -144,6 +146,7 @@ class FixtureRetoolTransport final : public retool::IRetoolHttpTransport
     std::vector<std::string> errors;
     std::vector<std::string> calledBaseUrls;
     std::vector<std::string> calledPaths;
+    std::function<void(const std::string&)> afterSend;
 
   private:
     std::deque<Exchange> exchanges_;
@@ -286,17 +289,40 @@ RetoolProviderFixture installWorkspace(const std::string& id,
     return RetoolProviderFixture(id, workflow, agent, openai, anthropic);
 }
 
-session_st makeRequest(const std::string& model, const std::string& conversation, const std::string& message,
-                       const std::string& workspace = "ws-1")
+provider::ProviderRequest makeRequest(const std::string& model,
+                                      const std::string& conversation,
+                                      const std::string& message,
+                                      const std::string& workspace = "ws-1")
 {
-    session_st session;
-    session.request.api = "retoolapi";
-    session.request.model = model;
-    session.request.message = message;
-    session.request.rawMessage = message;
-    session.state.conversationId = conversation;
-    session.provider.clientInfo["workspace_id"] = workspace;
-    return session;
+    provider::ProviderRequest request;
+    request.model = model;
+    request.input = message;
+    request.rawInput = message;
+    request.conversationId = conversation;
+    if (!workspace.empty()) request.routingHints["workspace_id"] = workspace;
+    return request;
+}
+
+provider::ProviderCallContext makeProviderContext(
+    const platform::CancellationToken& token,
+    std::chrono::milliseconds budget = std::chrono::minutes(10))
+{
+    return provider::ProviderCallContext{
+        token, std::chrono::steady_clock::now() + budget};
+}
+
+platform::Result<provider::ProviderResponse> invoke(
+    retoolapi& provider, const provider::ProviderRequest& request)
+{
+    const auto initialized = provider.initialize();
+    if (!initialized) {
+        return platform::Result<provider::ProviderResponse>::failure(
+            initialized.error());
+    }
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    return provider.generate(request, context);
 }
 
 bool usageBalanced(const std::shared_ptr<FakeRetoolWorkspaceStore>& store)
@@ -339,14 +365,14 @@ DROGON_TEST(RetoolProvider_WorkflowFixtureRunsRealRequestWorkflowOffline)
     auto clock = std::make_shared<FakeRetoolClock>();
     auto provider = fixture.provider(transport, clock);
 
-    auto session = makeRequest("gpt-4o-mini", "workflow-conversation", "synthetic current question");
-    const auto result = provider.generate(session);
+    auto request = makeRequest("gpt-4o-mini", "workflow-conversation", "synthetic current question");
+    const auto result = invoke(provider, request);
 
-    CHECK(result.isSuccess());
-    CHECK(result.text == "synthetic workflow answer");
-    CHECK(result.meta.at("routeType") == "workflow");
-    CHECK(result.meta.at("workspaceId") == "ws-1");
-    CHECK(result.meta.at("provider") == "openAI");
+    REQUIRE(result.ok());
+    CHECK(result.value().text == "synthetic workflow answer");
+    CHECK(result.value().meta.at("routeType") == "workflow");
+    CHECK(result.value().meta.at("workspaceId") == "ws-1");
+    CHECK(result.value().meta.at("provider") == "openAI");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);
@@ -361,19 +387,43 @@ DROGON_TEST(RetoolProvider_AgentFixtureRunsRealRequestAgentOffline)
     auto clock = std::make_shared<FakeRetoolClock>();
     auto provider = fixture.provider(transport, clock);
 
-    auto session = makeRequest("agent-claude-sonnet-4-6", "agent-conversation", "synthetic agent question");
-    const auto result = provider.generate(session);
+    auto request = makeRequest("agent-claude-sonnet-4-6", "agent-conversation", "synthetic agent question");
+    const auto result = invoke(provider, request);
 
-    CHECK(result.isSuccess());
-    CHECK(result.text == "synthetic agent answer");
-    CHECK(result.meta.at("routeType") == "agent");
-    CHECK(result.meta.at("resourceId") == "agent-1");
-    CHECK(result.meta.at("model") == "claude-sonnet-4-6");
-    CHECK(result.meta.at("provider") == "anthropic");
+    REQUIRE(result.ok());
+    CHECK(result.value().text == "synthetic agent answer");
+    CHECK(result.value().meta.at("routeType") == "agent");
+    CHECK(result.value().meta.at("resourceId") == "agent-1");
+    CHECK(result.value().meta.at("model") == "claude-sonnet-4-6");
+    CHECK(result.value().meta.at("provider") == "anthropic");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(clock->sleepCalls == 1);
     CHECK(usageBalanced(fixture.store));
+}
+
+DROGON_TEST(RetoolProvider_ProvidesNarrowModelAndThreadCapabilities)
+{
+    auto fixture = installWorkspace("ws-1", true, true);
+    auto provider = fixture.provider(
+        std::make_shared<FixtureRetoolTransport>(), std::make_shared<FakeRetoolClock>());
+
+    REQUIRE(provider.initialize().ok());
+    const auto catalog = provider.getModels();
+    CHECK(std::any_of(catalog.models.begin(), catalog.models.end(), [](const ProviderModel& model) {
+        return model.id == "gpt-4o-mini";
+    }));
+    CHECK(std::any_of(catalog.models.begin(), catalog.models.end(), [](const ProviderModel& model) {
+        return model.id == "agent-claude-sonnet-4-6";
+    }));
+    CHECK(provider.capabilities().upstreamHistory);
+    CHECK(provider.transferThreadContext("old-conversation", "new-conversation").ok());
+    CHECK(provider.eraseThreadContext("new-conversation").ok());
+
+    const auto upstreamDelete = provider.deleteUpstreamThread(
+        "unused-account", "unused-thread", "", "");
+    REQUIRE(!upstreamDelete.ok());
+    CHECK(upstreamDelete.error().code == platform::ErrorCode::NotFound);
 }
 
 DROGON_TEST(RetoolProvider_WorkspaceAffinityPersistsAfterExplicitSelection)
@@ -386,11 +436,12 @@ DROGON_TEST(RetoolProvider_WorkspaceAffinityPersistsAfterExplicitSelection)
     auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
 
     auto first = makeRequest("gpt-4o-mini", "affinity-conversation", "synthetic current question");
-    CHECK(provider.generate(first).isSuccess());
+    CHECK(invoke(provider, first).ok());
     auto second = makeRequest("gpt-4o-mini", "affinity-conversation", "synthetic current question");
-    second.provider.clientInfo.removeMember("workspace_id");
-    CHECK(provider.generate(second).isSuccess());
-    CHECK(second.provider.clientInfo["workspace_id"] == "ws-1");
+    second.routingHints.erase("workspace_id");
+    const auto secondResult = invoke(provider, second);
+    REQUIRE(secondResult.ok());
+    CHECK(secondResult.value().meta.at("workspace_id") == "ws-1");
     CHECK(transport->errors.empty());
     CHECK(fixture.store->usageLog.size() == 4);
 }
@@ -409,13 +460,13 @@ DROGON_TEST(RetoolProvider_WorkflowErrorMappingsComeFromProductionPath)
         entry["response"] = item;
         transport->enqueueSingle(entry);
         auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
-        auto session = makeRequest("gpt-4o-mini", "error-" + std::to_string(item["status"].asInt()), "question");
-        const auto result = provider.generate(session);
-        CHECK(!result.isSuccess());
-        CHECK(result.error.httpStatusCode == item["status"].asInt());
-        if (item["expected_code"] == "AuthError") CHECK(result.error.code == provider::ProviderErrorCode::AuthError);
-        if (item["expected_code"] == "RateLimited") CHECK(result.error.code == provider::ProviderErrorCode::RateLimited);
-        if (item["expected_code"] == "InternalError") CHECK(result.error.code == provider::ProviderErrorCode::InternalError);
+        auto request = makeRequest("gpt-4o-mini", "error-" + std::to_string(item["status"].asInt()), "question");
+        const auto result = invoke(provider, request);
+        REQUIRE(!result.ok());
+        CHECK(result.error().upstreamHttpStatus == item["status"].asInt());
+        if (item["expected_code"] == "AuthError") CHECK(result.error().code == platform::ErrorCode::Unauthorized);
+        if (item["expected_code"] == "RateLimited") CHECK(result.error().code == platform::ErrorCode::RateLimited);
+        if (item["expected_code"] == "InternalError") CHECK(result.error().code == platform::ErrorCode::ProviderError);
         CHECK(usageBalanced(fixture.store));
     }
 }
@@ -426,11 +477,11 @@ DROGON_TEST(RetoolProvider_InvalidJsonMappingIsCharacterized)
     auto transport = std::make_shared<FixtureRetoolTransport>();
     transport->enqueueSingle(loadFixture("invalid-json.json")["exchange"]);
     auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
-    auto session = makeRequest("gpt-4o-mini", "invalid-json-conversation", "question");
-    const auto result = provider.generate(session);
-    CHECK(!result.isSuccess());
-    CHECK(result.error.code == provider::ProviderErrorCode::Unknown);
-    CHECK(result.statusCode == 200);
+    auto request = makeRequest("gpt-4o-mini", "invalid-json-conversation", "question");
+    const auto result = invoke(provider, request);
+    REQUIRE(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::ProviderError);
+    CHECK(result.error().upstreamHttpStatus == 200);
     CHECK(transport->errors.empty());
     CHECK(usageBalanced(fixture.store));
 }
@@ -454,12 +505,41 @@ DROGON_TEST(RetoolProvider_WorkflowPollingTimeoutUsesFakeClock)
     for (int i = 0; i < 120; ++i) transport->enqueueSingle(running);
     auto clock = std::make_shared<FakeRetoolClock>();
     auto provider = fixture.provider(transport, clock);
-    auto session = makeRequest("gpt-4o-mini", "timeout-conversation", "question");
-    const auto result = provider.generate(session);
-    CHECK(!result.isSuccess());
-    CHECK(result.error.code == provider::ProviderErrorCode::Timeout);
+    auto request = makeRequest("gpt-4o-mini", "timeout-conversation", "question");
+    const auto result = invoke(provider, request);
+    REQUIRE(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::Timeout);
     CHECK(clock->sleepCalls == 120);
     CHECK(transport->remaining() == 0);
+    CHECK(usageBalanced(fixture.store));
+}
+
+DROGON_TEST(RetoolProvider_CancellationStopsBeforeTheNextPollingBoundary)
+{
+    auto fixture = installWorkspace("ws-1", true, false);
+    auto transport = std::make_shared<FixtureRetoolTransport>();
+    transport->enqueue(loadFixture("workflow-success.json"));
+    platform::CancellationSource cancellation;
+    transport->afterSend = [&cancellation](const std::string& path) {
+        if (path.find("getBlockLevelLogs") != std::string::npos) {
+            cancellation.request();
+        }
+    };
+    auto clock = std::make_shared<FakeRetoolClock>();
+    auto provider = fixture.provider(transport, clock);
+    REQUIRE(provider.initialize().ok());
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto request = makeRequest(
+        "gpt-4o-mini", "cancel-conversation", "synthetic question");
+    const auto result = provider.generate(request, context);
+
+    REQUIRE(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::Cancelled);
+    // The second poll exchange stays queued: cancellation observed immediately
+    // after the first blocking boundary prevents another upstream request.
+    CHECK(transport->remaining() == 1);
+    CHECK(clock->sleepCalls == 0);
     CHECK(usageBalanced(fixture.store));
 }
 
@@ -474,11 +554,11 @@ DROGON_TEST(RetoolProvider_AgentFailedRunIsMappedToInternalError)
     failed["response"]["body"]["trace"][0]["data"]["error"] = "synthetic agent failure";
     transport->enqueueSingle(failed);
     auto provider = fixture.provider(transport, std::make_shared<FakeRetoolClock>());
-    auto session = makeRequest("agent-claude-sonnet-4-6", "agent-failed-conversation", "synthetic agent question");
-    const auto result = provider.generate(session);
-    CHECK(!result.isSuccess());
-    CHECK(result.error.code == provider::ProviderErrorCode::InternalError);
-    CHECK(result.error.message == "synthetic agent failure");
+    auto request = makeRequest("agent-claude-sonnet-4-6", "agent-failed-conversation", "synthetic agent question");
+    const auto result = invoke(provider, request);
+    REQUIRE(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::ProviderError);
+    CHECK(result.error().message == "synthetic agent failure");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(usageBalanced(fixture.store));
@@ -493,10 +573,10 @@ DROGON_TEST(RetoolProvider_AgentPollingTimeoutUsesFakeClock)
     for (int i = 0; i < 180; ++i) transport->enqueueSingle(running);
     auto clock = std::make_shared<FakeRetoolClock>();
     auto provider = fixture.provider(transport, clock);
-    auto session = makeRequest("agent-claude-sonnet-4-6", "agent-timeout-conversation", "synthetic agent question");
-    const auto result = provider.generate(session);
-    CHECK(!result.isSuccess());
-    CHECK(result.error.code == provider::ProviderErrorCode::Timeout);
+    auto request = makeRequest("agent-claude-sonnet-4-6", "agent-timeout-conversation", "synthetic agent question");
+    const auto result = invoke(provider, request);
+    REQUIRE(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::Timeout);
     CHECK(clock->sleepCalls == 180);
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
