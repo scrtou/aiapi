@@ -13,6 +13,8 @@
 #include <domain/port/IResponseIndex.h>
 #include <domain/port/IExecutionGate.h>
 #include <domain/port/IChannelCatalog.h>
+#include <platform/Cancellation.h>
+#include <platform/Deadline.h>
 class chatSession;
 /**
  * @brief 生成服务
@@ -117,12 +119,21 @@ private:
     static session_st materializeSession(const GenerationRequest& req);
     
     /**
-     * @brief 调用 Provider 执行生成
+     * Execute a provider through the narrow P6 port when available.  The
+     * legacy lane remains only for the unsliced Retool provider.
      *
-     * @param session 会话状态（包含输入和输出）
-     * @return 是否成功
+     * @return an Error on failure; success response is materialized by the
+     * application layer for the remaining legacy event/session pipeline.
      */
-    bool executeProvider(session_st& session);
+    std::optional<platform::Error> executeProvider(
+        session_st& session,
+        const platform::CancellationToken& cancellation,
+        platform::Deadline deadline);
+
+    static provider::ProviderRequest providerRequestFromSession(const session_st& session);
+    static void applyProviderResponse(
+        session_st& session,
+        const provider::ProviderResponse& response);
     
     /**
      * @brief 将 Provider 结果转换为事件并发送
@@ -144,6 +155,8 @@ private:
         const std::string& message,
         IResponseSink& sink
     );
+
+    void emitError(const platform::Error& error, IResponseSink& sink);
     
     /**
      * @brief 应用输出清洗

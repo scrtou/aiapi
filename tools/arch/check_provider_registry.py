@@ -29,7 +29,7 @@ for path in SRC.rglob("*"):
 
 wiring = (SRC / "runtime/AppWiring.cpp").read_text(errors="replace")
 required = (
-    'registerProvider("chaynsapi"',
+    'registerChatProvider("chaynsapi"',
     'registerProvider("retoolapi"',
     "registry->freeze()",
     "setProviderRegistry(registry.get())",

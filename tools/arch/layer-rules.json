@@ -1,5 +1,5 @@
 {
-  "_comment": "当前模块出边棘轮：迁移债务边只能收紧；ADR-01/02 明确允许的目标态 domain -> platform 基础设施边单独列出，不视为债务。",
+  "_comment": "当前模块出边棘轮：迁移债务边只能收紧；ADR-01/02 明确允许的目标态 domain -> platform 基础设施边单独列出，不视为债务。P6-W2 另有唯一受 check_chayns_provider_slice.py 约束的 apipoint/chaynsapi -> infrastructure ProviderBase 过渡边；源码归位前不得将其泛化为其它 apipoint 依赖。",
   "modules": {
     "<root>": {
       "allow_out": [
@@ -96,12 +96,14 @@
         "channelManager",
         "dbManager",
         "domain",
+        "infrastructure",
         "managedAccount",
         "platform",
         "retoolWorkspace",
         "sessionManager",
         "utils"
-      ]
+      ],
+      "role": "P6-W2 的 chaynsapi 仍位于 apipoint 源目录但必须继承 infrastructure::ProviderBase；check_chayns_provider_slice.py 将这条过渡边钉为唯一允许的 apipoint -> infrastructure include，最终随 Provider 归位/P8 收紧。"
     },
     "controllers": {
       "allow_out": [

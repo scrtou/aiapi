@@ -6,6 +6,32 @@
 
 ---
 
+## P6-W2 收口 · Chayns Provider 垂直切片（2026-08-14）
+
+- `chaynsapi` 由 `APIinterface` 迁为 `ProviderBase` + `IProviderModelCatalog` +
+  `IProviderThreadContext`；启动改为 `initialize() -> Result<void>`，生成改为
+  `doGenerate(ProviderRequest, ProviderCallContext) -> Result<ProviderResponse>`。生产目录删除
+  `Session.h`、`session_st/session.response` 与项目 singleton 依赖。
+- `ProviderRegistry` 增加 narrow chat/model/thread capability lane；同名 Provider 不能同时注册进
+  narrow/legacy lane。AppWiring 用 `makeProductionProvider<chaynsapi>()`、显式初始化并
+  `registerChatProvider` 发布 Chayns，Retool 仍是 P6-W3 前唯一的 legacy lane。
+- GenerationService 优先调用 `IChatProvider`，显式完成 legacy session → `ProviderRequest` 与
+  `ProviderResponse` → 剩余 event pipeline JSON 的边界转换；`platform::Error` 的 ErrorCode、providerCode
+  和安全 message 保持到 transport，而不再统一伪装成 502。
+- `SessionExecutionGate` 改为 gate 持有 `CancellationSource`、Provider 只收只读 token；修复
+  CancelPrevious 下已取消旧 guard 释放新 lease 的并发缺陷。Chayns HTTP timeout 受 context 剩余 deadline
+  限制，账号等待、retry/polling 和 HTTP 返回边界检查取消。
+- session transfer/cleanup、model catalog 与 thread reaper 分别接入 narrow thread/model capability。新增
+  Chayns cancellation、ErrorCode → 400、registry lane 排斥、session thread context、lease identity 和
+  reaper registration 回归。
+- 新增并接入 CI `check_chayns_provider_slice.py`；它禁止 Chayns 回接 legacy session/singleton/lane，
+  固定 factory/application/capability/cancellation 接线，并以无写工作树的内存变异 selftest 验证可杀伤性。
+  ADR-05/ADR-07、计划、workbook、work product 与工具 README 同步更新。验证：Debug build、390/390
+  `ctest`、直接 runner 390 cases / 2031 assertions、严格 test registration 与全量架构门禁通过；P6-W2
+  标记 DONE，下一项为 P6-W3 Retool slice。
+
+---
+
 ## P6-W1 收口 · Result/Error 与 ProviderBase 基础（2026-08-14）
 
 - 新增 `platform::Result/Error/ErrorCode`、绝对 `Deadline` 与共享状态的只读

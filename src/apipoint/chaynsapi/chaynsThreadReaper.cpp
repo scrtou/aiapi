@@ -9,7 +9,6 @@
 
 #include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include <apipoint/chaynsapi/chaynsapi.h>
 
 chaynsThreadReaper::chaynsThreadReaper(
     std::shared_ptr<chaynsThreadDbManager> threadDb)
@@ -196,12 +195,11 @@ int chaynsThreadReaper::runOnce()
         LOG_WARN << "[chayns线程回收] ProviderRegistry 未注入，跳过本轮上游删除";
         return 0;
     }
-    auto api = providerRegistry_->findProvider("chaynsapi");
-    auto chayns = std::dynamic_pointer_cast<chaynsapi>(api);
-    if (!chayns) {
-        // 台账存在但 chaynsapi 未注册（例如该实例关闭了 chayns 渠道）：
+    auto threadContext = providerRegistry_->findThreadContext("chaynsapi");
+    if (!threadContext) {
+        // 台账存在但 chayns thread capability 未注册（例如该实例关闭了渠道）：
         // 此时无权也无法删上游，保留行等待有能力的实例处理，绝不静默删表。
-        LOG_WARN << "[chayns线程回收] chaynsapi 未注册，跳过本轮上游删除";
+        LOG_WARN << "[chayns线程回收] chayns thread context 未注册，跳过本轮上游删除";
         return 0;
     }
 
@@ -220,8 +218,13 @@ int chaynsThreadReaper::runOnce()
 
         bool ok = false;
         try {
-            ok = chayns->deleteUpstreamThread(row.accountUserName, row.threadId,
-                                              row.origin, row.referer);
+            const auto deletion = threadContext->deleteUpstreamThread(
+                row.accountUserName, row.threadId, row.origin, row.referer);
+            ok = deletion.ok();
+            if (!ok) {
+                LOG_WARN << "[chayns线程回收] 删除上游线程失败: code="
+                         << deletion.error().type();
+            }
         } catch (const std::exception& e) {
             ok = false;
             LOG_WARN << "[chayns线程回收] 删除上游线程异常：" << e.what();

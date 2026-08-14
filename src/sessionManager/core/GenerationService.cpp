@@ -44,6 +44,8 @@ Json::StreamWriterBuilder& compactJsonWriter() {
 std::string toCompactJson(const Json::Value& value) {
     return Json::writeString(compactJsonWriter(), value);
 }
+
+constexpr auto kProviderCallBudget = std::chrono::minutes(5);
 } // 匿名命名空间
 
 std::string GenerationService::computeExecutionKey(const session_st& session) {
@@ -174,7 +176,12 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
     }
     
     LOG_INFO << "[生成服务] 已获取执行门控, 会话: " << sessionKey;
-    
+    // One absolute deadline and one read-only token are shared by a provider
+    // call and any application-level strict retry for this request.
+    const auto providerCancellation = guard.cancellationToken();
+    const platform::Deadline providerDeadline =
+        std::chrono::steady_clock::now() + kProviderCallBudget;
+
 	    try {
 	        auto& sessionManager = *sessionStore_;
 	        // 每次请求独立字段：仅对当前上游调用有效，进入新请求前必须清空。
@@ -234,27 +241,22 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
             return AppError::cancelled("请求已取消");
         }
         
-        // 3. 调用上游接口
-        if (!executeProvider(session)) {
-            // 记录 UPSTREAM 错误统计（上游 错误）
-            int httpStatus = session.response.message.get("statusCode", 0).asInt();
-            std::string errorMsg = safeJsonAsString(session.response.message.get("error", "上游服务错误"), "上游服务错误");
+        // 3. 调用上游接口。Provider Result preserves its semantic error;
+        // transport receives that one ErrorCode rather than a guessed 502.
+        if (const auto providerError = executeProvider(
+                session, providerCancellation, providerDeadline)) {
+            const int httpStatus = providerError->httpStatus();
             recordErrorStat(
                 session,
                 metrics::Domain::UPSTREAM,
                 metrics::EventType::UPSTREAM_HTTP_ERROR,
-                errorMsg,
+                providerError->message,
                 httpStatus
             );
-            emitError(
-                generation::ErrorCode::ProviderError,
-                errorMsg,
-                sink
-            );
+            emitError(*providerError, sink);
             sink.onClose();
-            // 记录请求完成（失败分支）
             recordRequestCompletedStat(session, httpStatus);
-            return std::nullopt;  // 上游 错误已通过 发送
+            return std::nullopt;
         }
 
         // CodexRooCompat: validate and retry with the request-scoped codec.
@@ -334,11 +336,13 @@ std::optional<AppError> GenerationService::executeGuardedWithSession(
                     retryCodec->buildRetryPrompt(retryOptions);
                 session.response.message = Json::Value(Json::objectValue);
 
-                const bool retryOk = executeProvider(session);
+                const auto retryError = executeProvider(
+                    session, providerCancellation, providerDeadline);
                 session.request.message = bridgeMessage;
-                if (!retryOk) {
+                if (retryError) {
                     session.response.message = firstResponse;
-                    LOG_WARN << "[生成服务][CodexRooCompat] 严格重试失败，已恢复首次响应";
+                    LOG_WARN << "[生成服务][CodexRooCompat] 严格重试失败，已恢复首次响应: code="
+                             << retryError->type();
                 } else {
                     LOG_INFO << "[生成服务][CodexRooCompat] 严格重试完成";
                 }
@@ -462,46 +466,165 @@ std::optional<AppError> GenerationService::runGuarded(
     return executeGuardedWithSession(session, sink, req.stream, policy);
 }
 
-bool GenerationService::executeProvider(session_st& session) {
-    LOG_INFO << "[生成服务] 执行提供者: " << session.request.api;
-    
-    auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
-    if (!api) {
-        LOG_ERROR << "[生成服务] 未找到提供者: " << session.request.api;
-        session.response.message["error"] = "未找到上游提供者: " + session.request.api;
-        return false;
+provider::ProviderRequest GenerationService::providerRequestFromSession(
+    const session_st& session)
+{
+    provider::ProviderRequest request;
+    request.conversationId = session.state.conversationId;
+    if (session.state.isContinuation) {
+        request.previousConversationId = session.provider.prevProviderKey;
     }
-    
-    // 使用 () 接口获取结构化结果
-    ProviderResult result = api->generate(session);
+    request.model = session.request.model;
+    request.systemPrompt = session.request.systemPrompt;
+    request.input = session.request.message;
+    request.rawInput = session.request.rawMessage;
+    request.images = session.request.images;
+    request.toolChoice = session.request.toolChoice;
+    request.parallelToolCalls = session.request.parallelToolCalls;
+    request.requestId = session.state.requestId;
 
-    if (!result.toolCalls.empty()) {
-        Json::Value toolCalls(Json::arrayValue);
-        for (const auto& tc : result.toolCalls) {
-            Json::Value item(Json::objectValue);
-            item["id"] = tc.id;
-            item["name"] = tc.name;
-            item["arguments"] = tc.arguments;
-            toolCalls.append(item);
+    if (session.provider.messageContext.isArray()) {
+        request.messages.reserve(session.provider.messageContext.size());
+        for (const auto& legacyMessage : session.provider.messageContext) {
+            provider::ProviderMessage message;
+            const std::string role = legacyMessage.get("role", "user").asString();
+            if (role == "system") {
+                message.role = provider::ProviderMessageRole::System;
+            } else if (role == "assistant") {
+                message.role = provider::ProviderMessageRole::Assistant;
+            } else if (role == "tool") {
+                message.role = provider::ProviderMessageRole::Tool;
+            } else {
+                message.role = provider::ProviderMessageRole::User;
+            }
+            message.text = legacyMessage.get("content", "").asString();
+            message.toolCallId = legacyMessage.get("tool_call_id", "").asString();
+            request.messages.push_back(std::move(message));
         }
-        session.response.message["tool_calls"] = toolCalls;
     }
-    
-    // 将结果写回 会话.响应. 以保持旧链路兼容
-    session.response.message["message"] = result.text;
-    session.response.message["statusCode"] = result.statusCode;
-    if (!result.meta.empty()) {
-        session.response.message["_meta"] = providercodec::toJson(result.meta);
+
+    const Json::Value& tools = (!session.request.tools.isNull() && session.request.tools.isArray())
+        ? session.request.tools
+        : session.request.toolsRaw;
+    if (tools.isArray()) {
+        request.tools.reserve(tools.size());
+        for (const auto& item : tools) {
+            const Json::Value& function = item.isMember("function") && item["function"].isObject()
+                ? item["function"]
+                : item;
+            provider::ProviderToolDefinition definition;
+            definition.name = function.get("name", "").asString();
+            definition.description = function.get("description", "").asString();
+            if (function.isMember("parameters")) {
+                definition.parametersJson = toCompactJson(function["parameters"]);
+            }
+            if (!definition.name.empty()) {
+                request.tools.push_back(std::move(definition));
+            }
+        }
     }
-    
+    return request;
+}
+
+void GenerationService::applyProviderResponse(
+    session_st& session,
+    const provider::ProviderResponse& response)
+{
+    session.response.message["message"] = response.text;
+    // This is a successful ProviderResponse.  HTTP status for Error is mapped
+    // only by the transport sink from platform::ErrorCode.
+    session.response.message["statusCode"] = 200;
+
+    if (!response.toolCalls.empty()) {
+        Json::Value toolCalls(Json::arrayValue);
+        for (const auto& call : response.toolCalls) {
+            Json::Value item(Json::objectValue);
+            item["id"] = call.id;
+            item["name"] = call.name;
+            item["arguments"] = call.arguments;
+            toolCalls.append(std::move(item));
+        }
+        session.response.message["tool_calls"] = std::move(toolCalls);
+    }
+
+    for (const auto& [key, value] : response.meta) {
+        constexpr std::string_view kChaynsPrefix = "chayns.";
+        if (key.compare(0, kChaynsPrefix.size(), kChaynsPrefix) != 0) {
+            session.response.message["_meta"][key] = value;
+            continue;
+        }
+
+        const std::string field = key.substr(kChaynsPrefix.size());
+        auto& target = session.response.message["_meta"]["chayns"][field];
+        if (field == "reasoning_messages") {
+            Json::CharReaderBuilder builder;
+            Json::Value parsed;
+            std::string errors;
+            std::istringstream input(value);
+            if (Json::parseFromStream(builder, input, &parsed, &errors) && parsed.isArray()) {
+                target = std::move(parsed);
+            } else {
+                target = Json::Value(Json::arrayValue);
+            }
+        } else if (field == "thread_type_id" || field == "workspace_uac_id") {
+            try {
+                target = Json::Int64(std::stoll(value));
+            } catch (...) {
+                target = value;
+            }
+        } else {
+            target = value;
+        }
+    }
+}
+
+std::optional<platform::Error> GenerationService::executeProvider(
+    session_st& session,
+    const platform::CancellationToken& cancellation,
+    platform::Deadline deadline)
+{
+    LOG_INFO << "[生成服务] 执行提供者: " << session.request.api;
+    if (!providerRegistry_) {
+        return platform::Error::internal("Provider registry is unavailable");
+    }
+
+    if (const auto chatProvider = providerRegistry_->findChatProvider(session.request.api)) {
+        auto request = providerRequestFromSession(session);
+        provider::ProviderCallContext context{cancellation, deadline};
+        const auto result = chatProvider->generate(request, context);
+        if (!result) {
+            return result.error();
+        }
+        applyProviderResponse(session, result.value());
+        return std::nullopt;
+    }
+
+    // Retool is intentionally still on this fallback until P6-W3.  Chayns is
+    // never registered here, so it cannot silently regain session side effects.
+    const auto legacyProvider = providerRegistry_->findProvider(session.request.api);
+    if (!legacyProvider) {
+        return platform::Error::notFound("未找到上游提供者: " + session.request.api);
+    }
+
+    const provider::ProviderResult result = legacyProvider->generate(session);
     if (!result.isSuccess()) {
-        LOG_ERROR << "[生成服务] 上游返回错误，状态码: " << result.statusCode
-                  << ", 消息: " << result.error.message;
-        session.response.message["error"] = result.error.message;
-        return false;
+        auto error = provider::toPlatformError(result.error);
+        if (!error.hasError()) {
+            error = platform::Error::providerError(
+                "Provider returned an invalid failure result", {}, result.statusCode);
+        } else if (error.upstreamHttpStatus == 0) {
+            error.upstreamHttpStatus = result.statusCode;
+        }
+        return error;
     }
-    
-    return true;
+
+    provider::ProviderResponse response;
+    response.text = result.text;
+    response.usage = result.usage;
+    response.toolCalls = result.toolCalls;
+    response.meta = result.meta;
+    applyProviderResponse(session, response);
+    return std::nullopt;
 }
 
 /**

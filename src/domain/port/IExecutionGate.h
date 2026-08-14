@@ -1,22 +1,19 @@
 #pragma once
 
-#include <atomic>
+#include <platform/Cancellation.h>
+
 #include <memory>
 #include <string>
 
 namespace session {
 
-class CancellationToken
-{
-  public:
-    void cancel() { cancelled_.store(true, std::memory_order_release); }
-    bool isCancelled() const { return cancelled_.load(std::memory_order_acquire); }
-
-  private:
-    std::atomic<bool> cancelled_{false};
-};
-
-using CancellationTokenPtr = std::shared_ptr<CancellationToken>;
+/**
+ * A request gate owns cancellation authority; downstream callers receive only
+ * the read-only platform token.  Reusing the platform primitive lets a P6
+ * provider observe CancelPrevious without gaining permission to cancel its
+ * caller.
+ */
+using CancellationSourcePtr = std::shared_ptr<platform::CancellationSource>;
 
 enum class ConcurrencyPolicy { RejectConcurrent, CancelPrevious };
 enum class GateResult { Acquired, Rejected, Cancelled };
@@ -27,8 +24,16 @@ class IExecutionGate
     virtual ~IExecutionGate() = default;
     virtual GateResult tryAcquire(const std::string& sessionKey,
                                   ConcurrencyPolicy policy,
-                                  CancellationTokenPtr& outToken) = 0;
-    virtual void release(const std::string& sessionKey) = 0;
+                                  CancellationSourcePtr& outCancellation) = 0;
+    /**
+     * Release only the lease identified by `cancellation`.
+     *
+     * CancelPrevious can install a successor before the cancelled request has
+     * unwound.  A key-only release would then let that older guard clear the
+     * successor's state, so the gate must receive the lease identity back.
+     */
+    virtual void release(const std::string& sessionKey,
+                         const CancellationSourcePtr& cancellation) = 0;
     virtual bool isExecuting(const std::string& sessionKey) const = 0;
 };
 

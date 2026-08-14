@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P6（阶段 6，Provider 与 Result 垂直切片）**；P6-W1 已 DONE，
-**下一工作项为 P6-W2 Chayns Provider 垂直切片**。
+当前是 **P6（阶段 6，Provider 与 Result 垂直切片）**；P6-W1、P6-W2 已 DONE，
+**下一工作项为 P6-W3 Retool Provider 垂直切片**。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -105,7 +105,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P5-W2 | 阶段 5 | SessionStore/ResponseIndex/Gate 注入 | [`P05-session-services.md`](../work-products/P05-session-services.md) | DONE |
 | P5-W3 | 阶段 5 | Account/Channel/Workspace/Metrics 注入 | Controller 只依赖 use case | DONE |
 | P6-W1 | 阶段 6 | Result/Error/ProviderBase 基础 | [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md) | DONE |
-| P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | 无 session 副作用/单例，contract 通过 | TODO |
+| P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | [`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md) | DONE |
 | P6-W3 | 阶段 6 | Retool Provider 垂直切片 | workflow/agent contract 通过 | TODO |
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | stage contract、旧实现删除、R1 归零 | TODO |
 | P7-W2 | 阶段 7 | Account workflows 重写 | selector/state machine/workers/回滚测试 | TODO |

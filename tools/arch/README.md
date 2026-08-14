@@ -42,6 +42,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 4 | check_session_services | P5-W2 ResponseIndex/ExecutionGate 单例复活，或 application/transport 重新定位 chatSession |
 | 4 | check_lifecycle_services | P5-W3 queue/session/thread/metrics、五个 concrete DB store、Workspace/Account/Channel 或 AI facade 生命周期 singleton fallback 复活，或 AppContext ownership/构造接线缺失 |
 | 4 | check_provider_foundation | P6-W1 Result/Error/Deadline/CancellationToken、ProviderCallContext、薄 ProviderBase NVI、生产继承约束或 Result `[[nodiscard]]` compile probe 被破坏 |
+| 4 | check_chayns_provider_slice | P6-W2 Chayns 重回 `APIinterface/session_st`、singleton、legacy registry lane，或丢失 Result/cancellation/thread/model capability 接线 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -278,3 +279,21 @@ probe，以 `-Werror=unused-result` 分别编译“正确消费 Result”和“�
 P6-W1 只建立契约，尚未让 legacy `APIinterface` 或 chayns/retool 生产实现接入该 port；这些真实
 vertical slice 在 P6-W2/P6-W3 完成。为使 domain 使用 Result/Deadline/取消契约，layer rules 现在
 允许 ADR-01/02 明确的目标态 `domain -> platform`，但仍禁止 domain 指向任何具体 IO/codec 模块。
+
+### `check_chayns_provider_slice.py`
+
+P6-W2 Chayns vertical-slice gate:
+
+```bash
+python3 tools/arch/check_chayns_provider_slice.py
+python3 tools/arch/check_chayns_provider_slice.py --selftest
+```
+
+它冻结 Chayns 的 `ProviderBase` NVI、`IProviderModelCatalog` 与
+`IProviderThreadContext` 能力；生产目录不得再出现 `session_st`、`APIinterface`、
+`Session.h`、`session.response` 或项目 singleton 查询。运行时必须由 production factory
+构造并仅通过 `registerChatProvider("chaynsapi", ...)` 发布，GenerationService 必须优先走
+`IChatProvider`，session/reaper 必须走窄 thread capability，Retool 的宽 port fallback 则仍被
+明确保留到 P6-W3。它还检查 CancelPrevious 的 lease identity，避免被取消的旧请求释放新请求。
+
+`--selftest` 不写工作树：在内存中破坏 Chayns 的 `ProviderBase` 继承，再要求同一判据拒绝它。

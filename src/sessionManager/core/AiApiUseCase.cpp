@@ -242,12 +242,22 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
 aiapi::ModelCatalogResult AiApiUseCase::modelCatalog(const std::string& provider) const
 {
     aiapi::ModelCatalogResult result;
-    const auto api = providers_ ? providers_->findProvider(provider) : nullptr;
-    if (!api) {
+    if (!providers_) {
+        return result;
+    }
+    if (const auto catalog = providers_->findModelCatalog(provider)) {
+        result.outcome = aiapi::ModelCatalogOutcome::Found;
+        result.catalog = catalog->getModels();
+        return result;
+    }
+
+    // Retool remains on the temporary wide port until P6-W3.
+    const auto legacy = providers_->findProvider(provider);
+    if (!legacy) {
         return result;
     }
     result.outcome = aiapi::ModelCatalogOutcome::Found;
-    result.catalog = api->getModels();
+    result.catalog = legacy->getModels();
     return result;
 }
 

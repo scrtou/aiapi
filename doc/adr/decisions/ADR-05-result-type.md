@@ -2,8 +2,8 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，部分实施（P6-W1） |
-| 当前版本 | v3.0 |
+| 状态 | 已接受，部分实施（P6-W2：Chayns 已切片） |
+| 当前版本 | v3.1 |
 
 ## 决策范围
 
@@ -45,11 +45,18 @@ struct Error {
 
 P6-W1 已落地 `platform::Result/Error/ErrorCode`、绝对 `Deadline`、只读
 `CancellationToken`、`Result<void>`、重复 generation ErrorCode alias 与 `[[nodiscard]]` 的 C++17
-compile gate。`Error` 现保留 `providerCode`、`upstreamHttpStatus` 和仅诊断用 `detail`；legacy
+compile gate。`Error` 保留 `providerCode`、`upstreamHttpStatus` 和仅诊断用 `detail`；legacy
 `ProviderErrorCode` 只在旧 Provider 内部保留，并有到 platform Error 的投影。
 
-尚未完成 chayns/retool 的 port/application/transport 切片：旧 `APIinterface/session_st&`、session
-副作用和 transport DTO 仍存在。它们分别属于 P6-W2/P6-W3，不能因为基础类型已存在而标为已实施。
+P6-W2 已完成 Chayns 的真实切片：它通过 `ProviderBase` 返回
+`Result<ProviderResponse>`，不再读写 `session_st/session.response`。GenerationService 优先解析窄
+`IChatProvider`，把成功 response 仅在 application 边界物化给尚存的 legacy event/session pipeline；
+失败 `platform::Error` 原样进入 `generation::Error`，JSON/SSE sink 仍只通过
+`platform::defaultHttpStatus` 做语义 HTTP 映射。请求 gate 持有 `CancellationSource`，Provider 仅得到
+只读 token；Chayns 在账号等待、HTTP 返回、重试和 polling 边界检查取消/绝对 deadline。
+
+Retool 仍经暂时保留的 `APIinterface/session_st&` fallback，属于 P6-W3；阶段 6 不能因 Chayns 已完成而
+标为全部实施。
 
 ## 迁移顺序
 

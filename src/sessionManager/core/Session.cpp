@@ -30,6 +30,43 @@ Json::Value parseJson(const std::string& value)
         return Json::Value(Json::nullValue);
     return result;
 }
+
+void transferProviderThreadContext(IProviderRegistry* registry,
+                                   const std::string& providerName,
+                                   const std::string& oldId,
+                                   const std::string& newId)
+{
+    if (!registry || providerName.empty()) return;
+    if (const auto context = registry->findThreadContext(providerName)) {
+        const auto result = context->transferThreadContext(oldId, newId);
+        if (!result) {
+            LOG_WARN << "[SessionTransfer] provider thread context transfer failed: code="
+                     << result.error().type();
+        }
+        return;
+    }
+    if (const auto legacy = registry->findProvider(providerName)) {
+        legacy->transferThreadContext(oldId, newId);
+    }
+}
+
+void eraseProviderThreadContext(IProviderRegistry* registry,
+                                const std::string& providerName,
+                                const std::string& conversationId)
+{
+    if (!registry || providerName.empty()) return;
+    if (const auto context = registry->findThreadContext(providerName)) {
+        const auto result = context->eraseThreadContext(conversationId);
+        if (!result) {
+            LOG_WARN << "[会话清理] provider thread context erase failed: code="
+                     << result.error().type();
+        }
+        return;
+    }
+    if (const auto legacy = registry->findProvider(providerName)) {
+        legacy->eraseChatinfoMap(conversationId);
+    }
+}
 }  // namespace
 
 chatSession::chatSession()
@@ -532,13 +569,10 @@ void chatSession::commitSessionTransfer(session_st& session)
     session.state.conversationId = newSessionId;
     session.state.nextSessionId.clear();  // 清理已使用的 nextSessionId
     
-    // 5. 转移 provider 线程上下文（如 chaynsapi 的 threadId 映射）
-    if (!session.request.api.empty()) {
-        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
-        if (api) {
-            api->transferThreadContext(oldSessionId, newSessionId);
-        }
-    }
+    // 5. 转移 provider-owned upstream thread context through the narrow
+    // P6 capability.  The legacy fallback exists only for unsliced Retool.
+    transferProviderThreadContext(providerRegistry_, session.request.api,
+                                  oldSessionId, newSessionId);
     
     // 6. 更新 session_map（添加新会话，删除旧会话）
     addSession(newSessionId, session);
@@ -729,11 +763,7 @@ void chatSession::clearExpiredSession()
         if (apiName.empty())
             continue;
 
-        auto api = providerRegistry_ ? providerRegistry_->findProvider(apiName) : nullptr;
-        if (api)
-        {
-            api->eraseChatinfoMap(sessionId);
-        }
+        eraseProviderThreadContext(providerRegistry_, apiName, sessionId);
         
         if (isRespApi) {
             LOG_INFO << "[响应接口] 清理过期会话: " << sessionId;
@@ -1142,12 +1172,7 @@ bool chatSession::deleteResponseSession(const std::string& sessionId)
     // 如果有关联的 API，清理其资源
     const std::string& apiName = it->second.request.api;
     const std::string keyToDelete = it->first;
-    if (!apiName.empty()) {
-        auto api = providerRegistry_ ? providerRegistry_->findProvider(apiName) : nullptr;
-        if (api) {
-            api->eraseChatinfoMap(keyToDelete);
-        }
-    }
+    eraseProviderThreadContext(providerRegistry_, apiName, keyToDelete);
     
     session_map.erase(it);
     LOG_INFO << "[Response API] 删除会话, sessionId: " << sessionId << ", key: " << keyToDelete;
@@ -1196,11 +1221,10 @@ void chatSession::updateResponseSession(session_st& session)
     // 只有当 isContinuation 为 true 且 prevProviderKey 与 conversationId 不同时才需要转移
     if (session.state.isContinuation && !session.request.api.empty() &&
         !session.provider.prevProviderKey.empty() && session.provider.prevProviderKey != session.state.conversationId) {
-        auto api = providerRegistry_ ? providerRegistry_->findProvider(session.request.api) : nullptr;
-        if (api) {
-            LOG_INFO << "[Response API] 转移线程上下文: " << session.provider.prevProviderKey << " -> " << session.state.conversationId;
-            api->transferThreadContext(session.provider.prevProviderKey, session.state.conversationId);
-        }
+        LOG_INFO << "[Response API] 转移线程上下文: " << session.provider.prevProviderKey << " -> " << session.state.conversationId;
+        transferProviderThreadContext(providerRegistry_, session.request.api,
+                                      session.provider.prevProviderKey,
+                                      session.state.conversationId);
     }
 
     // 使用 conversationId 作为键更新

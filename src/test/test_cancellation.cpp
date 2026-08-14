@@ -1,6 +1,7 @@
 #include <drogon/drogon_test.h>
 
 #include <platform/Cancellation.h>
+#include <sessionManager/core/SessionExecutionGate.h>
 
 #include <chrono>
 #include <thread>
@@ -103,4 +104,32 @@ DROGON_TEST(Cancellation_ReadOnlyTokenObservesSourceAndOutlivesIt)
     // the read-only token keeps the shared state valid without exposing a
     // request() operation to the provider.
     CHECK(token.isCancelled());
+}
+
+DROGON_TEST(SessionExecutionGate_CancelPreviousCancelsOnlyTheSupersededLease)
+{
+    session::SessionExecutionGate gate;
+    session::CancellationSourcePtr first;
+    REQUIRE(gate.tryAcquire("same-conversation", session::ConcurrencyPolicy::RejectConcurrent,
+                            first) == session::GateResult::Acquired);
+    REQUIRE(first != nullptr);
+    const auto firstToken = first->token();
+
+    session::CancellationSourcePtr second;
+    REQUIRE(gate.tryAcquire("same-conversation", session::ConcurrencyPolicy::CancelPrevious,
+                            second) == session::GateResult::Acquired);
+    REQUIRE(second != nullptr);
+
+    // The downstream view is read-only but observes CancelPrevious promptly.
+    CHECK(firstToken.isCancelled());
+    CHECK(!second->isCancelled());
+    CHECK(gate.isExecuting("same-conversation"));
+
+    // The cancelled guard may complete after its replacement.  Its release
+    // must not clear the newer request's lease.
+    gate.release("same-conversation", first);
+    CHECK(gate.isExecuting("same-conversation"));
+
+    gate.release("same-conversation", second);
+    CHECK(!gate.isExecuting("same-conversation"));
 }

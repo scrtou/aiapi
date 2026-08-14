@@ -318,7 +318,7 @@ for needle in (
     "addAccountWorkersOwner(ctx, accounts)",
     "[accounts](std::chrono::steady_clock::time_point deadline)",
     "accounts->stopBackgroundThreads(deadline)",
-    "std::make_shared<chaynsapi>(",
+    "provider::makeProductionProvider<chaynsapi>",
     "std::make_shared<HealthUseCase>(",
     "ctx.setHealthUseCase(healthUseCase)",
     "HealthController::setUseCase(healthUseCase.get())",

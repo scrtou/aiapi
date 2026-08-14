@@ -17,7 +17,7 @@ namespace provider {
  * IChatProvider directly.
  */
 template <typename ProviderT, typename... Args>
-[[nodiscard]] std::shared_ptr<IChatProvider> makeProductionProvider(Args&&... args)
+[[nodiscard]] std::shared_ptr<ProviderT> makeProductionProvider(Args&&... args)
 {
     static_assert(std::is_base_of_v<ProviderBase, ProviderT>,
                   "production providers must derive from ProviderBase");

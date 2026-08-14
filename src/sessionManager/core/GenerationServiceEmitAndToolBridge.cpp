@@ -1018,9 +1018,16 @@ void GenerationService::emitError(
     const std::string& message,
     IResponseSink& sink
 ) {
+    emitError(platform::Error(code, message), sink);
+}
+
+void GenerationService::emitError(const platform::Error& source, IResponseSink& sink)
+{
     generation::Error error;
-    error.code = code;
-    error.message = message;
+    error.code = source.code;
+    error.message = source.message;
+    error.providerCode = source.providerCode;
+    error.detail = source.detail;
     sink.onEvent(error);
 }
 

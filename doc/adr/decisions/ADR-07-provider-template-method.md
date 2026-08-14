@@ -4,8 +4,8 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，部分实施（P6-W1） |
-| 当前版本 | v3.0 |
+| 状态 | 已接受，部分实施（P6-W2：Chayns 已切片） |
+| 当前版本 | v3.1 |
 
 ## Provider 范围
 
@@ -79,18 +79,26 @@ chayns 使用 JSON 轮询，retool 有 workflow/agent 两种模式，不存在�
 
 P6-W1 已提供 JSON-free 的 `ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider`、
 `ProviderBase::generate() final`、异常转换/失败一次上报以及 `makeProductionProvider<T>()` 的
-`static_assert`。`ProviderCallContext` 当前先落地只读 token + absolute deadline；上面草案中的 sink
-会和真实 event publication path 一起在 P6-W2/P7 接入，不能为凑接口提前建立空转发钩子。
+`static_assert`。`ProviderCallContext` 当前只持有只读 token + absolute deadline；上面草案中的 sink
+仍会和真实 event publication path 一起在 P7 接入，不能为凑接口提前建立空转发钩子。
 
-现有 chayns/retool 仍经 legacy `APIinterface` 和 `session_st` 运行，尚未成为本 port 的生产实现；
-P6-W2/P6-W3 必须在接通时删除对应旧出口，而不是长期 adapter 双轨。
+P6-W2 已让 `chaynsapi` 直接继承 `ProviderBase`，并同时实现只读模型目录
+`IProviderModelCatalog` 与上游线程所有权 `IProviderThreadContext`。composition root 用生产 factory
+构造/`initialize()` 后只以 `registerChatProvider` 发布它；Chayns 不再包含 `Session.h`、不访问
+`APIinterface/session_st/session.response` 或项目 singleton。它把 HTTP timeout 限制在 request 的剩余
+deadline 内，并在账号单飞等待、重试和 polling 边界观察只读 cancellation token。
+
+`SessionExecutionGate` 保有 `CancellationSource`；CancelPrevious 安装新 lease 时取消旧 source，旧 guard
+之后完成也不能释放新 lease。GenerationService、session cleanup/transfer、model catalog 与 reaper 已分别
+通过 chat/model/thread 窄能力接线。Retool 仍经明确的 legacy `APIinterface` fallback，必须由 P6-W3 切片，
+不得以永久 adapter 双轨替代。
 
 ## 迁移顺序
 
-1. 为活跃 chayns 建立契约测试；
-2. 用 adapter 让现有 chayns 先满足瘦 port，内部暂不大改；
-3. 切换 application 并删除 chayns session 副作用出口；
-4. 迁移 retool；
+1. [完成] 为活跃 Chayns 建立离线 transport/continuation/Pro/timeout/cancellation 契约测试；
+2. [完成] 让 Chayns 直接满足瘦 port，并删除其 session 副作用出口；
+3. [完成] 切换 application、model catalog、thread cleanup/reaper 与 transport Error 接线；
+4. 迁移 Retool；
 5. 比较两家真实重复代码，再抽公共策略；
 6. 删除旧 `APIinterface` 和名称硬判断。
 

@@ -18,10 +18,9 @@
  * chatSession 用 `stopClearExpiredLoop_` + `clearExpiredWakeCv_`。三套写法相同、
  * 各自维护同一个「置位必须持锁，否则 notify 落空」的约束——同一个 bug 要修三遍。
  *
- * 与 `SessionExecutionGate` 里的 `CancellationToken` 的关系：那个是**请求级**取消
- * （CancelPrevious 策略下取消上一次生成），生命周期随请求，且没有等待原语。
- * 本类是**进程停机级**取消，附带可中断等待。两者语义不同，不合并，但都由本文件
- * 提供的原语表达，避免第四套实现。
+ * P6-W2 同时将它用于 SessionExecutionGate 的**请求级**取消：gate 保有
+ * CancellationSource，ProviderCallContext 只收到 CancellationToken。进程停机和
+ * 单请求取消的拥有者不同，但状态/唤醒语义完全相同，不能再维护两套 token。
  *
  * 线程模型：`request()` 可由任意线程调用；`waitUntil` / `waitFor` 由被取消的
  * 工作线程调用。置位与谓词读取共用同一个 shared `State::mutex`，杜绝丢失唤醒——这正是

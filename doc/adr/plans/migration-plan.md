@@ -30,11 +30,11 @@
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
-| Provider 瘦端口 | 🔄 | P6-W1 已有 Result/Error/ProviderBase 与新 port contract；旧 `APIinterface/session_st&` 待 P6-W2/W3 删除 |
+| Provider 瘦端口 | 🔄 | P6-W2 已将 Chayns 迁入 Result/ProviderBase 窄端口；仅 Retool 的 `APIinterface/session_st&` 待 P6-W3 删除 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 6（Provider 与 Result 垂直切片）；P6-W1 已完成，当前工作项 P6-W2（Chayns Provider 垂直切片）。**
+**当前执行阶段：阶段 6（Provider 与 Result 垂直切片）；P6-W1/P6-W2 已完成，当前工作项 P6-W3（Retool Provider 垂直切片）。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
@@ -73,9 +73,18 @@ P6-W1 已收口：新增 `platform::Result/Error/ErrorCode`、绝对 `Deadline` 
 继承约束外，还用 C++17 `-Werror=unused-result` 正反编译 probe 固定 `Result` 的 `[[nodiscard]]` 语义；
 其变异自检会移除属性并断言 rc=4。为支持 domain 的基础值对象依赖，layer rule 明确允许 ADR-01/02 的
 目标态 `domain -> platform`，仍禁止 domain 指向具体 IO/codec。Debug build、385/385 `ctest`、直接 runner
-385 cases / 1995 assertions 与全量架构门禁均通过。legacy `APIinterface/session_st&`、provider session
-副作用和实际 HTTP/polling cancellation 尚未迁移，下一项为 P6-W2 chayns vertical slice。产物见
+385 cases / 1995 assertions 与全量架构门禁均通过。该基础项尚未迁移 legacy
+`APIinterface/session_st&`，下一项为 P6-W2 Chayns vertical slice。产物见
 [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md)。
+
+P6-W2 已收口：Chayns 已直接继承 `ProviderBase` 并通过 `Result<ProviderResponse>` 出口运行；
+`IProviderModelCatalog/IProviderThreadContext`、Registry narrow lane、production factory、application Result
+bridge、session/reaper capability 与 request cancellation lease 已接通。Chayns 生产代码不再访问
+`APIinterface/session_st/session.response` 或项目 singleton；实际 HTTP、账号等待、retry/polling 都受只读
+token/absolute deadline 约束。Retool 是唯一保留宽端口 fallback 的 Provider，下一项为 P6-W3。新增
+`check_chayns_provider_slice.py`（含内存变异 selftest）防止 Chayns 回接旧 lane。Debug build、390/390
+`ctest`、直接 runner 390 cases / 2031 assertions 与全量架构门禁通过；产物见
+[`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md)。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 

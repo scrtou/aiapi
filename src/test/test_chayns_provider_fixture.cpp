@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <list>
 #include <memory>
@@ -120,6 +121,9 @@ class FixtureChaynsTransport final : public chayns::IChaynsHttpTransport
         }
         response->setStatusCode(
             static_cast<drogon::HttpStatusCode>(exchange.response["status"].asInt()));
+        if (afterSend) {
+            afterSend(request);
+        }
         return {drogon::ReqResult::Ok, response};
     }
 
@@ -128,6 +132,7 @@ class FixtureChaynsTransport final : public chayns::IChaynsHttpTransport
     std::vector<std::string> errors;
     std::vector<std::string> calledBaseUrls;
     std::vector<std::string> calledPaths;
+    std::function<void(const drogon::HttpRequestPtr&)> afterSend;
 
   private:
     void checkRequestBody(const ExpectedExchange& exchange,
@@ -246,17 +251,28 @@ void installAccount(AccountManager& accountManager, const std::string& type)
     accountManager.loadAccount();
 }
 
-session_st makeRequest(const std::string& model,
-                       const std::string& conversationId,
-                       const std::string& message)
+provider::ProviderRequest makeProviderRequest(
+    const std::string& model,
+    const std::string& conversationId,
+    const std::string& input,
+    const std::string& previousConversationId = {})
 {
-    session_st session;
-    session.request.api = "chaynsapi";
-    session.request.model = model;
-    session.request.message = message;
-    session.request.rawMessage = message;
-    session.state.conversationId = conversationId;
-    return session;
+    provider::ProviderRequest request;
+    request.conversationId = conversationId;
+    request.previousConversationId = previousConversationId;
+    request.model = model;
+    request.input = input;
+    request.rawInput = input;
+    request.messages.push_back(provider::ProviderMessage{
+        provider::ProviderMessageRole::User, input, {}});
+    return request;
+}
+
+provider::ProviderCallContext makeProviderContext(
+    const platform::CancellationToken& cancellation)
+{
+    return provider::ProviderCallContext{
+        cancellation, std::chrono::steady_clock::now() + std::chrono::minutes(10)};
 }
 
 GenerationRequest makeGenerationRequest(EndpointType endpoint,
@@ -287,8 +303,11 @@ struct GenerationFixtureHarness
         transport->enqueue("poll-messages.json");
         provider = std::make_shared<chaynsapi>(
             accounts, transport, chayns::makeRealChaynsClock());
-        provider->init();
-        if (!registry.registerProvider("chaynsapi", provider)) {
+        const auto initialization = provider->initialize();
+        if (!initialization) {
+            throw std::runtime_error("failed to initialize chayns fixture provider");
+        }
+        if (!registry.registerChatProvider("chaynsapi", provider, provider, provider)) {
             throw std::runtime_error("failed to register chayns fixture provider");
         }
     }
@@ -304,7 +323,7 @@ struct GenerationFixtureHarness
 
 }  // namespace
 
-DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
+DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealPortPathOffline)
 {
     AccountManager accounts;
     installAccount(accounts, "free");
@@ -316,20 +335,19 @@ DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealGeneratePathOffline)
     transport->enqueue("poll-messages.json");
 
     chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
-    provider.init();
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-conversation", "synthetic user question"),
+        context);
 
-    auto session = makeRequest(
-        "fixture-free-model", "fixture-conversation", "synthetic user question");
-
-    const auto result = provider.generate(session);
-    CHECK(result.isSuccess());
-    CHECK(result.statusCode == 200);
-    CHECK(result.text == "synthetic final answer");
-    CHECK(session.response.message["_meta"]["chayns"]["request_message_id"].asString() ==
-          "<request-message>");
-    CHECK(session.response.message["_meta"]["chayns"]["assistant_message_id"].asString() ==
-          "<message-3>");
-    CHECK(session.response.message["_meta"]["chayns"]["reasoning_messages"].size() == 1);
+    REQUIRE(result.ok());
+    CHECK(result.value().text == "synthetic final answer");
+    CHECK(result.value().meta.at("chayns.request_message_id") == "<request-message>");
+    CHECK(result.value().meta.at("chayns.assistant_message_id") == "<message-3>");
+    CHECK(result.value().meta.at("chayns.reasoning_messages").find("<message-2>") != std::string::npos);
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
     CHECK(transport->calledPaths.size() == 4);
@@ -345,22 +363,24 @@ DROGON_TEST(ChaynsProvider_ProFixturePreservesWorkspaceRouteOffline)
     transport->enqueue("poll-messages.json");
 
     chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
-    provider.init();
-    auto session = makeRequest(
-        "fixture-pro-model", "fixture-pro-conversation", "synthetic user question");
-    const auto result = provider.generate(session);
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-pro-model", "fixture-pro-conversation", "synthetic user question"),
+        context);
 
-    CHECK(result.isSuccess());
-    CHECK(result.text == "synthetic final answer");
-    CHECK(session.response.message["_meta"]["chayns"]["account_type"].asString() == "pro");
-    CHECK(session.response.message["_meta"]["chayns"]["thread_type_id"].asInt() == 9);
-    CHECK(session.response.message["_meta"]["chayns"]["workspace_uac_id"].asInt64() ==
-          9001);
+    REQUIRE(result.ok());
+    CHECK(result.value().text == "synthetic final answer");
+    CHECK(result.value().meta.at("chayns.account_type") == "pro");
+    CHECK(result.value().meta.at("chayns.thread_type_id") == "9");
+    CHECK(result.value().meta.at("chayns.workspace_uac_id") == "9001");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
 }
 
-DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
+DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExplicitPreviousConversationOffline)
 {
     AccountManager accounts;
     installAccount(accounts, "free");
@@ -372,21 +392,22 @@ DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExistingThreadOffline)
     transport->enqueue("poll-messages.json");
 
     chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
-    provider.init();
-    auto first = makeRequest(
-        "fixture-free-model", "fixture-first", "synthetic user question");
-    REQUIRE(provider.generate(first).isSuccess());
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto firstContext = makeProviderContext(token);
+    REQUIRE(provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-first", "synthetic user question"),
+        firstContext).ok());
 
-    auto followup = makeRequest(
-        "fixture-free-model", "fixture-second", "synthetic follow-up question");
-    followup.state.isContinuation = true;
-    followup.provider.prevProviderKey = "fixture-first";
-    const auto result = provider.generate(followup);
+    auto followupContext = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-second", "synthetic follow-up question", "fixture-first"),
+        followupContext);
 
-    CHECK(result.isSuccess());
-    CHECK(result.text == "synthetic final answer");
-    CHECK(followup.response.message["_meta"]["chayns"]["request_message_id"].asString() ==
-          "<followup-request-message>");
+    REQUIRE(result.ok());
+    CHECK(result.value().text == "synthetic final answer");
+    CHECK(result.value().meta.at("chayns.request_message_id") == "<followup-request-message>");
     REQUIRE(transport->calledPaths.size() == 5);
     CHECK(transport->calledPaths[3] ==
           "/intercom-backend/v2/thread/<thread-1>/message");
@@ -405,20 +426,53 @@ DROGON_TEST(ChaynsProvider_FakeClockReachesPollingDeadlineWithoutWallClockWait)
     auto clock = std::make_shared<DeadlineJumpClock>();
 
     chaynsapi provider(accounts, transport, clock);
-    provider.init();
-    auto session = makeRequest(
-        "fixture-free-model", "fixture-timeout", "synthetic user question");
-    const auto result = provider.generate(session);
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-timeout", "synthetic user question"),
+        context);
 
-    CHECK(!result.isSuccess());
-    CHECK(result.statusCode == 504);
-    CHECK(result.error.code == provider::ProviderErrorCode::Timeout);
-    CHECK(session.response.message["errorCode"].asString() ==
-          "upstream_response_timeout");
+    CHECK(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::Timeout);
+    CHECK(result.error().providerCode == "upstream_response_timeout");
     CHECK(clock->sleepCalls == 1);
     REQUIRE(clock->requestedSleeps.size() == 1);
     CHECK(clock->requestedSleeps[0] == std::chrono::milliseconds(200));
     CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_CancellationStopsBeforeTheNextPollingBoundary)
+{
+    AccountManager accounts;
+    installAccount(accounts, "free");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("thread-create-free.json");
+    transport->enqueue("poll-messages.json");
+
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock());
+    REQUIRE(provider.initialize().ok());
+
+    platform::CancellationSource cancellation;
+    transport->afterSend = [&cancellation](const drogon::HttpRequestPtr& request) {
+        if (request && request->method() == drogon::HttpMethod::Post &&
+            request->getPath().find("/intercom-backend/v2/thread") != std::string::npos) {
+            cancellation.request();
+        }
+    };
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-cancelled", "synthetic user question"),
+        context);
+
+    CHECK(!result.ok());
+    CHECK(result.error().code == platform::ErrorCode::Cancelled);
+    CHECK(transport->calledPaths.size() == 2);
+    CHECK(transport->remaining() == 1);
     CHECK(transport->errors.empty());
 }
 
@@ -524,5 +578,34 @@ DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
     CHECK(chunks.find("response.completed") != std::string::npos);
     CHECK(closes == 1);
     CHECK(harness.transport->remaining() == 0);
+    CHECK(harness.transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_GenerationServicePreservesProviderErrorCodeForTransport)
+{
+    GenerationFixtureHarness harness;
+    Json::Value body;
+    int status = 0;
+    ChatJsonSink sink(
+        [&](const Json::Value& value, int valueStatus) {
+            body = value;
+            status = valueStatus;
+        },
+        "missing-fixture-model");
+    auto request = makeGenerationRequest(
+        EndpointType::ChatCompletions, false, "unknown-model-input");
+    request.model = "missing-fixture-model";
+
+    GenerationService service(&harness.registry, &harness.sessionStore,
+                              &harness.responseIndex, &harness.executionGate);
+    const auto error = service.runGuarded(request, sink);
+
+    CHECK(!error.has_value());
+    CHECK(status == 400);
+    CHECK(body["error"]["type"].asString() == "bad_request");
+    CHECK(body["error"]["message"].asString().find("Unknown model") != std::string::npos);
+    // `initialize()` loaded the catalog; the forced refresh is rate-limited,
+    // so a semantic request error must not invoke create/poll exchanges.
+    CHECK(harness.transport->calledPaths.size() == 1);
     CHECK(harness.transport->errors.empty());
 }

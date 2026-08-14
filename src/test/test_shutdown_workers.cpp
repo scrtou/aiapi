@@ -179,7 +179,7 @@ DROGON_TEST(ShutdownWorkers_ReaperDeleteLoopSpacingIsInterruptible)
     auto provider = std::make_shared<chaynsapi>(
         accounts, transport, chayns::makeRealChaynsClock(), threadDb);
     provider::ProviderRegistry registry;
-    REQUIRE(registry.registerProvider("chaynsapi", provider));
+    REQUIRE(registry.registerChatProvider("chaynsapi", provider, provider, provider));
 
     std::vector<chaynsThreadDbManager::ThreadRow> rows;
     for (int i = 0; i < 6; ++i) {

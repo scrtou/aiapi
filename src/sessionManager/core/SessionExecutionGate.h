@@ -31,11 +31,11 @@ namespace session {
  * 表示一个会话的执行状态
  */
 struct SessionSlot {
-    std::mutex mutex;                   // 执行互斥锁
-    CancellationTokenPtr currentToken;  // 当前执行的取消令牌
-    std::atomic<bool> executing{false}; // 是否正在执行
-    
-    SessionSlot() : currentToken(nullptr) {}
+    // Protects both fields below.  They must change together: a stale guard
+    // may finish after CancelPrevious has installed a successor.
+    std::mutex mutex;
+    CancellationSourcePtr currentCancellation;
+    bool executing = false;
 };
 
 using SessionSlotPtr = std::shared_ptr<SessionSlot>;
@@ -60,33 +60,28 @@ public:
     GateResult tryAcquire(
         const std::string& sessionKey,
         ConcurrencyPolicy policy,
-        CancellationTokenPtr& outToken
+        CancellationSourcePtr& outCancellation
     ) override {
         SessionSlotPtr slot = getOrCreateSlot(sessionKey);
         
-        // 尝试获取槽位锁
-        std::unique_lock<std::mutex> lock(slot->mutex, std::try_to_lock);
-        
-        if (!lock.owns_lock()) {
-            // 无法立即获取锁，说明有请求正在执行
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        if (slot->executing) {
             if (policy == ConcurrencyPolicy::RejectConcurrent) {
                 return GateResult::Rejected;
             }
-            
-            // CancelPrevious 策略：取消之前的请求
-            if (slot->currentToken) {
-                slot->currentToken->cancel();
+
+            // CancelPrevious is intentionally cooperative: the new request
+            // may start as soon as the old provider has been asked to stop.
+            // The identity-aware release below prevents the old guard from
+            // clearing this newly installed lease when it finally unwinds.
+            if (slot->currentCancellation) {
+                slot->currentCancellation->request();
             }
-            
-            // 等待获取锁
-            lock.lock();
         }
-        
-        // 成功获取执行权
-        outToken = std::make_shared<CancellationToken>();
-        slot->currentToken = outToken;
-        slot->executing.store(true, std::memory_order_release);
-        
+
+        outCancellation = std::make_shared<platform::CancellationSource>();
+        slot->currentCancellation = outCancellation;
+        slot->executing = true;
         return GateResult::Acquired;
     }
     
@@ -95,13 +90,19 @@ public:
      * 
      * @param sessionKey 会话标识
      */
-    void release(const std::string& sessionKey) override {
-        std::lock_guard<std::mutex> mapLock(mapMutex_);
-        auto it = slots_.find(sessionKey);
-        if (it != slots_.end()) {
-            it->second->executing.store(false, std::memory_order_release);
-            it->second->currentToken = nullptr;
+    void release(const std::string& sessionKey,
+                 const CancellationSourcePtr& cancellation) override {
+        const auto slot = findSlot(sessionKey);
+        if (!slot) return;
+
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        if (slot->currentCancellation != cancellation) {
+            // A CancelPrevious successor owns this key now.  The older guard
+            // is allowed to finish, but must not release the newer lease.
+            return;
         }
+        slot->executing = false;
+        slot->currentCancellation.reset();
     }
     
     /**
@@ -111,12 +112,10 @@ public:
      * @return true 正在执行
      */
     bool isExecuting(const std::string& sessionKey) const override {
-        std::lock_guard<std::mutex> mapLock(mapMutex_);
-        auto it = slots_.find(sessionKey);
-        if (it != slots_.end()) {
-            return it->second->executing.load(std::memory_order_acquire);
-        }
-        return false;
+        const auto slot = findSlot(sessionKey);
+        if (!slot) return false;
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        return slot->executing;
     }
     
     /**
@@ -130,7 +129,8 @@ public:
         // 移除未在执行的槽位，保留最多 maxIdleSlots 个
         std::vector<std::string> toRemove;
         for (const auto& pair : slots_) {
-            if (!pair.second->executing.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> slotLock(pair.second->mutex);
+            if (!pair.second->executing) {
                 toRemove.push_back(pair.first);
             }
         }
@@ -162,6 +162,12 @@ private:
         }
         return it->second;
     }
+
+    SessionSlotPtr findSlot(const std::string& sessionKey) const {
+        std::lock_guard<std::mutex> lock(mapMutex_);
+        const auto it = slots_.find(sessionKey);
+        return it == slots_.end() ? nullptr : it->second;
+    }
     
     mutable std::mutex mapMutex_;
     std::unordered_map<std::string, SessionSlotPtr> slots_;
@@ -179,13 +185,13 @@ public:
         const std::string& sessionKey,
         ConcurrencyPolicy policy = ConcurrencyPolicy::RejectConcurrent
     ) : gate_(gate), sessionKey_(sessionKey), acquired_(false) {
-        result_ = gate_.tryAcquire(sessionKey, policy, token_);
+        result_ = gate_.tryAcquire(sessionKey, policy, cancellation_);
         acquired_ = (result_ == GateResult::Acquired);
     }
     
     ~ExecutionGuard() {
         if (acquired_) {
-            gate_.release(sessionKey_);
+            gate_.release(sessionKey_, cancellation_);
         }
     }
     
@@ -197,7 +203,7 @@ public:
     ExecutionGuard(ExecutionGuard&& other) noexcept
         : gate_(other.gate_),
           sessionKey_(std::move(other.sessionKey_)),
-          token_(std::move(other.token_)),
+          cancellation_(std::move(other.cancellation_)),
           result_(other.result_),
           acquired_(other.acquired_) {
         other.acquired_ = false;
@@ -213,22 +219,22 @@ public:
      */
     GateResult getResult() const { return result_; }
     
-    /**
-     * @brief 获取取消令牌
-     */
-    CancellationTokenPtr getToken() const { return token_; }
-    
-    /**
-     * @brief 检查是否已被取消
-     */
-    bool isCancelled() const {
-        return token_ && token_->isCancelled();
+    /** Return the read-only token exposed to a provider call. */
+    platform::CancellationToken cancellationToken() const
+    {
+        return cancellation_ ? cancellation_->token() : platform::CancellationToken{};
+    }
+
+    /** @brief 检查是否已被取消 */
+    bool isCancelled() const
+    {
+        return cancellation_ && cancellation_->isCancelled();
     }
     
 private:
     IExecutionGate& gate_;
     std::string sessionKey_;
-    CancellationTokenPtr token_;
+    CancellationSourcePtr cancellation_;
     GateResult result_;
     bool acquired_;
 };

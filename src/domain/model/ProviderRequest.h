@@ -7,7 +7,7 @@
 
 namespace provider {
 
-enum class MessageRole {
+enum class ProviderMessageRole {
     System,
     User,
     Assistant,
@@ -16,7 +16,7 @@ enum class MessageRole {
 
 /** A JSON-free conversation item passed to a provider port. */
 struct ProviderMessage {
-    MessageRole role = MessageRole::User;
+    ProviderMessageRole role = ProviderMessageRole::User;
     std::string text;
     std::string toolCallId;
 };
@@ -35,8 +35,17 @@ struct ProviderToolDefinition {
 /** Immutable provider invocation input; no session_st or HTTP types leak in. */
 struct ProviderRequest {
     std::string conversationId;
+    // The previous local key is explicit because a provider may own an
+    // upstream thread independently of application session storage.  Empty
+    // means this invocation starts a new upstream conversation.
+    std::string previousConversationId;
     std::string model;
     std::string systemPrompt;
+    // `input` is the request-scoped prompt after application policy (for
+    // example a tool bridge) has been applied. `rawInput` remains available
+    // for history de-duplication without leaking a legacy session aggregate.
+    std::string input;
+    std::string rawInput;
     std::vector<ProviderMessage> messages;
     std::vector<ImageInfo> images;
     std::vector<ProviderToolDefinition> tools;

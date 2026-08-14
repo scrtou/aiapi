@@ -30,6 +30,7 @@
 #include <domain/port/IBackgroundExecutor.h>
 #include <metrics/ErrorStatsService.h>
 #include <infrastructure/provider/ProviderRegistry.h>
+#include <infrastructure/provider/ProductionProviderFactory.h>
 #include <managedAccount/backends/ClassicProviderAccountBackend.h>
 #include <managedAccount/backends/RetoolWorkspaceBackend.h>
 #include <managedAccount/service/ManagedAccountService.h>
@@ -333,13 +334,18 @@ StartupResult stepProviderRegistry(
         std::move(classicAccounts), std::move(retoolAccounts));
     ctx.setManagedAccountService(managedAccounts);
 
-    auto chayns = std::make_shared<chaynsapi>(
+    auto chayns = provider::makeProductionProvider<chaynsapi>(
         *accounts,
         chayns::makeDrogonChaynsHttpTransport(),
         chayns::makeRealChaynsClock(),
         threadLedger);
-    chayns->init();
-    if (!registry->registerProvider("chaynsapi", chayns)) {
+    const auto chaynsInitialization = chayns->initialize();
+    if (!chaynsInitialization) {
+        return StartupResult::failed(
+            StartupError::OwnerStartFailed,
+            "failed to initialize chaynsapi provider: " + chaynsInitialization.error().message);
+    }
+    if (!registry->registerChatProvider("chaynsapi", chayns, chayns, chayns)) {
         return StartupResult::failed(StartupError::OwnerStartFailed,
                                      "failed to register chaynsapi provider");
     }
