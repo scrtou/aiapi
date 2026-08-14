@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P7（阶段 7，拆解 GenerationService 与 AccountManager）**；P6-W1～P6-W3 已 DONE，
-**下一工作项为 P7-W1 Generation pipeline 重写**。
+当前是 **P7（阶段 7，拆解 GenerationService 与 AccountManager）**；P7-W1 已 DONE，
+**下一工作项为 P7-W2 Account workflows 重写**。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -80,6 +80,14 @@ selftest，Chayns gate 同步转为 P6 完成态；详见
 [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md)。P6 退出门禁全部满足，阶段
 推进到 P7-W1。
 
+P7-W1 已收口：`GenerationService` 保留兼容 facade，所有业务阶段由 `GenerationPipeline` 与
+`GenerationResponsePipeline` 承担；旧 `GenerationServiceEmitAndToolBridge.cpp` 已删除，工具 fallback/
+normalizer/definition encoder 各有专职实现。为避免拆文件反向增加 legacy owner，Generation/session/
+tooling/continuity/action-protocol support closure 迁入 `aiapi_application`，legacy source 由 38 降至 20。
+新增 provider semantic error 顺序回归、P7 architecture gate 和 selftest；393/393 `ctest`、直接 runner
+393 cases / 2053 assertions、全量架构门禁通过，R1=0、R3=7/2889。详见
+[`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md)。
+
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
 持线程单例经 `addOwner` 显式登记（G7 停机相关部分闭环）。新增门禁 `check_app_context.py`（A1～A5），
@@ -117,7 +125,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P6-W1 | 阶段 6 | Result/Error/ProviderBase 基础 | [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md) | DONE |
 | P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | [`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md) | DONE |
 | P6-W3 | 阶段 6 | Retool Provider 垂直切片 | [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md) | DONE |
-| P7-W1 | 阶段 7 | Generation pipeline 重写 | stage contract、旧实现删除、R1 归零 | TODO |
+| P7-W1 | 阶段 7 | Generation pipeline 重写 | [`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md) | DONE |
 | P7-W2 | 阶段 7 | Account workflows 重写 | selector/state machine/workers/回滚测试 | TODO |
 | P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | clean baseline、完整发布验证 | TODO |
 

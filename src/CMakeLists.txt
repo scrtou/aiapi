@@ -79,6 +79,28 @@ set(AIAPI_APPLICATION_SOURCES
     application/metrics/MetricsUseCase.cpp
     application/workspace/RetoolWorkspaceAdminUseCase.cpp
     application/workspace/RetoolWorkspaceUseCase.cpp
+    sessionManager/core/Session.cpp
+    sessionManager/core/SessionCodec.cpp
+    sessionManager/core/ClientOutputSanitizer.cpp
+    sessionManager/core/GenerationService.cpp
+    sessionManager/core/GenerationPipeline.cpp
+    sessionManager/core/GenerationResponsePipeline.cpp
+    sessionManager/tooling/BridgeHelpers.cpp
+    sessionManager/tooling/BridgeProtocolCodec.cpp
+    sessionManager/tooling/StrictClientRules.cpp
+    sessionManager/tooling/ToolCallBridge.cpp
+    sessionManager/tooling/ForcedToolCallGenerator.cpp
+    sessionManager/tooling/ToolCallNormalizer.cpp
+    sessionManager/tooling/ToolDefinitionEncoder.cpp
+    sessionManager/tooling/ToolCallValidator.cpp
+    sessionManager/tooling/XmlTagToolCallCodec.cpp
+    sessionManager/continuity/ResponseIndex.cpp
+    sessionManager/continuity/HistoryReplayBudget.cpp
+    sessionManager/continuity/OutboundBudget.cpp
+    sessionManager/continuity/TextExtractor.cpp
+    sessionManager/continuity/ContinuityResolver.cpp
+    sessionManager/actionProtocol/ActionProtocolCompiler.cpp
+    sessionManager/actionProtocol/ActionProtocolAdapter.cpp
 )
 
 set(AIAPI_INFRASTRUCTURE_SOURCES
@@ -138,27 +160,9 @@ set(AIAPI_LEGACY_SOURCES
     controllers/RetiredProviderTombstone.cc
     retoolWorkspace/RetoolWorkspaceManager.cpp
     retoolWorkspace/RetoolWorkspaceService.cpp
-    sessionManager/core/Session.cpp
-    sessionManager/core/SessionCodec.cpp
-    sessionManager/core/ClientOutputSanitizer.cpp
     sessionManager/core/AiApiUseCase.cpp
-    sessionManager/core/GenerationService.cpp
-    sessionManager/core/GenerationServiceEmitAndToolBridge.cpp
     sessionManager/core/RetiredProviderTelemetry.cpp
-    sessionManager/tooling/BridgeHelpers.cpp
-    sessionManager/tooling/BridgeProtocolCodec.cpp
-    sessionManager/tooling/StrictClientRules.cpp
-    sessionManager/continuity/ResponseIndex.cpp
-    sessionManager/continuity/HistoryReplayBudget.cpp
-    sessionManager/continuity/OutboundBudget.cpp
-    sessionManager/continuity/TextExtractor.cpp
-    sessionManager/continuity/ContinuityResolver.cpp
     sessionManager/core/RequestAdapters.cpp
-    sessionManager/actionProtocol/ActionProtocolCompiler.cpp
-    sessionManager/actionProtocol/ActionProtocolAdapter.cpp
-    sessionManager/tooling/ToolCallBridge.cpp
-    sessionManager/tooling/ToolCallValidator.cpp
-    sessionManager/tooling/XmlTagToolCallCodec.cpp
 )
 
 # First P3-W3 closed module: a standard-library-only platform utility.  Keep
@@ -172,9 +176,10 @@ target_include_directories(aiapi_platform
 target_compile_features(aiapi_platform PUBLIC cxx_std_17)
 aiapi_enable_coverage(aiapi_platform)
 
-# Domain and application currently expose header contracts only.  Their JSON
-# migration debt remains P3-W4; declaring the targets here establishes the
-# allowed target DAG without pretending the debt has already been removed.
+# Domain remains header-only.  Application now owns the use cases plus the
+# P7 Generation/session/tooling closure.  That closure still carries legacy
+# JsonCpp/Drogon compatibility at its outer boundary; P8 removes that debt
+# without adding a reverse internal target edge.
 add_library(aiapi_domain INTERFACE)
 target_link_libraries(aiapi_domain INTERFACE aiapi_platform)
 target_compile_features(aiapi_domain INTERFACE cxx_std_17)
@@ -212,6 +217,13 @@ find_package(OpenSSL REQUIRED)
 find_package(PostgreSQL REQUIRED)
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
+
+# P7-W1 moves the Generation pipeline and its session/tooling support closure
+# to application.  The remaining compatibility structures still use
+# JsonCpp/Drogon; retain that external compile/link requirement privately until
+# P8 removes the legacy representation.  This does not add an internal target
+# edge.
+target_link_libraries(aiapi_application PRIVATE Drogon::Drogon)
 
 target_link_libraries(aiapi_legacy PUBLIC Drogon::Drogon)
 target_link_libraries(aiapi_legacy PUBLIC OpenSSL::SSL OpenSSL::Crypto)

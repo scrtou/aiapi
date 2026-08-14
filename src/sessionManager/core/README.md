@@ -12,8 +12,9 @@
 ## 当前文件
 
 - `Session.*`：会话存储、生命周期与上下文维护
-- `GenerationService.*`：主编排入口与执行流程
-- `GenerationServiceEmitAndToolBridge.cpp`：结果事件发送与工具桥接相关输出处理
+- `GenerationService.*`：控制器/use case 使用的稳定薄 facade；只委派给 pipeline
+- `GenerationPipeline.*`：请求物化、连续性、执行门控、Provider 调用/重试和会话提交
+- `GenerationResponsePipeline.*`：输出清洗、工具解析/规范化/校验以及事件发射
 - `RequestAdapters.*`：协议请求转换
 - `ClientOutputSanitizer.*`：客户端输出清洗
 - `Errors.h`：统一错误定义

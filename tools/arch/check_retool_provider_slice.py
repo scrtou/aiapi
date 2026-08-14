@@ -17,7 +17,7 @@ FAIL = 4
 RETOOL_HEADER = SRC / "apipoint/retoolapi/retoolapi.h"
 RETOOL_CPP = SRC / "apipoint/retoolapi/retoolapi.cpp"
 WIRING = SRC / "runtime/AppWiring.cpp"
-GENERATION = SRC / "sessionManager/core/GenerationService.cpp"
+GENERATION_PIPELINE = SRC / "sessionManager/core/GenerationPipeline.cpp"
 REGISTRY_PORT = SRC / "domain/port/IProviderRegistry.h"
 REGISTRY_HEADER = SRC / "infrastructure/provider/ProviderRegistry.h"
 REGISTRY_CPP = SRC / "infrastructure/provider/ProviderRegistry.cpp"
@@ -46,7 +46,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     header = read(RETOOL_HEADER)
     retool_cpp = read(RETOOL_CPP)
     wiring = read(WIRING)
-    generation = read(GENERATION)
+    generation_pipeline = read(GENERATION_PIPELINE)
     registry_port = read(REGISTRY_PORT)
     registry_header = read(REGISTRY_HEADER)
     registry_cpp = read(REGISTRY_CPP)
@@ -129,8 +129,9 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         if needle not in registry_port:
             errors.append(f"IProviderRegistry narrow capability missing: {needle}")
 
-    execute_provider_at = generation.find("GenerationService::executeProvider")
-    execute_provider = generation[execute_provider_at:] if execute_provider_at >= 0 else ""
+    invoke_provider_at = generation_pipeline.find("GenerationPipeline::invokeProvider")
+    invoke_provider = (generation_pipeline[invoke_provider_at:]
+                       if invoke_provider_at >= 0 else "")
     for needle in (
         "providerRequestFromSession",
         "routingHints.emplace",
@@ -138,10 +139,10 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "ProviderCallContext context{cancellation, deadline}",
         "applyProviderResponse(session, result.value())",
     ):
-        if needle not in generation:
-            errors.append(f"GenerationService Retool bridge missing: {needle}")
-    if "findProvider(" in uncommented(execute_provider):
-        errors.append("GenerationService revived a Retool legacy fallback")
+        if needle not in generation_pipeline:
+            errors.append(f"GenerationPipeline Retool bridge missing: {needle}")
+    if "findProvider(" in uncommented(invoke_provider):
+        errors.append("GenerationPipeline revived a Retool legacy fallback")
 
     if "provider::makeProductionProvider<retoolapi>" not in wiring:
         errors.append("runtime Retool slice wiring missing production provider factory")

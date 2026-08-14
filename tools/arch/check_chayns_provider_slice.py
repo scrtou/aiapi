@@ -23,7 +23,7 @@ CHAYNS_HEADER = SRC / "apipoint/chaynsapi/chaynsapi.h"
 CHAYNS_CPP = SRC / "apipoint/chaynsapi/chaynsapi.cpp"
 RETOOL_HEADER = SRC / "apipoint/retoolapi/retoolapi.h"
 WIRING = SRC / "runtime/AppWiring.cpp"
-GENERATION = SRC / "sessionManager/core/GenerationService.cpp"
+GENERATION_PIPELINE = SRC / "sessionManager/core/GenerationPipeline.cpp"
 SESSION = SRC / "sessionManager/core/Session.cpp"
 REAPER = SRC / "apipoint/chaynsapi/chaynsThreadReaper.cpp"
 REGISTRY_PORT = SRC / "domain/port/IProviderRegistry.h"
@@ -53,7 +53,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     header = read(CHAYNS_HEADER)
     chayns_cpp = read(CHAYNS_CPP)
     wiring = read(WIRING)
-    generation = read(GENERATION)
+    generation_pipeline = read(GENERATION_PIPELINE)
     session = read(SESSION)
     reaper = read(REAPER)
     registry_port = read(REGISTRY_PORT)
@@ -142,21 +142,23 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     if re.search(r"\bregisterProvider\s*\(", clean_wiring):
         errors.append("runtime must not revive the deleted legacy provider lane")
 
-    # The application only resolves the narrow lane.  Remaining legacy session
-    # JSON is materialized after a Result, never handed to a provider.
-    execute_provider_at = generation.find("GenerationService::executeProvider")
-    execute_provider = generation[execute_provider_at:] if execute_provider_at >= 0 else ""
-    if "findChatProvider(session.request.api)" not in execute_provider:
-        errors.append("GenerationService no longer resolves IChatProvider")
-    if "findProvider(" in uncommented(execute_provider):
-        errors.append("GenerationService revived a legacy provider fallback")
+    # The application only resolves the narrow lane.  P7-W1 moved this seam
+    # into GenerationPipeline; remaining legacy session JSON is materialized
+    # after a Result, never handed to a provider.
+    invoke_provider_at = generation_pipeline.find("GenerationPipeline::invokeProvider")
+    invoke_provider = (generation_pipeline[invoke_provider_at:]
+                       if invoke_provider_at >= 0 else "")
+    if "findChatProvider(session.request.api)" not in invoke_provider:
+        errors.append("GenerationPipeline no longer resolves IChatProvider")
+    if "findProvider(" in uncommented(invoke_provider):
+        errors.append("GenerationPipeline revived a legacy provider fallback")
     for needle in (
         "ProviderCallContext context{cancellation, deadline}",
         "return result.error()",
         "applyProviderResponse(session, result.value())",
     ):
-        if needle not in generation:
-            errors.append(f"GenerationService Chayns Result bridge missing: {needle}")
+        if needle not in generation_pipeline:
+            errors.append(f"GenerationPipeline Chayns Result bridge missing: {needle}")
 
     # Model and upstream-thread ownership are separate capabilities. Session
     # cleanup/rebind and the reaper must never rediscover a provider through a

@@ -14,10 +14,14 @@ paths = [
     "sessionManager/core/Session.cpp",
     "sessionManager/core/RequestAdapters.cpp",
     "sessionManager/core/GenerationService.cpp",
-    "sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
+    "sessionManager/core/GenerationPipeline.cpp",
+    "sessionManager/core/GenerationResponsePipeline.cpp",
     "sessionManager/core/AiApiUseCase.cpp",
     "sessionManager/core/RetiredProviderTelemetry.cpp",
     "sessionManager/tooling/BridgeHelpers.cpp",
+    "sessionManager/tooling/ForcedToolCallGenerator.cpp",
+    "sessionManager/tooling/ToolCallNormalizer.cpp",
+    "sessionManager/tooling/ToolDefinitionEncoder.cpp",
 ]
 for relative in paths:
     text = (SRC / relative).read_text(errors="replace")

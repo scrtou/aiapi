@@ -36,21 +36,40 @@ TARGETS = [
         "functions": ["chaynsapi::generate(", "chaynsapi::postChatMessage("],
     },
     {
-        "name": "Generation ToolBridge transform/emit",
-        "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
+        "name": "Generation pipeline request/provider/commit",
+        "file": "src/sessionManager/core/GenerationPipeline.cpp",
+        "functions": [
+            "generation::GenerationPipeline::run(",
+            "generation::GenerationPipeline::execute(",
+            "generation::GenerationPipeline::invokeProvider(",
+        ],
+    },
+    {
+        "name": "Generation response decode/normalize/emit",
+        "file": "src/sessionManager/core/GenerationResponsePipeline.cpp",
+        "functions": [
+            "generation::GenerationResponsePipeline::emit(",
+        ],
+    },
+    {
+        "name": "Generation tool bridge request transform",
+        "file": "src/sessionManager/tooling/ToolDefinitionEncoder.cpp",
         "functions": [
             "toolcall::transformRequestForToolBridge(",
-            "GenerationService::emitResultEvents(",
-            "toolcall::generateForcedToolCall(",
+        ],
+    },
+    {
+        "name": "Generation tool argument normalization",
+        "file": "src/sessionManager/tooling/ToolCallNormalizer.cpp",
+        "functions": [
             "toolcall::normalizeToolCallArguments(",
         ],
     },
     {
-        "name": "Chat/Responses four GenerationService output modes",
-        "file": "src/sessionManager/core/GenerationService.cpp",
+        "name": "Generation forced tool fallback",
+        "file": "src/sessionManager/tooling/ForcedToolCallGenerator.cpp",
         "functions": [
-            "GenerationService::runGuarded(",
-            "GenerationService::executeProvider(",
+            "toolcall::generateForcedToolCall(",
         ],
     },
     {

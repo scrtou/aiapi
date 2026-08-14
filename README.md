@@ -103,11 +103,10 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                      生成编排层                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │               GenerationService                          │    │
-│  │  - runGuarded()          (主入口，含并发门控)             │    │
-│  │  - materializeSession()  (请求 → 会话)                   │    │
-│  │  - executeProvider()     (调用上游)                       │    │
-│  │  - emitResultEvents()    (结果处理 + 事件发送)            │    │
+│  │ GenerationService（稳定 facade）→ GenerationPipeline     │    │
+│  │  - materializeRequest() + ContinuityResolver              │    │
+│  │  - ExecutionGuard + Provider Result / retry / commit      │    │
+│  │  - GenerationResponsePipeline（结果处理 + 事件发送）      │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │     │           │              │              │              │   │
 │     ▼           ▼              ▼              ▼              ▼   │
@@ -243,10 +242,11 @@ aiapi/
     │   │   ├── GenerationEvent.h   # 统一事件模型
     │   │   └── IResponseSink.h     # 输出通道接口
     │   │
-    │   ├── core/                   # 核心服务
-    │   │   ├── README.md           # 核心层文档
-    │   │   ├── GenerationService.h/cpp              # 生成编排服务（主入口）
-    │   │   ├── GenerationServiceEmitAndToolBridge.cpp # 事件发送 + 工具桥接逻辑
+│   ├── core/                   # 核心服务
+│   │   ├── README.md           # 核心层文档
+│   │   ├── GenerationService.h/cpp              # 稳定生成入口（薄 facade）
+│   │   ├── GenerationPipeline.h/cpp             # 请求/Provider/提交编排
+│   │   ├── GenerationResponsePipeline.h/cpp     # 响应/工具/事件编排
     │   │   ├── RequestAdapters.h/cpp   # HTTP 请求 → GenerationRequest 适配器
     │   │   ├── Session.h/cpp           # 会话管理 + ZeroWidth/Hash 追踪
     │   │   ├── SessionExecutionGate.h  # 并发门控（单例 + RAII Guard）
@@ -480,27 +480,24 @@ aiapi/
 
 ### GenerationService（生成编排服务）
 
-核心编排服务，管理整个生成流程。代码拆分为两个 .cpp 文件：
-- `GenerationService.cpp` — 主流程（runGuarded / materializeSession / executeProvider）
-- `GenerationServiceEmitAndToolBridge.cpp` — 事件发送 + 工具桥接逻辑
+`GenerationService` 是保持 controller/use case 调用面不变的薄 facade；实际流程按阶段拆分：
+- `GenerationPipeline.cpp` — 请求物化、连续性恢复、执行门控、工具 bridge 请求转换、Provider 调用/重试和会话提交；
+- `GenerationResponsePipeline.cpp` — 输出清洗、原生/bridge 工具解析、identity/参数规范化、schema 校验、客户端规则、零宽会话 ID 与事件发射；
+- `tooling/ForcedToolCallGenerator.cpp`、`ToolCallNormalizer.cpp`、`ToolDefinitionEncoder.cpp` — 可独立测试的工具规则。
 
 ```
 runGuarded(req, sink, policy)
-  ├─ materializeSession()         → GenerationRequest → session_st
-  ├─ ContinuityResolver::resolve() → 会话连续性决策
-  ├─ sessionManager.getOrCreateSession()
-  └─ executeGuardedWithSession()
-       ├─ ExecutionGuard(RAII)     → 获取并发锁
-       ├─ transformRequestForToolBridge()  → 工具定义注入（Bridge 模式）
-       ├─ executeProvider()        → 调用上游 AI
-       ├─ emitResultEvents()       → 结果处理 + 事件发送
-       │    ├─ sanitizeOutput()     → 文本清洗
-       │    ├─ parseXmlToolCalls()  → XML 工具调用解析
-       │    ├─ ToolCallNormalizer   → 参数规范化
-       │    ├─ ToolCallValidator    → Schema 校验 + 过滤
-       │    ├─ StrictClientRules    → 严格客户端规则
-       │    └─ 零宽字符会话ID嵌入
-       └─ coverSessionresponse()   → 会话上下文更新 + 转移
+  └─ GenerationPipeline::run()
+       ├─ materializeRequest() → session_st
+       ├─ ContinuityResolver::resolve() + getOrCreateSession()
+       ├─ ExecutionGuard(RAII) + request-scoped cancellation/deadline
+       ├─ transformRequestForToolBridge()（按需）→ IChatProvider::generate()
+       ├─ GenerationResponsePipeline::emit()
+       │    ├─ sanitize + native/bridge decode
+       │    ├─ forced tool + identity + 参数规范化 + schema 校验
+       │    ├─ StrictClientRules + zero-width session ID
+       │    └─ ToolCallDone → OutputTextDone → Completed
+       └─ coverSessionresponse() → 会话上下文更新 + 转移
 ```
 
 ### GenerationEvent（统一事件模型）
@@ -579,7 +576,9 @@ runGuarded(req, sink, policy)
 - 收到带有 `[tool_result ...]` 的结果后继续生成最终响应；
 - 支持并行工具调用配置。
 
-该逻辑主要位于 `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp`，请求适配位于 `RequestAdapters.cpp`。
+该逻辑由 `GenerationPipeline.cpp`（请求 bridge / Provider 调用）、
+`GenerationResponsePipeline.cpp`（响应 bridge / 事件）和 `tooling/` 的专职规则组件共同承担；
+请求适配位于 `RequestAdapters.cpp`。
 
 ## 会话追踪
 

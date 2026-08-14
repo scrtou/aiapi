@@ -27,7 +27,9 @@
 
 - 请求入口适配：`core/RequestAdapters.*`
 - 会话状态与生命周期：`core/Session.*`
-- 主编排服务：`core/GenerationService.*`
+- 稳定生成入口：`core/GenerationService.*`（薄 facade）
+- 请求/调用/提交编排：`core/GenerationPipeline.*`
+- 响应、工具与事件编排：`core/GenerationResponsePipeline.*`
 - 连续性策略：`continuity/ContinuityResolver.*`
 - 工具调用桥接链路：`tooling/ToolCallBridge.*`、`tooling/XmlTagToolCallCodec.*`
 

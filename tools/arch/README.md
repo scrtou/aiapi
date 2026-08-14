@@ -44,6 +44,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 4 | check_provider_foundation | P6-W1 Result/Error/Deadline/CancellationToken、ProviderCallContext、薄 ProviderBase NVI、生产继承约束或 Result `[[nodiscard]]` compile probe 被破坏 |
 | 4 | check_chayns_provider_slice | P6-W2 Chayns 重回 `session_st`、singleton 或旧 Provider lane，或丢失 Result/cancellation/thread/model capability 接线 |
 | 4 | check_retool_provider_slice | P6-W3 Retool 重回 `APIinterface/session_st`、ProviderResult/ProviderError、singleton 或 legacy registry lane，或丢失 workflow/agent/cancellation/narrow capability 接线 |
+| 4 | check_generation_pipeline_slice | P7-W1 旧大文件/GenerationService 业务成员复活、P7 source owner 回退 legacy，或请求/响应 stage 与生产 fixture 覆盖缺失 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -240,7 +241,7 @@ Retool Provider 不得定位 singleton；同时要求 composition root 构造两
 ### `check_session_application_services.py`
 
 P5-W3 session application 增量门禁：ResponseIndex/Session/RequestAdapters/GenerationService/
-Bridge telemetry 不得定位或 include 具体 Manager/DB/metrics service；同时要求 runtime 保留
+GenerationPipeline/GenerationResponsePipeline/Bridge telemetry 不得定位或 include 具体 Manager/DB/metrics service；同时要求 runtime 保留
 session persistence、account settings、channel catalog 与 telemetry sink 的完整接线。
 
 ### `check_lifecycle_services.py`
@@ -293,7 +294,7 @@ python3 tools/arch/check_chayns_provider_slice.py --selftest
 它冻结 Chayns 的 `ProviderBase` NVI、`IProviderModelCatalog` 与
 `IProviderThreadContext` 能力；生产目录不得再出现 `session_st`、`APIinterface`、
 `Session.h`、`session.response` 或项目 singleton 查询。运行时必须由 production factory
-构造并仅通过 `registerChatProvider("chaynsapi", ...)` 发布，GenerationService 必须只走
+构造并仅通过 `registerChatProvider("chaynsapi", ...)` 发布，GenerationPipeline 必须只走
 `IChatProvider`，session/reaper 必须走窄 thread capability。P6-W3 删除的宽 port fallback
 不得复活；该 gate 也检查 CancelPrevious 的 lease identity，避免被取消的旧请求释放新请求。
 
@@ -312,6 +313,24 @@ python3 tools/arch/check_retool_provider_slice.py --selftest
 两条真实协议路径。生产目录不得重新出现 `session_st`、`APIinterface`、`ProviderResult` /
 `ProviderError` 或项目 singleton；每个 HTTP 调用、polling sleep 均须观察只读 cancellation 和
 absolute deadline。runtime 必须经 production factory 初始化并以 `registerChatProvider("retoolapi",
-...)` 发布；registry 与 GenerationService 不得保留 `findProvider()` / `registerProvider()` fallback。
+...)` 发布；registry 与 GenerationPipeline 不得保留 `findProvider()` / `registerProvider()` fallback。
 
 `--selftest` 在内存中破坏 Retool 的 `ProviderBase` 继承，并验证 gate 返回 rc=4；不写工作树。
+
+### `check_generation_pipeline_slice.py`
+
+P7-W1 Generation pipeline gate:
+
+```bash
+python3 tools/arch/check_generation_pipeline_slice.py
+python3 tools/arch/check_generation_pipeline_slice.py --selftest
+```
+
+它要求旧的 `GenerationServiceEmitAndToolBridge.cpp` 永久删除，`GenerationService` 只保留
+`unique_ptr<GenerationPipeline>` facade，并把 facade/pipeline/response pipeline 与三个 tooling 实现
+都登记为 `aiapi_application` 的唯一 source owner。请求阶段必须保留物化、连续性、执行门控、窄
+`IChatProvider` 调用、Codex retry 与会话提交；响应阶段必须按 decode → identity/normalize/validate →
+client rules/zero-width → emit 的顺序运行。fixture 同时锁定 bridge、native 参数、required fallback 和
+Provider semantic error 的 `Started → Error → close` 序列。
+
+`--selftest` 不写工作树：在内存中将 facade delegation 改成空返回，同一判据必须以 rc=4 拒绝它。

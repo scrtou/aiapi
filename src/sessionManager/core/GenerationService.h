@@ -2,31 +2,26 @@
 #define GENERATION_SERVICE_H
 
 #include <sessionManager/contracts/GenerationRequest.h>
-#include <sessionManager/contracts/GenerationEvent.h>
 #include <sessionManager/contracts/IResponseSink.h>
-#include <sessionManager/contracts/LegacySessionData.h>
 #include <sessionManager/core/SessionExecutionGate.h>
 #include <sessionManager/core/Errors.h>
-#include <sessionManager/tooling/ToolCallBridge.h>
-#include <sessionManager/tooling/XmlTagToolCallCodec.h>
-#include <domain/port/IProviderRegistry.h>
-#include <domain/port/IResponseIndex.h>
-#include <domain/port/IExecutionGate.h>
-#include <domain/port/IChannelCatalog.h>
-#include <platform/Cancellation.h>
-#include <platform/Deadline.h>
+
+#include <memory>
+#include <optional>
+
 class chatSession;
+class IProviderRegistry;
+class IResponseIndex;
+class IChannelCatalog;
+
+namespace generation {
+class GenerationPipeline;
+}
+
 /**
- * @brief 生成服务
- *
- * 统一的业务编排层，负责：
- * 1. 接收 GenerationRequest + IResponseSink
- * 2. 通过 SessionStore 获取/更新会话上下文
- * 3. 调用 provider 执行一次生成
- * 4. 将结果（或 provider 事件）转换成 GenerationEvent 发送给 sink
- * 5. 统一错误捕获、映射与清理
- *
- * 参考设计文档: plans/aiapi-refactor-design.md 第 5.1 节
+ * Public application port kept stable for controllers and AiApiUseCase.
+ * P7-W1 moves orchestration into GenerationPipeline; this class deliberately
+ * contains no generation rules or provider/session fallback paths.
  */
 class GenerationService {
 public:
@@ -34,169 +29,21 @@ public:
                       chatSession* sessionStore,
                       IResponseIndex* responseIndex,
                       session::IExecutionGate* executionGate,
-                      IChannelCatalog* channelCatalog = nullptr)
-        : providerRegistry_(providerRegistry),
-          sessionStore_(sessionStore),
-          responseIndex_(responseIndex),
-          executionGate_(executionGate),
-          channelCatalog_(channelCatalog)
-    {
-    }
-    ~GenerationService() = default;
-    
-    // 禁止拷贝和移动
+                      IChannelCatalog* channelCatalog = nullptr);
+    ~GenerationService();
+
     GenerationService(const GenerationService&) = delete;
     GenerationService& operator=(const GenerationService&) = delete;
     GenerationService(GenerationService&&) = delete;
     GenerationService& operator=(GenerationService&&) = delete;
-    
-    // ========== 新主入口（接收 Generation请求）==========
-    
-    /**
-     * @brief 【新主入口】从 GenerationRequest 执行生成（带执行门控）
-     *
-     * Controller 统一只调用此方法。职责：
-     * 1. materialize: GenerationRequest → session_st
-     * 2. create/update session（必须发生在门控前）
-     * 3. 调用共享 helper executeGuardedWithSession()
-     *
-     * @param req 生成请求（由 RequestAdapters 构建）
-     * @param sink 输出通道
-     * @param policy 并发策略
-     * @return 应用层错误（如果有）
-     */
+
     std::optional<error::AppError> runGuarded(
-        const GenerationRequest& req,
+        const GenerationRequest& request,
         IResponseSink& sink,
-        session::ConcurrencyPolicy policy = session::ConcurrencyPolicy::RejectConcurrent
-    );
-    
+        session::ConcurrencyPolicy policy = session::ConcurrencyPolicy::RejectConcurrent);
+
 private:
-    // ========== 共享 （新旧入口复用）==========
-    
-    /**
-     * @brief 计算执行门控的 key
-     *
-     * 门控 key 统一使用 sessionId（即 session.state.conversationId）。
-     * Responses API 的 response.id 为每次请求生成，不参与门控（避免同一会话并发打架）。
-     *
-     * @param session 会话状态
-     * @return 门控 key，空字符串表示不使用门控
-     */
-    static std::string computeExecutionKey(const session_st& session);
-    
-    /**
-     * @brief 【核心 helper】带门控执行生成
-     *
-     * 核心执行逻辑，负责：
-     * - guard key 计算入口（调用 computeExecutionKey）
-     * - ExecutionGuard 生命周期（构造/获取/失败分支处理）
-     * - 取消检查：guard.isCancelled() 前后各一次
-     * - guard 内执行包裹：Started/Provider调用/emitResultEvents/会话写回/afterResponseProcess
-     * - 错误/关闭语义
-     *
-     * @param session 已初始化的会话状态（会被修改）
-     * @param sink 输出通道
-     * @param stream 是否流式输出
-     * @param policy 并发策略
-     * @return 应用层错误（如果有）
-     */
-    std::optional<error::AppError> executeGuardedWithSession(
-        session_st& session,
-        IResponseSink& sink,
-        bool stream,
-        session::ConcurrencyPolicy policy
-    );
-    
-    /**
-     * @brief 将 GenerationRequest 物化为 session_st
-     *
-     * 唯一实现点：GenerationRequest → session_st 的字段映射
-     *
-     * @param req 生成请求
-     * @return 初始化的 session_st
-     */
-    static session_st materializeSession(const GenerationRequest& req);
-    
-    /**
-     * Execute a provider through the narrow P6 port when available.  The
-     * legacy lane remains only for the unsliced Retool provider.
-     *
-     * @return an Error on failure; success response is materialized by the
-     * application layer for the remaining legacy event/session pipeline.
-     */
-    std::optional<platform::Error> executeProvider(
-        session_st& session,
-        const platform::CancellationToken& cancellation,
-        platform::Deadline deadline);
-
-    static provider::ProviderRequest providerRequestFromSession(const session_st& session);
-    static void applyProviderResponse(
-        session_st& session,
-        const provider::ProviderResponse& response);
-    
-    /**
-     * @brief 将 Provider 结果转换为事件并发送
-     *
-     * @param session 会话状态
-     * @param sink 输出通道
-     */
-    void emitResultEvents(const session_st& session, IResponseSink& sink);
-    
-    /**
-     * @brief 发送错误事件
-     *
-     * @param code 错误代码
-     * @param message 错误信息
-     * @param sink 输出通道
-     */
-    void emitError(
-        generation::ErrorCode code,
-        const std::string& message,
-        IResponseSink& sink
-    );
-
-    void emitError(const platform::Error& error, IResponseSink& sink);
-    
-    /**
-     * @brief 应用输出清洗
-     *
-     * 使用 ClientOutputSanitizer 清洗输出文本
-     *
-     * @param clientInfo 客户端信息
-     * @param text 原始文本
-     * @return 清洗后的文本
-     */
-    std::string sanitizeOutput(const Json::Value& clientInfo, const std::string& text);
-    
-    /**
-     * @brief 获取通道的 tool call 支持能力
-     *
-     * @param channelName 通道名称
-     * @return 是否支持 tool calls
-     */
-    bool getChannelSupportsToolCalls(const std::string& channelName) const;
-    
-     /**
-      * @brief 解析 XML 格式的 tool calls（Toolify-style）
-      *
-      * @param xmlInput XML 输入文本
-      * @param outTextContent 输出的纯文本内容
-      * @param outToolCalls 输出的 tool calls 列表
-      */
-    static void parseXmlToolCalls(
-         const std::string& xmlInput,
-         std::string& outTextContent,
-         std::vector<generation::ToolCallDone>& outToolCalls,
-         const std::string& sentinel
-     );
-
-    IProviderRegistry* providerRegistry_ = nullptr;
-    chatSession* sessionStore_ = nullptr;
-    IResponseIndex* responseIndex_ = nullptr;
-    session::IExecutionGate* executionGate_ = nullptr;
-    IChannelCatalog* channelCatalog_ = nullptr;
-    
+    std::unique_ptr<generation::GenerationPipeline> pipeline_;
 };
 
-#endif // 头文件保护结束
+#endif

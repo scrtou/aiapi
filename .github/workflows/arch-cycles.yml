@@ -180,6 +180,14 @@ jobs:
       - name: P6 - Retool Provider vertical slice gate selftest
         run: python3 tools/arch/check_retool_provider_slice.py --selftest
 
+      # P7-W1：GenerationService 只保留稳定 application facade；请求、调用和
+      # 响应/工具事件的 stage 必须留在各自专职文件，不能恢复旧的 2225 行实现。
+      - name: P7 - Generation pipeline stages
+        run: python3 tools/arch/check_generation_pipeline_slice.py
+
+      - name: P7 - Generation pipeline stage gate selftest
+        run: python3 tools/arch/check_generation_pipeline_slice.py --selftest
+
       # 这道门禁既检查结构也检查 [[nodiscard]] 的 C++ 诊断。先真的删掉
       # 泛型 Result 的属性，再断言其以本门禁约定的 rc=4 失败；trap 保证本地
       # 运行也不会覆盖开发者已有改动。

@@ -6,6 +6,28 @@
 
 ---
 
+## P7-W1 收口 · Generation pipeline 重写（2026-08-14）
+
+- `GenerationService` 缩为稳定 facade，只持有 `GenerationPipeline`；请求物化、连续性、执行门控、
+  bridge request、窄 `IChatProvider` 调用、Codex retry 和 session commit 被迁至该 pipeline。响应的
+  sanitize/decode、forced tool、identity/argument normalization、schema validation、strict-client/zero-width
+  policy 与 `ToolCallDone → OutputTextDone → Completed` 发射迁至 `GenerationResponsePipeline`。
+- 删除旧 2,225 行 `GenerationServiceEmitAndToolBridge.cpp`，并将 `generateForcedToolCall`、
+  `normalizeToolCallArguments`、`transformRequestForToolBridge` 迁为专职 tooling `.cpp`；不保留成员版或
+  forwarding 双轨。Provider failure 仍为 `Started → Error → close`，新增 fixture 固定 semantic ErrorCode、
+  providerCode 和 diagnostic detail 不被重映射。
+- Generation/session/tooling/continuity/action-protocol 的 support closure 迁入 `aiapi_application`，
+  `aiapi_legacy` source count 由 38 降至 20；为了遗留 `session_st`/JSON event 边界，application 暂有
+  Drogon 私有外部 link requirement，但没有新增内部 target reverse edge。
+- 新增 `check_generation_pipeline_slice.py`（含无写工作树的 facade mutation selftest）并接入 CI；P5
+  session application、P6 Chayns/Retool gates 同步指向新的 pipeline stage。更新 coverage target、README、
+  计划和 work product。
+- 验证：Debug configure/build、393/393 `ctest`、直接 runner 393 cases / 2053 assertions、严格 test
+  registration 与全量 architecture gates 通过；R1=0，R3 由干净基线的 13/5006 降至 7/2889。P7-W1 标记
+  `DONE`，下一项为 P7-W2 Account workflows 重写。
+
+---
+
 ## P6-W3 收口 · Retool Provider 垂直切片（2026-08-14）
 
 - `retoolapi` 由 `APIinterface` 迁为 `ProviderBase` + `IProviderModelCatalog` +

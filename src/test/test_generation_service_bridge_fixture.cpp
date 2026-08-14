@@ -31,7 +31,12 @@ class FakeChannelCatalog final : public IChannelCatalog
 class CapturingProvider final : public provider::IChatProvider
 {
   public:
-    enum class Mode { PlainText, BridgeToolCall, NativeEmptyArguments };
+    enum class Mode {
+        PlainText,
+        BridgeToolCall,
+        NativeEmptyArguments,
+        SemanticFailure,
+    };
     explicit CapturingProvider(Mode mode = Mode::PlainText) : mode_(mode) {}
 
     platform::Result<provider::ProviderResponse> generate(
@@ -60,6 +65,15 @@ class CapturingProvider final : public provider::IChatProvider
             response.toolCalls.push_back(std::move(call));
             return platform::Result<provider::ProviderResponse>::success(
                 std::move(response));
+        }
+        if (mode_ == Mode::SemanticFailure)
+        {
+            return platform::Result<provider::ProviderResponse>::failure(
+                platform::Error(platform::ErrorCode::RateLimited,
+                                "synthetic quota exhausted",
+                                "fixture diagnostic",
+                                "fixture-rate-limit",
+                                429));
         }
         provider::ProviderResponse response;
         response.text = "synthetic bridge answer";
@@ -250,5 +264,31 @@ DROGON_TEST(GenerationService_RequiredToolFallbackRunsInsideEmitResultEvents)
             foundPing = true;
     }
     CHECK(foundPing);
+    CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_ProviderFailurePreservesSemanticErrorAndCloses)
+{
+    auto channels = makeChannel("failure-fixture", true);
+    auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::SemanticFailure);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("failure-fixture", provider));
+    auto request = makeRequest("failure-fixture", Json::Value(Json::arrayValue));
+    CollectingSink sink;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
+
+    CHECK(!service.runGuarded(request, sink).has_value());
+    CHECK(provider->calls == 1);
+    REQUIRE(sink.events.size() == 2);
+    CHECK(std::holds_alternative<generation::Started>(sink.events[0]));
+    REQUIRE(std::holds_alternative<generation::Error>(sink.events[1]));
+    const auto& error = std::get<generation::Error>(sink.events[1]);
+    CHECK(error.code == generation::ErrorCode::RateLimited);
+    CHECK(error.message == "synthetic quota exhausted");
+    CHECK(error.providerCode == "fixture-rate-limit");
+    CHECK(error.detail == "fixture diagnostic");
     CHECK(sink.closed);
 }
