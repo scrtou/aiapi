@@ -6,6 +6,30 @@
 
 ---
 
+## P6-W1 收口 · Result/Error 与 ProviderBase 基础（2026-08-14）
+
+- 新增 `platform::Result/Error/ErrorCode`、绝对 `Deadline` 与共享状态的只读
+  `CancellationToken`；Result 覆盖 move-only、`T == Error`、void 与错误态访问，Error 保留
+  `providerCode`、`upstreamHttpStatus` 和仅诊断 `detail`。
+- `sessionManager` 的 generation/app ErrorCode 改为 platform alias，旧 Provider 的细分类只在
+  legacy 内部保留，并在新 port 出口经 `toPlatformError()` 投影。`ErrorEvent` 继续是独立观测模型。
+- 新增 JSON/Drogon-free `ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider`、
+  `ProviderBase` final NVI 与带 C++17 `static_assert` 的生产构造 helper。Base 只统一取消/截止前置检查、
+  异常转换、结果合法性和一次失败上报，不吸收 chayns/retool 的协议流程。
+- 新增 `check_provider_foundation.py` 并接入 CI：检查重复 ErrorCode 收敛、port 不泄漏 session/JSON、
+  final NVI、生产继承约束和测试注册；以 `-Werror=unused-result` C++17 正反编译 probe 固定
+  `[[nodiscard]]`。CI 变异自检临时删除属性并断言 rc=4。
+- layer rule 修正为 ADR-01/02 已批准的目标态 `domain -> platform`（只允许基础值对象，不放开具体
+  IO/codec）。验证：Debug configure/build、385/385 `ctest`、直接 runner 385 cases / 1995 assertions
+  及全量架构门禁通过。
+- 同时复核 `check_target_layers.py` 的实际清单：P5 文档此前误记 legacy 从 39 到 37，源码实际为
+  38；已在当前计划和 P5 work product 更正，门禁上限仍是 39。
+- ADR-05/ADR-07 状态更新为“部分实施（P6-W1）”。旧 `APIinterface/session_st&` 与两家 Provider 的
+  session 副作用仍未迁移；下一项是 P6-W2 chayns vertical slice，不能将基础契约误写为完整 Provider
+  改造。
+
+---
+
 ## P5-W3 收口 · AiApiController use-case facade（2026-08-14）
 
 - 新增纯值 `aiapi::GenerationInput` / result DTO 与 `IAiApiUseCase` domain port。Controller 只复制影响

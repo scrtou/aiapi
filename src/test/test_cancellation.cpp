@@ -87,3 +87,20 @@ DROGON_TEST(Cancellation_WaitForDelegatesToAbsoluteDeadline)
     CHECK(source.waitFor(5s));
     CHECK(std::chrono::steady_clock::now() - start < 1s);
 }
+
+DROGON_TEST(Cancellation_ReadOnlyTokenObservesSourceAndOutlivesIt)
+{
+    platform::CancellationToken token;
+    {
+        CancellationSource source;
+        token = source.token();
+        CHECK(!token.isCancelled());
+        source.request();
+        CHECK(token.isCancelled());
+    }
+
+    // ProviderCallContext may outlive a caller-owned source during teardown;
+    // the read-only token keeps the shared state valid without exposing a
+    // request() operation to the provider.
+    CHECK(token.isCancelled());
+}

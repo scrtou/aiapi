@@ -110,6 +110,8 @@ set(TEST_SOURCES
     test_controller_utils.cpp
     test_provider_retirement.cpp
     test_provider_registry_port.cpp
+    test_result.cpp
+    test_provider_base.cpp
     test_ai_api_controller_injection.cpp
     test_ai_api_use_case.cpp
     test_error_stats_sink_port.cpp

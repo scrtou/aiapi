@@ -25,7 +25,7 @@ AppContext::build
 - `chatSession` 的 transfer/erase 四处调用改走注入端口；Controller、生成服务和 reaper
   不再访问 provider 全局管理器；
 - 删除 `ApiFactory.{h,cpp}`、`ApiManager.{h,cpp}` 及 Provider 注册宏/`createApi()` 壳；
-- legacy source ceiling 从 39 降至 37。
+- legacy source ceiling 从 39 降至 38。
 
 ## 测试与门禁
 

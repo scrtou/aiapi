@@ -31,7 +31,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 0 | 两者 | 通过 |
 | 1 | check_cycles | 存在超出基线的环或双向边 |
 | 2 | check_cycles | **前提被破坏**：出现跨目录同名头文件，基名判据失效 |
-| 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现出边） |
+| 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现 platform 之外的出边） |
 | 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 dbManager 直连 |
 | 4 | check_startup_wiring | 注入缺失，或注入晚于 `init()` |
 | 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或 legacy 棘轮回升 |
@@ -41,6 +41,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 4 | check_provider_registry | P5-W1 Provider 静态工厂/管理器复活，或显式注册/冻结接线缺失 |
 | 4 | check_session_services | P5-W2 ResponseIndex/ExecutionGate 单例复活，或 application/transport 重新定位 chatSession |
 | 4 | check_lifecycle_services | P5-W3 queue/session/thread/metrics、五个 concrete DB store、Workspace/Account/Channel 或 AI facade 生命周期 singleton fallback 复活，或 AppContext ownership/构造接线缺失 |
+| 4 | check_provider_foundation | P6-W1 Result/Error/Deadline/CancellationToken、ProviderCallContext、薄 ProviderBase NVI、生产继承约束或 Result `[[nodiscard]]` compile probe 被破坏 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -255,3 +256,25 @@ ThreadReaper/Provider 的 ledger 注入、metrics 的强制 sink 构造注入、
 静态非 owning `IAiApiUseCase` binding 必须由 owner 在 rollback/shutdown 时
 `setUseCase(nullptr)` 撤销，避免 context 析构后悬垂。已接纳的 generation task 必须由 facade 使用
 入队时捕获的 collaborator snapshot，不能在 queue worker 中重读已被撤销的 Controller binding。
+
+### `check_provider_foundation.py`
+
+P6-W1 foundation gate:
+
+```bash
+python3 tools/arch/check_provider_foundation.py
+```
+
+它冻结 `platform::Result/Error/ErrorCode`、绝对 `Deadline`、只读
+`CancellationToken`、JSON/Drogon-free `ProviderRequest/Response/CallContext` 与
+`IChatProvider` 的最小契约。它还要求 `ProviderBase::generate()` 是 `final` NVI，保留
+cancellation/deadline 前置检查、异常转换、结果合法性和一次失败上报；任何生产源码直接实现
+`IChatProvider` 都会失败，生产构造 helper 必须保留 `ProviderBase` 的 `static_assert`。
+
+`[[nodiscard]]` 不只靠文本搜属性：脚本使用一个不依赖 Drogon 的 C++17 `-fsyntax-only`
+probe，以 `-Werror=unused-result` 分别编译“正确消费 Result”和“丢弃 Result”的小程序；前者必须
+通过、后者必须失败。CI 另有变异自检，临时移除泛型 `Result` 的属性后要求 gate 返回 4。
+
+P6-W1 只建立契约，尚未让 legacy `APIinterface` 或 chayns/retool 生产实现接入该 port；这些真实
+vertical slice 在 P6-W2/P6-W3 完成。为使 domain 使用 Result/Deadline/取消契约，layer rules 现在
+允许 ADR-01/02 明确的目标态 `domain -> platform`，但仍禁止 domain 指向任何具体 IO/codec 模块。

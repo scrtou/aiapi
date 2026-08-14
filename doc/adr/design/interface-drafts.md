@@ -50,9 +50,10 @@ public:
     const Error& error() const&;
 
 private:
-    Result(OkTag, T value) : data_(std::move(value)) {}
+    struct Value { T value; }; // 避免 T == Error 时 variant 构造歧义
+    Result(OkTag, T value) : data_(Value{std::move(value)}) {}
     Result(ErrTag, Error error) : data_(std::move(error)) {}
-    std::variant<T, Error> data_;
+    std::variant<Value, Error> data_;
 };
 
 template<>
@@ -76,12 +77,18 @@ using Deadline = std::chrono::steady_clock::time_point;
 
 class CancellationToken {
 public:
-    void cancel() noexcept;
-    bool isCancelled() const noexcept;
+    bool isCancelled() const;
+    bool waitUntil(Deadline) const;
+};
+
+class CancellationSource {
+public:
+    void request();
+    CancellationToken token() const;
 };
 
 struct ProviderCallContext {
-    CancellationToken& cancellation;
+    const CancellationToken& cancellation; // provider is an observer, not an owner
     Deadline deadline;
     GenerationEventSink& sink;
 
@@ -90,6 +97,8 @@ struct ProviderCallContext {
 ```
 
 所有 timeout 都从绝对 deadline 计算，禁止每层重新开始一个完整相对超时。
+P6-W1 已先交付 token + deadline 子集；`GenerationEventSink` 仅在 P6-W2/P7 的真实事件路径
+接通时进入 call context，避免在 legacy session emission 仍存在时建立空接口。
 
 ## 4. Provider ports
 

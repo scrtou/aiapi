@@ -42,8 +42,9 @@ jobs:
         run: python3 tools/arch/check_cycles.py --baseline tools/arch/cycles-target.json
 
       # 分层边界：环检测看不见「中立层被污染」——污染不构成环。
-      # domain/ 出边一旦非空即失败（退出码 3）。
-      - name: R4 - layer boundary (domain must stay neutral)
+      # domain 仅允许 ADR-01/02 的 target-state domain -> platform 基础边；
+      # 任何具体 IO/codec 出边仍以退出码 3 失败。
+      - name: R4 - layer boundary (domain only depends on platform)
         run: python3 tools/arch/check_cycles.py --layer-rules tools/arch/layer-rules.json
 
       # dbManager 直接依赖棘轮（退出码 4）。前三道都看不见这类退化：
@@ -154,6 +155,44 @@ jobs:
       # stay green.
       - name: P5 - lifecycle workers have no singleton fallback
         run: python3 tools/arch/check_lifecycle_services.py
+
+      # P6-W1：Result/Error、read-only cancellation/deadline context 与薄 NVI
+      # 必须在 provider vertical slice 接线前保持完整；脚本还会用一个无依赖
+      # 的 C++17 compile probe 证明忽略 Result 在 -Werror=unused-result 下失败。
+      - name: P6 - Result/Error and ProviderBase foundation
+        run: python3 tools/arch/check_provider_foundation.py
+
+      # 这道门禁既检查结构也检查 [[nodiscard]] 的 C++ 诊断。先真的删掉
+      # 泛型 Result 的属性，再断言其以本门禁约定的 rc=4 失败；trap 保证本地
+      # 运行也不会覆盖开发者已有改动。
+      - name: P6 - provider foundation gate selftest
+        shell: bash
+        run: |
+          set -eu
+          tmp_dir="$(mktemp -d)"
+          trap 'cp "$tmp_dir/Result.h" src/platform/result/Result.h; rm -rf "$tmp_dir"' EXIT
+          cp src/platform/result/Result.h "$tmp_dir/Result.h"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/platform/result/Result.h')
+          text = path.read_text()
+          needle = 'class [[nodiscard]] Result'
+          if needle not in text:
+              raise SystemExit('P6 probe target class [[nodiscard]] Result not found')
+          path.write_text(text.replace(needle, 'class Result', 1))
+          PY
+          if cmp -s "$tmp_dir/Result.h" src/platform/result/Result.h; then
+            echo '::error::P6 provider-foundation probe did not mutate Result.h'
+            exit 1
+          fi
+          set +e
+          python3 tools/arch/check_provider_foundation.py
+          status=$?
+          set -e
+          if [ "$status" -ne 4 ]; then
+            echo "::error::P6 provider-foundation gate selftest expected rc=4, got rc=$status"
+            exit 1
+          fi
 
       # 这道门禁必须有杀伤力：把一个 owner 的限时调用临时改回无参形式，
       # 静态检查应立即失败。探针只改本步自己的副本，退出时无条件恢复。

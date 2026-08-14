@@ -1,6 +1,8 @@
 #ifndef PROVIDER_RESULT_H
 #define PROVIDER_RESULT_H
 
+#include <platform/result/Error.h>
+
 #include <map>
 #include <optional>
 #include <string>
@@ -68,6 +70,43 @@ struct ProviderError {
         return ProviderError{ProviderErrorCode::InternalError, msg, "", 500};
     }
 };
+
+/**
+ * Preserve a legacy provider's detailed classification while projecting it to
+ * the single cross-layer P6 Error model at a provider-port boundary.
+ */
+inline platform::Error toPlatformError(const ProviderError& source)
+{
+    platform::ErrorCode code = platform::ErrorCode::Internal;
+    switch (source.code) {
+        case ProviderErrorCode::None:
+            code = platform::ErrorCode::None;
+            break;
+        case ProviderErrorCode::AuthError:
+            code = platform::ErrorCode::Unauthorized;
+            break;
+        case ProviderErrorCode::RateLimited:
+            code = platform::ErrorCode::RateLimited;
+            break;
+        case ProviderErrorCode::InvalidRequest:
+            code = platform::ErrorCode::BadRequest;
+            break;
+        case ProviderErrorCode::Timeout:
+            code = platform::ErrorCode::Timeout;
+            break;
+        case ProviderErrorCode::NetworkError:
+        case ProviderErrorCode::ServiceUnavailable:
+        case ProviderErrorCode::Unknown:
+            code = platform::ErrorCode::ProviderError;
+            break;
+        case ProviderErrorCode::InternalError:
+            code = platform::ErrorCode::Internal;
+            break;
+    }
+
+    return platform::Error(
+        code, source.message, {}, source.providerCode, source.httpStatusCode);
+}
 
 /**
  * @brief Token 使用量统计

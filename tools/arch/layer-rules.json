@@ -1,5 +1,5 @@
 {
-  "_comment": "v3 当前模块出边棘轮。它冻结现状、防止新增方向，不表示所有允许边都是目标架构；迁移完成一条边后立即收紧。",
+  "_comment": "当前模块出边棘轮：迁移债务边只能收紧；ADR-01/02 明确允许的目标态 domain -> platform 基础设施边单独列出，不视为债务。",
   "modules": {
     "<root>": {
       "allow_out": [
@@ -20,7 +20,10 @@
       "role": "entry point。C8 后仅剩 config 装配 + AppContext 调用；组装特权已下沉到 runtime/。allow_out 为实测出边，随 main.cc 瘦身逐步收紧"
     },
     "domain": {
-      "allow_out": []
+      "allow_out": [
+        "platform"
+      ],
+      "role": "目标态 domain 只可依赖 platform（ADR-01/02）。P6-W1 的 Result/Error/Deadline/CancellationToken contract 正式使用这条目标边；具体 IO/codec 依赖仍一律禁止。"
     },
     "application": {
       "allow_out": [

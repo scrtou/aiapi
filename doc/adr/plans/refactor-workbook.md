@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P6（阶段 6，Provider 与 Result 垂直切片）**，P5-W1～P5-W3 均已 DONE，
-**下一工作项为 P6-W1 Result/Error/ProviderBase 基础**。
+当前是 **P6（阶段 6，Provider 与 Result 垂直切片）**；P6-W1 已 DONE，
+**下一工作项为 P6-W2 Chayns Provider 垂直切片**。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -60,6 +60,16 @@ admission、legacy `GenerationService`、provider catalog 和 Responses persiste
 P5-W3 已满足“Controller 只依赖 use case”的退出标准。详见
 [`P05-controller-services-progress.md`](../work-products/P05-controller-services-progress.md)。
 
+P6-W1 已收口：`platform::Result/Error/ErrorCode`、绝对 `Deadline` 与只读
+`CancellationToken` 已落地；legacy generation 的两个 ErrorCode 仅保留 platform alias。新的
+JSON-free `ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider` 和 final-NVI
+`ProviderBase` 已建立，生产构造 helper 用 `static_assert` 禁止绕过基类。新增
+`check_provider_foundation.py`（含 `[[nodiscard]]` C++ 编译 probe 与变异自检），并将 domain 的唯一
+基础出边收紧为 ADR-01/02 已批准的 `domain -> platform`。本项刻意未把 legacy
+`APIinterface/session_st&` 伪迁移；chayns 真正 slice 是下一项。Debug 构建、385/385 `ctest`、
+直接 runner 385 cases / 1995 assertions 与全部门禁通过，详见
+[`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md)。
+
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
 持线程单例经 `addOwner` 显式登记（G7 停机相关部分闭环）。新增门禁 `check_app_context.py`（A1～A5），
@@ -94,7 +104,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P5-W1 | 阶段 5 | ProviderRegistry/Router 注入 | [`P05-provider-registry.md`](../work-products/P05-provider-registry.md) | DONE |
 | P5-W2 | 阶段 5 | SessionStore/ResponseIndex/Gate 注入 | [`P05-session-services.md`](../work-products/P05-session-services.md) | DONE |
 | P5-W3 | 阶段 5 | Account/Channel/Workspace/Metrics 注入 | Controller 只依赖 use case | DONE |
-| P6-W1 | 阶段 6 | Result/Error/ProviderBase 基础 | Result contract、NVI、继承静态门禁 | TODO |
+| P6-W1 | 阶段 6 | Result/Error/ProviderBase 基础 | [`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md) | DONE |
 | P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | 无 session 副作用/单例，contract 通过 | TODO |
 | P6-W3 | 阶段 6 | Retool Provider 垂直切片 | workflow/agent contract 通过 | TODO |
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | stage contract、旧实现删除、R1 归零 | TODO |

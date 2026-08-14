@@ -24,16 +24,67 @@
  * 提供的原语表达，避免第四套实现。
  *
  * 线程模型：`request()` 可由任意线程调用；`waitUntil` / `waitFor` 由被取消的
- * 工作线程调用。置位与谓词读取共用同一把 `mutex_`，杜绝丢失唤醒——这正是
+ * 工作线程调用。置位与谓词读取共用同一个 shared `State::mutex`，杜绝丢失唤醒——这正是
  * Reaper 注释里记录过的那个坑（notify 落空会让停机退化成等满一个扫描周期，
  * 表现为 join 永久挂起）。
  */
 namespace platform {
 
+namespace cancellation_detail {
+
+struct State {
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    bool cancelled = false;
+};
+
+}  // namespace cancellation_detail
+
+/**
+ * Read-only cancellation view for request-scoped consumers.
+ *
+ * A token deliberately cannot request cancellation: providers may observe a
+ * caller's cancellation but cannot cancel another layer's work.  The shared
+ * state also keeps a token safe if its source has already been destroyed.
+ */
+class CancellationToken
+{
+  public:
+    CancellationToken() = default;
+
+    bool isCancelled() const
+    {
+        if (!state_) return false;
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        return state_->cancelled;
+    }
+
+    bool waitUntil(std::chrono::steady_clock::time_point deadline) const
+    {
+        if (!state_) return false;
+        std::unique_lock<std::mutex> lock(state_->mutex);
+        state_->cv.wait_until(lock, deadline, [this]() { return state_->cancelled; });
+        return state_->cancelled;
+    }
+
+  private:
+    explicit CancellationToken(std::shared_ptr<cancellation_detail::State> state)
+        : state_(std::move(state))
+    {
+    }
+
+    std::shared_ptr<cancellation_detail::State> state_;
+
+    friend class CancellationSource;
+};
+
 class CancellationSource
 {
 public:
-    CancellationSource() = default;
+    CancellationSource()
+        : state_(std::make_shared<cancellation_detail::State>())
+    {
+    }
 
     CancellationSource(const CancellationSource&)            = delete;
     CancellationSource& operator=(const CancellationSource&) = delete;
@@ -42,21 +93,26 @@ public:
     void request()
     {
         {
-            // 必须持锁置位：等待方的谓词读的就是 cancelled_，锁外置位会与
+            // 必须持锁置位：等待方的谓词读的是 State::cancelled，锁外置位会与
             // 「谓词已求值、尚未进入 wait」的窗口交错，使 notify 落空。
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (cancelled_) {
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            if (state_->cancelled) {
                 return;
             }
-            cancelled_ = true;
+            state_->cancelled = true;
         }
-        cv_.notify_all();
+        state_->cv.notify_all();
     }
 
     bool isCancelled() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return cancelled_;
+        return token().isCancelled();
+    }
+
+    /** Return a copyable, read-only token for a provider or other consumer. */
+    CancellationToken token() const
+    {
+        return CancellationToken(state_);
     }
 
     /**
@@ -69,9 +125,7 @@ public:
      */
     bool waitUntil(std::chrono::steady_clock::time_point deadline) const
     {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait_until(lock, deadline, [this]() { return cancelled_; });
-        return cancelled_;
+        return token().waitUntil(deadline);
     }
 
     /// 相对时长版本，仅供「本来就是周期轮询、与停机预算无关」的场景使用。
@@ -81,9 +135,7 @@ public:
     }
 
 private:
-    mutable std::mutex              mutex_;
-    mutable std::condition_variable cv_;
-    bool                            cancelled_ = false;
+    std::shared_ptr<cancellation_detail::State> state_;
 };
 
 using CancellationSourcePtr = std::shared_ptr<CancellationSource>;

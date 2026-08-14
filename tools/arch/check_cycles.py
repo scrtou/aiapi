@@ -252,7 +252,8 @@ def main():
         print('  {%s}  n=%d' % (', '.join(comp), len(comp)))
 
     # 分层边界检查：环检测看不见「中立层被污染」——那不构成环。
-    # domain/ 出边一旦非空，ADR-01 的方向约束就已失效，必须单独断言。
+    # ADR-01 允许 domain -> platform；任何超出 layer-rules 的出边仍会破坏
+    # 内侧不依赖具体适配器的方向约束，必须单独断言。
     if args.layer_rules:
         with io.open(args.layer_rules, encoding='utf-8') as fh:
             rules = json.load(fh)

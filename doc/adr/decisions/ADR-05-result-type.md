@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，待实施 |
+| 状态 | 已接受，部分实施（P6-W1） |
 | 当前版本 | v3.0 |
 
 ## 决策范围
@@ -15,6 +15,7 @@
 
 ```cpp
 enum class ErrorCode {
+    None = 0, // legacy/default interop only; Result failure must not use it
     BadRequest, Unauthorized, Forbidden, NotFound, Conflict,
     RateLimited, Timeout, ProviderError, Internal, Cancelled
 };
@@ -23,7 +24,7 @@ struct Error {
     ErrorCode code;
     std::string message;       // 可安全返回给调用方
     std::string providerCode;  // 上游原始分类
-    int httpStatus = 0;        // 上游实际状态
+    int upstreamHttpStatus = 0; // 上游实际状态（不替代语义 HTTP 映射）
     std::string detail;        // 仅日志，不返回客户端
 };
 ```
@@ -34,11 +35,21 @@ struct Error {
 
 ## Result 要求
 
-- C++17 `std::variant<T, Error>` 实现，并提供 `Result<void>` 特化；
+- C++17 `std::variant<success-wrapper, Error>` 实现，并提供 `Result<void>` 特化；
 - 使用显式 `Ok/Err` 工厂，避免 `T == Error` 时构造歧义；
 - 支持 move-only `T`；
 - 类型标记 `[[nodiscard]]`，CI 将忽略 Result 的诊断视为错误；
 - 错误态访问 `value()` 必须显式失败，不能返回默认值。
+
+## 实施进度
+
+P6-W1 已落地 `platform::Result/Error/ErrorCode`、绝对 `Deadline`、只读
+`CancellationToken`、`Result<void>`、重复 generation ErrorCode alias 与 `[[nodiscard]]` 的 C++17
+compile gate。`Error` 现保留 `providerCode`、`upstreamHttpStatus` 和仅诊断用 `detail`；legacy
+`ProviderErrorCode` 只在旧 Provider 内部保留，并有到 platform Error 的投影。
+
+尚未完成 chayns/retool 的 port/application/transport 切片：旧 `APIinterface/session_st&`、session
+副作用和 transport DTO 仍存在。它们分别属于 P6-W2/P6-W3，不能因为基础类型已存在而标为已实施。
 
 ## 迁移顺序
 

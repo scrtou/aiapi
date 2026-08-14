@@ -102,6 +102,7 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
     dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
     metrics/ErrorStatsConfig.cpp
     metrics/ErrorStatsService.cpp
+    infrastructure/provider/ProviderBase.cpp
     infrastructure/provider/ProviderRegistry.cpp
     utils/ConfigValidator.cpp
 )

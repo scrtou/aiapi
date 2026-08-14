@@ -2,6 +2,7 @@
 #define GENERATION_EVENT_H
 
 #include <json/json.h>
+#include <platform/result/ErrorCode.h>
 #include <string>
 #include <variant>
 #include <optional>
@@ -82,23 +83,9 @@ struct Completed {
     Json::Value meta{Json::objectValue}; // 附加元信息（如实际路由到的 workspaceId）
 };
 
-/**
- * @brief 错误代码
- * 
- * 统一错误类型，与 HTTP 状态码分离
- */
-enum class ErrorCode {
-    BadRequest,         // 请求格式错误 -> 400
-    Unauthorized,       // 未授权 -> 401
-    Forbidden,          // 禁止访问 -> 403
-    NotFound,           // 资源不存在 -> 404
-    Conflict,           // 冲突（如并发请求） -> 409
-    RateLimited,        // 限流 -> 429
-    Timeout,            // 超时 -> 504 或 408
-    ProviderError,      // 上游 错误 -> 502
-    Internal,           // 内部错误 -> 500
-    Cancelled           // 请求被取消 -> 499
-};
+// P6-W1: event emission shares the platform cross-layer ErrorCode rather than
+// maintaining a second enum with a drifting HTTP/string mapping.
+using ErrorCode = platform::ErrorCode;
 
 /**
  * @brief 错误事件
@@ -158,38 +145,14 @@ inline std::string getEventTypeName(const GenerationEvent& event) {
  * @brief ErrorCode 转换为 HTTP 状态码
  */
 inline int errorCodeToHttpStatus(ErrorCode code) {
-    switch (code) {
-        case ErrorCode::BadRequest:     return 400;
-        case ErrorCode::Unauthorized:   return 401;
-        case ErrorCode::Forbidden:      return 403;
-        case ErrorCode::NotFound:       return 404;
-        case ErrorCode::Conflict:       return 409;
-        case ErrorCode::RateLimited:    return 429;
-        case ErrorCode::Timeout:        return 504;
-        case ErrorCode::ProviderError:  return 502;
-        case ErrorCode::Internal:       return 500;
-        case ErrorCode::Cancelled:      return 499;
-        default:                        return 500;
-    }
+    return platform::defaultHttpStatus(code);
 }
 
 /**
  * @brief ErrorCode 转换为字符串
  */
 inline std::string errorCodeToString(ErrorCode code) {
-    switch (code) {
-        case ErrorCode::BadRequest:     return "bad_request";
-        case ErrorCode::Unauthorized:   return "unauthorized";
-        case ErrorCode::Forbidden:      return "forbidden";
-        case ErrorCode::NotFound:       return "not_found";
-        case ErrorCode::Conflict:       return "conflict";
-        case ErrorCode::RateLimited:    return "rate_limited";
-        case ErrorCode::Timeout:        return "timeout";
-        case ErrorCode::ProviderError:  return "provider_error";
-        case ErrorCode::Internal:       return "internal_error";
-        case ErrorCode::Cancelled:      return "cancelled";
-        default:                        return "unknown_error";
-    }
+    return std::string(platform::errorCodeName(code));
 }
 
 } // 命名空间结束

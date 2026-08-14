@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，待实施 |
+| 状态 | 已接受，部分实施（P6-W1） |
 | 当前版本 | v3.0 |
 
 ## Provider 范围
@@ -21,7 +21,7 @@
 
 ```cpp
 struct ProviderCallContext {
-    CancellationToken& cancellation;
+    const CancellationToken& cancellation; // Provider 只能观察，不能取消 caller
     Deadline deadline;
     GenerationEventSink& sink;
 };
@@ -74,6 +74,16 @@ void registerProductionProvider(std::string name) {
 chayns 使用 JSON 轮询，retool 有 workflow/agent 两种模式，不存在稳定一致的“构造请求 → SSE → parseChunk”流程。把完整 HTTP 流程放入模板会制造空钩子。
 
 `HttpTimeoutPolicy`、`RetryPolicy`、`ProviderErrorMapper`、`AccountSelector`、`PollingPolicy` 和 metrics decorator 作为独立组合对象。ProviderBase 是公共边界骨架，不负责这些策略的具体协议流程。
+
+## 实施进度
+
+P6-W1 已提供 JSON-free 的 `ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider`、
+`ProviderBase::generate() final`、异常转换/失败一次上报以及 `makeProductionProvider<T>()` 的
+`static_assert`。`ProviderCallContext` 当前先落地只读 token + absolute deadline；上面草案中的 sink
+会和真实 event publication path 一起在 P6-W2/P7 接入，不能为凑接口提前建立空转发钩子。
+
+现有 chayns/retool 仍经 legacy `APIinterface` 和 `session_st` 运行，尚未成为本 port 的生产实现；
+P6-W2/P6-W3 必须在接通时删除对应旧出口，而不是长期 adapter 双轨。
 
 ## 迁移顺序
 

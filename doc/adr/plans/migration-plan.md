@@ -26,20 +26,20 @@
 | 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
-| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；ProviderRegistry 迁入 infrastructure，legacy ceiling 由 39 降至 37，最终删除在 P8 |
+| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；ProviderRegistry 迁入 infrastructure，legacy ceiling 由 39 降至 38，最终删除在 P8 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
-| Provider 瘦端口 | ⬜ | 旧 `APIinterface/session_st&` 仍存在 |
+| Provider 瘦端口 | 🔄 | P6-W1 已有 Result/Error/ProviderBase 与新 port contract；旧 `APIinterface/session_st&` 待 P6-W2/W3 删除 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 6（Provider 与 Result 垂直切片）；P5-W1～W3 已完成，当前工作项 P6-W1（Result/Error/ProviderBase 基础）。**
+**当前执行阶段：阶段 6（Provider 与 Result 垂直切片）；P6-W1 已完成，当前工作项 P6-W2（Chayns Provider 垂直切片）。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
 均走注入端口。`ApiFactory/ApiManager`、静态注册宏和 `void* createApi` 已删除，legacy ceiling
-降至 37；`check_provider_registry.py` 禁止恢复 service locator 双轨。Debug 338/338 测试与全部
+降至 38；`check_provider_registry.py` 禁止恢复 service locator 双轨。Debug 338/338 测试与全部
 架构门禁通过，阶段继续 P5-W2。
 
 P5-W2 已收口：AppContext 持有 ResponseIndex/ExecutionGate，生成、连续性、Responses Controller
@@ -65,6 +65,17 @@ port 以序列化 JSON 和值对象穿过 domain 边界，不把 JsonCpp/Drogon 
 P5-W3 的退出门禁已满足：374/374 `ctest` 通过（直接 runner：374 cases / 1934 assertions），architecture
 audit、cycle/layer、严格测试注册、source ownership/include/target、enqueue、AppContext/deadline 及所有
 P5 增量门禁均通过。阶段推进到 P6-W1。
+
+P6-W1 已收口：新增 `platform::Result/Error/ErrorCode`、绝对 `Deadline` 与只读
+`CancellationToken`，并将 legacy generation 的重复 ErrorCode 统一为 platform alias；新的 JSON-free
+`ProviderRequest/Response/Capabilities/CallContext`、`IChatProvider`、final-NVI `ProviderBase` 和带
+`static_assert` 的生产构造 helper 已建立。`check_provider_foundation.py` 已接入 CI，除检查 contract/NVI/
+继承约束外，还用 C++17 `-Werror=unused-result` 正反编译 probe 固定 `Result` 的 `[[nodiscard]]` 语义；
+其变异自检会移除属性并断言 rc=4。为支持 domain 的基础值对象依赖，layer rule 明确允许 ADR-01/02 的
+目标态 `domain -> platform`，仍禁止 domain 指向具体 IO/codec。Debug build、385/385 `ctest`、直接 runner
+385 cases / 1995 assertions 与全量架构门禁均通过。legacy `APIinterface/session_st&`、provider session
+副作用和实际 HTTP/polling cancellation 尚未迁移，下一项为 P6-W2 chayns vertical slice。产物见
+[`P06-provider-foundation.md`](../work-products/P06-provider-foundation.md)。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 
@@ -382,12 +393,15 @@ P8 执行 `--require-no-legacy` 最终删除。
 
 ## 阶段 6 · Provider 与 Result 垂直切片
 
-### 6.1 Result 基础
+### 6.1 Result 基础（P6-W1 已完成）
 
-- 落地 Result/Error/Deadline/CancellationToken；
-- 合并重复 ErrorCode；
-- 开启 nodiscard 门禁；
-- 保留 ErrorEvent 为独立观测模型。
+- [x] 落地 Result/Error/Deadline/CancellationToken；
+- [x] 合并重复 ErrorCode；
+- [x] 开启 nodiscard 门禁；
+- [x] 保留 ErrorEvent 为独立观测模型。
+
+`IChatProvider`、不可变 Provider request/response 与薄 `ProviderBase` 同属本基础包；它们尚未替换
+legacy provider 出口，故阶段 6 的总退出门禁仍待 P6-W2/P6-W3。
 
 ### 6.2 chayns 切片
 
