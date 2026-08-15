@@ -3,6 +3,9 @@
 
 #include <drogon/drogon.h>
 
+#include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <utility>
 
 namespace account {
@@ -18,6 +21,16 @@ drogon::HttpMethod toDrogonMethod(HttpMethod method)
     return drogon::Get;
 }
 
+bool isContentTypeHeader(std::string_view name)
+{
+    constexpr std::string_view kContentType = "content-type";
+    return name.size() == kContentType.size() &&
+           std::equal(name.begin(), name.end(), kContentType.begin(),
+                      [](unsigned char left, unsigned char right) {
+                          return std::tolower(left) == std::tolower(right);
+                      });
+}
+
 class DrogonAccountHttpTransport final : public IAccountHttpTransport
 {
   public:
@@ -29,7 +42,16 @@ class DrogonAccountHttpTransport final : public IAccountHttpTransport
         native->setMethod(toDrogonMethod(request.method));
         native->setPath(request.path);
         for (const auto& [name, value] : request.headers) {
-            native->addHeader(name, value);
+            // Drogon stores Content-Type separately from its generic header
+            // map.  Adding it through addHeader() leaves that internal value
+            // unset, so a request with a body gets Drogon's default content
+            // type plus this one.  HTTP consumers such as FastAPI can then
+            // parse the first value and reject an otherwise valid JSON body.
+            if (isContentTypeHeader(name)) {
+                native->setContentTypeString(value);
+            } else {
+                native->addHeader(name, value);
+            }
         }
         native->setBody(request.body);
 

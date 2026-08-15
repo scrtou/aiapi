@@ -174,6 +174,12 @@ bool AccountManager::autoRegisterAccount(string apiName)
 
     auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
     if (result != account::HttpResultCode::Ok || !response || response->statusCode != 200) {
+        const int httpStatus = response ? response->statusCode : 0;
+        const std::string contentType = response ? response->header("content-type") : "";
+        const std::size_t bodySize = response ? response->body.size() : 0;
+        LOG_ERROR << "[自动注册] 注册 workflow 请求失败, result=" << static_cast<int>(result)
+                  << ", " << account_logging::summarizeLoginTransport(
+                         httpStatus, contentType, bodySize);
         rollbackWaitingAccount(waitingId);
         return false;
     }
