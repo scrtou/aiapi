@@ -1,14 +1,19 @@
 #ifndef CHAYNS_THREAD_DB_MANAGER_H
 #define CHAYNS_THREAD_DB_MANAGER_H
 
+#include <infrastructure/persistence/chaynsThread/IChaynsThreadLedger.h>
+
 #include <drogon/drogon.h>
 #include <drogon/orm/DbClient.h>
 #include <drogon/orm/Row.h>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,23 +32,13 @@
  */
 class IBackgroundExecutor;
 
-class chaynsThreadDbManager : public std::enable_shared_from_this<chaynsThreadDbManager>
+class chaynsThreadDbManager : public chayns::IChaynsThreadLedger,
+                              public std::enable_shared_from_this<chaynsThreadDbManager>
 {
 public:
     enum class DbType { PostgreSQL, MySQL, SQLite3 };
 
-    /// 线程台账行
-    struct ThreadRow
-    {
-        std::string threadId;         ///< 上游 thread id（主键）
-        std::string sessionId;        ///< 绑定的会话键；空串表示已解绑，等待回收
-        std::string accountUserName;  ///< 创建线程的账号，删除时必须用同一账号
-        std::string origin;           ///< free/pro 路由不同，删除请求需还原原始 Origin
-        std::string referer;
-        int64_t     createdAt = 0;
-        int64_t     lastActiveAt = 0;
-        int         deleteAttempts = 0;  ///< 上游删除失败次数，超阈值按孤儿丢弃
-    };
+    using ThreadRow = chayns::ThreadLedgerRow;
 
     /// Context-owned thread ledger.  The executor is borrowed from the same
     /// AppContext and remains alive until all queued write-through work is
@@ -60,7 +55,7 @@ public:
     /// 建表 + 建索引；失败返回 false 并通过 errorMessage 输出原因
     bool ensureTable(std::string* errorMessage = nullptr);
 
-    bool isEnabled() const { return enabled_; }
+    bool isEnabled() const override { return enabled_; }
     void setEnabled(bool enabled) { enabled_ = enabled; }
     DbType getDbType() const { return dbType_; }
 
@@ -78,7 +73,7 @@ public:
                                                 int limit,
                                                 std::string* errorMessage = nullptr);
     std::optional<ThreadRow> loadThreadBySessionId(const std::string& sessionId,
-                                                   std::string* errorMessage = nullptr);
+                                                   std::string* errorMessage = nullptr) override;
 
     bool deleteThread(const std::string& threadId, std::string* errorMessage = nullptr);
     bool deleteThreads(const std::vector<std::string>& threadIds, std::string* errorMessage = nullptr);
@@ -89,26 +84,43 @@ public:
     int purgeExhaustedThreads(int maxAttempts, std::string* errorMessage = nullptr);
 
     // ---- 异步写穿接口（供请求链路使用，永不阻塞）----
-    void asyncUpsertThread(const ThreadRow& row);
-    void asyncDetachThreadBySessionId(const std::string& sessionId);
-    void asyncUpdateThreadSessionId(const std::string& oldSessionId, const std::string& newSessionId);
+    void asyncUpsertThread(const ThreadRow& row) override;
+    void asyncDetachThreadBySessionId(const std::string& sessionId) override;
+    void asyncUpdateThreadSessionId(const std::string& oldSessionId,
+                                    const std::string& newSessionId) override;
     void asyncTouchThreadBySessionId(const std::string& sessionId, int64_t nowEpochSeconds);
     void asyncDeleteThread(const std::string& threadId);
 
 private:
+    struct PendingWrite
+    {
+        std::string name;
+        std::function<void()> task;
+    };
+
     void submitWrite(const char* taskName, std::function<void()> task);
+    void drainWrites();
     void detectDbType();
     static ThreadRow rowFromRecord(const drogon::orm::Row& r);
 
     std::string getCreateThreadTableSql() const;
     std::string getCreateThreadActiveIndexSql() const;
     std::string getCreateThreadSessionIndexSql() const;
+    bool ensureThreadContextColumns(std::string* errorMessage);
 
     drogon::orm::DbClientPtr dbClient_;
     IBackgroundExecutor* executor_ = nullptr;  // borrowed; owned by AppContext
     DbType dbType_ = DbType::PostgreSQL;
     std::atomic<bool> enabled_{false};
     bool initialized_ = false;
+
+    // The shared executor has multiple workers.  A single bounded local FIFO
+    // preserves upsert(old key) -> rotate(new key) order without parking its
+    // other workers behind a condition variable.
+    static constexpr std::size_t kMaxPendingWrites = 1024;
+    std::mutex writeQueueMutex_;
+    std::deque<PendingWrite> pendingWrites_;
+    bool writeDrainScheduled_ = false;
 };
 
 #endif  // CHAYNS_THREAD_DB_MANAGER_H

@@ -1,6 +1,5 @@
 #include <drogon/drogon.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
-#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 #include <algorithm>
 #include <chrono>
 #include <memory>
@@ -150,7 +149,7 @@ std::string summarizeUpstreamResponse(const HttpResponsePtr& response)
 chaynsapi::chaynsapi(IAccountSelector& accountSelector,
                      std::shared_ptr<chayns::IChaynsHttpTransport> transport,
                      std::shared_ptr<chayns::IChaynsClock> clock,
-                     std::shared_ptr<chaynsThreadDbManager> threadLedger,
+                     std::shared_ptr<chayns::IChaynsThreadLedger> threadLedger,
                      FailureObserver failureObserver)
     : ProviderBase(std::move(failureObserver)),
       m_accountSelector(accountSelector),
@@ -416,12 +415,71 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
 
     ThreadContext continuationContext;
     bool hasContinuationContext = false;
+    std::optional<chayns::ThreadLedgerRow> incompleteLedgerContext;
+    bool incompleteLedgerUsedFallbackKey = false;
     if (!request.previousConversationId.empty()) {
-        std::lock_guard<std::mutex> lock(m_threadMapMutex);
-        auto it = m_threadMap.find(request.previousConversationId);
-        if (it != m_threadMap.end()) {
-            continuationContext = it->second;
-            hasContinuationContext = true;
+        {
+            std::lock_guard<std::mutex> lock(m_threadMapMutex);
+            auto it = m_threadMap.find(request.previousConversationId);
+            if (it != m_threadMap.end()) {
+                continuationContext = it->second;
+                hasContinuationContext = true;
+            }
+        }
+
+        // m_threadMap is intentionally process-local.  On a process restart,
+        // restore its provider-specific half from the ledger after the
+        // application session has recovered the stable local session key.
+        // This runs on the background generation worker, never on Drogon's
+        // HTTP event loop.
+        if (!hasContinuationContext && m_threadLedger && m_threadLedger->isEnabled()) {
+            auto persisted = m_threadLedger->loadThreadBySessionId(
+                request.previousConversationId);
+            bool usedFallbackKey = false;
+            if (!persisted.has_value() &&
+                !request.previousConversationFallbackId.empty() &&
+                request.previousConversationFallbackId != request.previousConversationId) {
+                persisted = m_threadLedger->loadThreadBySessionId(
+                    request.previousConversationFallbackId);
+                usedFallbackKey = persisted.has_value();
+            }
+            if (persisted.has_value()) {
+                ThreadContext restored;
+                restored.threadId = persisted->threadId;
+                restored.userAuthorId = persisted->userAuthorId;
+                restored.agentAuthorId = persisted->agentAuthorId;
+                restored.accountUserName = persisted->accountUserName;
+                restored.modelId = persisted->modelId;
+                restored.accountType = persisted->accountType;
+                restored.threadTypeId = persisted->threadTypeId;
+                restored.workspaceUacId = persisted->workspaceUacId;
+                restored.origin = persisted->origin;
+                restored.referer = persisted->referer;
+                restored.lastRequestMessageId = persisted->lastRequestMessageId;
+                restored.lastRequestCreationTime = persisted->lastRequestCreationTime;
+                restored.lastAssistantMessageId = persisted->lastAssistantMessageId;
+
+                const bool hasRequiredContext =
+                    !restored.threadId.empty() && !restored.accountUserName.empty() &&
+                    !restored.modelId.empty() && !restored.accountType.empty() &&
+                    !restored.origin.empty() && !restored.referer.empty() &&
+                    restored.threadTypeId > 0 &&
+                    (restored.accountType != "pro" || restored.workspaceUacId > 0);
+                if (!hasRequiredContext) {
+                    incompleteLedgerContext = *persisted;
+                    incompleteLedgerUsedFallbackKey = usedFallbackKey;
+                } else {
+                    std::lock_guard<std::mutex> lock(m_threadMapMutex);
+                    const auto [it, inserted] = m_threadMap.emplace(
+                        request.previousConversationId, std::move(restored));
+                    continuationContext = it->second;
+                    hasContinuationContext = true;
+                    LOG_INFO << "[chaynsAPI] 已从线程台账恢复上游线程上下文: "
+                             << "threadIdPresent=" << !continuationContext.threadId.empty()
+                             << ", fallbackKeyUsed=" << usedFallbackKey
+                             << ", inserted=" << inserted;
+                }
+            }
         }
     }
     
@@ -465,13 +523,17 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
 
             // A continuation may only reuse its original account when that
             // account is still valid and satisfies the current model.
-            if (totalAttempts == 1 && !needSwitchAccount && hasContinuationContext &&
-                !continuationContext.accountUserName.empty()) {
+            const std::string continuationAccount = hasContinuationContext
+                ? continuationContext.accountUserName
+                : (incompleteLedgerContext.has_value()
+                       ? incompleteLedgerContext->accountUserName
+                       : std::string{});
+            if (totalAttempts == 1 && !needSwitchAccount && !continuationAccount.empty()) {
                 m_accountSelector.getAccountByUserName(
-                    "chaynsapi", continuationContext.accountUserName, selectedAccount);
+                    "chaynsapi", continuationAccount, selectedAccount);
                 if (!isUsableChaynsAccount(selectedAccount, selectedModel.requiresPro)) {
                     LOG_WARN << "[chaynsAPI] 续聊账户不可用或权限不足: "
-                             << continuationContext.accountUserName;
+                             << continuationAccount;
                     selectedAccount.reset();
                 }
             }
@@ -510,6 +572,53 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             return chaynsFailure(platform::ErrorCode::ProviderError,
                                  "Chayns Pro workspaceUacId is not configured",
                                  "chayns_pro_workspace_not_configured", 503);
+        }
+
+        // Early ledger rows predate durable provider-context columns.  They
+        // can be upgraded exactly once when the restored session also proves
+        // that the requested model is unchanged.  Restrict compatibility to
+        // the free route: a legacy row has no workspace ID, so reusing a Pro
+        // thread could cross a changed workspace boundary.
+        if (!hasContinuationContext && incompleteLedgerContext.has_value() &&
+            totalAttempts == 1 && !needSwitchAccount) {
+            const auto& legacy = *incompleteLedgerContext;
+            const bool restoredModelMatches =
+                !request.previousConversationFallbackModel.empty() &&
+                request.previousConversationFallbackModel == modelname;
+            const bool legacyFreeRouteMatches =
+                !requestRoute.isPro && legacy.accountUserName == accountinfo->userName &&
+                legacy.origin == requestRoute.origin && legacy.referer == requestRoute.referer;
+            if (!legacy.threadId.empty() && legacyFreeRouteMatches && restoredModelMatches) {
+                ThreadContext restored;
+                restored.threadId = legacy.threadId;
+                restored.userAuthorId = legacy.userAuthorId;
+                restored.agentAuthorId = legacy.agentAuthorId;
+                restored.accountUserName = accountinfo->userName;
+                restored.modelId = modelname;
+                restored.accountType = accountinfo->accountType;
+                restored.threadTypeId = requestRoute.threadTypeId;
+                restored.workspaceUacId = requestRoute.workspaceUacId;
+                restored.origin = requestRoute.origin;
+                restored.referer = requestRoute.referer;
+                restored.lastRequestMessageId = legacy.lastRequestMessageId;
+                restored.lastRequestCreationTime = legacy.lastRequestCreationTime;
+                restored.lastAssistantMessageId = legacy.lastAssistantMessageId;
+                std::lock_guard<std::mutex> lock(m_threadMapMutex);
+                const auto [it, inserted] = m_threadMap.emplace(
+                    request.previousConversationId, std::move(restored));
+                continuationContext = it->second;
+                hasContinuationContext = true;
+                LOG_INFO << "[chaynsAPI] 已兼容恢复旧版线程台账上下文: "
+                         << "threadIdPresent=" << !continuationContext.threadId.empty()
+                         << ", fallbackKeyUsed=" << incompleteLedgerUsedFallbackKey
+                         << ", inserted=" << inserted;
+            } else {
+                LOG_WARN << "[chaynsAPI] 上游线程台账记录不完整，安全地创建新线程: "
+                          << "threadIdPresent=" << !legacy.threadId.empty()
+                         << ", accountMatches=" << (legacy.accountUserName == accountinfo->userName)
+                         << ", routeMatches=" << legacyFreeRouteMatches
+                         << ", restoredModelMatches=" << restoredModelMatches;
+            }
         }
 
         if (accountExecutionLock.owns_lock()) {
@@ -1148,16 +1257,27 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             m_threadMap[request.conversationId] = ctx;
         }
 
-        // 上游线程台账：内存 m_threadMap 会随进程退出/会话过期消失，
-        // 但上游 thread 是真实存在的远端资源，必须单独留痕，否则重启即泄漏。
+        // 上游线程台账：内存 m_threadMap 会随进程退出/会话过期消失。
+        // Persist the complete credential-free context so a restart can both
+        // reattach the next turn and still let the reaper clean up orphaned
+        // upstream threads.
         {
             if (m_threadLedger && m_threadLedger->isEnabled() && !final_threadId.empty()) {
-                chaynsThreadDbManager::ThreadRow row;
+                chayns::ThreadLedgerRow row;
                 row.threadId        = final_threadId;
                 row.sessionId       = request.conversationId;
+                row.userAuthorId    = final_userAuthorId;
+                row.agentAuthorId   = final_agentAuthorId;
                 row.accountUserName = final_accountUserName;
+                row.modelId         = modelname;
+                row.accountType     = final_accountType;
+                row.threadTypeId    = final_threadTypeId;
+                row.workspaceUacId  = final_workspaceUacId;
                 row.origin          = final_origin;
                 row.referer         = final_referer;
+                row.lastRequestMessageId = final_requestMessageId;
+                row.lastRequestCreationTime = final_requestCreationTime;
+                row.lastAssistantMessageId = final_assistantMessageId;
                 row.createdAt       = static_cast<int64_t>(time(nullptr));
                 row.lastActiveAt    = row.createdAt;
                 // 异步落库：请求链路不等 DB，失败在 DbManager 内部降级忽略。
@@ -1189,12 +1309,21 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
         if (!request.previousConversationId.empty()) {
             m_threadMap.erase(request.previousConversationId);
         }
+        if (!request.previousConversationFallbackId.empty() &&
+            request.previousConversationFallbackId != request.previousConversationId) {
+            m_threadMap.erase(request.previousConversationFallbackId);
+        }
         m_threadMap.erase(request.conversationId);
     }
     if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
         if (m_threadLedger && m_threadLedger->isEnabled()) {
             if (!request.previousConversationId.empty()) {
                 m_threadLedger->asyncDetachThreadBySessionId(request.previousConversationId);
+            }
+            if (!request.previousConversationFallbackId.empty() &&
+                request.previousConversationFallbackId != request.previousConversationId) {
+                m_threadLedger->asyncDetachThreadBySessionId(
+                    request.previousConversationFallbackId);
             }
             m_threadLedger->asyncDetachThreadBySessionId(request.conversationId);
         }

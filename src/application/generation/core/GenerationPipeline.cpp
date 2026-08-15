@@ -448,6 +448,8 @@ provider::ProviderRequest generation::GenerationPipeline::providerRequestFromSes
     request.conversationId = session.state.conversationId;
     if (session.state.isContinuation) {
         request.previousConversationId = session.provider.prevProviderKey;
+        request.previousConversationFallbackId = session.provider.prevProviderFallbackKey;
+        request.previousConversationFallbackModel = session.provider.prevProviderFallbackModel;
     }
     request.model = session.request.model;
     request.systemPrompt = session.request.systemPrompt;

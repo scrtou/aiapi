@@ -202,6 +202,8 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     // 若不合并，这些字段（尤其 tools）会在续聊时丢失，从而导致工具桥接逻辑失效，
     // 最终表现为后续轮次无法识别客户端传入的工具定义。
     auto &stored = session_map[sessionId];
+    const std::string persistedProviderKey = stored.provider.prevProviderKey;
+    const std::string persistedModel = stored.request.model;
 
     // 请求级字段处理策略：始终以本次请求的最新值覆盖，确保行为与客户端输入一致。
     stored.request.api = session.request.api;
@@ -241,6 +243,14 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
 
     // 将合并后的稳定会话状态回写给调用方，后续流程统一使用该结果。
     session = stored;
+    // The old model is also needed to safely upgrade a pre-context ledger
+    // row when the stable session key did not rotate.  The fallback *key*
+    // itself is only meaningful across a rotation.
+    session.provider.prevProviderFallbackKey.clear();
+    session.provider.prevProviderFallbackModel = persistedModel;
+    if (!persistedProviderKey.empty() && persistedProviderKey != sessionId) {
+        session.provider.prevProviderFallbackKey = persistedProviderKey;
+    }
 }
 
 void chatSession::initializeNewSession(const std::string& sessionId, session_st& session)
@@ -545,6 +555,8 @@ void chatSession::commitSessionTransfer(session_st& session)
     // Codex 使用客户端 thread-id 作为稳定会话键，不应每轮迁移到 Hash/ZeroWidth ID。
     if (newSessionId == oldSessionId) {
         session.provider.prevProviderKey = oldSessionId;
+        session.provider.prevProviderFallbackKey.clear();
+        session.provider.prevProviderFallbackModel.clear();
         session.state.nextSessionId.clear();
         updateSession(oldSessionId, session);
         // [持久化] 原位提交路径：此刻快照才含本轮 user+assistant 消息，必须落库；
@@ -558,6 +570,8 @@ void chatSession::commitSessionTransfer(session_st& session)
     
     // 4. 更新 session 字段
     session.provider.prevProviderKey = oldSessionId;
+    session.provider.prevProviderFallbackKey.clear();
+    session.provider.prevProviderFallbackModel.clear();
     session.state.conversationId = newSessionId;
     session.state.nextSessionId.clear();  // 清理已使用的 nextSessionId
     

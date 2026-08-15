@@ -232,3 +232,51 @@ DROGON_TEST(SessionStore_ContextMap_IsConsumed_By_GetOrCreateSession)
 
     mgr.delSession(realSessionId);
 }
+
+DROGON_TEST(SessionStore_ContinuationPreservesLedgerRecoveryHints)
+{
+    chatSession mgr;
+    const std::string currentSessionId = "sess_current_ledger_key";
+
+    // This is the durable snapshot written after a local session-key
+    // transfer.  The provider ledger may have completed that transfer, or it
+    // may still be bound to the old key when a process is restarted.
+    session_st persisted;
+    persisted.state.conversationId = currentSessionId;
+    persisted.provider.prevProviderKey = "sess_before_ledger_key";
+    persisted.request.model = "persisted-model";
+    mgr.addSession(currentSessionId, persisted);
+
+    session_st incoming;
+    incoming.request.model = "requested-model";
+    mgr.getOrCreateSession(currentSessionId, incoming);
+
+    CHECK(incoming.state.isContinuation);
+    CHECK(incoming.provider.prevProviderKey == currentSessionId);
+    CHECK(incoming.provider.prevProviderFallbackKey == "sess_before_ledger_key");
+    CHECK(incoming.provider.prevProviderFallbackModel == "persisted-model");
+}
+
+DROGON_TEST(SessionStore_StableContinuationKeepsLegacyLedgerModelHint)
+{
+    chatSession mgr;
+    const std::string stableSessionId = "sess_stable_ledger_key";
+
+    // Stable client session IDs do not need a fallback key, but old ledger
+    // rows still need the durable model value to prove that reattachment is
+    // safe after their schema is upgraded.
+    session_st persisted;
+    persisted.state.conversationId = stableSessionId;
+    persisted.provider.prevProviderKey = stableSessionId;
+    persisted.request.model = "persisted-model";
+    mgr.addSession(stableSessionId, persisted);
+
+    session_st incoming;
+    incoming.request.model = "requested-model";
+    mgr.getOrCreateSession(stableSessionId, incoming);
+
+    CHECK(incoming.state.isContinuation);
+    CHECK(incoming.provider.prevProviderKey == stableSessionId);
+    CHECK(incoming.provider.prevProviderFallbackKey.empty());
+    CHECK(incoming.provider.prevProviderFallbackModel == "persisted-model");
+}

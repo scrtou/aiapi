@@ -1,7 +1,10 @@
 #include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 #include <domain/port/IBackgroundExecutor.h>
 #include <algorithm>
+#include <array>
+#include <exception>
 #include <sstream>
+#include <utility>
 
 namespace {
 constexpr const char* kLogTag = "[chayns线程台账]";
@@ -54,9 +57,18 @@ std::string chaynsThreadDbManager::getCreateThreadTableSql() const
                 CREATE TABLE IF NOT EXISTS chaynsa_thread (
                     thread_id TEXT PRIMARY KEY,
                     session_id TEXT DEFAULT '',
+                    user_author_id TEXT DEFAULT '',
+                    agent_author_id TEXT DEFAULT '',
                     account_user_name TEXT DEFAULT '',
+                    model_id TEXT DEFAULT '',
+                    account_type TEXT DEFAULT '',
+                    thread_type_id INTEGER DEFAULT 8,
+                    workspace_uac_id INTEGER DEFAULT 0,
                     origin TEXT DEFAULT '',
                     referer TEXT DEFAULT '',
+                    last_request_message_id TEXT DEFAULT '',
+                    last_request_creation_time TEXT DEFAULT '',
+                    last_assistant_message_id TEXT DEFAULT '',
                     created_at INTEGER DEFAULT 0,
                     last_active_at INTEGER DEFAULT 0,
                     delete_attempts INTEGER DEFAULT 0
@@ -67,9 +79,18 @@ std::string chaynsThreadDbManager::getCreateThreadTableSql() const
                 CREATE TABLE IF NOT EXISTS chaynsa_thread (
                     thread_id VARCHAR(191) PRIMARY KEY,
                     session_id VARCHAR(191) DEFAULT '',
+                    user_author_id VARCHAR(191) DEFAULT '',
+                    agent_author_id VARCHAR(191) DEFAULT '',
                     account_user_name VARCHAR(191) DEFAULT '',
+                    model_id VARCHAR(255) DEFAULT '',
+                    account_type VARCHAR(32) DEFAULT '',
+                    thread_type_id INT DEFAULT 8,
+                    workspace_uac_id BIGINT DEFAULT 0,
                     origin VARCHAR(255) DEFAULT '',
                     referer VARCHAR(255) DEFAULT '',
+                    last_request_message_id VARCHAR(191) DEFAULT '',
+                    last_request_creation_time VARCHAR(191) DEFAULT '',
+                    last_assistant_message_id VARCHAR(191) DEFAULT '',
                     created_at BIGINT DEFAULT 0,
                     last_active_at BIGINT DEFAULT 0,
                     delete_attempts INT DEFAULT 0
@@ -81,9 +102,18 @@ std::string chaynsThreadDbManager::getCreateThreadTableSql() const
                 CREATE TABLE IF NOT EXISTS chaynsa_thread (
                     thread_id VARCHAR(191) PRIMARY KEY,
                     session_id VARCHAR(191) DEFAULT '',
+                    user_author_id VARCHAR(191) DEFAULT '',
+                    agent_author_id VARCHAR(191) DEFAULT '',
                     account_user_name VARCHAR(191) DEFAULT '',
+                    model_id VARCHAR(255) DEFAULT '',
+                    account_type VARCHAR(32) DEFAULT '',
+                    thread_type_id INTEGER DEFAULT 8,
+                    workspace_uac_id BIGINT DEFAULT 0,
                     origin VARCHAR(255) DEFAULT '',
                     referer VARCHAR(255) DEFAULT '',
+                    last_request_message_id VARCHAR(191) DEFAULT '',
+                    last_request_creation_time VARCHAR(191) DEFAULT '',
+                    last_assistant_message_id VARCHAR(191) DEFAULT '',
                     created_at BIGINT DEFAULT 0,
                     last_active_at BIGINT DEFAULT 0,
                     delete_attempts INTEGER DEFAULT 0
@@ -116,6 +146,10 @@ bool chaynsThreadDbManager::ensureTable(std::string* errorMessage)
 
     try {
         dbClient_->execSqlSync(getCreateThreadTableSql());
+        if (!ensureThreadContextColumns(errorMessage)) {
+            enabled_ = false;
+            return false;
+        }
         // 索引创建失败不致命（MySQL 5.7 不支持 IF NOT EXISTS on index）
         try { dbClient_->execSqlSync(getCreateThreadActiveIndexSql()); } catch (...) {}
         try { dbClient_->execSqlSync(getCreateThreadSessionIndexSql()); } catch (...) {}
@@ -130,6 +164,62 @@ bool chaynsThreadDbManager::ensureTable(std::string* errorMessage)
     }
 }
 
+bool chaynsThreadDbManager::ensureThreadContextColumns(std::string* errorMessage)
+{
+    // Existing installations already have the reaper-only schema.  Probe
+    // before ALTER so the migration is portable across SQLite/MySQL/Postgres
+    // without relying on their different ADD COLUMN IF NOT EXISTS syntax.
+    struct ColumnDefinition {
+        const char* name;
+        const char* sqlite;
+        const char* mysql;
+        const char* postgres;
+    };
+    static constexpr std::array<ColumnDefinition, 9> kColumns{{
+        {"user_author_id", "TEXT DEFAULT ''", "VARCHAR(191) DEFAULT ''", "VARCHAR(191) DEFAULT ''"},
+        {"agent_author_id", "TEXT DEFAULT ''", "VARCHAR(191) DEFAULT ''", "VARCHAR(191) DEFAULT ''"},
+        {"model_id", "TEXT DEFAULT ''", "VARCHAR(255) DEFAULT ''", "VARCHAR(255) DEFAULT ''"},
+        {"account_type", "TEXT DEFAULT ''", "VARCHAR(32) DEFAULT ''", "VARCHAR(32) DEFAULT ''"},
+        {"thread_type_id", "INTEGER DEFAULT 8", "INT DEFAULT 8", "INTEGER DEFAULT 8"},
+        {"workspace_uac_id", "INTEGER DEFAULT 0", "BIGINT DEFAULT 0", "BIGINT DEFAULT 0"},
+        {"last_request_message_id", "TEXT DEFAULT ''", "VARCHAR(191) DEFAULT ''", "VARCHAR(191) DEFAULT ''"},
+        {"last_request_creation_time", "TEXT DEFAULT ''", "VARCHAR(191) DEFAULT ''", "VARCHAR(191) DEFAULT ''"},
+        {"last_assistant_message_id", "TEXT DEFAULT ''", "VARCHAR(191) DEFAULT ''", "VARCHAR(191) DEFAULT ''"},
+    }};
+
+    for (const auto& column : kColumns) {
+        const char* definition = column.postgres;
+        switch (dbType_) {
+            case DbType::SQLite3: definition = column.sqlite; break;
+            case DbType::MySQL: definition = column.mysql; break;
+            case DbType::PostgreSQL: break;
+        }
+        try {
+            dbClient_->execSqlSync(std::string("select ") + column.name +
+                                    " from chaynsa_thread limit 0");
+            continue;
+        } catch (...) {
+            // The table is known to exist.  A missing projected column is
+            // the only expected failure here; the ALTER below verifies it.
+        }
+
+        try {
+            dbClient_->execSqlSync(std::string("alter table chaynsa_thread add column ") +
+                                    column.name + " " + definition);
+            LOG_INFO << kLogTag << " 已补齐续聊上下文字段: " << column.name;
+        } catch (const std::exception& ex) {
+            if (errorMessage) {
+                *errorMessage = std::string("补齐 chaynsa_thread.") + column.name +
+                                " 失败: " + ex.what();
+            }
+            LOG_ERROR << kLogTag << " 补齐续聊上下文字段失败: " << column.name
+                      << ", " << ex.what();
+            return false;
+        }
+    }
+    return true;
+}
+
 // ========================= 行映射 =========================
 
 chaynsThreadDbManager::ThreadRow chaynsThreadDbManager::rowFromRecord(const drogon::orm::Row& r)
@@ -137,9 +227,21 @@ chaynsThreadDbManager::ThreadRow chaynsThreadDbManager::rowFromRecord(const drog
     ThreadRow row;
     row.threadId        = r["thread_id"].as<std::string>();
     row.sessionId       = r["session_id"].isNull() ? "" : r["session_id"].as<std::string>();
+    row.userAuthorId    = r["user_author_id"].isNull() ? "" : r["user_author_id"].as<std::string>();
+    row.agentAuthorId   = r["agent_author_id"].isNull() ? "" : r["agent_author_id"].as<std::string>();
     row.accountUserName = r["account_user_name"].isNull() ? "" : r["account_user_name"].as<std::string>();
+    row.modelId         = r["model_id"].isNull() ? "" : r["model_id"].as<std::string>();
+    row.accountType     = r["account_type"].isNull() ? "" : r["account_type"].as<std::string>();
+    row.threadTypeId    = r["thread_type_id"].isNull() ? 8 : r["thread_type_id"].as<int>();
+    row.workspaceUacId  = r["workspace_uac_id"].isNull() ? 0 : r["workspace_uac_id"].as<int64_t>();
     row.origin          = r["origin"].isNull() ? "" : r["origin"].as<std::string>();
     row.referer         = r["referer"].isNull() ? "" : r["referer"].as<std::string>();
+    row.lastRequestMessageId = r["last_request_message_id"].isNull()
+        ? "" : r["last_request_message_id"].as<std::string>();
+    row.lastRequestCreationTime = r["last_request_creation_time"].isNull()
+        ? "" : r["last_request_creation_time"].as<std::string>();
+    row.lastAssistantMessageId = r["last_assistant_message_id"].isNull()
+        ? "" : r["last_assistant_message_id"].as<std::string>();
     row.createdAt       = r["created_at"].isNull() ? 0 : r["created_at"].as<int64_t>();
     row.lastActiveAt    = r["last_active_at"].isNull() ? 0 : r["last_active_at"].as<int64_t>();
     row.deleteAttempts  = r["delete_attempts"].isNull() ? 0 : r["delete_attempts"].as<int>();
@@ -159,16 +261,27 @@ bool chaynsThreadDbManager::upsertThread(const ThreadRow& row, std::string* erro
             row.threadId);
         if (existing.empty()) {
             dbClient_->execSqlSync(
-                "insert into chaynsa_thread(thread_id, session_id, account_user_name, origin, referer, "
-                "created_at, last_active_at, delete_attempts) values($1, $2, $3, $4, $5, $6, $7, $8)",
-                row.threadId, row.sessionId, row.accountUserName, row.origin, row.referer,
-                static_cast<int64_t>(row.createdAt), static_cast<int64_t>(row.lastActiveAt),
-                row.deleteAttempts);
+                "insert into chaynsa_thread(thread_id, session_id, user_author_id, agent_author_id, "
+                "account_user_name, model_id, account_type, thread_type_id, workspace_uac_id, origin, "
+                "referer, last_request_message_id, last_request_creation_time, last_assistant_message_id, "
+                "created_at, last_active_at, delete_attempts) "
+                "values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+                row.threadId, row.sessionId, row.userAuthorId, row.agentAuthorId,
+                row.accountUserName, row.modelId, row.accountType, row.threadTypeId,
+                row.workspaceUacId, row.origin, row.referer, row.lastRequestMessageId,
+                row.lastRequestCreationTime, row.lastAssistantMessageId,
+                static_cast<int64_t>(row.createdAt), static_cast<int64_t>(row.lastActiveAt), row.deleteAttempts);
         } else {
             dbClient_->execSqlSync(
-                "update chaynsa_thread set session_id=$1, account_user_name=$2, origin=$3, referer=$4, "
-                "last_active_at=$5 where thread_id=$6",
-                row.sessionId, row.accountUserName, row.origin, row.referer,
+                "update chaynsa_thread set session_id=$1, user_author_id=$2, agent_author_id=$3, "
+                "account_user_name=$4, model_id=$5, account_type=$6, thread_type_id=$7, "
+                "workspace_uac_id=$8, origin=$9, referer=$10, last_request_message_id=$11, "
+                "last_request_creation_time=$12, last_assistant_message_id=$13, last_active_at=$14 "
+                "where thread_id=$15",
+                row.sessionId, row.userAuthorId, row.agentAuthorId, row.accountUserName,
+                row.modelId, row.accountType, row.threadTypeId, row.workspaceUacId,
+                row.origin, row.referer, row.lastRequestMessageId,
+                row.lastRequestCreationTime, row.lastAssistantMessageId,
                 static_cast<int64_t>(row.lastActiveAt), row.threadId);
         }
         return true;
@@ -238,8 +351,10 @@ std::vector<chaynsThreadDbManager::ThreadRow> chaynsThreadDbManager::loadThreads
     try {
         // 注意 last_active_at > 0 的保护：0 表示时间戳缺失，不能当成"极旧"误删刚建的线程。
         auto result = dbClient_->execSqlSync(
-            "select thread_id, session_id, account_user_name, origin, referer, "
-            "created_at, last_active_at, delete_attempts from chaynsa_thread "
+            "select thread_id, session_id, user_author_id, agent_author_id, account_user_name, model_id, "
+            "account_type, thread_type_id, workspace_uac_id, origin, referer, last_request_message_id, "
+            "last_request_creation_time, last_assistant_message_id, created_at, last_active_at, delete_attempts "
+            "from chaynsa_thread "
             "where last_active_at > 0 and last_active_at < $1 "
             "order by last_active_at asc limit $2",
             cutoffEpochSeconds, limit);
@@ -261,9 +376,10 @@ std::optional<chaynsThreadDbManager::ThreadRow> chaynsThreadDbManager::loadThrea
     if (!enabled_ || !dbClient_ || sessionId.empty()) return std::nullopt;
     try {
         auto result = dbClient_->execSqlSync(
-            "select thread_id, session_id, account_user_name, origin, referer, "
-            "created_at, last_active_at, delete_attempts from chaynsa_thread "
-            "where session_id=$1 limit 1",
+            "select thread_id, session_id, user_author_id, agent_author_id, account_user_name, model_id, "
+            "account_type, thread_type_id, workspace_uac_id, origin, referer, last_request_message_id, "
+            "last_request_creation_time, last_assistant_message_id, created_at, last_active_at, delete_attempts "
+            "from chaynsa_thread where session_id=$1 order by last_active_at desc limit 1",
             sessionId);
         if (result.empty()) return std::nullopt;
         return rowFromRecord(result[0]);
@@ -341,10 +457,85 @@ void chaynsThreadDbManager::submitWrite(const char* taskName, std::function<void
         LOG_ERROR << "[chayns线程DB] executor 未注入，数据未落盘：" << taskName;
         return;
     }
-    const auto result = executor_->submit(taskName, std::move(task));
-    if (result != TaskSubmitResult::Accepted) {
+
+    bool scheduleDrain = false;
+    {
+        std::lock_guard<std::mutex> lock(writeQueueMutex_);
+        if (pendingWrites_.size() >= kMaxPendingWrites) {
+            LOG_ERROR << "[chayns线程DB] 本地写穿队列已满(" << kMaxPendingWrites
+                      << ")，数据未落盘：" << taskName;
+            return;
+        }
+        pendingWrites_.push_back({taskName, std::move(task)});
+        if (!writeDrainScheduled_) {
+            writeDrainScheduled_ = true;
+            scheduleDrain = true;
+        }
+    }
+    if (!scheduleDrain) return;
+
+    // Each public async entry first obtains a shared owner.  Keep the same
+    // owner in the drain job so no queued write can outlive this context-owned
+    // ledger during shutdown.
+    const auto self = weak_from_this().lock();
+    if (!self) {
+        std::deque<PendingWrite> rejected;
+        {
+            std::lock_guard<std::mutex> lock(writeQueueMutex_);
+            pendingWrites_.swap(rejected);
+            writeDrainScheduled_ = false;
+        }
+        for (const auto& rejectedWrite : rejected) {
+            LOG_ERROR << "[chayns线程DB] 未由 shared_ptr 持有，数据未落盘："
+                      << rejectedWrite.name;
+        }
+        return;
+    }
+
+    const auto result = executor_->submit(
+        "chaynsThread.writeDrain", [self]() { self->drainWrites(); });
+    if (result == TaskSubmitResult::Accepted) return;
+
+    std::deque<PendingWrite> rejected;
+    {
+        std::lock_guard<std::mutex> lock(writeQueueMutex_);
+        // This drain never entered the executor, so every pending item was
+        // rejected together.  Clear them rather than leaving a permanently
+        // scheduled-but-never-running queue behind.
+        pendingWrites_.swap(rejected);
+        writeDrainScheduled_ = false;
+    }
+    for (const auto& rejectedWrite : rejected) {
         LOG_ERROR << "[chayns线程DB] 异步写穿任务入队被拒(" << toString(result)
-                  << ")，数据未落盘：" << taskName;
+                  << ")，数据未落盘：" << rejectedWrite.name;
+    }
+}
+
+void chaynsThreadDbManager::drainWrites()
+{
+    while (true) {
+        PendingWrite write;
+        {
+            std::lock_guard<std::mutex> lock(writeQueueMutex_);
+            if (pendingWrites_.empty()) {
+                writeDrainScheduled_ = false;
+                return;
+            }
+            write = std::move(pendingWrites_.front());
+            pendingWrites_.pop_front();
+        }
+
+        try {
+            write.task();
+        } catch (const std::exception& ex) {
+            // Individual tasks normally catch database exceptions themselves,
+            // but this guard ensures one unexpected throw cannot strand the
+            // remaining FIFO writes forever.
+            LOG_ERROR << "[chayns线程DB] 异步写穿任务异常(" << write.name
+                      << "): " << ex.what();
+        } catch (...) {
+            LOG_ERROR << "[chayns线程DB] 异步写穿任务未知异常(" << write.name << ")";
+        }
     }
 }
 

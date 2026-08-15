@@ -40,6 +40,14 @@ struct ProviderRequest {
     // upstream thread independently of application session storage.  Empty
     // means this invocation starts a new upstream conversation.
     std::string previousConversationId;
+    // A persisted session can retain the local key from immediately before a
+    // session-ID rotation. Providers may use this only as a fallback when the
+    // primary key has no durable upstream-context record.
+    std::string previousConversationFallbackId;
+    // The model from the persisted session before this request overwrote it.
+    // It validates legacy upstream-thread recovery whether or not the local
+    // session key itself rotated.
+    std::string previousConversationFallbackModel;
     std::string model;
     std::string systemPrompt;
     // `input` is the request-scoped prompt after application policy (for

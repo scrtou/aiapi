@@ -8,8 +8,9 @@
  * @brief session_st <-> Json 编解码（会话持久化快照）
  *
  * 设计约束：
- * - 全字段可逆：RequestData / ResponseData / SessionState / ProviderContext 四段全部覆盖，
- *   缺一个字段就会在重启恢复后表现为「上下文丢失」或「路由到错误的上游会话」。
+ * - 持久状态可逆：RequestData / ResponseData / SessionState / ProviderContext 的
+ *   durable 字段全部覆盖；仅本轮 materialize 使用的 recovery hint 不落盘。
+ *   缺持久字段会在重启恢复后表现为「上下文丢失」或「路由到错误的上游会话」。
  * - 向前兼容：decode 对缺失键一律回落到 session_st 的默认值，不因老快照缺字段而失败。
  * - 纯函数、无 IO：便于单元测试直接做 encode->decode 往返校验。
  */

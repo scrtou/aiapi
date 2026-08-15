@@ -6,6 +6,7 @@
 #include <infrastructure/provider/chayns/ChaynsMessageCorrelation.h>
 #include <infrastructure/provider/chayns/ChaynsModelCatalog.h>
 #include <infrastructure/provider/chayns/ChaynsPollingPolicy.h>
+#include <infrastructure/persistence/chaynsThread/IChaynsThreadLedger.h>
 #include <domain/port/IAccountSelector.h>
 #include <domain/port/IProviderModelCatalog.h>
 #include <domain/port/IProviderThreadContext.h>
@@ -25,8 +26,6 @@ constexpr int BASE_DELAY = 100;  // 轮询重试间隔（毫秒）
 constexpr int CONSECUTIVE_FAILS_BEFORE_SWITCH = 3;  // 连续失败n次后换账号
 constexpr int MAX_UPSTREAM_RETRIES = 4;  // 上游最大总重试次数（外层循环，每次创建新线程或换账号）
 
-class chaynsThreadDbManager;
-
 /**
  * Chayns P6 provider slice.
  *
@@ -42,7 +41,7 @@ class chaynsapi final : public provider::ProviderBase,
     chaynsapi(IAccountSelector& accountSelector,
               std::shared_ptr<chayns::IChaynsHttpTransport> transport,
               std::shared_ptr<chayns::IChaynsClock> clock,
-              std::shared_ptr<chaynsThreadDbManager> threadLedger = nullptr,
+              std::shared_ptr<chayns::IChaynsThreadLedger> threadLedger = nullptr,
               FailureObserver failureObserver = {});
     ~chaynsapi() override = default;
 
@@ -122,7 +121,7 @@ class chaynsapi final : public provider::ProviderBase,
     std::shared_ptr<chayns::IChaynsClock> m_clock;
     // Context-owned ledger; null is an explicit memory-only/degraded
     // configuration, never a fallback lookup of a global DB manager.
-    std::shared_ptr<chaynsThreadDbManager> m_threadLedger;
+    std::shared_ptr<chayns::IChaynsThreadLedger> m_threadLedger;
 
     std::map<std::string, ThreadContext> m_threadMap;
     std::mutex m_threadMapMutex;

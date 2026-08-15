@@ -4,6 +4,7 @@
 #include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
 #include <infrastructure/provider/chayns/ChaynsClock.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
+#include <infrastructure/persistence/chaynsThread/IChaynsThreadLedger.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
 #include <application/generation/continuity/ResponseIndex.h>
@@ -181,6 +182,46 @@ class FixtureChaynsTransport final : public chayns::IChaynsHttpTransport
     std::deque<ExpectedExchange> exchanges_;
 };
 
+class FixtureChaynsThreadLedger final : public chayns::IChaynsThreadLedger
+{
+  public:
+    bool isEnabled() const override { return enabled; }
+
+    std::optional<chayns::ThreadLedgerRow> loadThreadBySessionId(
+        const std::string& sessionId,
+        std::string*) override
+    {
+        loadedSessionIds.push_back(sessionId);
+        if (!row.has_value() || row->sessionId != sessionId) {
+            return std::nullopt;
+        }
+        return row;
+    }
+
+    void asyncUpsertThread(const chayns::ThreadLedgerRow& value) override
+    {
+        upserts.push_back(value);
+    }
+
+    void asyncDetachThreadBySessionId(const std::string& sessionId) override
+    {
+        detachedSessionIds.push_back(sessionId);
+    }
+
+    void asyncUpdateThreadSessionId(const std::string& oldSessionId,
+                                    const std::string& newSessionId) override
+    {
+        rotations.emplace_back(oldSessionId, newSessionId);
+    }
+
+    bool enabled = true;
+    std::optional<chayns::ThreadLedgerRow> row;
+    std::vector<std::string> loadedSessionIds;
+    std::vector<chayns::ThreadLedgerRow> upserts;
+    std::vector<std::string> detachedSessionIds;
+    std::vector<std::pair<std::string, std::string>> rotations;
+};
+
 class ChaynsFixtureAccountStore final : public IAccountStore
 {
   public:
@@ -255,11 +296,15 @@ provider::ProviderRequest makeProviderRequest(
     const std::string& model,
     const std::string& conversationId,
     const std::string& input,
-    const std::string& previousConversationId = {})
+    const std::string& previousConversationId = {},
+    const std::string& previousConversationFallbackId = {},
+    const std::string& previousConversationFallbackModel = {})
 {
     provider::ProviderRequest request;
     request.conversationId = conversationId;
     request.previousConversationId = previousConversationId;
+    request.previousConversationFallbackId = previousConversationFallbackId;
+    request.previousConversationFallbackModel = previousConversationFallbackModel;
     request.model = model;
     request.input = input;
     request.rawInput = input;
@@ -411,6 +456,102 @@ DROGON_TEST(ChaynsProvider_FollowupFixtureUsesExplicitPreviousConversationOfflin
     REQUIRE(transport->calledPaths.size() == 5);
     CHECK(transport->calledPaths[3] ==
           "/intercom-backend/v2/thread/<thread-1>/message");
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProvider_RestartHydratesPersistedThreadContextOffline)
+{
+    AccountManager accounts;
+    installAccount(accounts, "free");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("message-create.json");
+    transport->enqueue("poll-messages.json");
+
+    auto ledger = std::make_shared<FixtureChaynsThreadLedger>();
+    chayns::ThreadLedgerRow persisted;
+    persisted.threadId = "<thread-1>";
+    persisted.sessionId = "fixture-persisted-session";
+    persisted.userAuthorId = "<user-author>";
+    persisted.agentAuthorId = "<agent-author>";
+    persisted.accountUserName = "fixture-free-account";
+    persisted.modelId = "fixture-free-model";
+    persisted.accountType = "free";
+    persisted.threadTypeId = 8;
+    persisted.origin = "https://sidekick.ki";
+    persisted.referer = "https://sidekick.ki/";
+    ledger->row = persisted;
+
+    // This fresh provider has no m_threadMap entry, which models a process
+    // restart.  The follow-up must use the ledger record rather than create a
+    // new Chayns thread and replay the entire local history.
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock(), ledger);
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-after-restart",
+                            "synthetic follow-up question", "fixture-persisted-session"),
+        context);
+
+    REQUIRE(result.ok());
+    REQUIRE(transport->calledPaths.size() == 3);
+    CHECK(transport->calledPaths[1] ==
+          "/intercom-backend/v2/thread/<thread-1>/message");
+    CHECK(transport->remaining() == 0);
+    CHECK(transport->errors.empty());
+    REQUIRE(ledger->loadedSessionIds.size() == 1);
+    CHECK(ledger->loadedSessionIds[0] == "fixture-persisted-session");
+    REQUIRE(ledger->upserts.size() == 1);
+    CHECK(ledger->upserts[0].modelId == "fixture-free-model");
+    CHECK(ledger->upserts[0].threadId == "<thread-1>");
+}
+
+DROGON_TEST(ChaynsProvider_RestartMigratesLegacyLedgerUsingSessionFallbackOffline)
+{
+    AccountManager accounts;
+    installAccount(accounts, "free");
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("model-catalog.json");
+    transport->enqueue("message-create.json");
+    transport->enqueue("poll-messages.json");
+
+    auto ledger = std::make_shared<FixtureChaynsThreadLedger>();
+    // This is the schema used before durable provider-context fields were
+    // added.  It is bound to the pre-rotation key retained in the recovered
+    // session snapshot.
+    chayns::ThreadLedgerRow legacy;
+    legacy.threadId = "<thread-1>";
+    legacy.sessionId = "fixture-before-rotation";
+    legacy.accountUserName = "fixture-free-account";
+    legacy.origin = "https://sidekick.ki";
+    legacy.referer = "https://sidekick.ki/";
+    ledger->row = legacy;
+
+    chaynsapi provider(accounts, transport, chayns::makeRealChaynsClock(), ledger);
+    REQUIRE(provider.initialize().ok());
+    platform::CancellationSource cancellation;
+    const auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto result = provider.generate(
+        makeProviderRequest("fixture-free-model", "fixture-after-restart",
+                            "synthetic follow-up question", "fixture-current-session",
+                            "fixture-before-rotation", "fixture-free-model"),
+        context);
+
+    REQUIRE(result.ok());
+    REQUIRE(transport->calledPaths.size() == 3);
+    CHECK(transport->calledPaths[1] ==
+          "/intercom-backend/v2/thread/<thread-1>/message");
+    REQUIRE(ledger->loadedSessionIds.size() == 2);
+    CHECK(ledger->loadedSessionIds[0] == "fixture-current-session");
+    CHECK(ledger->loadedSessionIds[1] == "fixture-before-rotation");
+    REQUIRE(ledger->upserts.size() == 1);
+    CHECK(ledger->upserts[0].sessionId == "fixture-after-restart");
+    CHECK(ledger->upserts[0].modelId == "fixture-free-model");
+    CHECK(ledger->upserts[0].accountType == "free");
     CHECK(transport->remaining() == 0);
     CHECK(transport->errors.empty());
 }

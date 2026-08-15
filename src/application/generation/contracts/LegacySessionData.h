@@ -38,6 +38,11 @@ struct session_st
     struct ProviderContext
     {
         std::string prevProviderKey;
+        // Request-scoped restart recovery hints. They deliberately are not
+        // serialized: the durable snapshot's prevProviderKey/request.model
+        // are copied here only while a continuation is being materialized.
+        std::string prevProviderFallbackKey;
+        std::string prevProviderFallbackModel;
         std::string toolBridgeTrigger;
         toolcall::BridgeWireFormat toolBridgeFormat = toolcall::BridgeWireFormat::Unset;
         bool toolBridgeAllowFormatFallback = false;

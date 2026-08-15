@@ -51,6 +51,11 @@ bool ConfigDbManager::setValues(const std::map<std::string, std::string>&, std::
 void chaynsThreadDbManager::asyncUpsertThread(const ThreadRow&) {}
 void chaynsThreadDbManager::asyncDetachThreadBySessionId(const std::string&) {}
 void chaynsThreadDbManager::asyncUpdateThreadSessionId(const std::string&, const std::string&) {}
+std::optional<chaynsThreadDbManager::ThreadRow>
+chaynsThreadDbManager::loadThreadBySessionId(const std::string&, std::string*)
+{
+    return std::nullopt;
+}
 int chaynsThreadDbManager::purgeExhaustedThreads(int, std::string*) { return 0; }
 std::vector<chaynsThreadDbManager::ThreadRow>
 chaynsThreadDbManager::loadThreadsOlderThan(int64_t, int limit, std::string*)
