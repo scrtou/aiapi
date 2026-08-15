@@ -195,7 +195,6 @@
                 "gpt-4o-mini": true,
                 "legacy-compat-model": false
             },
-            "strict_sentinel_enabled_channels": [],
             "strict_sentinel_disabled_channels": [
                 "chaynsapi"
             ],
@@ -326,8 +325,8 @@
             "memory_expire_hours": 24,
             "memory_cleanup_interval_hours": 12,
             "db_retention_hours": 720,
-            "store_session_payload": false,
-            "store_response_body": false
+            "store_session_payload": true,
+            "store_response_body": true
         }
     }
 }
