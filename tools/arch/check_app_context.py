@@ -9,7 +9,9 @@ AppContext + AppWiring。搬完之后，五条关键性质全部只由「代码�
       这正是 G1 的同构复发点：从前 `return 1` 被 std::function<void()> 吞掉，
       现在若有人写成裸的 `appContext.build();`，进程会带着失败的 Store
       继续 run()。头文件上的 [[nodiscard]] 只在开了对应告警且没被 -Wno- 关掉
-      时才有效，且 `(void)appContext.build()` 能合法绕过它。
+      时才有效，且 `(void)appContext.build()` 能合法绕过它。Drogon 的 DB
+      client 在 run() 内创建，故 production build() 位于 BeginningAdvice；这
+      不改变「返回值必须据以停止启动」这一约束。
 
   A2  每个 addOwner 都必须落在某个已注册步骤内部，且与其启动动作同处一处。
       AppContext 的回滚正确性依赖「owners_ 里的东西恰好是已经起来的东西」。
@@ -33,6 +35,11 @@ AppContext + AppWiring。搬完之后，五条关键性质全部只由「代码�
       接线的唯一真相是 AppWiring；main.cc 里出现第二处注入，
       check_startup_wiring.py 反而会因为「在候选文件里找到了」而通过，
       两道门禁一起变瞎。
+
+  A6  production build() 必须位于 Drogon BeginningAdvice 中。
+      db_clients 的配置在 loadConfigFile() 时只被记录，真正的 DbClient 要到
+      app().run() 中才创建。把 build() 搬回 run() 前会让所有 DB Store 获得空
+      client 并失败；BeginningAdvice 又恰好位于 listener 开放之前，仍是启动屏障。
 
 所有判据都是**结构性**的，不看注释、不看命名，只看语法形状。
 盲区必须明说：本脚本是正则级的，不解析 C++。
@@ -185,6 +192,38 @@ def check_main_has_no_injection(src, problems):
                                 % (MAIN, i, name, WIRING))
 
 
+def check_build_waits_for_drogon_db_clients(src, problems):
+    """A6：build() 必须由 BeginningAdvice 包围，而非在 app().run() 之前执行。"""
+    marker = 'appContext.build()'
+    build_at = src.find(marker)
+    if build_at < 0:
+        # A1 会给出更详细的缺失诊断；此处不再重复。
+        return
+
+    advice_at = src.rfind('registerBeginningAdvice', 0, build_at)
+    if advice_at < 0:
+        problems.append('A6 %s 中 build() 不在 registerBeginningAdvice 内；'
+                        'Drogon DbClient 尚未创建就会访问 Store' % MAIN)
+        return
+    lambda_open = src.find('{', advice_at, build_at)
+    if lambda_open < 0:
+        problems.append('A6 %s 中找不到包围 build() 的 BeginningAdvice lambda' % MAIN)
+        return
+
+    depth = 0
+    for ch in src[lambda_open:build_at]:
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+    if depth <= 0:
+        problems.append('A6 %s 中 build() 已落在 BeginningAdvice lambda 之外；'
+                        'Drogon DbClient 生命周期会被破坏' % MAIN)
+    if src.find('drogon::app().run()', build_at) < 0:
+        problems.append('A6 %s 中 build() 后找不到 app().run()；'
+                        '无法保证 Drogon 的启动顺序' % MAIN)
+
+
 def check_thread_owners_registered(src, problems):
     """A5：登记册里的每个持线程 service，都要能在 AppWiring 中找到对应的 stop 调用。
 
@@ -221,6 +260,7 @@ def main():
     check_owner_inside_step(wiring_src, problems)
     check_absolute_deadline(main_src, problems)
     check_main_has_no_injection(main_src, problems)
+    check_build_waits_for_drogon_db_clients(main_src, problems)
     check_thread_owners_registered(wiring_src, problems)
 
     if problems:
@@ -233,6 +273,7 @@ def main():
     print('OK A2 全部 addOwner 均位于步骤内部')
     print('OK A3 shutdown() 使用绝对 deadline')
     print('OK A4 main.cc 未直接注入任何 Store')
+    print('OK A6 build() 位于 Drogon BeginningAdvice，DbClient 已创建且 listener 尚未开放')
     print('OK A5 %d 个持线程 runtime service 均已登记为 owner' % len(THREAD_OWNING_SERVICES))
     return 0
 

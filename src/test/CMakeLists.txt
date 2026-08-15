@@ -80,6 +80,7 @@ set(TEST_SOURCES
     test_background_task_queue_shutdown.cpp
     test_background_task_queue_budget_exceeded.cpp
     test_application_shutdown_harness.cpp
+    test_startup_db_client_lifecycle.cpp
     test_startup_result.cpp
     test_app_context.cpp
     test_cancellation.cpp
@@ -146,6 +147,15 @@ if (UNIX)
     target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE
         aiapi_runtime Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
+
+    # Drogon creates configured DbClient instances only after entering run().
+    # Keep this as an isolated process so its singleton app lifecycle cannot
+    # interfere with the main test runner's own Drogon event loop.
+    add_executable(aiapi_startup_db_client_fixture
+        support/startup_db_client_fixture.cpp)
+    aiapi_enable_coverage(aiapi_startup_db_client_fixture)
+    target_link_libraries(aiapi_startup_db_client_fixture PRIVATE Drogon::Drogon)
+    add_dependencies(${PROJECT_NAME} aiapi_startup_db_client_fixture)
 endif()
 
 if (COMMAND ParseAndAddDrogonTests)

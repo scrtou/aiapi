@@ -40,7 +40,24 @@ bool validateConfigFile(const std::string& path) {
         LOG_ERROR << "[配置校验]" << error;
     }
 
-    return validation.valid;
+    // 应用内所有必需 Store 都以此名字从 Drogon 取得 DB client。Drogon 在
+    // getDbClient() 查询不存在的名字时会把空指针插入内部 map；随后失败路径
+    // 调用 app().quit() 销毁该 map 会解引用空指针。这里在 run() 前 fail-fast，
+    // 同时把「配置不完整」和「数据库实际不可用」清楚地区分开。
+    bool hasRequiredDbClient = false;
+    if (root["db_clients"].isArray()) {
+        for (const auto& client : root["db_clients"]) {
+            if (client.isObject() && client.get("name", "").asString() == "aichatpg") {
+                hasRequiredDbClient = true;
+                break;
+            }
+        }
+    }
+    if (!hasRequiredDbClient) {
+        LOG_ERROR << "[配置校验]db_clients 必须配置 name=aichatpg 的数据库客户端";
+    }
+
+    return validation.valid && hasRequiredDbClient;
 }
 
 const Json::Value& getCustomConfig() {
@@ -183,45 +200,63 @@ int main() {
     // 记录服务启动时间（用于健康检查接口）
     const auto processStartTime = std::chrono::steady_clock::now();
 
-    // 这里只宣告「HTTP 开始受理」。后台队列的就绪与否不再由它表达——队列在
-    // build() 里已于 run() 之前同步启动，若在此打印「队列已就绪」，日志时序会
-    // 晚于事实，排查启动顺序问题时反而误导。
-    drogon::app().registerBeginningAdvice([](){
-        LOG_INFO << "[启动] HTTP 监听已就绪，开始受理请求";
-    });
-
     // ---- 启动接线（P4-W2）----
-    // 从前的写法是把整段初始化塞进 queueInLoop + BackgroundTaskQueue::enqueue 的
-    // 双层 lambda。代价有三：其一，enqueue 失败时那句 `return 1` 返回给的是
-    // trantor 的 std::function<void()>，返回值被丢弃，进程带着未建表的 Store
-    // 继续服务；其二，初始化跑在队列 worker 上，与 run() 并发，谁先谁后取决于
-    // 调度；其三，中途失败没有回滚，已起的线程留在原地。
+    // Drogon 直到 app().run() 内部才会根据 db_clients 创建 DbClient。因而不能
+    // 在调用 run() 前访问任何 DbManager；那会得到空 client，并把一个本应正常的
+    // 配置误判为启动失败。BeginningAdvice 在 DbClient 创建之后、监听 socket 开放
+    // 之前执行，正好提供所需的启动屏障：外部请求仍无法观察到半初始化服务。
     //
-    // 改为在 main 线程上同步 build()：失败即 return，且 AppContext 按登记逆序
-    // 回滚已启动的 owner。run() 之后的停机也复用同一份 owner 列表，不再有
-    // 「启动登记一处、停机硬编码另一处」的双份真相。
+    // 仍然只在主 event loop 同步 build()，而不是退回 queueInLoop + 后台队列的
+    // 双层 lambda。这样 StartupResult 仍被明确处理，失败会回滚已经启动的 owner，
+    // 并立即进入 Drogon 的 shutdown，而不会以半启动状态持续对外服务。
     lifecycle::AppContext appContext;
     lifecycle::registerApplicationSteps(
         appContext, drogon::app().getCustomConfig(), processStartTime);
 
-    const auto startup = appContext.build();
-    if (!startup.canProceed()) {
-        // stepsCompleted() 是已跑完的步骤数，失败时恰为失败步骤的 0-based 下标。
-        LOG_FATAL << "[启动] 第 " << appContext.stepsCompleted()
-                  << " 号步骤失败 code=" << lifecycle::toString(startup.error())
-                  << " detail=" << startup.detail()
-                  << "，已回滚 " << appContext.ownersStarted()
-                  << " 个已启动 owner，终止启动";
-        return 1;
-    }
-    // 降级不阻塞启动，但必须留痕：G8 的两处有意降级正是靠这里从「静默」变成「可见」。
-    for (const auto& reason : appContext.degradedReasons()) {
-        LOG_WARN << "[启动·降级] " << reason;
-    }
-    LOG_INFO << "[启动] 接线完成：" << appContext.stepsCompleted() << " 个步骤，"
-             << appContext.ownersStarted() << " 个后台 owner";
+    enum class StartupState { Pending, Succeeded, Failed };
+    StartupState startupState = StartupState::Pending;
+
+    drogon::app().registerBeginningAdvice([&appContext, &startupState]() {
+        const auto startup = appContext.build();
+        if (!startup.canProceed()) {
+            // stepsCompleted() 是已跑完的步骤数，失败时恰为失败步骤的 0-based 下标。
+            LOG_FATAL << "[启动] 第 " << appContext.stepsCompleted()
+                      << " 号步骤失败 code=" << lifecycle::toString(startup.error())
+                      << " detail=" << startup.detail()
+                      << "，已回滚 " << appContext.ownersStarted()
+                      << " 个已启动 owner，终止启动";
+            startupState = StartupState::Failed;
+            // BeginningAdvice 运行在 main event loop；quit() 会在本轮 advice
+            // 返回后停止 listener/DB/IO loop，避免短暂暴露一个失败的服务。
+            drogon::app().quit();
+            return;
+        }
+
+        // 降级不阻塞启动，但必须留痕：G8 的两处有意降级正是靠这里从「静默」变成「可见」。
+        for (const auto& reason : appContext.degradedReasons()) {
+            LOG_WARN << "[启动·降级] " << reason;
+        }
+        startupState = StartupState::Succeeded;
+        LOG_INFO << "[启动] 接线完成：" << appContext.stepsCompleted() << " 个步骤，"
+                 << appContext.ownersStarted() << " 个后台 owner";
+    });
+
+    // BeginningAdvice 按注册顺序运行；只有上一个启动屏障完成后才声明 HTTP 就绪。
+    drogon::app().registerBeginningAdvice([&startupState](){
+        if (startupState == StartupState::Succeeded) {
+            LOG_INFO << "[启动] HTTP 监听已就绪，开始受理请求";
+        }
+    });
 
     drogon::app().run();
+
+    if (startupState != StartupState::Succeeded) {
+        // build() 失败时已做过回滚；shutdown() 的幂等性让这里同时覆盖
+        // 「Drogon 尚未执行 beginning advice 就收到终止信号」这一极端路径。
+        appContext.shutdown(std::chrono::steady_clock::now() +
+                            std::chrono::seconds(kShutdownGraceSeconds));
+        return 1;
+    }
 
     // 优雅停机：顺序不再写在这里。
     //

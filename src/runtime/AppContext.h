@@ -84,10 +84,12 @@ struct RuntimeOwner
  *
  * AppContext 把这三件事收敛成一条线性时序：
  *
- *     配置 → build()  → run() → shutdown(deadline)
+ *     配置 → Drogon 创建 DB client → build() → 开放 listener → shutdown(deadline)
  *
- * build() 在**调用线程**上同步跑完全部步骤后才返回，因此 `run()` 之前的
- * happens-before 是构造性的，不再依赖「队列大概已经跑完了」这类假设。
+ * Drogon 的 DB client 只能在 `run()` 内部创建，所以 production main 把 build()
+ * 放在其 BeginningAdvice 中：它仍在主 event loop 同步跑完全部步骤，并且位于
+ * listener 开放之前。因此对外可见的 happens-before 是构造性的，不再依赖
+ * 「队列大概已经跑完了」这类假设。
  *
  * 本类不是单例：它由 main 在栈上持有，析构顺序因此是确定的（G7）。
  */
