@@ -4,7 +4,7 @@
 /**
  * @brief 账号的纯数据表示（Accountinfo_st 及其配套值类型）
  *
- * 从 accountManager/accountManager.h 抽出。原文件把纯数据 Accountinfo_st 与
+ * 从 application/account/accountManager.h 抽出。原文件把纯数据 Accountinfo_st 与
  * 带线程/DB/业务编排的 AccountManager 混装，导致 dbManager 的两个 DbManager
  * 头（只需要这个结构体做参数和返回值）被迫反向依赖整个 accountManager，
  * 形成 accountManager <--> dbManager 双向边。

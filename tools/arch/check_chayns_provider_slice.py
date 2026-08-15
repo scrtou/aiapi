@@ -23,12 +23,12 @@ CHAYNS_HEADER = SRC / "infrastructure/provider/chayns/chaynsapi.h"
 CHAYNS_CPP = SRC / "infrastructure/provider/chayns/chaynsapi.cpp"
 RETOOL_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
 WIRING = SRC / "runtime/AppWiring.cpp"
-GENERATION_PIPELINE = SRC / "sessionManager/core/GenerationPipeline.cpp"
-SESSION = SRC / "sessionManager/core/Session.cpp"
+GENERATION_PIPELINE = SRC / "application/generation/core/GenerationPipeline.cpp"
+SESSION = SRC / "application/generation/core/Session.cpp"
 REAPER = SRC / "infrastructure/provider/chayns/chaynsThreadReaper.cpp"
 REGISTRY_PORT = SRC / "domain/port/IProviderRegistry.h"
 EXECUTION_GATE = SRC / "domain/port/IExecutionGate.h"
-SESSION_GATE = SRC / "sessionManager/core/SessionExecutionGate.h"
+SESSION_GATE = SRC / "application/generation/core/SessionExecutionGate.h"
 FIXTURE_TEST = SRC / "test/test_chayns_provider_fixture.cpp"
 REGISTRY_TEST = SRC / "test/test_provider_registry_port.cpp"
 
@@ -159,7 +159,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     # Model and upstream-thread ownership are separate capabilities. Session
     # cleanup/rebind and the reaper must never rediscover a provider through a
     # wide port.
-    if "findModelCatalog(provider)" not in read(SRC / "sessionManager/core/AiApiUseCase.cpp"):
+    if "findModelCatalog(provider)" not in read(SRC / "application/generation/core/AiApiUseCase.cpp"):
         errors.append("AiApiUseCase does not resolve the narrow model catalog")
     if "findThreadContext(providerName)" not in session:
         errors.append("Session thread cleanup/transfer must use IProviderThreadContext")

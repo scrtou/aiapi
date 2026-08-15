@@ -4,7 +4,7 @@
  */
 
 #include <drogon/drogon_test.h>
-#include <sessionManager/continuity/ResponseIndex.h>
+#include <application/generation/continuity/ResponseIndex.h>
 #include <thread>
 #include <sstream>
 

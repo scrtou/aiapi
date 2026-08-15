@@ -2,8 +2,8 @@
 #include <runtime/AppContext.h>
 #include <runtime/AppWiring.h>
 #include <infrastructure/config/ConfigValidator.h>
-#include <controllers/AdminAuthFilter.h>
-#include <controllers/RateLimitFilter.h>
+#include <transport/controllers/AdminAuthFilter.h>
+#include <transport/controllers/RateLimitFilter.h>
 #include <chrono>
 #include <execinfo.h>
 #include <fstream>

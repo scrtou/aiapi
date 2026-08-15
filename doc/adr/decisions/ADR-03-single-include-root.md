@@ -11,7 +11,7 @@
 
 ```cpp
 #include <domain/model/SessionData.h>
-#include <sessionManager/core/Session.h>
+#include <application/generation/core/Session.h>
 ```
 
 禁止依赖“当前目录恰好在 include path”而写 `#include "Session.h"`，也禁止 `../` 跨目录引用。

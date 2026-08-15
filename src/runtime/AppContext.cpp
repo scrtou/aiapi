@@ -1,21 +1,21 @@
 #include <runtime/AppContext.h>
 
-#include <accountManager/accountManager.h>
-#include <channelManager/channelManager.h>
-#include <dbManager/account/accountBackupDbManager.h>
-#include <dbManager/account/accountDbManager.h>
-#include <dbManager/channel/channelDbManager.h>
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
-#include <dbManager/config/ConfigDbManager.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
-#include <dbManager/metrics/StatusDbManager.h>
-#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
-#include <dbManager/session/SessionDbManager.h>
+#include <application/account/accountManager.h>
+#include <application/channel/channelManager.h>
+#include <infrastructure/persistence/account/accountBackupDbManager.h>
+#include <infrastructure/persistence/account/accountDbManager.h>
+#include <infrastructure/persistence/channel/channelDbManager.h>
+#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
+#include <infrastructure/persistence/config/ConfigDbManager.h>
+#include <infrastructure/persistence/metrics/ErrorStatsDbManager.h>
+#include <infrastructure/persistence/metrics/StatusDbManager.h>
+#include <infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <infrastructure/persistence/session/SessionDbManager.h>
 #include <infrastructure/provider/chayns/chaynsThreadReaper.h>
 #include <drogon/drogon.h>
-#include <metrics/ErrorStatsService.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <sessionManager/core/Session.h>
+#include <infrastructure/metrics/ErrorStatsService.h>
+#include <application/workspace/RetoolWorkspaceManager.h>
+#include <application/generation/core/Session.h>
 #include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <utility>

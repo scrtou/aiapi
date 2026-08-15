@@ -26,7 +26,7 @@ timeout，不能声称“天然可取消”。
   `infrastructure/account/DrogonAccountHttpTransport` 是具体 Drogon adapter；
 - `AppWiring` 读取 `custom_config` 后按值注入 Account workflow 与 `AiApiUseCase`，后台 application
   path 不回查 Drogon runtime；
-- `IoLoopResponseStream` 位于 `controllers/sinks/`，是 worker 回到 Drogon event loop 的唯一 adapter；
+- `IoLoopResponseStream` 位于 `transport/controllers/sinks/`，是 worker 回到 Drogon event loop 的唯一 adapter；
 - Chayns/Retool 的同步 HTTP、轮询和 clock/sleep 均在 infrastructure，并受 deadline/cancellation
   contract 和 fixture 覆盖。
 

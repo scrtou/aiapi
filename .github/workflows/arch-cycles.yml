@@ -47,10 +47,10 @@ jobs:
       - name: R4 - layer boundary (domain only depends on platform)
         run: python3 tools/arch/check_cycles.py --layer-rules tools/arch/layer-rules.json
 
-      # dbManager 直接依赖棘轮（退出码 4）。前三道都看不见这类退化：
-      # 业务层 -> dbManager 是单向边不成环；模块粒度的 layer-rules 又早已放行它。
-      # 文件粒度才拦得住「在已白名单模块里追加 include」这条侵蚀通道。
-      - name: R4 - dbManager include ratchet (file-level)
+      # persistence 直接依赖棘轮（退出码 4）。前三道都看不见 infrastructure 内部
+      # provider/reaper -> persistence 的单向退化；模块粒度 layer-rules 同层放行，
+      # 文件粒度才拦得住「在已白名单目录里追加 include」这条侵蚀通道。
+      - name: R4 - persistence include ratchet (file-level)
         run: python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
 
       # 启动接线（退出码 4）。这道守的是单元测试结构上覆盖不到的地方：
@@ -98,6 +98,15 @@ jobs:
       # 已删除的 aiapi_legacy target/source list。
       - name: P8 - layered target DAG (no legacy)
         run: python3 tools/arch/check_target_layers.py --require-no-legacy
+
+      # P8-W2：target owner 正确还不够。历史顶层目录一旦保留，新的实现很容易
+      # 在错误物理层落盘而不改变 link 边；此 gate 同时拒绝旧目录复活，并核对每个
+      # 正式 CMake source list 的实现均位于其对应层目录。
+      - name: P8-W2 - physical source layout
+        run: python3 tools/arch/check_physical_layout.py
+
+      - name: P8-W2 - physical source layout gate selftest
+        run: python3 tools/arch/check_physical_layout.py --selftest
 
       # ADR-09 is intentionally separate from the CMake DAG gate.  All
       # targets share src/ as an include root, so a framework type can leak
@@ -321,8 +330,8 @@ jobs:
           PROBE_TMP="$(mktemp -d)"
           restore_probes() {
             [ -f "$PROBE_TMP"/probe_i.bak ] && cp "$PROBE_TMP"/probe_i.bak src/infrastructure/executor/BackgroundTaskQueue.h
-            [ -f "$PROBE_TMP"/probe_i2.bak ] && cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
-            [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
+            [ -f "$PROBE_TMP"/probe_i2.bak ] && cp "$PROBE_TMP"/probe_i2.bak src/transport/controllers/ChannelController.cc
+            [ -f "$PROBE_TMP"/probe_a.bak ] && cp "$PROBE_TMP"/probe_a.bak src/application/workspace/RetoolWorkspaceManager.cpp
             [ -f "$PROBE_TMP"/probe_c.bak ] && cp "$PROBE_TMP"/probe_c.bak src/runtime/AppWiring.cpp
             [ -f "$PROBE_TMP"/probe_d.bak ] && cp "$PROBE_TMP"/probe_d.bak src/runtime/AppWiring.cpp
             rm -f src/domain/__selftest_probe.h src/test/__selftest_probe.cpp \
@@ -337,7 +346,7 @@ jobs:
 
           # 探针会临时改写真实源文件。复原是否成功，必须用「跑前/跑后」快照来断言。
           probe_snapshot() {
-            md5sum src/retoolWorkspace/RetoolWorkspaceManager.cpp src/main.cc src/CMakeLists.txt 2>&1
+            md5sum src/application/workspace/RetoolWorkspaceManager.cpp src/main.cc src/CMakeLists.txt 2>&1
             md5sum src/runtime/AppWiring.cpp src/runtime/AppContext.h 2>&1
             find src/domain src/test -type f 2>/dev/null | sort | xargs -r md5sum 2>&1
             find src -maxdepth 1 -type f -name '*selftest_probe*' 2>/dev/null | \
@@ -345,13 +354,13 @@ jobs:
           }
           snapshot_before=$(probe_snapshot)
 
-          echo '--- probe A: business layer adds direct dbManager include -> expect rc=4 ---'
-          cp src/retoolWorkspace/RetoolWorkspaceManager.cpp "$PROBE_TMP"/probe_a.bak
-          sed -i '2i #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>' \
-            src/retoolWorkspace/RetoolWorkspaceManager.cpp
-          assert_mutated probe_a "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp && \
+          echo '--- probe A: business layer adds direct persistence include -> expect rc=4 ---'
+          cp src/application/workspace/RetoolWorkspaceManager.cpp "$PROBE_TMP"/probe_a.bak
+          sed -i '2i #include <infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.h>' \
+            src/application/workspace/RetoolWorkspaceManager.cpp
+          assert_mutated probe_a "$PROBE_TMP"/probe_a.bak src/application/workspace/RetoolWorkspaceManager.cpp && \
             expect_rc 4 python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
-          cp "$PROBE_TMP"/probe_a.bak src/retoolWorkspace/RetoolWorkspaceManager.cpp
+          cp "$PROBE_TMP"/probe_a.bak src/application/workspace/RetoolWorkspaceManager.cpp
 
           echo '--- probe B: domain/ gains an outgoing edge -> expect rc=3 ---'
           printf '#pragma once\n#include "RetoolWorkspaceManager.h"\n' > src/domain/__selftest_probe.h
@@ -459,10 +468,10 @@ jobs:
           echo '--- probe I2: executor result bound but never read -> expect rc=4 ---'
           # 仅校验头文件属性是不够的：真正的退化发生在调用点。
           # 缺这一条，「只看 [[nodiscard]] 存不存在」的退化判据会全绿通过。
-          cp src/controllers/ChannelController.cc "$PROBE_TMP"/probe_i2.bak
+          cp src/transport/controllers/ChannelController.cc "$PROBE_TMP"/probe_i2.bak
           python3 - <<'PROBE_I2'
           import io, re
-          p = 'src/controllers/ChannelController.cc'
+          p = 'src/transport/controllers/ChannelController.cc'
           lines = io.open(p, encoding='utf-8').read().splitlines(True)
           idx = next((i for i, l in enumerate(lines)
                       if re.search(r'auto\s+\w+\s*=.*->submit\s*\(', l)), -1)
@@ -474,9 +483,9 @@ jobs:
                               'const auto ignoredProbe =', lines[idx])
           io.open(p, 'w', encoding='utf-8', newline='').writelines(lines)
           PROBE_I2
-          assert_mutated probe_i2 "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc && \
+          assert_mutated probe_i2 "$PROBE_TMP"/probe_i2.bak src/transport/controllers/ChannelController.cc && \
             expect_rc 4 python3 tools/arch/check_enqueue_result.py
-          cp "$PROBE_TMP"/probe_i2.bak src/controllers/ChannelController.cc
+          cp "$PROBE_TMP"/probe_i2.bak src/transport/controllers/ChannelController.cc
 
           echo '--- probe J1: build() result discarded -> expect rc=4 ---'
           # G1 的同构复发：从前是 std::function<void()> 吞掉 return 1，

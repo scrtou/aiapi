@@ -10,14 +10,14 @@ FAIL = 4
 errors = []
 
 for relative in (
-    "accountManager/accountManager.cpp",
-    "accountManager/AccountSelector.cpp",
-    "accountManager/AccountTokenWorkflow.cpp",
-    "accountManager/AccountRegistrationWorkflow.cpp",
-    "accountManager/AccountHealthWorkflow.cpp",
-    "accountManager/AccountWorkers.cpp",
-    "accountManager/AccountRegistrationStateMachine.cpp",
-    "accountManager/AccountWorkflowSupport.cpp",
+    "application/account/accountManager.cpp",
+    "application/account/AccountSelector.cpp",
+    "application/account/AccountTokenWorkflow.cpp",
+    "application/account/AccountRegistrationWorkflow.cpp",
+    "application/account/AccountHealthWorkflow.cpp",
+    "application/account/AccountWorkers.cpp",
+    "application/account/AccountRegistrationStateMachine.cpp",
+    "application/account/AccountWorkflowSupport.cpp",
     "application/account/AccountAdminUseCase.cpp",
     "infrastructure/provider/chayns/chaynsapi.cpp",
 ):
@@ -48,7 +48,7 @@ for needle in (
     if needle not in wiring:
         errors.append(f"runtime account wiring missing: {needle}")
 
-account_header = (SRC / "accountManager/accountManager.h").read_text(errors="replace")
+account_header = (SRC / "application/account/accountManager.h").read_text(errors="replace")
 if "public IAccountSelector" not in account_header:
     errors.append("AccountManager no longer implements the narrow IAccountSelector port")
 if re.search(r"static\s+AccountManager\s*&\s*getInstance\s*\(", account_header):
@@ -57,7 +57,7 @@ if re.search(r"static\s+AccountManager\s*&\s*getInstance\s*\(", account_header):
 chayns_header = (SRC / "infrastructure/provider/chayns/chaynsapi.h").read_text(errors="replace")
 if "IAccountSelector& accountSelector" not in chayns_header:
     errors.append("chaynsapi no longer requires an injected IAccountSelector")
-if "accountManager/accountManager.h" in chayns_header:
+if "application/account/accountManager.h" in chayns_header:
     errors.append("chaynsapi still includes concrete AccountManager")
 if re.search(r"static\s+AccountAdminUseCase\b", wiring):
     errors.append("AppWiring still keeps AccountAdminUseCase as a function-static object")

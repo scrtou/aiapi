@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/AccountJsonCodec.h>
-#include <controllers/codecs/ChannelJsonCodec.h>
-#include <retoolWorkspace/RetoolWorkspaceJsonCodec.h>
+#include <transport/controllers/codecs/AccountJsonCodec.h>
+#include <transport/controllers/codecs/ChannelJsonCodec.h>
+#include <infrastructure/codec/RetoolWorkspaceJsonCodec.h>
 
 DROGON_TEST(AccountJsonCodec_RoundTripsCurrentWireFields)
 {

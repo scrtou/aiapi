@@ -23,9 +23,9 @@ SRC = ROOT / "src"
 CMAKE = SRC / "CMakeLists.txt"
 FAIL = 4
 
-REQUEST_ADAPTERS_H = SRC / "sessionManager/core/RequestAdapters.h"
-REQUEST_ADAPTERS_CPP = SRC / "sessionManager/core/RequestAdapters.cpp"
-ACCOUNT_HTTP_PORT = SRC / "accountManager/AccountHttpTransport.h"
+REQUEST_ADAPTERS_H = SRC / "application/generation/core/RequestAdapters.h"
+REQUEST_ADAPTERS_CPP = SRC / "application/generation/core/RequestAdapters.cpp"
+ACCOUNT_HTTP_PORT = SRC / "domain/port/IAccountHttpTransport.h"
 ACCOUNT_HTTP_ADAPTER = SRC / "infrastructure/account/DrogonAccountHttpTransport.cpp"
 WIRING = SRC / "runtime/AppWiring.cpp"
 

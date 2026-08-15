@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <managedAccount/service/ManagedAccountService.h>
+#include <infrastructure/managedAccount/service/ManagedAccountService.h>
 
 namespace {
 

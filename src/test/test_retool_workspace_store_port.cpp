@@ -1,9 +1,9 @@
 #include <drogon/drogon_test.h>
 
-#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <retoolWorkspace/RetoolWorkspaceService.h>
+#include <application/workspace/RetoolWorkspaceManager.h>
+#include <infrastructure/workspace/RetoolWorkspaceService.h>
 
 #include <memory>
 #include <stdexcept>

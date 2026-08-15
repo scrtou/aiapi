@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/accountManager.h>
+#include <application/account/accountManager.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
 

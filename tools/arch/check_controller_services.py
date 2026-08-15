@@ -15,12 +15,12 @@ FAIL = 4
 errors = []
 
 clean_controllers = (
-    "controllers/ChannelController.cc",
-    "controllers/HealthController.cc",
-    "controllers/MetricsController.cc",
-    "controllers/RetoolWorkspaceController.cc",
-    "controllers/AccountController.cc",
-    "controllers/AiApiController.cc",
+    "transport/controllers/ChannelController.cc",
+    "transport/controllers/HealthController.cc",
+    "transport/controllers/MetricsController.cc",
+    "transport/controllers/RetoolWorkspaceController.cc",
+    "transport/controllers/AccountController.cc",
+    "transport/controllers/AiApiController.cc",
 )
 
 # P5-W3 removed Controller service locators.  Keep a directory scan so a newly
@@ -40,12 +40,12 @@ for relative in sorted(set(clean_controllers) | set(scanned_controllers)):
 
 # Every business Controller is closed over exactly one controller-facing port.
 management = {
-    "controllers/AccountController.h": "domain/port/IAccountAdminUseCase.h",
-    "controllers/ChannelController.h": "domain/port/IChannelAdminUseCase.h",
-    "controllers/HealthController.h": "domain/port/IHealthUseCase.h",
-    "controllers/MetricsController.h": "domain/port/IMetricsUseCase.h",
-    "controllers/RetoolWorkspaceController.h": "domain/port/IRetoolWorkspaceAdminUseCase.h",
-    "controllers/AiApiController.h": "domain/port/IAiApiUseCase.h",
+    "transport/controllers/AccountController.h": "domain/port/IAccountAdminUseCase.h",
+    "transport/controllers/ChannelController.h": "domain/port/IChannelAdminUseCase.h",
+    "transport/controllers/HealthController.h": "domain/port/IHealthUseCase.h",
+    "transport/controllers/MetricsController.h": "domain/port/IMetricsUseCase.h",
+    "transport/controllers/RetoolWorkspaceController.h": "domain/port/IRetoolWorkspaceAdminUseCase.h",
+    "transport/controllers/AiApiController.h": "domain/port/IAiApiUseCase.h",
 }
 for relative, expected_port in management.items():
     text = (SRC / relative).read_text(errors="replace")
@@ -55,13 +55,13 @@ for relative, expected_port in management.items():
 # Explicitly ban the pre-facade collaborators from Controller headers.  Codec,
 # sink and HTTP-stream includes remain allowed because they are wire adaptation.
 for relative, forbidden in {
-    "controllers/ChannelController.h": (
+    "transport/controllers/ChannelController.h": (
         "IAccountCatalog.h", "IChannelCatalog.h", "IBackgroundExecutor.h"),
-    "controllers/HealthController.h": (
+    "transport/controllers/HealthController.h": (
         "IAccountStore.h", "IAccountCatalog.h", "IProviderRegistry.h"),
-    "controllers/MetricsController.h": ("IMetricsQuery.h",),
-    "controllers/RetoolWorkspaceController.h": ("IRetoolWorkspaceUseCase.h",),
-    "controllers/AiApiController.h": (
+    "transport/controllers/MetricsController.h": ("IMetricsQuery.h",),
+    "transport/controllers/RetoolWorkspaceController.h": ("IRetoolWorkspaceUseCase.h",),
+    "transport/controllers/AiApiController.h": (
         "IProviderRegistry.h", "IResponseIndex.h", "IExecutionGate.h",
         "IBackgroundExecutor.h", "IChannelCatalog.h", "GenerationService.h",
         "RequestAdapters.h", "Session.h"),
@@ -71,8 +71,8 @@ for relative, forbidden in {
         if header in text:
             errors.append(f"{relative}: direct collaborator include revived: {header}")
 
-ai_header = (SRC / "controllers/AiApiController.h").read_text(errors="replace")
-ai_cpp = (SRC / "controllers/AiApiController.cc").read_text(errors="replace")
+ai_header = (SRC / "transport/controllers/AiApiController.h").read_text(errors="replace")
+ai_cpp = (SRC / "transport/controllers/AiApiController.cc").read_text(errors="replace")
 for needle in (
     "static void setUseCase(aiapi::IAiApiUseCase* useCase)",
     "static aiapi::IAiApiUseCase* useCase_",

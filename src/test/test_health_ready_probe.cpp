@@ -3,7 +3,7 @@
 #include <drogon/HttpResponse.h>
 
 #include <application/health/HealthUseCase.h>
-#include <controllers/HealthController.h>
+#include <transport/controllers/HealthController.h>
 #include <domain/port/IAccountCatalog.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IProviderRegistry.h>

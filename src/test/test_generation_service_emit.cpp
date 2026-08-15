@@ -1,5 +1,5 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/contracts/IResponseSink.h>
+#include <application/generation/contracts/IResponseSink.h>
 namespace {
 
 class CollectingSink : public IResponseSink {

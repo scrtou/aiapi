@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <channelManager/channelManager.h>
+#include <application/channel/channelManager.h>
 #include <domain/port/IChannelStore.h>
 
 #include <list>

@@ -2,7 +2,7 @@
 
 #include <infrastructure/provider/ProviderBase.h>
 #include <infrastructure/provider/ProviderRegistry.h>
-#include <sessionManager/core/Session.h>
+#include <application/generation/core/Session.h>
 
 #include <memory>
 #include <utility>

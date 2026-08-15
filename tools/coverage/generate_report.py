@@ -36,7 +36,7 @@ TARGETS = [
     },
     {
         "name": "Generation pipeline request/provider/commit",
-        "file": "src/sessionManager/core/GenerationPipeline.cpp",
+        "file": "src/application/generation/core/GenerationPipeline.cpp",
         "functions": [
             "generation::GenerationPipeline::run(",
             "generation::GenerationPipeline::execute(",
@@ -45,35 +45,35 @@ TARGETS = [
     },
     {
         "name": "Generation response decode/normalize/emit",
-        "file": "src/sessionManager/core/GenerationResponsePipeline.cpp",
+        "file": "src/application/generation/core/GenerationResponsePipeline.cpp",
         "functions": [
             "generation::GenerationResponsePipeline::emit(",
         ],
     },
     {
         "name": "Generation tool bridge request transform",
-        "file": "src/sessionManager/tooling/ToolDefinitionEncoder.cpp",
+        "file": "src/application/generation/tooling/ToolDefinitionEncoder.cpp",
         "functions": [
             "toolcall::transformRequestForToolBridge(",
         ],
     },
     {
         "name": "Generation tool argument normalization",
-        "file": "src/sessionManager/tooling/ToolCallNormalizer.cpp",
+        "file": "src/application/generation/tooling/ToolCallNormalizer.cpp",
         "functions": [
             "toolcall::normalizeToolCallArguments(",
         ],
     },
     {
         "name": "Generation forced tool fallback",
-        "file": "src/sessionManager/tooling/ForcedToolCallGenerator.cpp",
+        "file": "src/application/generation/tooling/ForcedToolCallGenerator.cpp",
         "functions": [
             "toolcall::generateForcedToolCall(",
         ],
     },
     {
         "name": "Account selection/invalidation/pool rebuild",
-        "file": "src/accountManager/AccountSelector.cpp",
+        "file": "src/application/account/AccountSelector.cpp",
         "functions": [
             "AccountManager::getAccount(",
             "AccountManager::getEligibleAccount(",
@@ -87,7 +87,7 @@ TARGETS = [
     },
     {
         "name": "Account registration rollback",
-        "file": "src/accountManager/AccountRegistrationWorkflow.cpp",
+        "file": "src/application/account/AccountRegistrationWorkflow.cpp",
         "functions": [
             "AccountManager::rollbackWaitingAccount(",
             "AccountManager::autoRegisterAccount(",
@@ -95,7 +95,7 @@ TARGETS = [
     },
     {
         "name": "Account token refresh",
-        "file": "src/accountManager/AccountTokenWorkflow.cpp",
+        "file": "src/application/account/AccountTokenWorkflow.cpp",
         "functions": [
             "AccountManager::checkToken(",
         ],
@@ -111,12 +111,12 @@ TARGETS = [
     },
     {
         "name": "Account worker interrupt/join",
-        "file": "src/accountManager/AccountWorkers.cpp",
+        "file": "src/application/account/AccountWorkers.cpp",
         "functions": ["AccountManager::stopBackgroundThreads("],
     },
     {
         "name": "Session cleaner interrupt/join",
-        "file": "src/sessionManager/core/Session.cpp",
+        "file": "src/application/generation/core/Session.cpp",
         "functions": ["chatSession::stopClearExpiredSession("],
     },
     {
@@ -126,7 +126,7 @@ TARGETS = [
     },
     {
         "name": "Streaming disconnect boundary",
-        "file": "src/controllers/sinks/IoLoopResponseStream.h",
+        "file": "src/transport/controllers/sinks/IoLoopResponseStream.h",
         "functions": [
             "IoLoopResponseStream::send(",
             "IoLoopResponseStream::sendInLoop(",
@@ -135,7 +135,7 @@ TARGETS = [
     },
     {
         "name": "HTTP Controller Chat/Responses route edge",
-        "file": "src/controllers/AiApiController.cc",
+        "file": "src/transport/controllers/AiApiController.cc",
         "functions": [
             "AiApiController::chaynsapichat(",
             "AiApiController::responsesCreate(",

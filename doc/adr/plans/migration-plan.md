@@ -23,7 +23,7 @@
 | 模块依赖环 | ✅ | `check_cycles.py` 当前为 0 环 |
 | layer rules 基础门禁 | ✅ | 当前检查通过 |
 | 架构审计 v4 口径 | ✅ | 直接/显式 test owner；覆盖 `.cc`；不再把 production owner 误称为 test-linked |
-| 可复现架构基线 | ✅ | P8 实现提交后的 clean snapshot 生成；CI 拒绝 `git.dirty != false` 的 baseline |
+| 可复现架构基线 | ✅ | P8-W2 clean snapshot 作为实现提交后的独立 machine baseline 生成；CI 拒绝 `git.dirty != false` |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
 | 独立 CMake libraries | ✅ | 六个正式 target 唯一拥有全部 89 个 production implementation；`aiapi_legacy` 与 source list 已在 P8 删除 |
@@ -32,9 +32,11 @@
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
 | Provider 瘦端口 | ✅ | P6-W2/W3 已将 Chayns 与 Retool 迁入 Result/ProviderBase 窄端口；`APIinterface`、legacy registry lane 与 Provider session aggregate 出口均已删除 |
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
+| `src/` 物理目录与 target 一致 | ✅ | P8-W2：历史顶层目录已迁入六个正式层，physical-layout gate 与 selftest 已加入 CI |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**RFC-001 已实施：P0-W1 至 P8-W1 均已完成，当前没有活跃重构工作项。后续变更须建立新的 RFC/工作项。**
+**P8-W2（物理目录收口）已 DONE。P8-W1 的 target/DAG、P8-W2 的物理树/CI gate/完整验证及干净 audit baseline
+共同构成 RFC-001 的完成证据；RFC-001 已实施。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
@@ -56,7 +58,7 @@ service 改为显式构造，Retool Provider 的账号上下文、workspace usag
 DB store 均为 AppContext-owned 的显式对象。
 
 最后的 AI transport seam 由 `domain/port/IAiApiUseCase.h` 收口。`AiApiController` 只保留 HTTP/JSON
-校验、provider 路径推断以及 JSON/SSE sink 适配；`sessionManager/core/AiApiUseCase` 独占请求规范化、
+校验、provider 路径推断以及 JSON/SSE sink 适配；`application/generation/core/AiApiUseCase` 独占请求规范化、
 queue admission、遗留 `GenerationService` 调用、provider model catalog 与 Responses index 的读/删/持久化。
 port 以序列化 JSON 和值对象穿过 domain 边界，不把 JsonCpp/Drogon 引入 domain；Responses JSON/SSE sink
 在成功完成时提供持久化 record。AppWiring 创建该 facade，AppContext 持有它，并在 rollback/shutdown 前
@@ -118,12 +120,17 @@ fake-HTTP lifecycle、worker regression。397/397 `ctest`、直接 runner 397 ca
 
 P8-W1 已收口：`aiapi_legacy` 与全部 transition source owner 已删除，89 个 production implementation
 由 platform/domain/application/infrastructure/transport/runtime 六个正式 target 唯一拥有；ProviderResult/
-重复 ErrorCode compatibility 和历史目录 debt 已清理。ADR-09 现在由 framework-neutral Account HTTP DTO、
-infrastructure Drogon adapter、transport header/JSON copy 和 runtime-config 显式接线共同落实。Debug、coverage
-与 ASan+UBSan 均为 396/396 PASS；TSan 全绿（396 cases / 2075 assertions、0 data race），停机专项与五类
-SIGTERM harness 均为 5/5；30/30 架构/迁移 gate 通过。完整记录见
-[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)。P8 实现提交后从干净工作树生成
-新的 audit baseline 并单独提交，RFC-001 至此完成。
+重复 ErrorCode compatibility 已清理。ADR-09 现在由 framework-neutral Account HTTP DTO、infrastructure
+Drogon adapter、transport header/JSON copy 和 runtime-config 显式接线共同落实。其 Debug、coverage、
+ASan+UBSan、TSan、停机专项和当时的架构 gate 证据记录在
+[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)。
+
+P8-W2 已收口：P8-W1 的 source owner 只约束 CMake target，不能证明源码位于其正式物理层，因此本项将
+`accountManager/`、`channelManager/`、`sessionManager/`、`dbManager/`、`managedAccount/`、`metrics/`、
+`retoolWorkspace/` 和 `controllers/` 等历史顶层职责迁入 `application/`、`infrastructure/`、`transport/`；
+`check_physical_layout.py` 与 CI selftest 现在阻止旧根目录及错误层 source 复活。完整设计、验证和回滚记录见
+[`P08-physical-layout.md`](../work-products/P08-physical-layout.md)；新的 audit baseline 在干净实现提交后作为
+独立 machine snapshot 保存。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 
@@ -494,7 +501,7 @@ Retry、timeout、error mapping、metrics、polling 的协议细节继续使用�
 | `afterResponseProcess` | 已删除（没有独立业务语义） |
 | `eraseChatinfoMap/transferThreadContext` | `IProviderThreadContext`，由 Session 显式调用 |
 
-迁移完成的 Provider 不得再 include `sessionManager/core/Session.h`，不得访问 ApiManager、AccountManager
+迁移完成的 Provider 不得再 include `application/generation/core/Session.h`，不得访问 ApiManager、AccountManager
 或任何 DB singleton。
 
 ---
@@ -544,17 +551,24 @@ characterization 通过后允许整体替换，但必须保持同一 port contra
 
 ---
 
-## 阶段 8 · 收口（已完成）
+## 阶段 8 · 收口（DONE）
+
+### P8-W1 · target/DAG 收口（DONE）
 
 - [x] 运行 `check_target_layers.py --require-no-legacy` 和
   `check_source_ownership.py --require-no-legacy`，删除 legacy target/source list；
 - [x] 删除 ProviderResult compatibility codec、重复 ErrorCode、无效配置和过渡 allowlist；
-- [x] 删除所有已归零 layer debt；
-- [x] 在 P8 实现提交后从干净工作树重新生成发布 baseline，并作为独立机器快照提交；
-- [x] clean build、全量测试、coverage、ASan/TSan、架构门禁、SIGTERM 集成测试通过；
-- [x] 更新 README 架构与运维章节；
-- [x] 为 Provider 数据 archive 保留独立运维说明，不随代码清理丢失；
-- [x] RFC 状态改为“已实施”。
+- [x] 完成 P8-W1 clean snapshot 和当时的 Debug/coverage/ASan/TSan、架构门禁、SIGTERM 验证；
+- [x] 为 Provider 数据 archive 保留独立运维说明，不随代码清理丢失。
+
+### P8-W2 · 物理目录收口（DONE）
+
+- [x] 将仍在历史顶层目录的源码迁入 `application/`、`infrastructure/`、`transport/`，并删除空旧目录；
+- [x] 新增 physical-layout gate：拒绝历史顶层目录复活，且每个正式 CMake source list 的实现必须在匹配层目录；
+- [x] 在 CI 运行该 gate 与 mutation selftest；同步更新 README、RFC、target tree 和 active gate 文档；
+- [x] clean build、全量测试、coverage、ASan+UBSan、TSan、架构门禁、SIGTERM 集成测试通过；
+- [x] P8-W2 实现提交后从干净工作树生成新的发布 baseline，并作为独立机器快照提交；
+- [x] 将 RFC 状态改为“已实施”。
 
 ## 每阶段通用规则
 

@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
 
 #include <domain/port/IErrorStatsSink.h>
-#include <metrics/ErrorStatsConfig.h>
-#include <metrics/ErrorStatsService.h>
+#include <infrastructure/metrics/ErrorStatsConfig.h>
+#include <infrastructure/metrics/ErrorStatsService.h>
 
 #include <atomic>
 #include <chrono>

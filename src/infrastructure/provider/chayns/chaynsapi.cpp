@@ -1,13 +1,13 @@
 #include <drogon/drogon.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 #include <algorithm>
 #include <chrono>
 #include <memory>
 #include <optional>
 #include <mutex>
-#include <sessionManager/continuity/HistoryReplayBudget.h>
-#include <sessionManager/continuity/OutboundBudget.h>
+#include <infrastructure/provider/limits/HistoryReplayBudget.h>
+#include <infrastructure/provider/limits/OutboundBudget.h>
 #include <string>
 #include <stdexcept>
 #include <unordered_map>

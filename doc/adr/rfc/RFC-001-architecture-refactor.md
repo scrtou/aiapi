@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已接受，已实施（P8-W1） |
-| 当前版本 | v4.0 |
+| 状态 | 已接受，已实施 |
+| 当前版本 | v4.1 |
 | 语言 | C++17 |
 | Provider 目标范围 | 保留 chayns + retool；下线 nexos + 不可触达的 OpenAiProvider |
 | 工期 | 不纳入本文；按门禁推进 |
@@ -28,12 +28,15 @@
 
 ## 实施结论
 
-P8-W1 已完成：全部 production implementation 已迁入六个正式 target，`aiapi_legacy` 与其
-source list 已删除；ProviderResult/重复 ErrorCode compatibility 已清理；Provider、queue、配置、
-response stream 与零宽编码已归位；ADR-09 HTTP/IO seam 由静态 selftest 和运行时配置接线共同保护。
-当前发布证据、验证命令与回滚说明见
-[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)，机器指标以
-[`architecture-baseline.md`](../audits/architecture-baseline.md) 为唯一真值。
+P8-W1 已完成：全部 production implementation 已由六个正式 target 唯一拥有，`aiapi_legacy`
+及其 source list 已删除；ProviderResult/重复 ErrorCode compatibility 已清理；ADR-09 HTTP/IO seam
+由静态 selftest 和运行时配置接线共同保护。这个结论只证明 target/DAG 收口，**不证明物理目录已收口**。
+
+P8-W2 已将仍留在历史顶层目录的实现迁入 canonical `application/`、`infrastructure/`、`transport/`
+tree，并以 physical-layout gate 防止旧目录或错误层 source 复活。P8-W1 的历史证据、验证命令与回滚说明见
+[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)；P8-W2 的设计、验证和 clean
+baseline 规则见 [`P08-physical-layout.md`](../work-products/P08-physical-layout.md)。实现与 baseline
+刻意分为两个提交，以保证机器快照生成时工作树干净。
 
 
 ## 2. 问题
@@ -82,30 +85,33 @@ response stream 与零宽编码已归位；ADR-09 HTTP/IO seam 由静态 selftes
 
 ## 4. 目标结构
 
+P8-W2 后，正式 target 和物理树使用同一组顶层层名；根 `main.cc` 只作为进程入口，`runtime/`
+是唯一 composition root。
+
 ```text
 src/
-├── platform/                 Result、Error、Deadline、日志抽象
-├── domain/
-│   ├── model/                纯 C++ 值类型
-│   ├── policy/               纯业务规则
-│   └── port/                 Provider/Store/Clock/Metrics 等接口
+├── platform/                 Result、错误、deadline、日志与通用值设施
+├── domain/{model,policy,port}/
 ├── application/
-│   ├── usecase/
-│   └── pipeline/
+│   ├── account/              account selection/registration/token/worker
+│   ├── channel/
+│   ├── generation/{actionProtocol,continuity,contracts,core,tooling}/
+│   ├── health/、metrics/、workspace/
 ├── infrastructure/
-│   ├── provider/chayns/
-│   ├── provider/retool/
-│   ├── persistence/
-│   ├── codec/                DB/上游 JSON 映射
-│   └── http/
-├── transport/
-│   ├── controllers/
-│   ├── filters/
-│   ├── codec/                HTTP JSON 映射
-│   └── sinks/
-├── AppContext.h/.cpp
+│   ├── account/、codec/、config/、executor/、metrics/、workspace/
+│   ├── managedAccount/{backends,contracts,service}/
+│   ├── persistence/{account,channel,chaynsThread,config,metrics,retoolWorkspace,session}/
+│   └── provider/{chayns,limits,retool}/
+├── transport/controllers/{codecs,sinks}/
+├── runtime/
+├── test/
+├── CMakeLists.txt
 └── main.cc
 ```
+
+历史 `accountManager/`、`channelManager/`、`sessionManager/`、`dbManager/`、`managedAccount/`、
+`metrics/`、`retoolWorkspace/`、`controllers/`、`apiManager/` 和 `models/` 均不是可用 `src/` 顶层目录。
+详细树、迁移映射和机械约束见 [`target-architecture.md`](../design/target-architecture.md)。
 
 具体依赖图见 ADR-01/02。
 

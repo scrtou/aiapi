@@ -2,7 +2,7 @@
 #include <drogon/drogon_test.h>
 #include <trantor/net/AsyncStream.h>
 
-#include <controllers/sinks/IoLoopResponseStream.h>
+#include <transport/controllers/sinks/IoLoopResponseStream.h>
 
 #include <atomic>
 #include <chrono>

@@ -35,19 +35,19 @@ def main():
     problems = []
     app_context = read("src/runtime/AppContext.h")
     wiring = read("src/runtime/AppWiring.cpp")
-    account_h = read("src/accountManager/accountManager.h")
+    account_h = read("src/application/account/accountManager.h")
     # P7-W2 leaves AccountManager.cpp as the composition/configuration
     # facade.  The actual four-worker lifecycle (and therefore the final
     # deadline-aware join) is owned by AccountWorkers.cpp; checking the old
     # facade would make this gate demand the very monolith the slice removed.
-    account_workers = read("src/accountManager/AccountWorkers.cpp")
+    account_workers = read("src/application/account/AccountWorkers.cpp")
     reaper_h = read("src/infrastructure/provider/chayns/chaynsThreadReaper.h")
     reaper_cpp = read("src/infrastructure/provider/chayns/chaynsThreadReaper.cpp")
-    session_h = read("src/sessionManager/core/Session.h")
-    session_cpp = read("src/sessionManager/core/Session.cpp")
+    session_h = read("src/application/generation/core/Session.h")
+    session_cpp = read("src/application/generation/core/Session.cpp")
     queue_h = read("src/infrastructure/executor/BackgroundTaskQueue.h")
-    stats_h = read("src/metrics/ErrorStatsService.h")
-    stats_cpp = read("src/metrics/ErrorStatsService.cpp")
+    stats_h = read("src/infrastructure/metrics/ErrorStatsService.h")
+    stats_cpp = read("src/infrastructure/metrics/ErrorStatsService.cpp")
 
     check_file("src/runtime/AppContext.h", app_context,
                [("RuntimeOwner 绝对 deadline",
@@ -69,9 +69,9 @@ def main():
          r"\berrorStats\s*->\s*shutdown\s*\(\s*deadline\s*\)"),
     ], problems)
 
-    check_file("src/accountManager/accountManager.h", account_h,
+    check_file("src/application/account/accountManager.h", account_h,
                [("限时 stop 声明", r"stopBackgroundThreads\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\s*\)")], problems)
-    check_file("src/accountManager/AccountWorkers.cpp", account_workers,
+    check_file("src/application/account/AccountWorkers.cpp", account_workers,
                [("四个账号 worker 的 joinUntil", r"joinUntil\s*\("),
                 ("账号 worker completion", r"tokenCheckDone_|tokenUpdateDone_|accountCountDone_|accountTypeDone_")], problems)
     check_file("src/infrastructure/provider/chayns/chaynsThreadReaper.h", reaper_h,
@@ -80,14 +80,14 @@ def main():
     check_file("src/infrastructure/provider/chayns/chaynsThreadReaper.cpp", reaper_cpp,
                [("reaper joinUntil", r"joinUntil\s*\("),
                 ("reaper completion signal", r"workerDone_\s*=\s*std::make_shared")], problems)
-    check_file("src/sessionManager/core/Session.cpp", session_cpp,
+    check_file("src/application/generation/core/Session.cpp", session_cpp,
                [("session cleaner joinUntil", r"joinUntil\s*\(")], problems)
     check_file("src/infrastructure/executor/BackgroundTaskQueue.h", queue_h,
                [("队列限时 shutdown", r"shutdown\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\)"),
                 ("队列 joinUntil", r"joinUntil\s*\(")], problems)
-    check_file("src/metrics/ErrorStatsService.h", stats_h,
+    check_file("src/infrastructure/metrics/ErrorStatsService.h", stats_h,
                [("ErrorStats 限时 shutdown", r"shutdown\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\)")], problems)
-    check_file("src/metrics/ErrorStatsService.cpp", stats_cpp,
+    check_file("src/infrastructure/metrics/ErrorStatsService.cpp", stats_cpp,
                [("ErrorStats joinUntil", r"joinUntil\s*\(")], problems)
 
     if problems:

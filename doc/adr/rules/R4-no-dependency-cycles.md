@@ -20,11 +20,14 @@ python3 tools/arch/check_cycles.py \
 
 非法单向依赖不形成环，例如 domain include infrastructure 而 infrastructure 不反向 include domain。Tarjan 会 PASS，但端口方向已经损坏。因此 layer rules 是独立强制门。
 
-## v3 模块覆盖
+## v4 正式层覆盖
 
-`layer-rules.json` 已登记当前所有有意义的顶层模块，包括高出度的 controllers/apipoint/sessionManager/accountManager；旧版只冻结低出度模块的盲区已关闭。
+P8-W2 后，`layer-rules.json` 只登记正式 `src/` 顶层层：`platform`、`domain`、
+`application`、`infrastructure`、`transport`、`runtime` 与 `<root>`。历史业务目录不再作为
+模块边界；`check_physical_layout.py` 会拒绝它们复活。
 
-`<root>` 是 composition root，可以知道具体模块。其它当前白名单随阶段 3～7 迁移逐条收紧，最终由 platform/domain/application/infrastructure/transport target 规则取代。
+`<root>` 只代表 `main.cc` 进程入口，可以知道启动所需 concrete adapter。其它白名单与正式
+CMake target DAG 一致；同层内部的 persistence 直连另由 file-level db-ratchet（兼容名称）冻结。
 
 ## 外部依赖边界
 

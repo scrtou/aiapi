@@ -1,7 +1,7 @@
 #include <drogon/drogon_test.h>
 
 #include <domain/port/ISessionPersistence.h>
-#include <sessionManager/core/Session.h>
+#include <application/generation/core/Session.h>
 
 #include <chrono>
 #include <condition_variable>

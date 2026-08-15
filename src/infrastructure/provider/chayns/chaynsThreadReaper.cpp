@@ -8,7 +8,7 @@
 #include <utility>
 
 #include <infrastructure/provider/chayns/ChaynsPollingPolicy.h>
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 
 chaynsThreadReaper::chaynsThreadReaper(
     std::shared_ptr<chaynsThreadDbManager> threadDb)

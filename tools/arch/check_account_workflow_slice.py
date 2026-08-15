@@ -14,30 +14,30 @@ SRC = ROOT / "src"
 FAIL = 4
 
 CMAKE = SRC / "CMakeLists.txt"
-CORE = SRC / "accountManager/accountManager.cpp"
-SELECTOR = SRC / "accountManager/AccountSelector.cpp"
-POLICY = SRC / "accountManager/AccountSelectionPolicy.cpp"
-STATE_HEADER = SRC / "accountManager/AccountRegistrationStateMachine.h"
-STATE = SRC / "accountManager/AccountRegistrationStateMachine.cpp"
-TOKEN = SRC / "accountManager/AccountTokenWorkflow.cpp"
-REGISTRATION = SRC / "accountManager/AccountRegistrationWorkflow.cpp"
-HEALTH = SRC / "accountManager/AccountHealthWorkflow.cpp"
-WORKERS = SRC / "accountManager/AccountWorkers.cpp"
-SUPPORT = SRC / "accountManager/AccountWorkflowSupport.cpp"
+CORE = SRC / "application/account/accountManager.cpp"
+SELECTOR = SRC / "application/account/AccountSelector.cpp"
+POLICY = SRC / "application/account/AccountSelectionPolicy.cpp"
+STATE_HEADER = SRC / "application/account/AccountRegistrationStateMachine.h"
+STATE = SRC / "application/account/AccountRegistrationStateMachine.cpp"
+TOKEN = SRC / "application/account/AccountTokenWorkflow.cpp"
+REGISTRATION = SRC / "application/account/AccountRegistrationWorkflow.cpp"
+HEALTH = SRC / "application/account/AccountHealthWorkflow.cpp"
+WORKERS = SRC / "application/account/AccountWorkers.cpp"
+SUPPORT = SRC / "application/account/AccountWorkflowSupport.cpp"
 TEST = SRC / "test/test_account_workflow_stages.cpp"
 LIFECYCLE_TEST = SRC / "test/test_account_lifecycle_fixture.cpp"
 SHUTDOWN_TEST = SRC / "test/test_shutdown_workers.cpp"
 
 APPLICATION_SOURCES = (
-    "accountManager/accountManager.cpp",
-    "accountManager/AccountWorkflowSupport.cpp",
-    "accountManager/AccountSelectionPolicy.cpp",
-    "accountManager/AccountRegistrationStateMachine.cpp",
-    "accountManager/AccountSelector.cpp",
-    "accountManager/AccountTokenWorkflow.cpp",
-    "accountManager/AccountRegistrationWorkflow.cpp",
-    "accountManager/AccountHealthWorkflow.cpp",
-    "accountManager/AccountWorkers.cpp",
+    "application/account/accountManager.cpp",
+    "application/account/AccountWorkflowSupport.cpp",
+    "application/account/AccountSelectionPolicy.cpp",
+    "application/account/AccountRegistrationStateMachine.cpp",
+    "application/account/AccountSelector.cpp",
+    "application/account/AccountTokenWorkflow.cpp",
+    "application/account/AccountRegistrationWorkflow.cpp",
+    "application/account/AccountHealthWorkflow.cpp",
+    "application/account/AccountWorkers.cpp",
 )
 
 

@@ -10,10 +10,10 @@ FAIL = 4
 errors = []
 
 for relative in (
-    "managedAccount/backends/ClassicProviderAccountBackend.cpp",
-    "managedAccount/backends/RetoolWorkspaceBackend.cpp",
-    "managedAccount/service/ManagedAccountService.h",
-    "managedAccount/service/ManagedAccountService.cpp",
+    "infrastructure/managedAccount/backends/ClassicProviderAccountBackend.cpp",
+    "infrastructure/managedAccount/backends/RetoolWorkspaceBackend.cpp",
+    "infrastructure/managedAccount/service/ManagedAccountService.h",
+    "infrastructure/managedAccount/service/ManagedAccountService.cpp",
     "infrastructure/provider/retool/retoolapi.cpp",
 ):
     text = (SRC / relative).read_text(errors="replace")
@@ -21,7 +21,7 @@ for relative in (
         line = text.count("\n", 0, match.start()) + 1
         errors.append(f"{relative}:{line}: managed account path locates a global service")
 
-service = (SRC / "managedAccount/service/ManagedAccountService.h").read_text(
+service = (SRC / "infrastructure/managedAccount/service/ManagedAccountService.h").read_text(
     errors="replace"
 )
 if "static ManagedAccountService" in service:

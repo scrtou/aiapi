@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <sessionManager/tooling/BridgeProtocolCodec.h>
+#include <application/generation/tooling/BridgeProtocolCodec.h>
 
 namespace {
 

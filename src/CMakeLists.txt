@@ -71,56 +71,53 @@ set(AIAPI_PLATFORM_SOURCES
 )
 
 set(AIAPI_APPLICATION_SOURCES
-    accountManager/accountManager.cpp
-    accountManager/AccountWorkflowSupport.cpp
-    accountManager/AccountSelectionPolicy.cpp
-    accountManager/AccountRegistrationStateMachine.cpp
-    accountManager/AccountSelector.cpp
-    accountManager/AccountTokenWorkflow.cpp
-    accountManager/AccountRegistrationWorkflow.cpp
-    accountManager/AccountHealthWorkflow.cpp
-    accountManager/AccountWorkers.cpp
-    accountManager/RetoolProvisionHealth.cpp
+    application/account/accountManager.cpp
+    application/account/AccountWorkflowSupport.cpp
+    application/account/AccountSelectionPolicy.cpp
+    application/account/AccountRegistrationStateMachine.cpp
+    application/account/AccountSelector.cpp
+    application/account/AccountTokenWorkflow.cpp
+    application/account/AccountRegistrationWorkflow.cpp
+    application/account/AccountHealthWorkflow.cpp
+    application/account/AccountWorkers.cpp
+    application/account/RetoolProvisionHealth.cpp
     application/account/AccountAdminUseCase.cpp
     application/channel/ChannelAdminUseCase.cpp
     application/health/HealthUseCase.cpp
     application/metrics/MetricsUseCase.cpp
     application/workspace/RetoolWorkspaceAdminUseCase.cpp
     application/workspace/RetoolWorkspaceUseCase.cpp
-    channelManager/channelManager.cpp
-    managedAccount/backends/ClassicProviderAccountBackend.cpp
-    managedAccount/backends/RetoolWorkspaceBackend.cpp
-    managedAccount/service/ManagedAccountService.cpp
-    retoolWorkspace/RetoolWorkspaceManager.cpp
-    sessionManager/core/Session.cpp
-    sessionManager/core/SessionCodec.cpp
-    sessionManager/core/ClientOutputSanitizer.cpp
-    sessionManager/core/AiApiUseCase.cpp
-    sessionManager/core/RetiredProviderTelemetry.cpp
-    sessionManager/core/RequestAdapters.cpp
-    sessionManager/core/GenerationService.cpp
-    sessionManager/core/GenerationPipeline.cpp
-    sessionManager/core/GenerationResponsePipeline.cpp
-    sessionManager/tooling/BridgeHelpers.cpp
-    sessionManager/tooling/BridgeProtocolCodec.cpp
-    sessionManager/tooling/StrictClientRules.cpp
-    sessionManager/tooling/ToolCallBridge.cpp
-    sessionManager/tooling/ForcedToolCallGenerator.cpp
-    sessionManager/tooling/ToolCallNormalizer.cpp
-    sessionManager/tooling/ToolDefinitionEncoder.cpp
-    sessionManager/tooling/ToolCallValidator.cpp
-    sessionManager/tooling/XmlTagToolCallCodec.cpp
-    sessionManager/continuity/ResponseIndex.cpp
-    sessionManager/continuity/TextExtractor.cpp
-    sessionManager/continuity/ContinuityResolver.cpp
-    sessionManager/actionProtocol/ActionProtocolCompiler.cpp
-    sessionManager/actionProtocol/ActionProtocolAdapter.cpp
+    application/channel/channelManager.cpp
+    application/workspace/RetoolWorkspaceManager.cpp
+    application/generation/core/Session.cpp
+    application/generation/core/SessionCodec.cpp
+    application/generation/core/ClientOutputSanitizer.cpp
+    application/generation/core/AiApiUseCase.cpp
+    application/generation/core/RetiredProviderTelemetry.cpp
+    application/generation/core/RequestAdapters.cpp
+    application/generation/core/GenerationService.cpp
+    application/generation/core/GenerationPipeline.cpp
+    application/generation/core/GenerationResponsePipeline.cpp
+    application/generation/tooling/BridgeHelpers.cpp
+    application/generation/tooling/BridgeProtocolCodec.cpp
+    application/generation/tooling/StrictClientRules.cpp
+    application/generation/tooling/ToolCallBridge.cpp
+    application/generation/tooling/ForcedToolCallGenerator.cpp
+    application/generation/tooling/ToolCallNormalizer.cpp
+    application/generation/tooling/ToolDefinitionEncoder.cpp
+    application/generation/tooling/ToolCallValidator.cpp
+    application/generation/tooling/XmlTagToolCallCodec.cpp
+    application/generation/continuity/ResponseIndex.cpp
+    application/generation/continuity/TextExtractor.cpp
+    application/generation/continuity/ContinuityResolver.cpp
+    application/generation/actionProtocol/ActionProtocolCompiler.cpp
+    application/generation/actionProtocol/ActionProtocolAdapter.cpp
 )
 
 set(AIAPI_INFRASTRUCTURE_SOURCES
     infrastructure/account/DrogonAccountHttpTransport.cpp
-    accountManager/AccountClock.cpp
-    accountManager/RetoolProvisionClock.cpp
+    infrastructure/account/AccountClock.cpp
+    infrastructure/account/RetoolProvisionClock.cpp
     infrastructure/provider/chayns/ChaynsHttpTransport.cpp
     infrastructure/provider/chayns/ChaynsClock.cpp
     infrastructure/provider/chayns/ChaynsModelCatalog.cpp
@@ -130,38 +127,41 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
     infrastructure/provider/retool/RetoolHttpTransport.cpp
     infrastructure/provider/retool/RetoolClock.cpp
     infrastructure/provider/retool/retoolapi.cpp
-    dbManager/account/accountDbManager.cpp
-    dbManager/account/accountBackupDbManager.cpp
-    dbManager/channel/channelDbManager.cpp
-    dbManager/config/ConfigDbManager.cpp
-    dbManager/chaynsThread/chaynsThreadDbManager.cpp
-    dbManager/session/SessionDbManager.cpp
-    dbManager/metrics/ErrorStatsDbManager.cpp
-    dbManager/metrics/StatusDbManager.cpp
-    dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp
-    metrics/ErrorStatsConfig.cpp
-    metrics/ErrorStatsService.cpp
+    infrastructure/managedAccount/backends/ClassicProviderAccountBackend.cpp
+    infrastructure/managedAccount/backends/RetoolWorkspaceBackend.cpp
+    infrastructure/managedAccount/service/ManagedAccountService.cpp
+    infrastructure/persistence/account/accountDbManager.cpp
+    infrastructure/persistence/account/accountBackupDbManager.cpp
+    infrastructure/persistence/channel/channelDbManager.cpp
+    infrastructure/persistence/config/ConfigDbManager.cpp
+    infrastructure/persistence/chaynsThread/chaynsThreadDbManager.cpp
+    infrastructure/persistence/session/SessionDbManager.cpp
+    infrastructure/persistence/metrics/ErrorStatsDbManager.cpp
+    infrastructure/persistence/metrics/StatusDbManager.cpp
+    infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.cpp
+    infrastructure/metrics/ErrorStatsConfig.cpp
+    infrastructure/metrics/ErrorStatsService.cpp
     infrastructure/provider/ProviderBase.cpp
     infrastructure/provider/ProviderRegistry.cpp
-    retoolWorkspace/RetoolWorkspaceService.cpp
-    sessionManager/continuity/HistoryReplayBudget.cpp
-    sessionManager/continuity/OutboundBudget.cpp
+    infrastructure/workspace/RetoolWorkspaceService.cpp
+    infrastructure/provider/limits/HistoryReplayBudget.cpp
+    infrastructure/provider/limits/OutboundBudget.cpp
     infrastructure/config/ConfigValidator.cpp
 )
 
 set(AIAPI_TRANSPORT_SOURCES
-    controllers/sinks/ChatSseSink.cpp
-    controllers/sinks/ChatJsonSink.cpp
-    controllers/sinks/ResponsesSseSink.cpp
-    controllers/sinks/ResponsesJsonSink.cpp
-    controllers/AiApiController.cc
-    controllers/AccountController.cc
-    controllers/ChannelController.cc
-    controllers/MetricsController.cc
-    controllers/HealthController.cc
-    controllers/RetoolWorkspaceController.cc
-    controllers/RetiredProviderTombstone.cc
-    controllers/LogController.cc
+    transport/controllers/sinks/ChatSseSink.cpp
+    transport/controllers/sinks/ChatJsonSink.cpp
+    transport/controllers/sinks/ResponsesSseSink.cpp
+    transport/controllers/sinks/ResponsesJsonSink.cpp
+    transport/controllers/AiApiController.cc
+    transport/controllers/AccountController.cc
+    transport/controllers/ChannelController.cc
+    transport/controllers/MetricsController.cc
+    transport/controllers/HealthController.cc
+    transport/controllers/RetoolWorkspaceController.cc
+    transport/controllers/RetiredProviderTombstone.cc
+    transport/controllers/LogController.cc
 )
 
 set(AIAPI_RUNTIME_SOURCES

@@ -2,7 +2,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
-#include <controllers/ChannelController.h>
+#include <transport/controllers/ChannelController.h>
 
 // ARCH_TESTS: domain/port/IChannelAdminUseCase.h
 

@@ -14,7 +14,7 @@
 //   init/getAccount/saveAccount/saveAccountList/updateAccountStatus/
 //   getAccountStatusById 从未被 accountManager 调用，故不纳入；
 //   getDbType() 返回 DbType —— 那是 dbManager 的内部实现细节，
-//   纳入会把 dbManager/DbType.h 拖进 domain，被第三道门禁（rc=3）拦下。
+//   纳入会把 infrastructure/persistence/DbType.h 拖进 domain，被第三道门禁（rc=3）拦下。
 //
 // countAccountsByChannel 的默认参数只在此处声明一次。
 // 虚函数的默认参数按静态类型绑定，若实现类重复声明默认值，

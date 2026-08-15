@@ -1,7 +1,7 @@
 #ifndef AIAPI_TEST_CHAYNS_THREAD_STUB_CONTROL_H
 #define AIAPI_TEST_CHAYNS_THREAD_STUB_CONTROL_H
 
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 
 #include <mutex>
 #include <string>

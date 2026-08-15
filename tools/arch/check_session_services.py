@@ -22,7 +22,7 @@ for path in SRC.rglob("*"):
             line = text.count("\n", 0, match.start()) + 1
             errors.append(f"{relative}:{line}: forbidden {label}")
 
-    if relative.startswith(("sessionManager/", "controllers/")):
+    if relative.startswith(("application/generation/", "transport/controllers/")):
         for match in re.finditer(r"chatSession\s*::\s*getInstance\s*\(", text):
             line = text.count("\n", 0, match.start()) + 1
             errors.append(f"{relative}:{line}: application/transport locates chatSession")

@@ -1,7 +1,7 @@
 #include <drogon/drogon_test.h>
 
 #include <platform/Cancellation.h>
-#include <sessionManager/core/SessionExecutionGate.h>
+#include <application/generation/core/SessionExecutionGate.h>
 
 #include <chrono>
 #include <thread>

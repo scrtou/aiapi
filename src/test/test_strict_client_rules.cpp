@@ -1,5 +1,5 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/tooling/StrictClientRules.h>
+#include <application/generation/tooling/StrictClientRules.h>
 using namespace toolcall;
 
 namespace {

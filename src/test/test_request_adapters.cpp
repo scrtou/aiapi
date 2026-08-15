@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 #include <drogon/drogon.h>
-#include <sessionManager/core/RequestAdapters.h>
+#include <application/generation/core/RequestAdapters.h>
 using namespace drogon;
 
 namespace {

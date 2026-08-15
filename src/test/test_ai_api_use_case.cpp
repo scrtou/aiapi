@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <sessionManager/core/AiApiUseCase.h>
+#include <application/generation/core/AiApiUseCase.h>
 
 // ARCH_TESTS: domain/model/AiApiData.h
 // ARCH_TESTS: domain/port/IAiApiUseCase.h

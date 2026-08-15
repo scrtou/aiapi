@@ -1,5 +1,5 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/continuity/HistoryReplayBudget.h>
+#include <infrastructure/provider/limits/HistoryReplayBudget.h>
 
 using namespace continuity;
 

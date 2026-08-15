@@ -16,10 +16,9 @@
 
 ## 当前状态
 
-RFC-001 的 P0-W1 至 P8-W1 均已 **DONE**。P8 已删除 `aiapi_legacy` 与过渡 owner，
-完成 ADR-09 HTTP/IO seam、目录/debt 清理以及 Debug、coverage、ASan+UBSan、TSan、SIGTERM 和
-全部架构门禁验证；当前没有活跃的重构工作项。后续架构变化必须先登记新的 RFC/工作项，不能复用已收口
-的 P8-W1。
+P8-W1（正式 target/DAG 与过渡 owner 清理）及 P8-W2（物理目录收口）均已 **DONE**。此前“正式
+target 已收口”不等于“目录也已收口”；P8-W2 已迁移历史顶层源码、加入 physical-layout CI gate 并完成
+全量验证。实现提交后的 clean audit baseline 作为独立 machine snapshot 保存，RFC-001 已实施。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -54,7 +53,7 @@ setter 双轨并在 rollback/shutdown 先撤销非 owning workspace port。其 c
 `AccountDbManager`、`AccountBackupDbManager`、`ChannelDbManager` 与 `ConfigDbManager` 也完成同一
 迁移：五个 concrete DB store 全部由 AppContext 唯一持有、显式初始化，均无 lazy singleton。
 最后一个 AI transport seam 现已收口：`AiApiController` 只绑定 `IAiApiUseCase`，保留 HTTP/JSON
-校验、路径推断和 JSON/SSE sink 适配；`sessionManager/core/AiApiUseCase` 独占请求规范化、queue
+校验、路径推断和 JSON/SSE sink 适配；`application/generation/core/AiApiUseCase` 独占请求规范化、queue
 admission、legacy `GenerationService`、provider catalog 和 Responses persistence/read/delete 编排。
 该 facade 由 AppContext 持有，rollback/shutdown 先 `AiApiController::setUseCase(nullptr)`；已接纳任务
 在入队时 snapshot 借用协作者。Responses JSON/SSE sink 成功关闭时暴露 persistence record，因此 Controller
@@ -99,11 +98,17 @@ token、registration、health 和 worker 均迁入 application 专职 source。�
 P8-W1 完成最终收口。
 
 P8-W1 已收口：全部 89 个 production implementation 只属于六个正式 target，
-`aiapi_legacy`、ProviderResult compatibility 与历史目录 debt 已删除；application 不再接收或链接
-Drogon HTTP 类型，Account HTTP adapter 和 runtime config 均由 infrastructure/runtime 显式接线。
-Debug/coverage/ASan+UBSan 均为 396/396 PASS，TSan 全绿（396 cases / 2075 assertions、0 data race），
-30/30 架构与迁移 gate 通过。完整调用边界、验证与回滚记录见
+`aiapi_legacy` 与 ProviderResult compatibility 已删除；application 不再接收或链接 Drogon HTTP 类型，
+Account HTTP adapter 和 runtime config 均由 infrastructure/runtime 显式接线。Debug/coverage/ASan+UBSan
+均为 396/396 PASS，TSan 全绿（396 cases / 2075 assertions、0 data race），30/30 架构与迁移 gate
+通过；这些是 P8-W1 的 target/DAG 证据，**不是**历史目录已移除的证据。完整记录见
 [`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)。
+
+P8-W2 已将实际源码树与该 DAG 对齐：历史 account/channel/generation/workspace facade 已移至
+`application/`，DB/metrics/managed-account/provider support 已移至 `infrastructure/`，Controller/codec/sink
+已移至 `transport/`。`check_physical_layout.py` 及 CI selftest 禁止旧顶层目录复活，并要求每个正式
+CMake source list 只引用匹配层目录。工作产物为
+[`P08-physical-layout.md`](../work-products/P08-physical-layout.md)。
 
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
@@ -145,6 +150,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | [`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md) | DONE |
 | P7-W2 | 阶段 7 | Account workflows 重写 | [`P07-account-workflows.md`](../work-products/P07-account-workflows.md) | DONE |
 | P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | [`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md) | DONE |
+| P8-W2 | 阶段 8 | 物理目录与正式 target 收口 | [`P08-physical-layout.md`](../work-products/P08-physical-layout.md) | DONE |
 
 ## 产物保存规则
 

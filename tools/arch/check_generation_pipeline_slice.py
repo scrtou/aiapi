@@ -14,22 +14,22 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 FAIL = 4
 
-SERVICE_HEADER = SRC / "sessionManager/core/GenerationService.h"
-SERVICE_CPP = SRC / "sessionManager/core/GenerationService.cpp"
-PIPELINE_HEADER = SRC / "sessionManager/core/GenerationPipeline.h"
-PIPELINE_CPP = SRC / "sessionManager/core/GenerationPipeline.cpp"
-RESPONSE_HEADER = SRC / "sessionManager/core/GenerationResponsePipeline.h"
-RESPONSE_CPP = SRC / "sessionManager/core/GenerationResponsePipeline.cpp"
-LEGACY_CPP = SRC / "sessionManager/core/GenerationServiceEmitAndToolBridge.cpp"
+SERVICE_HEADER = SRC / "application/generation/core/GenerationService.h"
+SERVICE_CPP = SRC / "application/generation/core/GenerationService.cpp"
+PIPELINE_HEADER = SRC / "application/generation/core/GenerationPipeline.h"
+PIPELINE_CPP = SRC / "application/generation/core/GenerationPipeline.cpp"
+RESPONSE_HEADER = SRC / "application/generation/core/GenerationResponsePipeline.h"
+RESPONSE_CPP = SRC / "application/generation/core/GenerationResponsePipeline.cpp"
+LEGACY_CPP = SRC / "application/generation/core/GenerationServiceEmitAndToolBridge.cpp"
 CMAKE = SRC / "CMakeLists.txt"
 FIXTURE_TEST = SRC / "test/test_generation_service_bridge_fixture.cpp"
 
 TOOLING_SOURCES = {
-    SRC / "sessionManager/tooling/ForcedToolCallGenerator.cpp":
+    SRC / "application/generation/tooling/ForcedToolCallGenerator.cpp":
         "void toolcall::generateForcedToolCall(",
-    SRC / "sessionManager/tooling/ToolCallNormalizer.cpp":
+    SRC / "application/generation/tooling/ToolCallNormalizer.cpp":
         "void toolcall::normalizeToolCallArguments(",
-    SRC / "sessionManager/tooling/ToolDefinitionEncoder.cpp":
+    SRC / "application/generation/tooling/ToolDefinitionEncoder.cpp":
         "void toolcall::transformRequestForToolBridge(",
 }
 
@@ -71,12 +71,12 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         errors.append("P7-W1 must delete GenerationServiceEmitAndToolBridge.cpp")
 
     p7_sources = (
-        "sessionManager/core/GenerationService.cpp",
-        "sessionManager/core/GenerationPipeline.cpp",
-        "sessionManager/core/GenerationResponsePipeline.cpp",
-        "sessionManager/tooling/ForcedToolCallGenerator.cpp",
-        "sessionManager/tooling/ToolCallNormalizer.cpp",
-        "sessionManager/tooling/ToolDefinitionEncoder.cpp",
+        "application/generation/core/GenerationService.cpp",
+        "application/generation/core/GenerationPipeline.cpp",
+        "application/generation/core/GenerationResponsePipeline.cpp",
+        "application/generation/tooling/ForcedToolCallGenerator.cpp",
+        "application/generation/tooling/ToolCallNormalizer.cpp",
+        "application/generation/tooling/ToolDefinitionEncoder.cpp",
     )
     for source in p7_sources:
         if source not in cmake:

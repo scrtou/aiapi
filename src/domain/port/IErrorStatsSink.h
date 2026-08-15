@@ -8,7 +8,7 @@
 namespace metrics {
 
 // 错误统计落库端口（依赖倒置）。
-// 上层 metrics/ErrorStatsService 只依赖本接口，不再依赖 ErrorStatsDbManager 具体实现。
+// 上层 infrastructure/metrics/ErrorStatsService 只依赖本接口，不再依赖 ErrorStatsDbManager 具体实现。
 // 方法签名逐字取自 ErrorStatsDbManager，因此既有调用表达式无需改写。
 //
 // 成员取舍依据 ErrorStatsService 的实测调用点：

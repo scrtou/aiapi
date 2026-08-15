@@ -156,9 +156,10 @@
 
 ## 当前源码与 target
 
-每个 production `.cpp/.cc` 由一个且仅一个正式 CMake target 拥有；测试只链接这些 target，
-不会重新编译生产实现。目录名保留了部分历史业务名，但**职责边界以 target owner 和架构门禁为准**。
-`aiapi_legacy` 及其 source list 已删除。
+P8-W1 已完成正式 target DAG，P8-W2 已将该 DAG 收口为同一份物理目录事实。每个
+production `.cpp/.cc` 由一个且仅一个正式 CMake target 拥有，测试只链接这些 target，
+不会重新编译生产实现。`aiapi_legacy` 及其 source list 与所有历史源码顶层目录均已删除；
+`check_physical_layout.py` 持续禁止旧目录或错误物理层 source 复活。
 
 ```text
 aiapi_platform
@@ -173,30 +174,43 @@ aiapi (main.cc)                 -> aiapi_runtime
 `aiapi_transport` 仍以 whole-archive 链接到最终可执行文件，仅用于保留 Drogon 的静态 Controller
 注册对象；这不是 application 到 transport/infrastructure 的反向依赖。
 
+当前 canonical tree：
+
 ```text
 src/
-├── platform/                   Result、ErrorCode、UUID、日志与 ZeroWidth 编码
+├── platform/                   Result、ErrorCode、deadline、日志与通用值设施
 ├── domain/                     纯值对象、规则和 ports；不含 JsonCpp/Drogon/DB 类型
-├── application/                Controller-facing use case（账号/渠道/健康/指标/Workspace）
-├── accountManager/             application-owned 账号选择、注册、Token、健康与 worker stage
-├── sessionManager/             application-owned generation、连续性、工具 bridge 与 session 编排
-├── channelManager/             application-owned 渠道路由与状态
-├── managedAccount/             application-owned ManagedAccount backend/service
-├── retoolWorkspace/            application-owned Workspace 编排；其 store adapter 在 infrastructure
+├── application/
+│   ├── account/                账号选择、注册、token、health 与 worker stage
+│   ├── channel/                渠道 facade/use case
+│   ├── generation/             action protocol、continuity、contracts、core、tooling
+│   ├── health/                 readiness use case
+│   ├── metrics/                metrics use case
+│   └── workspace/              Workspace facade/use case
 ├── infrastructure/
-│   ├── account/                Drogon account HTTP adapter
-│   ├── config/                 ConfigValidator
-│   ├── executor/               BackgroundTaskQueue
-│   └── provider/
-│       ├── chayns/             Chayns Provider、HTTP、clock、reaper 与 browser helper
-│       └── retool/             Retool Provider、HTTP 与 clock
-├── dbManager/                  infrastructure-owned persistence adapters
-├── metrics/                    infrastructure-owned metrics/store adapters
-├── controllers/                transport Controller、Filter、JSON/SSE codec 和 sinks
+│   ├── account/                Drogon account HTTP adapter 与 clocks
+│   ├── codec/                  infrastructure JSON codec
+│   ├── config/
+│   ├── executor/
+│   ├── managedAccount/         backend、contract 与 service
+│   ├── metrics/                ErrorStats config/service 与 decoder
+│   ├── persistence/            DB adapter（account/channel/config/session/metrics/workspace/thread）
+│   ├── provider/{chayns,limits,retool}/
+│   └── workspace/              RetoolWorkspaceService
+├── transport/
+│   └── controllers/
+│       ├── codecs/             HTTP JSON codec
+│       ├── sinks/              JSON/SSE sink 与 event-loop adapter
+│       └── Controller、filter、tombstone
 ├── runtime/                    AppContext 与唯一组合根 AppWiring
-├── apiManager/、models/        仍在使用的共享枚举/模型资源
-└── test/                       CTest 注册的单元、fixture 与停机测试
+├── test/                       CTest 注册的单元、fixture 与停机测试
+├── CMakeLists.txt
+└── main.cc
 ```
+
+顶层只允许这些正式层、`CMakeLists.txt` 和 `main.cc`。`tools/arch/check_physical_layout.py`
+将 CMake source list 与目录层逐项核对，并拒绝 `accountManager/`、`sessionManager/`、`dbManager/`、
+`controllers/` 等历史顶层目录复活；其 selftest 在 CI 中与正向 gate 一起运行。
 
 ### HTTP / IO 边界（ADR-09）
 
@@ -207,7 +221,7 @@ src/
   `infrastructure/account/DrogonAccountHttpTransport` 是唯一 Drogon adapter。
 - `AppWiring` 在组合根读取 `custom_config`，按值注入 Account workflow 和 AI use case；
   application worker 不重新查询 Drogon runtime config。
-- `controllers/sinks/IoLoopResponseStream.h` 是 worker 回到 Drogon event loop 的 adapter；
+- `transport/controllers/sinks/IoLoopResponseStream.h` 是 worker 回到 Drogon event loop 的 adapter；
   sink/application 不直接操作 loop-affine response。
 
 `tools/arch/check_http_io_boundary.py` 扫描 application include closure 与全部 domain 文件，
@@ -844,11 +858,11 @@ preflight → 副本往返演练 → 原库 retire”的顺序执行。archive s
 
 | 文档 | 说明 |
 |------|------|
-| [sessionManager 模块](src/sessionManager/README.md) | 会话管理核心模块说明 |
-| [contracts 层](src/sessionManager/contracts/README.md) | 接口契约说明 |
-| [core 层](src/sessionManager/core/README.md) | 核心服务说明 |
-| [continuity 模块](src/sessionManager/continuity/README.md) | 会话连续性模块说明 |
-| [tooling 模块](src/sessionManager/tooling/README.md) | 工具调用模块说明 |
+| [sessionManager 模块](src/application/generation/README.md) | 会话管理核心模块说明 |
+| [contracts 层](src/application/generation/contracts/README.md) | 接口契约说明 |
+| [core 层](src/application/generation/core/README.md) | 核心服务说明 |
+| [continuity 模块](src/application/generation/continuity/README.md) | 会话连续性模块说明 |
+| [tooling 模块](src/application/generation/tooling/README.md) | 工具调用模块说明 |
 
 ## 单元测试
 
@@ -895,7 +909,7 @@ preflight → 副本往返演练 → 原库 retire”的顺序执行。archive s
 - [x] 控制器拆分（6 个独立控制器）
 - [x] sessionManager 分层重构（contracts / core / continuity / tooling）
 - [x] HistoryReplayBudget（多 Provider 历史回放预算与完整 turn 截取）
-- [x] P8 架构收口（六个正式 target、无 legacy owner、ADR-09 IO boundary）
+- [x] P8 架构收口（六个正式 target、无 legacy owner、ADR-09 IO boundary、物理目录 gate）
 - [x] 正式 target 复用的 CTest 行为、fixture、sanitizer 与 SIGTERM 测试
 
 ## License

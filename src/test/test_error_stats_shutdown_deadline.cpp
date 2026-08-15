@@ -21,7 +21,7 @@
 
 #include <drogon/drogon_test.h>
 
-#include <metrics/ErrorStatsService.h>
+#include <infrastructure/metrics/ErrorStatsService.h>
 #include <domain/port/IErrorStatsSink.h>
 
 #include <chrono>

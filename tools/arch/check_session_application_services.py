@@ -10,18 +10,18 @@ FAIL = 4
 errors = []
 
 paths = [
-    "sessionManager/continuity/ResponseIndex.cpp",
-    "sessionManager/core/Session.cpp",
-    "sessionManager/core/RequestAdapters.cpp",
-    "sessionManager/core/GenerationService.cpp",
-    "sessionManager/core/GenerationPipeline.cpp",
-    "sessionManager/core/GenerationResponsePipeline.cpp",
-    "sessionManager/core/AiApiUseCase.cpp",
-    "sessionManager/core/RetiredProviderTelemetry.cpp",
-    "sessionManager/tooling/BridgeHelpers.cpp",
-    "sessionManager/tooling/ForcedToolCallGenerator.cpp",
-    "sessionManager/tooling/ToolCallNormalizer.cpp",
-    "sessionManager/tooling/ToolDefinitionEncoder.cpp",
+    "application/generation/continuity/ResponseIndex.cpp",
+    "application/generation/core/Session.cpp",
+    "application/generation/core/RequestAdapters.cpp",
+    "application/generation/core/GenerationService.cpp",
+    "application/generation/core/GenerationPipeline.cpp",
+    "application/generation/core/GenerationResponsePipeline.cpp",
+    "application/generation/core/AiApiUseCase.cpp",
+    "application/generation/core/RetiredProviderTelemetry.cpp",
+    "application/generation/tooling/BridgeHelpers.cpp",
+    "application/generation/tooling/ForcedToolCallGenerator.cpp",
+    "application/generation/tooling/ToolCallNormalizer.cpp",
+    "application/generation/tooling/ToolDefinitionEncoder.cpp",
 ]
 for relative in paths:
     text = (SRC / relative).read_text(errors="replace")

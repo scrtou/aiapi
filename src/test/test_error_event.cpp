@@ -10,8 +10,8 @@
 
 #include <drogon/drogon_test.h>
 #include <domain/model/ErrorEvent.h>
-#include <dbManager/metrics/ErrorEventJsonEncoder.h>
-#include <metrics/ErrorEventJsonDecoder.h>
+#include <infrastructure/persistence/metrics/ErrorEventJsonEncoder.h>
+#include <infrastructure/metrics/ErrorEventJsonDecoder.h>
 
 using namespace metrics;
 

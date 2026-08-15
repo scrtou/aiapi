@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/AccountRegistrationStateMachine.h>
-#include <accountManager/AccountSelectionPolicy.h>
-#include <accountManager/AccountWorkflowSupport.h>
+#include <application/account/AccountRegistrationStateMachine.h>
+#include <application/account/AccountSelectionPolicy.h>
+#include <application/account/AccountWorkflowSupport.h>
 #include <domain/port/IAccountStore.h>
 
 #include <list>
@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-// ARCH_TESTS: accountManager/AccountRegistrationStateMachine.h
-// ARCH_TESTS: accountManager/AccountSelectionPolicy.h
-// ARCH_TESTS: accountManager/AccountWorkflowSupport.h
+// ARCH_TESTS: application/account/AccountRegistrationStateMachine.h
+// ARCH_TESTS: application/account/AccountSelectionPolicy.h
+// ARCH_TESTS: application/account/AccountWorkflowSupport.h
 
 namespace {
 

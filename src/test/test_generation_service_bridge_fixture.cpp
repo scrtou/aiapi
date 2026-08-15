@@ -2,11 +2,11 @@
 
 #include <domain/port/IChannelCatalog.h>
 #include <infrastructure/provider/ProviderRegistry.h>
-#include <sessionManager/continuity/ResponseIndex.h>
-#include <sessionManager/core/SessionExecutionGate.h>
-#include <sessionManager/core/Session.h>
-#include <sessionManager/contracts/IResponseSink.h>
-#include <sessionManager/core/GenerationService.h>
+#include <application/generation/continuity/ResponseIndex.h>
+#include <application/generation/core/SessionExecutionGate.h>
+#include <application/generation/core/Session.h>
+#include <application/generation/contracts/IResponseSink.h>
+#include <application/generation/core/GenerationService.h>
 
 #include <algorithm>
 #include <list>

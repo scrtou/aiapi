@@ -2,7 +2,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
-#include <controllers/AccountController.h>
+#include <transport/controllers/AccountController.h>
 
 // ARCH_TESTS: domain/port/IAccountAdminCommands.h
 // ARCH_TESTS: domain/port/IAccountBackupStore.h

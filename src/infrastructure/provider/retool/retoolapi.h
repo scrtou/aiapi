@@ -8,7 +8,7 @@
 #include <domain/port/IProviderThreadContext.h>
 #include <domain/port/IRetoolWorkspaceUseCase.h>
 #include <infrastructure/provider/ProviderBase.h>
-#include <managedAccount/contracts/ManagedAccount.h>
+#include <infrastructure/managedAccount/contracts/ManagedAccount.h>
 
 #include <memory>
 #include <mutex>

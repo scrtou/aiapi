@@ -2,25 +2,25 @@
 
 #include <runtime/AppContext.h>
 #include <runtime/StartupResult.h>
-#include <accountManager/accountManager.h>
+#include <application/account/accountManager.h>
 #include <application/account/AccountAdminUseCase.h>
 #include <application/channel/ChannelAdminUseCase.h>
 #include <application/health/HealthUseCase.h>
 #include <application/metrics/MetricsUseCase.h>
 #include <application/workspace/RetoolWorkspaceAdminUseCase.h>
 #include <application/workspace/RetoolWorkspaceUseCase.h>
-#include <channelManager/channelManager.h>
-#include <dbManager/account/accountBackupDbManager.h>
-#include <dbManager/account/accountDbManager.h>
-#include <dbManager/channel/channelDbManager.h>
-#include <dbManager/config/ConfigDbManager.h>
-#include <dbManager/metrics/ErrorStatsDbManager.h>
-#include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
-#include <dbManager/metrics/StatusDbManager.h>
-#include <dbManager/session/SessionDbManager.h>
+#include <application/channel/channelManager.h>
+#include <infrastructure/persistence/account/accountBackupDbManager.h>
+#include <infrastructure/persistence/account/accountDbManager.h>
+#include <infrastructure/persistence/channel/channelDbManager.h>
+#include <infrastructure/persistence/config/ConfigDbManager.h>
+#include <infrastructure/persistence/metrics/ErrorStatsDbManager.h>
+#include <infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.h>
+#include <infrastructure/persistence/metrics/StatusDbManager.h>
+#include <infrastructure/persistence/session/SessionDbManager.h>
 #include <domain/port/IBackgroundExecutor.h>
-#include <metrics/ErrorStatsService.h>
-#include <retoolWorkspace/RetoolWorkspaceManager.h>
+#include <infrastructure/metrics/ErrorStatsService.h>
+#include <application/workspace/RetoolWorkspaceManager.h>
 #include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <atomic>

@@ -1,106 +1,56 @@
 {
-  "_comment": "目录级依赖棘轮：迁移债务边只能收紧；正式 target DAG、唯一 source owner 与 no-legacy 由 ADR-02/P8 gates 单独强制。所有 P8 过渡例外已删除；domain -> platform 是唯一显式目标态基础边。",
+  "_comment": "P8-W2 物理目录收口：目录模块现在与六个正式 CMake target 对齐。旧 accountManager/sessionManager/dbManager/controllers 等根目录禁止复活；目标 DAG 与目录 include 方向同时受此文件约束。",
   "modules": {
     "<root>": {
       "allow_out": [
-        "controllers",
         "infrastructure",
-        "runtime"
+        "runtime",
+        "transport"
       ],
-      "role": "entry point。C8 后仅剩 config 装配 + AppContext 调用；组装特权已下沉到 runtime/。allow_out 为实测出边，随 main.cc 瘦身逐步收紧"
+      "role": "main.cc 是进程入口，只保留框架 filter、runtime 生命周期及启动所需 concrete adapter。"
+    },
+    "platform": {
+      "allow_out": [],
+      "role": "横切基础设施的依赖 DAG 底层。"
     },
     "domain": {
       "allow_out": [
         "platform"
       ],
-      "role": "目标态 domain 只可依赖 platform（ADR-01/02）。P6-W1 的 Result/Error/Deadline/CancellationToken contract 正式使用这条目标边；具体 IO/codec 依赖仍一律禁止。"
+      "role": "纯模型、策略和 port；不得依赖 JSON/HTTP/DB/Provider concrete。"
     },
     "application": {
       "allow_out": [
-        "domain"
-      ]
+        "domain",
+        "platform"
+      ],
+      "role": "用例与流程编排，只依赖 domain port 与 platform 值设施。"
     },
-    "models": {
-      "allow_out": []
-    },
-    "apiManager": {
-      "allow_out": [
-        "domain"
-      ]
-    },
-    "channelManager": {
+    "infrastructure": {
       "allow_out": [
         "domain",
         "platform"
-      ]
+      ],
+      "role": "Provider、DB、clock、config、executor、metrics 和其他 concrete adapter。"
     },
-    "dbManager": {
+    "transport": {
       "allow_out": [
-        "domain"
-      ]
-    },
-    "retoolWorkspace": {
-      "allow_out": [
+        "application",
         "domain",
         "platform"
-      ]
-    },
-    "metrics": {
-      "allow_out": [
-        "dbManager",
-        "domain",
-        "platform"
-      ]
-    },
-    "managedAccount": {
-      "allow_out": [
-        "accountManager",
-        "domain",
-        "retoolWorkspace"
-      ]
-    },
-    "accountManager": {
-      "allow_out": [
-        "domain",
-        "platform"
-      ]
-    },
-    "controllers": {
-      "allow_out": [
-        "accountManager",
-        "domain",
-        "retoolWorkspace",
-        "sessionManager"
-      ]
-    },
-    "sessionManager": {
-      "allow_out": [
-        "apiManager",
-        "domain",
-        "platform"
-      ]
+      ],
+      "role": "Drogon Controller、filter、HTTP codec 和 response sink。"
     },
     "runtime": {
       "allow_out": [
-        "accountManager",
         "application",
-        "channelManager",
-        "controllers",
-        "dbManager",
         "domain",
         "infrastructure",
-        "managedAccount",
-        "metrics",
         "platform",
-        "retoolWorkspace",
-        "sessionManager"
+        "transport"
       ],
-      "role": "composition root; may know concrete modules（原 main.cc 的特权已迁移至此）"
-    },
-    "platform": {
-      "allow_out": [],
-      "role": "platform 闭包（migration-plan 3.5 第 1 项）：Result/Error/Deadline/取消/时钟/日志 port。allow_out 必须恒为空——它是依赖 DAG 的底，任何出边都会让「人人可依赖」这一前提失效。"
+      "role": "唯一 composition root；显式构造并连接所有 concrete service。"
     }
   },
-  "_target": "正式 target DAG 由 platform/domain/application/infrastructure/transport/runtime 规则强制；目录规则只保护仍有独立业务边界的模块，且不保留过渡 allowlist。"
+  "_target": "正式 target DAG：platform <- domain <- application；infrastructure 独立实现 domain port；transport -> application；runtime 负责组合。"
 }

@@ -5,8 +5,8 @@
 #include <infrastructure/provider/retool/retoolapi.h>
 #include <application/workspace/RetoolWorkspaceUseCase.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
-#include <managedAccount/backends/RetoolWorkspaceBackend.h>
-#include <managedAccount/service/ManagedAccountService.h>
+#include <infrastructure/managedAccount/backends/RetoolWorkspaceBackend.h>
+#include <infrastructure/managedAccount/service/ManagedAccountService.h>
 
 #include <algorithm>
 #include <chrono>

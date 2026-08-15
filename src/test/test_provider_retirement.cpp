@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
 
-#include <controllers/RetiredProviderTombstone.h>
-#include <accountManager/accountManager.h>
-#include <channelManager/channelManager.h>
+#include <transport/controllers/RetiredProviderTombstone.h>
+#include <application/account/accountManager.h>
+#include <application/channel/channelManager.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
 #include <infrastructure/config/ConfigValidator.h>

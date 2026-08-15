@@ -11,7 +11,7 @@
 #include <domain/port/IMetricsUseCase.h>
 #include <domain/port/IRetoolWorkspaceAdminUseCase.h>
 #include <domain/port/IRetoolWorkspaceUseCase.h>
-#include <managedAccount/contracts/ManagedAccount.h>
+#include <infrastructure/managedAccount/contracts/ManagedAccount.h>
 
 #include <chrono>
 #include <functional>

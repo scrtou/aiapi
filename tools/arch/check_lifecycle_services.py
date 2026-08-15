@@ -46,37 +46,37 @@ for path in SRC.rglob("*"):
             line = text.count("\n", 0, match.start()) + 1
             errors.append(f"{relative}:{line}: lifecycle service locator revived: {symbol}")
 
-session_header = (SRC / "sessionManager/core/Session.h").read_text(errors="replace")
+session_header = (SRC / "application/generation/core/Session.h").read_text(errors="replace")
 reaper_header = (SRC / "infrastructure/provider/chayns/chaynsThreadReaper.h").read_text(errors="replace")
 queue_header = (SRC / "infrastructure/executor/BackgroundTaskQueue.h").read_text(errors="replace")
-session_db_header = (SRC / "dbManager/session/SessionDbManager.h").read_text(errors="replace")
-thread_db_header = (SRC / "dbManager/chaynsThread/chaynsThreadDbManager.h").read_text(errors="replace")
-error_stats_db_header = (SRC / "dbManager/metrics/ErrorStatsDbManager.h").read_text(errors="replace")
-status_db_header = (SRC / "dbManager/metrics/StatusDbManager.h").read_text(errors="replace")
-account_db_header = (SRC / "dbManager/account/accountDbManager.h").read_text(errors="replace")
-account_backup_db_header = (SRC / "dbManager/account/accountBackupDbManager.h").read_text(
+session_db_header = (SRC / "infrastructure/persistence/session/SessionDbManager.h").read_text(errors="replace")
+thread_db_header = (SRC / "infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h").read_text(errors="replace")
+error_stats_db_header = (SRC / "infrastructure/persistence/metrics/ErrorStatsDbManager.h").read_text(errors="replace")
+status_db_header = (SRC / "infrastructure/persistence/metrics/StatusDbManager.h").read_text(errors="replace")
+account_db_header = (SRC / "infrastructure/persistence/account/accountDbManager.h").read_text(errors="replace")
+account_backup_db_header = (SRC / "infrastructure/persistence/account/accountBackupDbManager.h").read_text(
     errors="replace"
 )
-channel_db_header = (SRC / "dbManager/channel/channelDbManager.h").read_text(errors="replace")
-config_db_header = (SRC / "dbManager/config/ConfigDbManager.h").read_text(errors="replace")
-workspace_db_header = (SRC / "dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h").read_text(
+channel_db_header = (SRC / "infrastructure/persistence/channel/channelDbManager.h").read_text(errors="replace")
+config_db_header = (SRC / "infrastructure/persistence/config/ConfigDbManager.h").read_text(errors="replace")
+workspace_db_header = (SRC / "infrastructure/persistence/retoolWorkspace/RetoolWorkspaceDbManager.h").read_text(
     errors="replace"
 )
-error_stats_service_header = (SRC / "metrics/ErrorStatsService.h").read_text(errors="replace")
-error_stats_service_cpp = (SRC / "metrics/ErrorStatsService.cpp").read_text(errors="replace")
-error_stats_config_header = (SRC / "metrics/ErrorStatsConfig.h").read_text(errors="replace")
-account_manager_header = (SRC / "accountManager/accountManager.h").read_text(errors="replace")
-channel_manager_header = (SRC / "channelManager/channelManager.h").read_text(errors="replace")
-workspace_manager_header = (SRC / "retoolWorkspace/RetoolWorkspaceManager.h").read_text(
+error_stats_service_header = (SRC / "infrastructure/metrics/ErrorStatsService.h").read_text(errors="replace")
+error_stats_service_cpp = (SRC / "infrastructure/metrics/ErrorStatsService.cpp").read_text(errors="replace")
+error_stats_config_header = (SRC / "infrastructure/metrics/ErrorStatsConfig.h").read_text(errors="replace")
+account_manager_header = (SRC / "application/account/accountManager.h").read_text(errors="replace")
+channel_manager_header = (SRC / "application/channel/channelManager.h").read_text(errors="replace")
+workspace_manager_header = (SRC / "application/workspace/RetoolWorkspaceManager.h").read_text(
     errors="replace"
 )
-workspace_service_header = (SRC / "retoolWorkspace/RetoolWorkspaceService.h").read_text(
+workspace_service_header = (SRC / "infrastructure/workspace/RetoolWorkspaceService.h").read_text(
     errors="replace"
 )
-ai_controller_header = (SRC / "controllers/AiApiController.h").read_text(errors="replace")
-ai_controller_cpp = (SRC / "controllers/AiApiController.cc").read_text(errors="replace")
-ai_use_case_header = (SRC / "sessionManager/core/AiApiUseCase.h").read_text(errors="replace")
-ai_use_case_cpp = (SRC / "sessionManager/core/AiApiUseCase.cpp").read_text(errors="replace")
+ai_controller_header = (SRC / "transport/controllers/AiApiController.h").read_text(errors="replace")
+ai_controller_cpp = (SRC / "transport/controllers/AiApiController.cc").read_text(errors="replace")
+ai_use_case_header = (SRC / "application/generation/core/AiApiUseCase.h").read_text(errors="replace")
+ai_use_case_cpp = (SRC / "application/generation/core/AiApiUseCase.cpp").read_text(errors="replace")
 context = (SRC / "runtime/AppContext.h").read_text(errors="replace")
 wiring = (SRC / "runtime/AppWiring.cpp").read_text(errors="replace")
 
@@ -477,8 +477,8 @@ if all(needle in wiring for needle in (
         )
 
 for relative in (
-    "dbManager/session/SessionDbManager.cpp",
-    "dbManager/chaynsThread/chaynsThreadDbManager.cpp",
+    "infrastructure/persistence/session/SessionDbManager.cpp",
+    "infrastructure/persistence/chaynsThread/chaynsThreadDbManager.cpp",
 ):
     text = (SRC / relative).read_text(errors="replace")
     if "BackgroundTaskQueue.h" in text:

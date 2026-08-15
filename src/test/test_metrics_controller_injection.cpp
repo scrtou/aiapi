@@ -2,7 +2,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
-#include <controllers/MetricsController.h>
+#include <transport/controllers/MetricsController.h>
 
 // ARCH_TESTS: domain/model/MetricsData.h
 // ARCH_TESTS: domain/port/IMetricsUseCase.h

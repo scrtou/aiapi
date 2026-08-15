@@ -1,5 +1,5 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/continuity/OutboundBudget.h>
+#include <infrastructure/provider/limits/OutboundBudget.h>
 
 using namespace continuity;
 

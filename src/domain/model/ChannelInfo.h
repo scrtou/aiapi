@@ -6,7 +6,7 @@
 using std::string;
 
 // 渠道信息领域模型（R4 试点 B）。
-// 原定义在 dbManager/channel/channelDbManager.h 内。端口 IChannelStore 的签名要用到它，
+// 原定义在 infrastructure/persistence/channel/channelDbManager.h 内。端口 IChannelStore 的签名要用到它，
 // 若留在 dbManager 头里，domain/port 就得反向 include dbManager —— 那会污染中立层，
 // 并被第三道门禁（layer boundary, rc=3）直接拦下。故先行搬迁。
 //

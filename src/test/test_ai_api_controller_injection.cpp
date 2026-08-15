@@ -2,7 +2,7 @@
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
 
-#include <controllers/AiApiController.h>
+#include <transport/controllers/AiApiController.h>
 
 // ARCH_TESTS: domain/model/AiApiData.h
 // ARCH_TESTS: domain/port/IAiApiUseCase.h

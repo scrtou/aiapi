@@ -1,5 +1,5 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/tooling/ToolCallNormalizer.h>
+#include <application/generation/tooling/ToolCallNormalizer.h>
 using namespace toolcall;
 
 namespace {

@@ -1,19 +1,19 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/accountManager.h>
+#include <application/account/accountManager.h>
 #include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
 #include <infrastructure/provider/chayns/ChaynsClock.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
-#include <sessionManager/continuity/ResponseIndex.h>
-#include <sessionManager/core/SessionExecutionGate.h>
-#include <sessionManager/core/Session.h>
-#include <controllers/sinks/ChatJsonSink.h>
-#include <controllers/sinks/ChatSseSink.h>
-#include <controllers/sinks/ResponsesJsonSink.h>
-#include <controllers/sinks/ResponsesSseSink.h>
-#include <sessionManager/core/GenerationService.h>
+#include <application/generation/continuity/ResponseIndex.h>
+#include <application/generation/core/SessionExecutionGate.h>
+#include <application/generation/core/Session.h>
+#include <transport/controllers/sinks/ChatJsonSink.h>
+#include <transport/controllers/sinks/ChatSseSink.h>
+#include <transport/controllers/sinks/ResponsesJsonSink.h>
+#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/core/GenerationService.h>
 
 #include <algorithm>
 #include <deque>

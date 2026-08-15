@@ -35,7 +35,7 @@ chat_port = source("domain/port/IChatProvider.h")
 base_header = source("infrastructure/provider/ProviderBase.h")
 base_cpp = source("infrastructure/provider/ProviderBase.cpp")
 factory = source("infrastructure/provider/ProductionProviderFactory.h")
-generation_event = source("sessionManager/contracts/GenerationEvent.h")
+generation_event = source("application/generation/contracts/GenerationEvent.h")
 test_cmake = source("test/CMakeLists.txt")
 
 for name in (
@@ -52,8 +52,8 @@ if "using ErrorCode" in generation_event:
 
 for removed in (
     "domain/model/ProviderResult.h",
-    "sessionManager/core/ProviderResultCodec.h",
-    "sessionManager/core/Errors.h",
+    "application/generation/core/ProviderResultCodec.h",
+    "application/generation/core/Errors.h",
 ):
     if (SRC / removed).exists():
         errors.append(f"P8 compatibility artifact still exists: src/{removed}")

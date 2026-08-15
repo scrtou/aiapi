@@ -1,12 +1,12 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/accountManager.h>
+#include <application/account/accountManager.h>
 #include <infrastructure/provider/chayns/chaynsThreadReaper.h>
 #include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
-#include <sessionManager/core/Session.h>
+#include <application/generation/core/Session.h>
 
 #include <test/chayns_thread_stub_control.h>
 

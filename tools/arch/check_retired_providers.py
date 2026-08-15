@@ -27,11 +27,11 @@ def source_text() -> str:
 
 
 all_source = source_text()
-controller = (SRC / "controllers/AiApiController.h").read_text(encoding="utf-8")
-channels = (SRC / "channelManager/channelManager.cpp").read_text(encoding="utf-8")
+controller = (SRC / "transport/controllers/AiApiController.h").read_text(encoding="utf-8")
+channels = (SRC / "application/channel/channelManager.cpp").read_text(encoding="utf-8")
 account_write_sources = (
-    SRC / "accountManager/AccountSelector.cpp",
-    SRC / "accountManager/AccountRegistrationWorkflow.cpp",
+    SRC / "application/account/AccountSelector.cpp",
+    SRC / "application/account/AccountRegistrationWorkflow.cpp",
 )
 accounts = "\n".join(path.read_text(encoding="utf-8") for path in account_write_sources)
 

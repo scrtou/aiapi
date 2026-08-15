@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
-#include <controllers/sinks/ChatJsonSink.h>
-#include <controllers/sinks/ResponsesJsonSink.h>
-#include <controllers/sinks/ChatSseSink.h>
-#include <controllers/sinks/ResponsesSseSink.h>
+#include <transport/controllers/sinks/ChatJsonSink.h>
+#include <transport/controllers/sinks/ResponsesJsonSink.h>
+#include <transport/controllers/sinks/ChatSseSink.h>
+#include <transport/controllers/sinks/ResponsesSseSink.h>
 
 namespace {
 

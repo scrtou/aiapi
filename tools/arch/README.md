@@ -3,10 +3,11 @@
 ## 为什么需要它
 
 ADR-02 靠 `target_link_libraries` 强制分层，而 **CMake 不允许 static library 循环依赖**。
-只要 `src/` 存在跨模块环，阶段 1 的 target 拆分就无法完成。
+即使 P8 已完成 target 拆分，`src/` 的 include 回边仍会让边界退化，因此 cycle/layer gate 继续是
+正式层 DAG 的棘轮。
 
-更重要的是：阶段 0.7 的三环表是**逐条人工定位**的 —— 边看得很准，
-但**看不出九个模块合起来是一个环**。这就是本脚本存在的理由。
+环检测不能看见“同层 infrastructure 内部直接碰 persistence”或“文件留在错误物理层”等单向退化；
+因此本目录同时维护 cycle/layer、persistence include、source owner 和 P8-W2 physical-layout 等互补门禁。
 
 ## 用法
 
@@ -32,13 +33,14 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 1 | check_cycles | 存在超出基线的环或双向边 |
 | 2 | check_cycles | **前提被破坏**：出现跨目录同名头文件，基名判据失效 |
 | 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现 platform 之外的出边） |
-| 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 dbManager 直连 |
+| 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 `infrastructure/persistence` 直连 |
 | 4 | check_startup_wiring | 注入缺失，或注入晚于 `init()` |
 | 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或已删除 legacy target/source list 复活 |
 | 1 | check_retired_providers | retired Provider 实现/工厂或 account/channel guard 复活，或 tombstone/兼容公开路由丢失 |
 | 4 | check_test_registration | 测试文件未在 CMake 注册 |
 | 4 | check_enqueue_result | queue `enqueue()` / executor `submit()` 丢属性，或调用点绑定后不读结果 |
 | 4 | check_app_context | 组装根形状被破坏：build() 结果被丢弃、addOwner 逃出步骤、shutdown 收相对时长、main.cc 直接注入 |
+| 4 | check_physical_layout | P8-W2：历史/未知 `src/` 顶层目录复活，或正式 CMake source list 的实现不在其匹配层目录 |
 | 4 | check_provider_registry | P5/P6 Provider 静态工厂/管理器、`APIinterface` 或 legacy registry lane 复活，或两家 Provider 的显式窄注册/冻结接线缺失 |
 | 4 | check_session_services | P5-W2 ResponseIndex/ExecutionGate 单例复活，或 application/transport 重新定位 chatSession |
 | 4 | check_lifecycle_services | P5-W3 queue/session/thread/metrics、五个 concrete DB store、Workspace/Account/Channel 或 AI facade 生命周期 singleton fallback 复活，或 AppContext ownership/构造接线缺失 |
@@ -53,59 +55,59 @@ python3 tools/arch/check_cycles.py --write-baseline
 
 ## 判据说明（重要）
 
-判据是「`#include` 的头文件**基名** → 该头文件在 `src/` 下的顶层目录」。
+cycle/layer 判据是「`#include` 的头文件**基名** → 该头文件所在的 `src/` 顶层正式层」。
 
-> **不要改回用 include 路径前缀判断模块归属。** v2.3 用过路径前缀，测出 **0 个环** —— 那是错的：
-> 仓库里有 200 处 include 只写文件名，路径前缀判据完全看不见它们。
+> **不要改回只用 include 路径前缀判断依赖。** 无路径的 `#include "Header.h"` 也必须被解析；
+> 只按路径前缀会把这类真实边静默漏掉。
 
-基名判据成立的前提是**头文件名全库唯一**。脚本每次运行都会先自检该前提，
-不成立就直接退 2 —— 这同时也是 ADR-03 机械改写的守门条件
-（重名状态下机械改写会静默改错目标）。
+基名判据成立的前提是**头文件名全库唯一**（包括同一 formal layer 的不同子目录）。脚本每次运行
+都会先自检该前提，不成立就直接退 2 —— 这同时也是 ADR-03 机械改写的守门条件（重名状态下机械
+改写会静默改错目标）。
 
-## 两个基线文件
+## Cycle 基线
 
 | 文件 | 含义 |
 |---|---|
-| `cycles-baseline.json` | **当前实测态**（9 节点 SCC / 6 条双向边）。CI 用它防回归 |
-| `cycles-target.json` | **阶段 0.7 验收标准**：SCC 仅剩 `{apipoint, sessionManager}`。阶段 0.7 完成时应能通过 |
+| `cycles-baseline.json` | 当前可接受实测态；P8 后为 **0 SCC / 0 双向边**，CI 用它防回归 |
+| `cycles-target.json` | 正式目标态；同样为 **0 SCC / 0 双向边** |
 
-阶段 0.7 的每一项（C1~C7）做完后，都应重跑 `--write-baseline` 收紧 `cycles-baseline.json`，
-最终它应与 `cycles-target.json` 一致。
+基线只能在改善后通过 `--write-baseline` 收紧，不能手工放宽。
 
-## 残留的那一个环
-
-`{apipoint, sessionManager}` 由 `sessionManager/core/Session.cpp:6 -> chaynsapi.h` 造成，
-是**真 DIP 违规**（domain 直接依赖具体 Provider），必须靠 `IChatProvider` port + 组合根注入才能断，
-**已明确转阶段 2 与「消灭单例」同批处理**，不在阶段 0.7 范围内。
-
-## 门禁 4：dbManager 直接依赖棘轮（退出码 4）
+## 门禁 4：persistence 直接依赖棘轮（退出码 4）
 
 ```bash
 python3 tools/arch/check_cycles.py --db-ratchet tools/arch/db-include-ratchet.json
 ```
 
-业务层直接 `#include` dbManager 头文件的**文件级**白名单。新增即 FAIL。
+`--db-ratchet` 是保留的 CLI/文件名兼容别名；实际检查的是**非
+`infrastructure/persistence/` 文件**直接 include persistence adapter 的文件级白名单。
 
-**为什么需要第四道**：前三道都看不见这类退化。
-`accountManager -> dbManager` 是单向边，不成环（门禁 1/2 无感）；
-该模块也已在 `layer-rules.json` 的 `allow_out` 里（门禁 3 放行）。
-于是「在已白名单模块里无限追加 include」成了倒置成果被悄悄侵蚀的通道。
-粒度定在**文件**而非模块，就是为了堵这条路。
+**为什么需要这道门**：正式 layer rule 只能看到 `infrastructure -> infrastructure`，看不到 provider/
+reaper 在同层内重新直接碰 DB adapter 的退化；环检测也看不见单向边。粒度定在**文件**而非层，
+是为了防止已允许的 source 目录无限新增这类 include。
 
 **两类判定**：
-- `allowed_files`：冻结现状。出现清单外的文件即 FAIL。
-- `must_stay_clean`：已完成依赖倒置的模块，必须保持零直连。
-  这是显式表达意图，而不是依赖「它恰好不在清单里」。
+- `allowed_files`：冻结现有的 concrete provider/runtime 直连；出现清单外文件即 FAIL。
+- `must_stay_clean`：`application/`、`transport/` 等已完成倒置的物理层必须保持零直连；即使有人
+  错误把它加到 allowlist，仍会 FAIL。
 
-**工作流**：
-- 完成一个模块的倒置后，把它从 `allowed_files` 移除、加入 `must_stay_clean`。
-- 解除直连后脚本会提示 `--write-db-ratchet` 收紧清单。减少不算违规，不会 FAIL。
-- 确需放宽，显式改 JSON 并在提交信息里写明理由。
+解析仍使用全库唯一的头文件基名，因此既可抓完整路径 include，也可抓无路径的
+`#include "ErrorStatsDbManager.h"` 和 `.cc` source。
 
-**判据坑（实测记录）**：
-扫描复用与前三道相同的头文件基名索引，原因是路径判据会漏两类写法——
-无路径的 `#include "ErrorStatsDbManager.h"`，以及 `.cc` 扩展名的文件。
-手工 grep 曾因此漏报 4 个文件（10 vs 实际 14）。
+## P8-W2：physical-layout gate（退出码 4）
+
+```bash
+python3 tools/arch/check_physical_layout.py
+python3 tools/arch/check_physical_layout.py --selftest
+```
+
+它不尝试替代 source-owner 或 target-DAG gate：前者检查每个 production implementation 的唯一 owner，
+后者检查 link 方向；本 gate 只检查**物理路径**。它拒绝历史/未知 `src/` 顶层目录，并要求
+`AIAPI_PLATFORM_SOURCES`、`AIAPI_APPLICATION_SOURCES`、`AIAPI_INFRASTRUCTURE_SOURCES`、
+`AIAPI_TRANSPORT_SOURCES`、`AIAPI_RUNTIME_SOURCES` 中每个 `.cpp/.cc` 均位于相应层目录。
+
+`--selftest` 不写工作树：在内存中把一个 application source 改成 infrastructure 路径，并复活
+`sessionManager/` 顶层目录；两个 mutation 都必须被拒绝。
 
 
 ## 门禁 5：启动接线（退出码 4）

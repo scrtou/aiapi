@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <accountManager/LoginResponseLogSummary.h>
+#include <application/account/LoginResponseLogSummary.h>
 
 DROGON_TEST(LoginResponseLogSummary_ReportsOnlyPresenceFlags)
 {

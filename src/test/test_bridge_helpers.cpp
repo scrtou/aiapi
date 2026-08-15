@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <sessionManager/tooling/BridgeHelpers.h>
+#include <application/generation/tooling/BridgeHelpers.h>
 
 #include <string>
 

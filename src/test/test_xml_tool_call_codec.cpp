@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
-#include <sessionManager/tooling/ToolCallBridge.h>
-#include <sessionManager/tooling/XmlTagToolCallCodec.h>
+#include <application/generation/tooling/ToolCallBridge.h>
+#include <application/generation/tooling/XmlTagToolCallCodec.h>
 using namespace toolcall;
 
 namespace {

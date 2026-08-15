@@ -11,10 +11,10 @@
 // 测试会红；而旧的 stub_account_manager.cpp 做法下改坏真身测试照样绿。
 //
 // 缺口清单来自链接实测而非推测；Provider 退役后已同步删除不再需要的 backup 桩。
-#include <dbManager/config/ConfigDbManager.h>
-#include <dbManager/chaynsThread/chaynsThreadDbManager.h>
+#include <infrastructure/persistence/config/ConfigDbManager.h>
+#include <infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h>
 #include <test/chayns_thread_stub_control.h>
-#include <retoolWorkspace/RetoolWorkspaceService.h>
+#include <infrastructure/workspace/RetoolWorkspaceService.h>
 
 #include <map>
 #include <optional>
