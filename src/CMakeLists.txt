@@ -232,15 +232,20 @@ endforeach()
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PostgreSQL REQUIRED)
+find_path(JSONCPP_INCLUDE_DIRS
+    NAMES json/json.h
+    PATHS /usr/include/jsoncpp /usr/local/include/jsoncpp
+    REQUIRED)
+find_library(JSONCPP_LIBRARIES
+    NAMES jsoncpp
+    PATHS /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib
+    REQUIRED)
 get_target_property(DROGON_INCLUDE_DIRS Drogon::Drogon INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Drogon头文件路径: ${DROGON_INCLUDE_DIRS}")
 
 # Application still serializes its legacy request/event value boundary with
 # JsonCpp, but it must not receive Drogon's HTTP/runtime usage requirements.
 # Keep the codec dependency explicit until that representation is retired.
-if (NOT JSONCPP_INCLUDE_DIRS OR NOT JSONCPP_LIBRARIES)
-    message(FATAL_ERROR "JsonCpp is required by the application compatibility codecs")
-endif()
 target_include_directories(aiapi_application PRIVATE ${JSONCPP_INCLUDE_DIRS})
 target_link_libraries(aiapi_application PRIVATE ${JSONCPP_LIBRARIES})
 

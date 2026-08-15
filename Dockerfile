@@ -75,7 +75,11 @@ RUN mkdir -p src/build/logs
 WORKDIR /usr/aiapi/src/build
 
 # 构建项目
-RUN cmake ..
+# Ubuntu 22.04 提供 MariaDB 兼容的 MySQL 客户端库；显式告诉 Drogon
+# 头文件和库的位置，避免 FindMySQL.cmake 搜索失败。
+RUN cmake .. \
+    -DMYSQL_INCLUDE_DIRS=/usr/include/mariadb \
+    -DMYSQL_LIBRARIES=/usr/lib/x86_64-linux-gnu/libmariadb.so
 RUN make -j $(nproc)
 
 # 复制默认配置文件（config.sqlite.example.json 已删除，改用 config.example.json）

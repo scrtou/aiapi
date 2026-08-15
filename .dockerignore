@@ -1,12 +1,34 @@
+# Git 和编辑器
 .git
 .gitignore
+.idea
+.vscode
+
+# CMake/Drogon 生成文件
 build/
+build-*
 src/build/
 **/build/
+.deps/
+_deps/
+
+# 运行时数据、日志和崩溃转储
+data/
+logs/
+cores/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# 编译产物
 *.o
 *.so
 *.a
-*.log
-README.md
+*.d
+
+# Docker 自身文件
 Dockerfile
 .dockerignore
+docker-compose.yml
+compose.yml
