@@ -233,6 +233,64 @@ DROGON_TEST(SessionStore_ContextMap_IsConsumed_By_GetOrCreateSession)
     mgr.delSession(realSessionId);
 }
 
+DROGON_TEST(SessionStore_ZeroWidthKeepsStableSessionAcrossCommit)
+{
+    chatSession mgr;
+    mgr.setTrackingMode(SessionTrackingMode::ZeroWidth);
+
+    session_st session;
+    session.state.conversationId = "zw_stable_session";
+    session.request.api.clear();
+    session.request.model = "GPT-4o";
+    session.request.message = "current question";
+    session.request.rawMessage = session.request.message;
+    session.response.message["message"] = "answer";
+    mgr.addSession(session.state.conversationId, session);
+
+    const auto prepared = mgr.prepareNextSessionId(session);
+    CHECK(prepared == "zw_stable_session");
+
+    mgr.coverSessionresponse(session);
+    CHECK(session.state.conversationId == "zw_stable_session");
+    CHECK(mgr.sessionIsExist("zw_stable_session"));
+
+    session_st overlappingRequest;
+    overlappingRequest.request.api.clear();
+    overlappingRequest.request.model = "GPT-4o";
+    overlappingRequest.request.message = "retry from previous response";
+    mgr.getOrCreateSession("zw_stable_session", overlappingRequest);
+    CHECK(overlappingRequest.state.isContinuation);
+    CHECK(overlappingRequest.state.conversationId == "zw_stable_session");
+
+    mgr.delSession("zw_stable_session");
+}
+
+DROGON_TEST(SessionStore_ZeroWidthCreateOrUpdateDoesNotRotateKey)
+{
+    chatSession mgr;
+    mgr.setTrackingMode(SessionTrackingMode::ZeroWidth);
+
+    session_st first;
+    first.state.conversationId = "zw_helper_stable";
+    first.request.model = "GPT-4o";
+    first.request.message = "first";
+    mgr.createOrUpdateSessionZeroWidth(first);
+    CHECK(!first.state.isContinuation);
+    CHECK(mgr.sessionIsExist("zw_helper_stable"));
+
+    session_st second;
+    second.state.conversationId = "zw_helper_stable";
+    second.request.model = "GPT-4o";
+    second.request.message = "second";
+    mgr.createOrUpdateSessionZeroWidth(second);
+    CHECK(second.state.isContinuation);
+    CHECK(second.state.conversationId == "zw_helper_stable");
+    CHECK(second.provider.prevProviderKey == "zw_helper_stable");
+    CHECK(mgr.sessionIsExist("zw_helper_stable"));
+
+    mgr.delSession("zw_helper_stable");
+}
+
 DROGON_TEST(SessionStore_ContinuationPreservesLedgerRecoveryHints)
 {
     chatSession mgr;

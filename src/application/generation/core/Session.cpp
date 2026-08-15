@@ -487,9 +487,14 @@ std::string chatSession::prepareNextSessionId(session_st& session)
 {
     // 根据追踪模式生成下一轮的 sessionId
     if (isZeroWidthMode()) {
-        session.state.nextSessionId = generateZeroWidthSessionId();
-        LOG_INFO << "[ZeroWidth] 预生成下一轮 sessionId: " << session.state.nextSessionId
-                 << " (当前: " << session.state.conversationId << ")";
+        // ZeroWidth is a transport mechanism, not a per-turn identifier.
+        // Claude Code can issue overlapping/retried requests that still carry
+        // the previous response marker. Rotating and deleting the old key here
+        // makes those requests look like new conversations and forces an
+        // unnecessary upstream thread plus history replay. Keep one stable key
+        // for the lifetime of the tracked conversation instead.
+        session.state.nextSessionId = session.state.conversationId;
+        LOG_INFO << "[ZeroWidth] 保持稳定会话ID: " << session.state.nextSessionId;
     } else {
         // Hash 模式：基于当前上下文生成新的 sessionId
         // 注意：此时 messageContext 还未包含本轮对话，需要先临时添加
@@ -1285,44 +1290,20 @@ std::string chatSession::generateZeroWidthSessionId()
 session_st& chatSession::createOrUpdateSessionZeroWidth(session_st& session)
 {
     LOG_INFO << "[ZeroWidth] 开始处理零宽字符模式会话";
-    
-    // 会话ID 由请求适配阶段提前写入 conversationId（若存在）
-    // 这里仅检查 conversationId 是否已设置
-    std::string extractedSessionId = session.state.conversationId;
-    
-    if (!extractedSessionId.empty() && sessionIsExist(session))
-    {
-        // 找到了有效的会话ID，更新现有会话
-        LOG_INFO << "[ZeroWidth] 找到旧会话: " << extractedSessionId;
-        updateExistingSessionFromRequest(extractedSessionId, session);
-        
-        // 生成新的会话 ID（像 Response 接口一样，每次都变化）
-        std::string newSessionId = generateZeroWidthSessionId();
-        LOG_INFO << "[ZeroWidth] 生成新的会话ID: " << newSessionId << " (旧: " << extractedSessionId << ")";
-        
-        // 迁移会话：从旧 ID 迁移到新 ID
-        session_map[newSessionId] = session;
-        session_map[newSessionId].state.conversationId = newSessionId;
-        session_map[newSessionId].provider.prevProviderKey = extractedSessionId;
-        delSession(extractedSessionId);
-        
-        // 更新 session 引用
-        session = session_map[newSessionId];
-        
-        // 标记为继续会话，需要转移线程上下文
-        session.state.isContinuation = true;
-        session.provider.prevProviderKey = extractedSessionId;
+
+    // ZeroWidth 会话 ID 是传输层携带的稳定主键，而不是每轮生成的临时键。
+    // 统一复用 getOrCreateSession()，让内存/持久化回填、请求字段合并以及续聊
+    // 标记都走同一条会话入口。这样并发或重试请求携带上一轮响应中的标记时，
+    // 仍能命中同一个本地会话和 provider 线程上下文。
+    std::string sessionId = session.state.conversationId;
+    if (sessionId.empty()) {
+        sessionId = generateZeroWidthSessionId();
+        LOG_INFO << "[ZeroWidth] 未提取到会话ID，创建稳定会话: " << sessionId;
+    } else {
+        LOG_INFO << "[ZeroWidth] 使用稳定会话ID: " << sessionId;
     }
-    else
-    {
-        // 没有找到有效的会话ID，创建新会话
-        LOG_INFO << "[ZeroWidth] 创建新会话";
-        std::string newSessionId = generateZeroWidthSessionId();
-        initializeNewSession(newSessionId, session);
-        session.state.isContinuation = false;
-    }
-    
-    return session;
+
+    return getOrCreateSession(sessionId, session);
 }
 
 std::string chatSession::extractSessionIdFromText(const std::string& text)

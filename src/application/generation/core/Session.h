@@ -315,9 +315,10 @@ public:
     
     // ========== 会话转移两阶段方法（ZeroWidth/Hash 模式共用）==========
     /**
-     * @brief 阶段1：预生成下一轮的 sessionId
+     * @brief 阶段1：准备下一轮的 sessionId
      *
-     * 在响应嵌入之前调用，生成新的 sessionId 并存储到 session.state.nextSessionId。
+     * 在响应嵌入之前调用并存储到 session.state.nextSessionId。
+     * ZeroWidth 模式复用当前会话 ID，避免并发/重试请求携带旧标记时断开会话。
      * 调用方应将 nextSessionId 嵌入到响应中发送给客户端。
      *
      * @param session 会话对象（会设置 nextSessionId 字段）
