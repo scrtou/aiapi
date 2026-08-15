@@ -6,9 +6,9 @@
 
 | 项 | 值 |
 |---|---|
-| schema | v3 |
-| 生成时间 | `2026-08-09T03:54:21+00:00` |
-| 基础 commit | `544bf44` |
+| schema | v4 |
+| 生成时间 | `2026-08-15T07:32:09+00:00` |
+| 基础 commit | `0090b60` |
 | 工作区 | **clean** |
 | 扫描扩展名 | `.h/.hpp/.cpp/.cc` |
 
@@ -18,18 +18,18 @@
 
 | 规则 | 当前值 | 含义 |
 |---|---:|---|
-| R1 | **4** | tooling/actionProtocol 自由函数与 GenerationService 成员同名竞争 |
-| R2 | **43** | fan-in ≥2 且无直接/显式 test owner 的生产头；**不是运行时覆盖** |
-| R3 | **13** | `.cpp/.cc` 中超过 200 行的函数候选 |
-| R3 行数 | **5006** | R3 候选总行数 |
+| R1 | **0** | tooling/actionProtocol 自由函数与 GenerationService 成员同名竞争 |
+| R2 | **41** | fan-in ≥2 且无直接/显式 test owner 的生产头；**不是运行时覆盖** |
+| R3 | **6** | `.cpp/.cc` 中超过 200 行的函数候选 |
+| R3 行数 | **2563** | R3 候选总行数 |
 
 | 规模项 | 当前值 |
 |---|---:|
-| 生产翻译单元 | 65 |
-| 测试直接编译的生产源 | 38 |
-| 测试源 | 35 |
-| 测试用例 | 223 |
-| 静态断言宏计数 | 872 |
+| 生产翻译单元 | 89 |
+| 已登记 production library owner 的生产源 | 88 |
+| 测试源 | 65 |
+| 测试用例 | 396 |
+| 静态断言宏计数 | 1755 |
 
 规模项用于发现 CMake/注册漂移，不作为质量 KPI。
 
@@ -37,73 +37,64 @@
 
 owner 只来自有用例和断言的测试源直接 include，或 `// ARCH_TESTS: path/from/src/Header.h`。传递 include 不产生 owner。即使有 owner，也不能证明运行时执行；真实覆盖使用 gcov/llvm-cov。
 
-v3 口径与旧版不可比较，当前值是新棘轮起点。无行为头可以通过规则修正或 ADR 排除，不应为清零写无意义断言。
+v4 不再把 production source list 称为‘已进测试链接’：普通链接静态库时，源属于库不能证明该 object 已被 linker 提取。运行时真值使用 gcov。无行为头可以通过规则修正或 ADR 排除，不应为清零写无意义断言。
 
 ## 4. R2 明细
 
-| fan-in | impl 行 | 已进测试链接 | 头文件 |
+| fan-in | impl 行 | 已登记 production owner | 头文件 |
 |---:|---:|:---:|---|
-| 11 | 0 | 否 | `src/domain/model/SessionData.h` |
-| 10 | 115 | 是 | `src/apiManager/ApiManager.h` |
+| 21 | 0 | 否 | `src/platform/Log.h` |
+| 13 | 0 | 否 | `src/domain/model/AccountData.h` |
 | 9 | 0 | 否 | `src/sessionManager/contracts/GenerationEvent.h` |
-| 7 | 28 | 是 | `src/apiManager/ApiFactory.h` |
+| 9 | 0 | 否 | `src/sessionManager/contracts/LegacySessionData.h` |
 | 6 | 0 | 否 | `src/controllers/AdminAuthFilter.h` |
 | 6 | 0 | 否 | `src/sessionManager/contracts/GenerationRequest.h` |
-| 5 | 591 | 否 | `src/dbManager/account/accountDbManager.h` |
-| 5 | 351 | 是 | `src/metrics/ErrorStatsService.h` |
-| 5 | 0 | 否 | `src/domain/model/RetoolWorkspaceInfo.h` |
-| 5 | 0 | 否 | `src/domain/port/APIinterface.h` |
-| 4 | 490 | 是 | `src/dbManager/session/SessionDbManager.h` |
-| 4 | 383 | 否 | `src/dbManager/chaynsThread/chaynsThreadDbManager.h` |
-| 4 | 162 | 否 | `src/dbManager/account/accountBackupDbManager.h` |
-| 4 | 87 | 否 | `src/sessionManager/core/ClientOutputSanitizer.h` |
-| 4 | 0 | 否 | `src/apiManager/Apicomn.h` |
-| 4 | 0 | 否 | `src/dbManager/DbType.h` |
-| 4 | 0 | 否 | `src/domain/model/AccountData.h` |
-| 4 | 0 | 否 | `src/domain/model/ProviderResult.h` |
-| 4 | 0 | 否 | `src/sessionManager/tooling/ToolDefinitionResolver.h` |
-| 3 | 533 | 否 | `src/sessionManager/core/GenerationService.h` |
-| 3 | 384 | 是 | `src/dbManager/channel/channelDbManager.h` |
-| 3 | 181 | 否 | `src/retoolWorkspace/RetoolWorkspaceService.h` |
-| 3 | 142 | 否 | `src/dbManager/config/ConfigDbManager.h` |
-| 3 | 61 | 否 | `src/managedAccount/service/ManagedAccountService.h` |
-| 3 | 30 | 否 | `src/sessionManager/tooling/ToolDefinitionEncoder.h` |
-| 2 | 1444 | 否 | `src/apipoint/chaynsapi/chaynsapi.h` |
-| 2 | 1336 | 否 | `src/apipoint/nexosapi/nexosapi.h` |
-| 2 | 523 | 是 | `src/dbManager/metrics/ErrorStatsDbManager.h` |
-| 2 | 452 | 否 | `src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h` |
+| 6 | 0 | 否 | `src/sessionManager/tooling/ToolDefinitionResolver.h` |
+| 5 | 416 | 是 | `src/dbManager/chaynsThread/chaynsThreadDbManager.h` |
+| 5 | 0 | 否 | `src/dbManager/DbType.h` |
+| 5 | 0 | 否 | `src/domain/port/IResponseIndex.h` |
+| 4 | 0 | 否 | `src/managedAccount/contracts/ManagedAccount.h` |
+| 4 | 0 | 否 | `src/platform/result/Error.h` |
+| 3 | 41 | 是 | `src/sessionManager/core/RetiredProviderTelemetry.h` |
+| 3 | 0 | 否 | `src/domain/model/ImageInfo.h` |
+| 3 | 0 | 否 | `src/domain/model/ProviderModelCatalog.h` |
+| 3 | 0 | 否 | `src/domain/model/RequestAggData.h` |
+| 3 | 0 | 否 | `src/domain/port/IExecutionGate.h` |
+| 3 | 0 | 否 | `src/domain/port/IProviderModelCatalog.h` |
+| 3 | 0 | 否 | `src/domain/port/IProviderThreadContext.h` |
+| 3 | 0 | 否 | `src/domain/port/IRetoolWorkspaceAdminUseCase.h` |
+| 3 | 0 | 否 | `src/domain/port/ITelemetrySink.h` |
+| 3 | 0 | 否 | `src/managedAccount/backends/IManagedAccountBackend.h` |
+| 2 | 746 | 是 | `src/runtime/AppWiring.h` |
+| 2 | 588 | 是 | `src/sessionManager/core/GenerationPipeline.h` |
+| 2 | 556 | 是 | `src/sessionManager/core/GenerationResponsePipeline.h` |
+| 2 | 360 | 是 | `src/sessionManager/tooling/ToolDefinitionEncoder.h` |
+| 2 | 289 | 是 | `src/controllers/RetoolWorkspaceController.h` |
 | 2 | 206 | 是 | `src/sessionManager/core/SessionCodec.h` |
-| 2 | 185 | 否 | `src/apipoint/chaynsapi/chaynsThreadReaper.h` |
-| 2 | 184 | 是 | `src/utils/ConfigValidator.h` |
-| 2 | 102 | 否 | `src/managedAccount/backends/ClassicProviderAccountBackend.h` |
-| 2 | 62 | 否 | `src/managedAccount/backends/RetoolWorkspaceBackend.h` |
+| 2 | 115 | 是 | `src/managedAccount/backends/ClassicProviderAccountBackend.h` |
+| 2 | 86 | 是 | `src/sessionManager/core/ClientOutputSanitizer.h` |
+| 2 | 57 | 是 | `src/infrastructure/account/DrogonAccountHttpTransport.h` |
 | 2 | 22 | 是 | `src/sessionManager/continuity/TextExtractor.h` |
 | 2 | 0 | 否 | `src/controllers/RateLimitFilter.h` |
 | 2 | 0 | 否 | `src/domain/model/BridgeWireFormat.h` |
-| 2 | 0 | 否 | `src/domain/model/ChannelInfo.h` |
-| 2 | 0 | 否 | `src/domain/model/ImageInfo.h` |
-| 2 | 0 | 否 | `src/managedAccount/backends/IManagedAccountBackend.h` |
-| 2 | 0 | 否 | `src/managedAccount/contracts/ManagedAccount.h` |
-| 2 | 0 | 否 | `src/sessionManager/core/Errors.h` |
-| 2 | 0 | 否 | `src/sessionManager/core/SessionExecutionGate.h` |
+| 2 | 0 | 否 | `src/domain/port/IAccountSelector.h` |
+| 2 | 0 | 否 | `src/domain/port/IAccountSettingsQuery.h` |
+| 2 | 0 | 否 | `src/domain/port/IChatProvider.h` |
+| 2 | 0 | 否 | `src/platform/Deadline.h` |
+| 2 | 0 | 否 | `src/platform/LocalDateTime.h` |
+| 2 | 0 | 否 | `src/platform/Uuid.h` |
+| 2 | 0 | 否 | `src/platform/result/ErrorCode.h` |
 
 ## 5. R3 明细
 
 | 行数 | 位置 |
 |---:|---|
-| 867 | `src/apipoint/chaynsapi/chaynsapi.cpp:284-1150` |
-| 554 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:1661-2214` |
-| 503 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:516-1018` |
-| 459 | `src/apipoint/retoolapi/retoolapi.cpp:847-1305` |
-| 375 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:678-1052` |
-| 334 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:344-677` |
-| 325 | `src/accountManager/accountManager.cpp:1937-2261` |
-| 313 | `src/main.cc:121-433` |
-| 283 | `src/sessionManager/core/GenerationService.cpp:143-425` |
+| 893 | `src/infrastructure/provider/chayns/chaynsapi.cpp:328-1220` |
+| 460 | `src/infrastructure/provider/retool/retoolapi.cpp:955-1414` |
+| 375 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:677-1051` |
+| 334 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:343-676` |
 | 272 | `src/sessionManager/tooling/BridgeProtocolCodec.cpp:170-441` |
-| 258 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:1386-1643` |
-| 234 | `src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp:1152-1385` |
-| 229 | `src/sessionManager/core/RequestAdapters.cpp:796-1024` |
+| 229 | `src/sessionManager/core/RequestAdapters.cpp:789-1017` |
 
 ## 6. 更新
 

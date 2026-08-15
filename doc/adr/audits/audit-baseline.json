@@ -1,8 +1,8 @@
 {
-  "schema_version": 3,
-  "generated_at": "2026-08-09T03:54:21+00:00",
+  "schema_version": 4,
+  "generated_at": "2026-08-15T07:32:09+00:00",
   "git": {
-    "commit": "544bf44",
+    "commit": "0090b60",
     "dirty": false
   },
   "definitions": {
@@ -11,392 +11,331 @@
     "R3": "production function longer than 200 lines"
   },
   "counts": {
-    "R1": 4,
-    "R2": 43,
-    "R3": 13,
-    "R3_lines": 5006,
-    "production_sources": 65,
-    "linked_production_sources": 38,
-    "test_sources": 35,
-    "test_cases": 223,
-    "assertions": 872
+    "R1": 0,
+    "R2": 41,
+    "R3": 6,
+    "R3_lines": 2563,
+    "production_sources": 89,
+    "owned_library_sources": 88,
+    "test_sources": 65,
+    "test_cases": 396,
+    "assertions": 1755
   },
   "rules": {
-    "R1": [
-      {
-        "func": "applyStrictClientRules",
-        "header": "src/sessionManager/tooling/StrictClientRules.h"
-      },
-      {
-        "func": "generateForcedToolCall",
-        "header": "src/sessionManager/tooling/ForcedToolCallGenerator.h"
-      },
-      {
-        "func": "normalizeToolCallArguments",
-        "header": "src/sessionManager/tooling/ToolCallNormalizer.h"
-      },
-      {
-        "func": "transformRequestForToolBridge",
-        "header": "src/sessionManager/tooling/ToolDefinitionEncoder.h"
-      }
-    ],
+    "R1": [],
     "R2": [
       {
-        "header": "src/domain/model/SessionData.h",
-        "fanin": 11,
+        "header": "src/platform/Log.h",
+        "fanin": 21,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/apiManager/ApiManager.h",
-        "fanin": 10,
+        "header": "src/domain/model/AccountData.h",
+        "fanin": 13,
         "test_owners": 0,
-        "linked": true,
-        "impl_lines": 115
+        "production_owned": false,
+        "impl_lines": 0
       },
       {
         "header": "src/sessionManager/contracts/GenerationEvent.h",
         "fanin": 9,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/apiManager/ApiFactory.h",
-        "fanin": 7,
+        "header": "src/sessionManager/contracts/LegacySessionData.h",
+        "fanin": 9,
         "test_owners": 0,
-        "linked": true,
-        "impl_lines": 28
+        "production_owned": false,
+        "impl_lines": 0
       },
       {
         "header": "src/controllers/AdminAuthFilter.h",
         "fanin": 6,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
         "header": "src/sessionManager/contracts/GenerationRequest.h",
         "fanin": 6,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/dbManager/account/accountDbManager.h",
-        "fanin": 5,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 591
-      },
-      {
-        "header": "src/metrics/ErrorStatsService.h",
-        "fanin": 5,
-        "test_owners": 0,
-        "linked": true,
-        "impl_lines": 351
-      },
-      {
-        "header": "src/domain/model/RetoolWorkspaceInfo.h",
-        "fanin": 5,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/domain/port/APIinterface.h",
-        "fanin": 5,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/dbManager/session/SessionDbManager.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": true,
-        "impl_lines": 490
-      },
-      {
-        "header": "src/dbManager/chaynsThread/chaynsThreadDbManager.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 383
-      },
-      {
-        "header": "src/dbManager/account/accountBackupDbManager.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 162
-      },
-      {
-        "header": "src/sessionManager/core/ClientOutputSanitizer.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 87
-      },
-      {
-        "header": "src/apiManager/Apicomn.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/dbManager/DbType.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/domain/model/AccountData.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 0
-      },
-      {
-        "header": "src/domain/model/ProviderResult.h",
-        "fanin": 4,
-        "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
         "header": "src/sessionManager/tooling/ToolDefinitionResolver.h",
-        "fanin": 4,
+        "fanin": 6,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/core/GenerationService.h",
-        "fanin": 3,
+        "header": "src/dbManager/chaynsThread/chaynsThreadDbManager.h",
+        "fanin": 5,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 533
+        "production_owned": true,
+        "impl_lines": 416
       },
       {
-        "header": "src/dbManager/channel/channelDbManager.h",
-        "fanin": 3,
+        "header": "src/dbManager/DbType.h",
+        "fanin": 5,
         "test_owners": 0,
-        "linked": true,
-        "impl_lines": 384
+        "production_owned": false,
+        "impl_lines": 0
       },
       {
-        "header": "src/retoolWorkspace/RetoolWorkspaceService.h",
-        "fanin": 3,
+        "header": "src/domain/port/IResponseIndex.h",
+        "fanin": 5,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 181
+        "production_owned": false,
+        "impl_lines": 0
       },
       {
-        "header": "src/dbManager/config/ConfigDbManager.h",
-        "fanin": 3,
+        "header": "src/managedAccount/contracts/ManagedAccount.h",
+        "fanin": 4,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 142
+        "production_owned": false,
+        "impl_lines": 0
       },
       {
-        "header": "src/managedAccount/service/ManagedAccountService.h",
+        "header": "src/platform/result/Error.h",
+        "fanin": 4,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/sessionManager/core/RetiredProviderTelemetry.h",
         "fanin": 3,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 61
+        "production_owned": true,
+        "impl_lines": 41
+      },
+      {
+        "header": "src/domain/model/ImageInfo.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/model/ProviderModelCatalog.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/model/RequestAggData.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/port/IExecutionGate.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/port/IProviderModelCatalog.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/port/IProviderThreadContext.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/port/IRetoolWorkspaceAdminUseCase.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/domain/port/ITelemetrySink.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/managedAccount/backends/IManagedAccountBackend.h",
+        "fanin": 3,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/runtime/AppWiring.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": true,
+        "impl_lines": 746
+      },
+      {
+        "header": "src/sessionManager/core/GenerationPipeline.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": true,
+        "impl_lines": 588
+      },
+      {
+        "header": "src/sessionManager/core/GenerationResponsePipeline.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": true,
+        "impl_lines": 556
       },
       {
         "header": "src/sessionManager/tooling/ToolDefinitionEncoder.h",
-        "fanin": 3,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 30
-      },
-      {
-        "header": "src/apipoint/chaynsapi/chaynsapi.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 1444
+        "production_owned": true,
+        "impl_lines": 360
       },
       {
-        "header": "src/apipoint/nexosapi/nexosapi.h",
+        "header": "src/controllers/RetoolWorkspaceController.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 1336
-      },
-      {
-        "header": "src/dbManager/metrics/ErrorStatsDbManager.h",
-        "fanin": 2,
-        "test_owners": 0,
-        "linked": true,
-        "impl_lines": 523
-      },
-      {
-        "header": "src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h",
-        "fanin": 2,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 452
+        "production_owned": true,
+        "impl_lines": 289
       },
       {
         "header": "src/sessionManager/core/SessionCodec.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": true,
+        "production_owned": true,
         "impl_lines": 206
-      },
-      {
-        "header": "src/apipoint/chaynsapi/chaynsThreadReaper.h",
-        "fanin": 2,
-        "test_owners": 0,
-        "linked": false,
-        "impl_lines": 185
-      },
-      {
-        "header": "src/utils/ConfigValidator.h",
-        "fanin": 2,
-        "test_owners": 0,
-        "linked": true,
-        "impl_lines": 184
       },
       {
         "header": "src/managedAccount/backends/ClassicProviderAccountBackend.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 102
+        "production_owned": true,
+        "impl_lines": 115
       },
       {
-        "header": "src/managedAccount/backends/RetoolWorkspaceBackend.h",
+        "header": "src/sessionManager/core/ClientOutputSanitizer.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
-        "impl_lines": 62
+        "production_owned": true,
+        "impl_lines": 86
+      },
+      {
+        "header": "src/infrastructure/account/DrogonAccountHttpTransport.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": true,
+        "impl_lines": 57
       },
       {
         "header": "src/sessionManager/continuity/TextExtractor.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": true,
+        "production_owned": true,
         "impl_lines": 22
       },
       {
         "header": "src/controllers/RateLimitFilter.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
         "header": "src/domain/model/BridgeWireFormat.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/domain/model/ChannelInfo.h",
+        "header": "src/domain/port/IAccountSelector.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/domain/model/ImageInfo.h",
+        "header": "src/domain/port/IAccountSettingsQuery.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/managedAccount/backends/IManagedAccountBackend.h",
+        "header": "src/domain/port/IChatProvider.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/managedAccount/contracts/ManagedAccount.h",
+        "header": "src/platform/Deadline.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/core/Errors.h",
+        "header": "src/platform/LocalDateTime.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/core/SessionExecutionGate.h",
+        "header": "src/platform/Uuid.h",
         "fanin": 2,
         "test_owners": 0,
-        "linked": false,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/platform/result/ErrorCode.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": false,
         "impl_lines": 0
       }
     ],
     "R3": [
       {
-        "file": "src/apipoint/chaynsapi/chaynsapi.cpp",
-        "start": 284,
-        "end": 1150,
-        "lines": 867
+        "file": "src/infrastructure/provider/chayns/chaynsapi.cpp",
+        "start": 328,
+        "end": 1220,
+        "lines": 893
       },
       {
-        "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
-        "start": 1661,
-        "end": 2214,
-        "lines": 554
-      },
-      {
-        "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
-        "start": 516,
-        "end": 1018,
-        "lines": 503
-      },
-      {
-        "file": "src/apipoint/retoolapi/retoolapi.cpp",
-        "start": 847,
-        "end": 1305,
-        "lines": 459
+        "file": "src/infrastructure/provider/retool/retoolapi.cpp",
+        "start": 955,
+        "end": 1414,
+        "lines": 460
       },
       {
         "file": "src/sessionManager/tooling/XmlTagToolCallCodec.cpp",
-        "start": 678,
-        "end": 1052,
+        "start": 677,
+        "end": 1051,
         "lines": 375
       },
       {
         "file": "src/sessionManager/tooling/XmlTagToolCallCodec.cpp",
-        "start": 344,
-        "end": 677,
+        "start": 343,
+        "end": 676,
         "lines": 334
-      },
-      {
-        "file": "src/accountManager/accountManager.cpp",
-        "start": 1937,
-        "end": 2261,
-        "lines": 325
-      },
-      {
-        "file": "src/main.cc",
-        "start": 121,
-        "end": 433,
-        "lines": 313
-      },
-      {
-        "file": "src/sessionManager/core/GenerationService.cpp",
-        "start": 143,
-        "end": 425,
-        "lines": 283
       },
       {
         "file": "src/sessionManager/tooling/BridgeProtocolCodec.cpp",
@@ -405,28 +344,16 @@
         "lines": 272
       },
       {
-        "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
-        "start": 1386,
-        "end": 1643,
-        "lines": 258
-      },
-      {
-        "file": "src/sessionManager/core/GenerationServiceEmitAndToolBridge.cpp",
-        "start": 1152,
-        "end": 1385,
-        "lines": 234
-      },
-      {
         "file": "src/sessionManager/core/RequestAdapters.cpp",
-        "start": 796,
-        "end": 1024,
+        "start": 789,
+        "end": 1017,
         "lines": 229
       }
     ]
   },
   "diagnostics": {
-    "owned_headers": 42,
-    "fanin_headers": 95,
+    "owned_headers": 115,
+    "fanin_headers": 165,
     "tests": [
       {
         "file": "test_main.cc",
@@ -436,9 +363,9 @@
       },
       {
         "file": "test_error_event.cpp",
-        "cases": 6,
-        "assertions": 38,
-        "owned_headers": 1
+        "cases": 8,
+        "assertions": 43,
+        "owned_headers": 3
       },
       {
         "file": "test_error_stats_config.cpp",
@@ -448,8 +375,8 @@
       },
       {
         "file": "test_response_index.cpp",
-        "cases": 4,
-        "assertions": 7,
+        "cases": 5,
+        "assertions": 15,
         "owned_headers": 1
       },
       {
@@ -472,8 +399,8 @@
       },
       {
         "file": "test_request_adapters.cpp",
-        "cases": 17,
-        "assertions": 71,
+        "cases": 18,
+        "assertions": 73,
         "owned_headers": 1
       },
       {
@@ -490,8 +417,8 @@
       },
       {
         "file": "test_bridge_helpers.cpp",
-        "cases": 13,
-        "assertions": 61,
+        "cases": 14,
+        "assertions": 69,
         "owned_headers": 1
       },
       {
@@ -515,7 +442,7 @@
       {
         "file": "test_forced_tool_call.cpp",
         "cases": 5,
-        "assertions": 15,
+        "assertions": 13,
         "owned_headers": 1
       },
       {
@@ -527,13 +454,13 @@
       {
         "file": "test_sinks.cpp",
         "cases": 9,
-        "assertions": 46,
+        "assertions": 52,
         "owned_headers": 4
       },
       {
         "file": "test_io_loop_response_stream.cpp",
-        "cases": 3,
-        "assertions": 23,
+        "cases": 4,
+        "assertions": 31,
         "owned_headers": 1
       },
       {
@@ -541,6 +468,12 @@
         "cases": 5,
         "assertions": 10,
         "owned_headers": 1
+      },
+      {
+        "file": "test_generation_service_bridge_fixture.cpp",
+        "cases": 6,
+        "assertions": 47,
+        "owned_headers": 7
       },
       {
         "file": "test_chayns_model_catalog.cpp",
@@ -555,21 +488,21 @@
         "owned_headers": 1
       },
       {
-        "file": "test_nexos_user_agent.cpp",
-        "cases": 2,
-        "assertions": 5,
-        "owned_headers": 1
+        "file": "test_chayns_fixtures.cpp",
+        "cases": 5,
+        "assertions": 44,
+        "owned_headers": 2
+      },
+      {
+        "file": "test_chayns_provider_fixture.cpp",
+        "cases": 10,
+        "assertions": 73,
+        "owned_headers": 14
       },
       {
         "file": "test_chayns_browser_impersonation.cpp",
         "cases": 5,
         "assertions": 19,
-        "owned_headers": 1
-      },
-      {
-        "file": "test_nexos_registration_mail_policy.cpp",
-        "cases": 3,
-        "assertions": 18,
         "owned_headers": 1
       },
       {
@@ -580,15 +513,99 @@
       },
       {
         "file": "test_background_task_queue_shutdown.cpp",
-        "cases": 1,
-        "assertions": 7,
+        "cases": 12,
+        "assertions": 74,
         "owned_headers": 1
       },
       {
-        "file": "test_retool_workspace_store_port.cpp",
+        "file": "test_background_task_queue_budget_exceeded.cpp",
+        "cases": 3,
+        "assertions": 14,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_application_shutdown_harness.cpp",
+        "cases": 8,
+        "assertions": 9,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_startup_result.cpp",
+        "cases": 6,
+        "assertions": 27,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_app_context.cpp",
+        "cases": 22,
+        "assertions": 89,
+        "owned_headers": 22
+      },
+      {
+        "file": "test_cancellation.cpp",
         "cases": 9,
-        "assertions": 31,
+        "assertions": 25,
         "owned_headers": 2
+      },
+      {
+        "file": "test_thread_join.cpp",
+        "cases": 7,
+        "assertions": 20,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_error_stats_shutdown_deadline.cpp",
+        "cases": 3,
+        "assertions": 9,
+        "owned_headers": 2
+      },
+      {
+        "file": "test_error_stats_shutdown_budget_exceeded.cpp",
+        "cases": 1,
+        "assertions": 7,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_session_cleaner_shutdown_deadline.cpp",
+        "cases": 1,
+        "assertions": 5,
+        "owned_headers": 2
+      },
+      {
+        "file": "test_shutdown_workers.cpp",
+        "cases": 5,
+        "assertions": 15,
+        "owned_headers": 7
+      },
+      {
+        "file": "test_retool_workspace_store_port.cpp",
+        "cases": 11,
+        "assertions": 34,
+        "owned_headers": 4
+      },
+      {
+        "file": "test_retool_workspace_use_case.cpp",
+        "cases": 5,
+        "assertions": 20,
+        "owned_headers": 6
+      },
+      {
+        "file": "test_managed_account_service.cpp",
+        "cases": 2,
+        "assertions": 15,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_retool_provider_fixture.cpp",
+        "cases": 10,
+        "assertions": 66,
+        "owned_headers": 7
+      },
+      {
+        "file": "test_domain_json_codecs.cpp",
+        "cases": 6,
+        "assertions": 24,
+        "owned_headers": 3
       },
       {
         "file": "test_channel_store_port.cpp",
@@ -603,9 +620,21 @@
         "owned_headers": 3
       },
       {
+        "file": "test_account_lifecycle_fixture.cpp",
+        "cases": 4,
+        "assertions": 41,
+        "owned_headers": 5
+      },
+      {
+        "file": "test_account_workflow_stages.cpp",
+        "cases": 5,
+        "assertions": 30,
+        "owned_headers": 4
+      },
+      {
         "file": "test_account_reload_ghost_index.cpp",
         "cases": 2,
-        "assertions": 7,
+        "assertions": 6,
         "owned_headers": 2
       },
       {
@@ -616,14 +645,50 @@
       },
       {
         "file": "test_retool_provision_health.cpp",
-        "cases": 7,
-        "assertions": 21,
-        "owned_headers": 1
+        "cases": 9,
+        "assertions": 28,
+        "owned_headers": 3
       },
       {
         "file": "test_health_ready_probe.cpp",
-        "cases": 4,
-        "assertions": 6,
+        "cases": 7,
+        "assertions": 18,
+        "owned_headers": 6
+      },
+      {
+        "file": "test_metrics_controller_injection.cpp",
+        "cases": 2,
+        "assertions": 10,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_channel_controller_injection.cpp",
+        "cases": 3,
+        "assertions": 13,
+        "owned_headers": 2
+      },
+      {
+        "file": "test_channel_admin_use_case.cpp",
+        "cases": 2,
+        "assertions": 12,
+        "owned_headers": 4
+      },
+      {
+        "file": "test_metrics_use_case.cpp",
+        "cases": 1,
+        "assertions": 7,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_account_controller_injection.cpp",
+        "cases": 1,
+        "assertions": 5,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_account_admin_use_case.cpp",
+        "cases": 3,
+        "assertions": 8,
         "owned_headers": 2
       },
       {
@@ -631,6 +696,48 @@
         "cases": 17,
         "assertions": 58,
         "owned_headers": 1
+      },
+      {
+        "file": "test_provider_retirement.cpp",
+        "cases": 7,
+        "assertions": 38,
+        "owned_headers": 7
+      },
+      {
+        "file": "test_provider_registry_port.cpp",
+        "cases": 4,
+        "assertions": 20,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_result.cpp",
+        "cases": 5,
+        "assertions": 22,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_provider_base.cpp",
+        "cases": 5,
+        "assertions": 32,
+        "owned_headers": 1
+      },
+      {
+        "file": "test_ai_api_controller_injection.cpp",
+        "cases": 1,
+        "assertions": 14,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_ai_api_use_case.cpp",
+        "cases": 1,
+        "assertions": 9,
+        "owned_headers": 3
+      },
+      {
+        "file": "test_error_stats_sink_port.cpp",
+        "cases": 1,
+        "assertions": 13,
+        "owned_headers": 3
       },
       {
         "file": "stub_db_collaborators.cpp",
