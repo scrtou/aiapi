@@ -1,8 +1,8 @@
 {
   "schema_version": 4,
-  "generated_at": "2026-08-15T07:32:09+00:00",
+  "generated_at": "2026-08-15T08:49:10+00:00",
   "git": {
-    "commit": "0090b60",
+    "commit": "c0f8fc5",
     "dirty": false
   },
   "definitions": {
@@ -39,53 +39,46 @@
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/contracts/GenerationEvent.h",
+        "header": "src/application/generation/contracts/GenerationEvent.h",
         "fanin": 9,
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/contracts/LegacySessionData.h",
+        "header": "src/application/generation/contracts/LegacySessionData.h",
         "fanin": 9,
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/controllers/AdminAuthFilter.h",
+        "header": "src/application/generation/contracts/GenerationRequest.h",
         "fanin": 6,
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/contracts/GenerationRequest.h",
+        "header": "src/application/generation/tooling/ToolDefinitionResolver.h",
         "fanin": 6,
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/tooling/ToolDefinitionResolver.h",
+        "header": "src/transport/controllers/AdminAuthFilter.h",
         "fanin": 6,
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
       },
       {
-        "header": "src/dbManager/chaynsThread/chaynsThreadDbManager.h",
+        "header": "src/infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h",
         "fanin": 5,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 416
-      },
-      {
-        "header": "src/dbManager/DbType.h",
-        "fanin": 5,
-        "test_owners": 0,
-        "production_owned": false,
-        "impl_lines": 0
       },
       {
         "header": "src/domain/port/IResponseIndex.h",
@@ -95,7 +88,14 @@
         "impl_lines": 0
       },
       {
-        "header": "src/managedAccount/contracts/ManagedAccount.h",
+        "header": "src/infrastructure/persistence/DbType.h",
+        "fanin": 5,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
+      },
+      {
+        "header": "src/infrastructure/managedAccount/contracts/ManagedAccount.h",
         "fanin": 4,
         "test_owners": 0,
         "production_owned": false,
@@ -109,7 +109,7 @@
         "impl_lines": 0
       },
       {
-        "header": "src/sessionManager/core/RetiredProviderTelemetry.h",
+        "header": "src/application/generation/core/RetiredProviderTelemetry.h",
         "fanin": 3,
         "test_owners": 0,
         "production_owned": true,
@@ -172,7 +172,7 @@
         "impl_lines": 0
       },
       {
-        "header": "src/managedAccount/backends/IManagedAccountBackend.h",
+        "header": "src/infrastructure/managedAccount/backends/IManagedAccountBackend.h",
         "fanin": 3,
         "test_owners": 0,
         "production_owned": false,
@@ -186,49 +186,49 @@
         "impl_lines": 746
       },
       {
-        "header": "src/sessionManager/core/GenerationPipeline.h",
+        "header": "src/application/generation/core/GenerationPipeline.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 588
       },
       {
-        "header": "src/sessionManager/core/GenerationResponsePipeline.h",
+        "header": "src/application/generation/core/GenerationResponsePipeline.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 556
       },
       {
-        "header": "src/sessionManager/tooling/ToolDefinitionEncoder.h",
+        "header": "src/application/generation/tooling/ToolDefinitionEncoder.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 360
       },
       {
-        "header": "src/controllers/RetoolWorkspaceController.h",
+        "header": "src/transport/controllers/RetoolWorkspaceController.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 289
       },
       {
-        "header": "src/sessionManager/core/SessionCodec.h",
+        "header": "src/application/generation/core/SessionCodec.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 206
       },
       {
-        "header": "src/managedAccount/backends/ClassicProviderAccountBackend.h",
+        "header": "src/infrastructure/managedAccount/backends/ClassicProviderAccountBackend.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
-        "impl_lines": 115
+        "impl_lines": 134
       },
       {
-        "header": "src/sessionManager/core/ClientOutputSanitizer.h",
+        "header": "src/application/generation/core/ClientOutputSanitizer.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
@@ -242,18 +242,11 @@
         "impl_lines": 57
       },
       {
-        "header": "src/sessionManager/continuity/TextExtractor.h",
+        "header": "src/application/generation/continuity/TextExtractor.h",
         "fanin": 2,
         "test_owners": 0,
         "production_owned": true,
         "impl_lines": 22
-      },
-      {
-        "header": "src/controllers/RateLimitFilter.h",
-        "fanin": 2,
-        "test_owners": 0,
-        "production_owned": false,
-        "impl_lines": 0
       },
       {
         "header": "src/domain/model/BridgeWireFormat.h",
@@ -310,6 +303,13 @@
         "test_owners": 0,
         "production_owned": false,
         "impl_lines": 0
+      },
+      {
+        "header": "src/transport/controllers/RateLimitFilter.h",
+        "fanin": 2,
+        "test_owners": 0,
+        "production_owned": false,
+        "impl_lines": 0
       }
     ],
     "R3": [
@@ -326,25 +326,25 @@
         "lines": 460
       },
       {
-        "file": "src/sessionManager/tooling/XmlTagToolCallCodec.cpp",
+        "file": "src/application/generation/tooling/XmlTagToolCallCodec.cpp",
         "start": 677,
         "end": 1051,
         "lines": 375
       },
       {
-        "file": "src/sessionManager/tooling/XmlTagToolCallCodec.cpp",
+        "file": "src/application/generation/tooling/XmlTagToolCallCodec.cpp",
         "start": 343,
         "end": 676,
         "lines": 334
       },
       {
-        "file": "src/sessionManager/tooling/BridgeProtocolCodec.cpp",
+        "file": "src/application/generation/tooling/BridgeProtocolCodec.cpp",
         "start": 170,
         "end": 441,
         "lines": 272
       },
       {
-        "file": "src/sessionManager/core/RequestAdapters.cpp",
+        "file": "src/application/generation/core/RequestAdapters.cpp",
         "start": 789,
         "end": 1017,
         "lines": 229
@@ -352,8 +352,8 @@
     ]
   },
   "diagnostics": {
-    "owned_headers": 115,
-    "fanin_headers": 165,
+    "owned_headers": 116,
+    "fanin_headers": 166,
     "tests": [
       {
         "file": "test_main.cc",
@@ -623,7 +623,7 @@
         "file": "test_account_lifecycle_fixture.cpp",
         "cases": 4,
         "assertions": 41,
-        "owned_headers": 5
+        "owned_headers": 6
       },
       {
         "file": "test_account_workflow_stages.cpp",

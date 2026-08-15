@@ -7,8 +7,8 @@
 | 项 | 值 |
 |---|---|
 | schema | v4 |
-| 生成时间 | `2026-08-15T07:32:09+00:00` |
-| 基础 commit | `0090b60` |
+| 生成时间 | `2026-08-15T08:49:10+00:00` |
+| 基础 commit | `c0f8fc5` |
 | 工作区 | **clean** |
 | 扫描扩展名 | `.h/.hpp/.cpp/.cc` |
 
@@ -45,17 +45,17 @@ v4 不再把 production source list 称为‘已进测试链接’：普通链�
 |---:|---:|:---:|---|
 | 21 | 0 | 否 | `src/platform/Log.h` |
 | 13 | 0 | 否 | `src/domain/model/AccountData.h` |
-| 9 | 0 | 否 | `src/sessionManager/contracts/GenerationEvent.h` |
-| 9 | 0 | 否 | `src/sessionManager/contracts/LegacySessionData.h` |
-| 6 | 0 | 否 | `src/controllers/AdminAuthFilter.h` |
-| 6 | 0 | 否 | `src/sessionManager/contracts/GenerationRequest.h` |
-| 6 | 0 | 否 | `src/sessionManager/tooling/ToolDefinitionResolver.h` |
-| 5 | 416 | 是 | `src/dbManager/chaynsThread/chaynsThreadDbManager.h` |
-| 5 | 0 | 否 | `src/dbManager/DbType.h` |
+| 9 | 0 | 否 | `src/application/generation/contracts/GenerationEvent.h` |
+| 9 | 0 | 否 | `src/application/generation/contracts/LegacySessionData.h` |
+| 6 | 0 | 否 | `src/application/generation/contracts/GenerationRequest.h` |
+| 6 | 0 | 否 | `src/application/generation/tooling/ToolDefinitionResolver.h` |
+| 6 | 0 | 否 | `src/transport/controllers/AdminAuthFilter.h` |
+| 5 | 416 | 是 | `src/infrastructure/persistence/chaynsThread/chaynsThreadDbManager.h` |
 | 5 | 0 | 否 | `src/domain/port/IResponseIndex.h` |
-| 4 | 0 | 否 | `src/managedAccount/contracts/ManagedAccount.h` |
+| 5 | 0 | 否 | `src/infrastructure/persistence/DbType.h` |
+| 4 | 0 | 否 | `src/infrastructure/managedAccount/contracts/ManagedAccount.h` |
 | 4 | 0 | 否 | `src/platform/result/Error.h` |
-| 3 | 41 | 是 | `src/sessionManager/core/RetiredProviderTelemetry.h` |
+| 3 | 41 | 是 | `src/application/generation/core/RetiredProviderTelemetry.h` |
 | 3 | 0 | 否 | `src/domain/model/ImageInfo.h` |
 | 3 | 0 | 否 | `src/domain/model/ProviderModelCatalog.h` |
 | 3 | 0 | 否 | `src/domain/model/RequestAggData.h` |
@@ -64,18 +64,17 @@ v4 不再把 production source list 称为‘已进测试链接’：普通链�
 | 3 | 0 | 否 | `src/domain/port/IProviderThreadContext.h` |
 | 3 | 0 | 否 | `src/domain/port/IRetoolWorkspaceAdminUseCase.h` |
 | 3 | 0 | 否 | `src/domain/port/ITelemetrySink.h` |
-| 3 | 0 | 否 | `src/managedAccount/backends/IManagedAccountBackend.h` |
+| 3 | 0 | 否 | `src/infrastructure/managedAccount/backends/IManagedAccountBackend.h` |
 | 2 | 746 | 是 | `src/runtime/AppWiring.h` |
-| 2 | 588 | 是 | `src/sessionManager/core/GenerationPipeline.h` |
-| 2 | 556 | 是 | `src/sessionManager/core/GenerationResponsePipeline.h` |
-| 2 | 360 | 是 | `src/sessionManager/tooling/ToolDefinitionEncoder.h` |
-| 2 | 289 | 是 | `src/controllers/RetoolWorkspaceController.h` |
-| 2 | 206 | 是 | `src/sessionManager/core/SessionCodec.h` |
-| 2 | 115 | 是 | `src/managedAccount/backends/ClassicProviderAccountBackend.h` |
-| 2 | 86 | 是 | `src/sessionManager/core/ClientOutputSanitizer.h` |
+| 2 | 588 | 是 | `src/application/generation/core/GenerationPipeline.h` |
+| 2 | 556 | 是 | `src/application/generation/core/GenerationResponsePipeline.h` |
+| 2 | 360 | 是 | `src/application/generation/tooling/ToolDefinitionEncoder.h` |
+| 2 | 289 | 是 | `src/transport/controllers/RetoolWorkspaceController.h` |
+| 2 | 206 | 是 | `src/application/generation/core/SessionCodec.h` |
+| 2 | 134 | 是 | `src/infrastructure/managedAccount/backends/ClassicProviderAccountBackend.h` |
+| 2 | 86 | 是 | `src/application/generation/core/ClientOutputSanitizer.h` |
 | 2 | 57 | 是 | `src/infrastructure/account/DrogonAccountHttpTransport.h` |
-| 2 | 22 | 是 | `src/sessionManager/continuity/TextExtractor.h` |
-| 2 | 0 | 否 | `src/controllers/RateLimitFilter.h` |
+| 2 | 22 | 是 | `src/application/generation/continuity/TextExtractor.h` |
 | 2 | 0 | 否 | `src/domain/model/BridgeWireFormat.h` |
 | 2 | 0 | 否 | `src/domain/port/IAccountSelector.h` |
 | 2 | 0 | 否 | `src/domain/port/IAccountSettingsQuery.h` |
@@ -84,6 +83,7 @@ v4 不再把 production source list 称为‘已进测试链接’：普通链�
 | 2 | 0 | 否 | `src/platform/LocalDateTime.h` |
 | 2 | 0 | 否 | `src/platform/Uuid.h` |
 | 2 | 0 | 否 | `src/platform/result/ErrorCode.h` |
+| 2 | 0 | 否 | `src/transport/controllers/RateLimitFilter.h` |
 
 ## 5. R3 明细
 
@@ -91,10 +91,10 @@ v4 不再把 production source list 称为‘已进测试链接’：普通链�
 |---:|---|
 | 893 | `src/infrastructure/provider/chayns/chaynsapi.cpp:328-1220` |
 | 460 | `src/infrastructure/provider/retool/retoolapi.cpp:955-1414` |
-| 375 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:677-1051` |
-| 334 | `src/sessionManager/tooling/XmlTagToolCallCodec.cpp:343-676` |
-| 272 | `src/sessionManager/tooling/BridgeProtocolCodec.cpp:170-441` |
-| 229 | `src/sessionManager/core/RequestAdapters.cpp:789-1017` |
+| 375 | `src/application/generation/tooling/XmlTagToolCallCodec.cpp:677-1051` |
+| 334 | `src/application/generation/tooling/XmlTagToolCallCodec.cpp:343-676` |
+| 272 | `src/application/generation/tooling/BridgeProtocolCodec.cpp:170-441` |
+| 229 | `src/application/generation/core/RequestAdapters.cpp:789-1017` |
 
 ## 6. 更新
 
