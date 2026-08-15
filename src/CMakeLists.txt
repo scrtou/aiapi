@@ -210,6 +210,24 @@ aiapi_enable_coverage(aiapi_runtime)
 
 add_executable(${PROJECT_NAME} main.cc)
 
+# The root CMake file intentionally delegates to this directory with
+# add_subdirectory(src).  Without an explicit runtime output directory CMake
+# mirrors that source-directory boundary and emits the server as
+# build/src/aiapi, while the operational entry point has always been
+# build/aiapi.  Keep one canonical deployable path so an obsolete executable
+# cannot survive a layout-only rebuild and be started by accident.
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# The generic property above covers single-config generators (the production
+# Makefiles/Ninja path).  Pin the standard multi-config variants too, rather
+# than silently reintroducing build/<config>/aiapi for IDE generators.
+foreach(aiapi_build_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_property(TARGET ${PROJECT_NAME}
+                 PROPERTY RUNTIME_OUTPUT_DIRECTORY_${aiapi_build_config}
+                 "${CMAKE_BINARY_DIR}")
+endforeach()
+
 # ##############################################################################
 find_package(Drogon CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)

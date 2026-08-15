@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
 # aiapi 安全重启脚本（脱离当前终端，后台常驻）
-set -u
-BUILD_DIR="/home/vps/code/aiapi/build"
+set -euo pipefail
+REPO_ROOT="/home/vps/code/aiapi"
+BUILD_DIR="$REPO_ROOT/build"
+# src/CMakeLists.txt explicitly emits the server here.  Do not fall back to
+# build/src/aiapi: that path is a stale pre-output-unification artifact.
 BIN="$BUILD_DIR/aiapi"
+LEGACY_BIN="$BUILD_DIR/src/aiapi"
 OUT_LOG="$BUILD_DIR/logs/aiapi.stdout.log"
 PORT=55555
 
 mkdir -p "$BUILD_DIR/logs"
+
+# Refuse to take down a healthy service for an unbuilt/stale canonical target.
+# This catches exactly the old situation where build/aiapi predates the newer
+# build/src/aiapi output.  Reconfigure and rebuild before invoking this script.
+if [ ! -x "$BIN" ]; then
+  echo "未找到规范运行产物: $BIN"
+  echo "请先执行: cmake -S $REPO_ROOT -B $BUILD_DIR && cmake --build $BUILD_DIR --target aiapi"
+  exit 1
+fi
+if [ -x "$LEGACY_BIN" ] && [ "$LEGACY_BIN" -nt "$BIN" ]; then
+  echo "规范运行产物比遗留 build/src/aiapi 旧，拒绝重启以免启动旧版本。"
+  echo "请先执行: cmake -S $REPO_ROOT -B $BUILD_DIR && cmake --build $BUILD_DIR --target aiapi"
+  exit 1
+fi
 
 OLD_PIDS=$(pgrep -x aiapi || true)
 if [ -n "$OLD_PIDS" ]; then
@@ -23,6 +41,13 @@ if [ -n "$OLD_PIDS" ]; then
   fi
 else
   echo "[1/4] 无运行中的 aiapi 进程"
+fi
+
+# CMake 仍会保留 build/src/ 作为子目录的构建元数据，但不应再保留第二个
+# 可执行文件。只在旧进程停止且规范产物已通过上方校验后删除它。
+if [ -e "$LEGACY_BIN" ]; then
+  rm -f "$LEGACY_BIN"
+  echo "[1/4] 已清理遗留运行产物: $LEGACY_BIN"
 fi
 
 echo "[2/4] 启动新进程"
