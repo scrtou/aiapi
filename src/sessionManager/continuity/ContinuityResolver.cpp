@@ -1,6 +1,6 @@
 #include <sessionManager/continuity/ContinuityResolver.h>
 #include <sessionManager/continuity/TextExtractor.h>
-#include <tools/ZeroWidthEncoder.h>
+#include <platform/ZeroWidthEncoder.h>
 #include <chrono>
 #include <random>
 #include <sstream>

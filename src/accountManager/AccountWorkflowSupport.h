@@ -26,8 +26,11 @@ bool isSuccessEnvelope(const Json::Value& json);
 std::string extractErrorMessageFromEnvelope(const Json::Value& json,
                                             const std::string& fallback);
 
-std::string loginServiceUrl(const std::string& provider);
-std::string registrationServiceUrl(const std::string& provider);
-std::string downstreamBearerApiKey(const std::string& provider);
+std::string currentLocalDbTimestamp();
+
+std::string loginServiceUrl(const Json::Value& runtimeConfig, const std::string& provider);
+std::string registrationServiceUrl(const Json::Value& runtimeConfig, const std::string& provider);
+std::string downstreamBearerApiKey(const Json::Value& runtimeConfig,
+                                  const std::string& provider);
 
 }  // namespace account::workflow

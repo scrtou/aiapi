@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-QUEUE_HEADER = 'src/utils/BackgroundTaskQueue.h'
+QUEUE_HEADER = 'src/infrastructure/executor/BackgroundTaskQueue.h'
 PORT_HEADER = 'src/domain/port/IBackgroundExecutor.h'
 SRC_DIR = 'src'
 EXCLUDE_DIRS = {'test'}

@@ -34,7 +34,8 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 3 | check_cycles | `--layer-rules`：分层边界被破坏（如 domain/ 出现 platform 之外的出边） |
 | 4 | check_cycles | `--db-ratchet`：出现棘轮清单外的 dbManager 直连 |
 | 4 | check_startup_wiring | 注入缺失，或注入晚于 `init()` |
-| 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或 legacy 棘轮回升 |
+| 1 | check_source_ownership / check_include_paths / check_target_layers | owner 重复、include 非规范路径、DAG 或已删除 legacy target/source list 复活 |
+| 1 | check_retired_providers | retired Provider 实现/工厂或 account/channel guard 复活，或 tombstone/兼容公开路由丢失 |
 | 4 | check_test_registration | 测试文件未在 CMake 注册 |
 | 4 | check_enqueue_result | queue `enqueue()` / executor `submit()` 丢属性，或调用点绑定后不读结果 |
 | 4 | check_app_context | 组装根形状被破坏：build() 结果被丢弃、addOwner 逃出步骤、shutdown 收相对时长、main.cc 直接注入 |
@@ -354,3 +355,41 @@ registration、health 和 worker 必须留在各自 stage；rollback 中 `WAITIN
 
 `--selftest` 不写工作树：在内存中将 rollback 的 `AccountStatus::WAITING` 改为 `ACTIVE`，同一判据
 必须以 rc=4 拒绝它。
+
+### `check_http_io_boundary.py`
+
+ADR-09 HTTP/IO boundary gate:
+
+```bash
+python3 tools/arch/check_http_io_boundary.py
+python3 tools/arch/check_http_io_boundary.py --selftest
+```
+
+它从 `AIAPI_APPLICATION_SOURCES` 跟随本地自有 include closure，并扫描全部 `domain/` 源/头；
+拒绝 Drogon/Trantor include 或符号、`HttpClient`、`DbClient` 以及直接
+`std::this_thread::sleep_for`。这补住了“CMake target 不直接链接 Drogon，但共享 `src/` include 根后
+仍在 application header 偷渡框架类型”的漏洞。
+
+除此之外，gate 固定四个结构事实：`aiapi_application` 不得链接 `Drogon::Drogon`；
+`RequestAdapters` 只接收复制的 `Json::Value + aiapi::RequestHeaders`；
+`IAccountHttpTransport` 保持框架无关且 Drogon concrete adapter 留在 `infrastructure/account/`；
+`AppWiring` 必须把 `custom_config` 按值接到 Account workflow 和 `AiApiUseCase`。`--selftest`
+在内存中向 RequestAdapters 注入一个 Drogon include，必须以 rc=4 拒绝，不写工作树。
+
+这是一道静态边界门禁，不证明 deadline/cancellation 的运行时行为；HTTP/轮询/断连/SIGTERM fixture
+和 sanitizer 才提供后者的证据。
+
+
+### `check_retired_providers.py`
+
+P2 retired-provider boundary gate:
+
+```bash
+python3 tools/arch/check_retired_providers.py
+```
+
+它精确检查 `OpenAiProvider`/nexos 实现与工厂仍不存在、Chayns/Retool 的公开兼容路由仍在、六条
+Nexos tombstone 仍返回 410、配置示例没有 retired key，同时 Account add/update/registration workflow
+和 Channel write path 都在落库前拒绝 retired key。P7 将 Account workflow 拆文件后，本 gate 跟随实际
+owner 扫描 `AccountSelector.cpp` 与 `AccountRegistrationWorkflow.cpp`，不再把已瘦身的 facade 当作
+错误的唯一事实来源。

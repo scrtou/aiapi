@@ -35,6 +35,7 @@ class AdminCommands final : public IAccountAdminCommands
     void checkToken() override { ++tokenChecks; }
     void updateAllAccountTypes() override { ++typeRefreshes; }
     bool autoRegisterAccount(std::string) override { ++autoRegisterCalls; return true; }
+    void autoRegisterAccounts(std::string, int count) override { autoRegisterCalls += count; }
     AccountAutomationSettings getAccountAutomationSettings() const override { return settings; }
     bool updateAccountAutomationSettings(
         const AccountAutomationSettings& value, bool, std::string*) override

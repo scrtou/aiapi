@@ -4,8 +4,9 @@
 #include <sessionManager/contracts/GenerationRequest.h>
 #include <sessionManager/contracts/IResponseSink.h>
 #include <sessionManager/core/SessionExecutionGate.h>
-#include <sessionManager/core/Errors.h>
+#include <platform/result/Error.h>
 
+#include <json/json.h>
 #include <memory>
 #include <optional>
 
@@ -29,7 +30,8 @@ public:
                       chatSession* sessionStore,
                       IResponseIndex* responseIndex,
                       session::IExecutionGate* executionGate,
-                      IChannelCatalog* channelCatalog = nullptr);
+                      IChannelCatalog* channelCatalog = nullptr,
+                      Json::Value runtimeConfig = Json::Value(Json::objectValue));
     ~GenerationService();
 
     GenerationService(const GenerationService&) = delete;
@@ -37,7 +39,7 @@ public:
     GenerationService(GenerationService&&) = delete;
     GenerationService& operator=(GenerationService&&) = delete;
 
-    std::optional<error::AppError> runGuarded(
+    std::optional<platform::Error> runGuarded(
         const GenerationRequest& request,
         IResponseSink& sink,
         session::ConcurrencyPolicy policy = session::ConcurrencyPolicy::RejectConcurrent);

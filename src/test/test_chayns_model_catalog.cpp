@@ -1,7 +1,7 @@
 #include <drogon/drogon_test.h>
 
-#include <apipoint/chaynsapi/ChaynsModelCatalog.h>
-#include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
+#include <infrastructure/provider/chayns/ChaynsModelCatalog.h>
+#include <infrastructure/provider/chayns/ChaynsPollingPolicy.h>
 
 namespace {
 

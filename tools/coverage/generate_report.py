@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Generate the aiapi production coverage baseline from GCC gcov JSON.
 
-Production implementations are compiled once by their canonical production
-library and reused by the test executables.  During P3 this means the formal
-``aiapi_*`` layered libraries plus the shrinking ``aiapi_legacy`` scaffold.
-The collector reads those libraries' gcda files plus the ``aiapi_test`` gcda
+Production implementations are compiled once by their canonical formal
+library target and reused by the test executables.  The collector reads those
+libraries' gcda files plus the ``aiapi_test`` gcda
 files (needed for production inline/header code instantiated by tests).  It
 deliberately excludes the unexecuted production ``aiapi`` executable target.
 Files absent from the test-linked object graph are reported as
@@ -31,9 +30,9 @@ PRODUCTION_SUFFIXES = SOURCE_SUFFIXES | {".h", ".hpp"}
 
 TARGETS = [
     {
-        "name": "Chayns generate/postChatMessage",
-        "file": "src/apipoint/chaynsapi/chaynsapi.cpp",
-        "functions": ["chaynsapi::generate(", "chaynsapi::postChatMessage("],
+        "name": "Chayns provider generate/upstream request",
+        "file": "src/infrastructure/provider/chayns/chaynsapi.cpp",
+        "functions": ["chaynsapi::doGenerate(", "chaynsapi::sendWithinContext("],
     },
     {
         "name": "Generation pipeline request/provider/commit",
@@ -73,25 +72,37 @@ TARGETS = [
         ],
     },
     {
-        "name": "Account selection/invalidation/rollback/pool rebuild",
-        "file": "src/accountManager/accountManager.cpp",
+        "name": "Account selection/invalidation/pool rebuild",
+        "file": "src/accountManager/AccountSelector.cpp",
         "functions": [
             "AccountManager::getAccount(",
             "AccountManager::getEligibleAccount(",
             "AccountManager::setStatusTokenStatus(",
-            "AccountManager::rollbackWaitingAccount(",
             "AccountManager::rebuildPoolLocked(",
             "AccountManager::loadAccount(",
             "AccountManager::addAccountbyPost(",
             "AccountManager::updateAccount(",
             "AccountManager::deleteAccountbyPost(",
-            "AccountManager::checkToken(",
+        ],
+    },
+    {
+        "name": "Account registration rollback",
+        "file": "src/accountManager/AccountRegistrationWorkflow.cpp",
+        "functions": [
+            "AccountManager::rollbackWaitingAccount(",
             "AccountManager::autoRegisterAccount(",
         ],
     },
     {
+        "name": "Account token refresh",
+        "file": "src/accountManager/AccountTokenWorkflow.cpp",
+        "functions": [
+            "AccountManager::checkToken(",
+        ],
+    },
+    {
         "name": "BackgroundTaskQueue shutdown/drain",
-        "file": "src/utils/BackgroundTaskQueue.h",
+        "file": "src/infrastructure/executor/BackgroundTaskQueue.h",
         "functions": [
             "BackgroundTaskQueue::enqueue(",
             "BackgroundTaskQueue::shutdown(",
@@ -100,7 +111,7 @@ TARGETS = [
     },
     {
         "name": "Account worker interrupt/join",
-        "file": "src/accountManager/accountManager.cpp",
+        "file": "src/accountManager/AccountWorkers.cpp",
         "functions": ["AccountManager::stopBackgroundThreads("],
     },
     {
@@ -110,12 +121,12 @@ TARGETS = [
     },
     {
         "name": "Chayns reaper interrupt/join",
-        "file": "src/apipoint/chaynsapi/chaynsThreadReaper.cpp",
+        "file": "src/infrastructure/provider/chayns/chaynsThreadReaper.cpp",
         "functions": ["chaynsThreadReaper::stop("],
     },
     {
         "name": "Streaming disconnect boundary",
-        "file": "src/utils/IoLoopResponseStream.h",
+        "file": "src/controllers/sinks/IoLoopResponseStream.h",
         "functions": [
             "IoLoopResponseStream::send(",
             "IoLoopResponseStream::sendInLoop(",
@@ -132,7 +143,7 @@ TARGETS = [
     },
     {
         "name": "Retool workflow/agent upstream paths",
-        "file": "src/apipoint/retoolapi/retoolapi.cpp",
+        "file": "src/infrastructure/provider/retool/retoolapi.cpp",
         "functions": ["retoolapi::requestWorkflow(", "retoolapi::requestAgent("],
     },
     {
@@ -209,7 +220,6 @@ def merge_gcov_file(records, item):
 
 def collect(build_dir, gcov):
     target_markers = (
-        os.sep + "aiapi_legacy.dir" + os.sep,
         os.sep + "aiapi_platform.dir" + os.sep,
         os.sep + "aiapi_domain.dir" + os.sep,
         os.sep + "aiapi_application.dir" + os.sep,
@@ -405,7 +415,7 @@ def pct(value):
 def markdown(report):
     summary = report["summary"]
     lines = [
-        "# P1 · 运行时覆盖机器报告",
+        "# 运行时覆盖机器报告",
         "",
         "> 此文件由 `tools/coverage/generate_report.py` 生成。不要手工修改数字。",
         "",
@@ -499,7 +509,7 @@ def markdown(report):
             "",
             "## 4. 未进入测试链接对象图的生产实现",
             "",
-            "这些文件没有运行时覆盖证据，是 P1 后续 fixture/characterization 的输入：",
+            "这些文件没有运行时覆盖证据，是后续 fixture/characterization 的输入：",
             "",
         ]
     )

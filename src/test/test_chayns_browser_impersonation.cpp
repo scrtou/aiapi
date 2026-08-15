@@ -1,7 +1,7 @@
 #include <drogon/drogon_test.h>
 #include <drogon/HttpRequest.h>
 
-#include <utils/chaynsBrowserImpersonation.h>
+#include <infrastructure/provider/chayns/ChaynsBrowserImpersonation.h>
 
 using drogon::HttpRequest;
 

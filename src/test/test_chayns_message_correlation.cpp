@@ -1,6 +1,6 @@
 #include <drogon/drogon_test.h>
 
-#include <apipoint/chaynsapi/ChaynsMessageCorrelation.h>
+#include <infrastructure/provider/chayns/ChaynsMessageCorrelation.h>
 
 #include <unordered_set>
 

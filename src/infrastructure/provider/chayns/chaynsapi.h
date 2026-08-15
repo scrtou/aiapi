@@ -1,11 +1,11 @@
 #ifndef CHAYNSAPI_H
 #define CHAYNSAPI_H
 
-#include <apipoint/chaynsapi/ChaynsClock.h>
-#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
-#include <apipoint/chaynsapi/ChaynsMessageCorrelation.h>
-#include <apipoint/chaynsapi/ChaynsModelCatalog.h>
-#include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
+#include <infrastructure/provider/chayns/ChaynsClock.h>
+#include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
+#include <infrastructure/provider/chayns/ChaynsMessageCorrelation.h>
+#include <infrastructure/provider/chayns/ChaynsModelCatalog.h>
+#include <infrastructure/provider/chayns/ChaynsPollingPolicy.h>
 #include <domain/port/IAccountSelector.h>
 #include <domain/port/IProviderModelCatalog.h>
 #include <domain/port/IProviderThreadContext.h>

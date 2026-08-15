@@ -13,6 +13,7 @@
 #include <list>
 #include <set>
 #include <cstdint>
+#include <json/json.h>
 using namespace std;
 
 // 纯数据类型（Accountinfo_st / AccountCompare / AccountAutomationSettings /
@@ -83,8 +84,9 @@ class AccountManager : public IAccountCatalog,
     workspace::IRetoolWorkspaceUseCase* workspaceUseCase_ = nullptr;
     workspace::IRetoolWorkspaceProvisioner* workspaceProvisioner_ = nullptr;
     account::HttpResult sendHttpRequest(const std::string& baseUrl,
-                                        const drogon::HttpRequestPtr& request,
+                                        const account::HttpRequest& request,
                                         double timeoutSeconds) const;
+    Json::Value runtimeConfig_{Json::objectValue};
     public:
     /**
      * Runtime creates one AccountManager in AppContext; tests create local
@@ -102,6 +104,7 @@ class AccountManager : public IAccountCatalog,
     void setRetoolProvisionClock(
         std::shared_ptr<retoolProvision::IRetoolProvisionClock> clock);
     void setConfigStore(std::shared_ptr<IKeyValueConfigStore> store);
+    void setRuntimeConfig(Json::Value config);
     void setRetoolWorkspaceServices(
         workspace::IRetoolWorkspaceUseCase* useCase,
         workspace::IRetoolWorkspaceProvisioner* provisioner);
@@ -153,6 +156,7 @@ class AccountManager : public IAccountCatalog,
     void checkChannelAccountCounts() override;
     void checkChannelAccountCount(string apiName) override;
     bool autoRegisterAccount(string apiName) override;
+    void autoRegisterAccounts(std::string apiName, int count) override;
     void checkAccountCountThread();
     
     // 竞态条件保护相关方法

@@ -1,9 +1,9 @@
-#include <accountManager/AccountHttpTransport.h>
+#include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
 
-namespace account {
+namespace chayns {
 namespace {
 
-class DrogonAccountHttpTransport final : public IAccountHttpTransport
+class DrogonChaynsHttpTransport final : public IChaynsHttpTransport
 {
   public:
     HttpResult send(const std::string& baseUrl,
@@ -17,9 +17,9 @@ class DrogonAccountHttpTransport final : public IAccountHttpTransport
 
 }  // namespace
 
-std::shared_ptr<IAccountHttpTransport> makeDrogonAccountHttpTransport()
+std::shared_ptr<IChaynsHttpTransport> makeDrogonChaynsHttpTransport()
 {
-    return std::make_shared<DrogonAccountHttpTransport>();
+    return std::make_shared<DrogonChaynsHttpTransport>();
 }
 
-}  // namespace account
+}  // namespace chayns

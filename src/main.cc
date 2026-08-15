@@ -1,7 +1,7 @@
 #include <drogon/drogon.h>
 #include <runtime/AppContext.h>
 #include <runtime/AppWiring.h>
-#include <utils/ConfigValidator.h>
+#include <infrastructure/config/ConfigValidator.h>
 #include <controllers/AdminAuthFilter.h>
 #include <controllers/RateLimitFilter.h>
 #include <chrono>

@@ -7,7 +7,7 @@
 #include <sessionManager/continuity/ContinuityResolver.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <sessionManager/core/Session.h>
-#include <tools/ZeroWidthEncoder.h>
+#include <platform/ZeroWidthEncoder.h>
 
 namespace {
 

@@ -4,8 +4,7 @@
 #include <random>
 #include <algorithm>
 #include <cctype>
-#include <drogon/utils/Utilities.h>
-#include<drogon/drogon.h>
+#include <platform/Log.h>
 namespace toolcall {
 
 

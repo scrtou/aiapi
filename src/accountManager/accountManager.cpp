@@ -1,14 +1,11 @@
 #include <accountManager/accountManager.h>
 
 #include <accountManager/AccountWorkflowSupport.h>
-
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
 #include <chrono>
 #include <optional>
 #include <utility>
-
-using namespace drogon;
 
 namespace {
 
@@ -93,9 +90,9 @@ class NullConfigStoreForAccount final : public IKeyValueConfigStore
 class UnconfiguredAccountHttpTransport final : public account::IAccountHttpTransport
 {
   public:
-    account::HttpResult send(const std::string&, const drogon::HttpRequestPtr&, double) override
+    account::HttpResult send(const std::string&, const account::HttpRequest&, double) override
     {
-        return {drogon::ReqResult::BadResponse, nullptr};
+        return {account::HttpResultCode::BadResponse, nullptr};
     }
 };
 
@@ -153,6 +150,11 @@ void AccountManager::setConfigStore(std::shared_ptr<IKeyValueConfigStore> store)
     if (store) configStore_ = std::move(store);
 }
 
+void AccountManager::setRuntimeConfig(Json::Value config)
+{
+    runtimeConfig_ = config.isObject() ? std::move(config) : Json::Value(Json::objectValue);
+}
+
 void AccountManager::setRetoolWorkspaceServices(
     workspace::IRetoolWorkspaceUseCase* useCase,
     workspace::IRetoolWorkspaceProvisioner* provisioner)
@@ -163,11 +165,11 @@ void AccountManager::setRetoolWorkspaceServices(
 
 account::HttpResult AccountManager::sendHttpRequest(
     const std::string& baseUrl,
-    const drogon::HttpRequestPtr& request,
+    const account::HttpRequest& request,
     double timeoutSeconds) const
 {
     return httpTransport_ ? httpTransport_->send(baseUrl, request, timeoutSeconds)
-                          : account::HttpResult{drogon::ReqResult::BadResponse, nullptr};
+                          : account::HttpResult{account::HttpResultCode::BadResponse, nullptr};
 }
 
 IAccountStore* AccountManager::requireStore()
@@ -192,7 +194,7 @@ IChannelStore* AccountManager::requireChannelStore()
 void AccountManager::loadAccountAutomationSettings()
 {
     const auto defaults = account::workflow::loadAutomationSettingsFromCustomConfig(
-        drogon::app().getCustomConfig());
+        runtimeConfig_);
     auto settings = defaults;
     auto* configStore = configStore_.get();
     std::string error;
@@ -280,7 +282,7 @@ void AccountManager::init()
     loadAccountAutomationSettings();
     loadAccount();
 
-    const auto config = app().getCustomConfig();
+    const auto& config = runtimeConfig_;
     const bool startWorkers = !config.isMember("account_background_threads_enabled") ||
         config["account_background_threads_enabled"].asBool();
     if (startWorkers) {
@@ -289,7 +291,7 @@ void AccountManager::init()
         checkAccountTypeThread();
     }
     LOG_INFO << "[账户管理] 登录服务URL: "
-             << account::workflow::loginServiceUrl("chaynsapi");
+             << account::workflow::loginServiceUrl(runtimeConfig_, "chaynsapi");
     LOG_INFO << "[账户管理] 注册服务URL: "
-             << account::workflow::registrationServiceUrl("chaynsapi");
+             << account::workflow::registrationServiceUrl(runtimeConfig_, "chaynsapi");
 }

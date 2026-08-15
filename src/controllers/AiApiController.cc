@@ -7,7 +7,7 @@
 #include <controllers/sinks/ChatSseSink.h>
 #include <controllers/sinks/ResponsesJsonSink.h>
 #include <controllers/sinks/ResponsesSseSink.h>
-#include <utils/IoLoopResponseStream.h>
+#include <controllers/sinks/IoLoopResponseStream.h>
 
 #include <drogon/HttpResponse.h>
 #include <drogon/drogon.h>
@@ -126,18 +126,18 @@ HttpResponsePtr unavailableResponse()
     return makeUseCaseError(error);
 }
 
-generation::ErrorCode toGenerationErrorCode(const aiapi::Error& error)
+platform::ErrorCode toGenerationErrorCode(const aiapi::Error& error)
 {
-    if (error.httpStatus == 400) return generation::ErrorCode::BadRequest;
-    if (error.httpStatus == 401) return generation::ErrorCode::Unauthorized;
-    if (error.httpStatus == 403) return generation::ErrorCode::Forbidden;
-    if (error.httpStatus == 404) return generation::ErrorCode::NotFound;
-    if (error.httpStatus == 409) return generation::ErrorCode::Conflict;
-    if (error.httpStatus == 429) return generation::ErrorCode::RateLimited;
-    if (error.httpStatus == 504 || error.httpStatus == 408) return generation::ErrorCode::Timeout;
-    if (error.httpStatus == 502) return generation::ErrorCode::ProviderError;
-    if (error.httpStatus == 499) return generation::ErrorCode::Cancelled;
-    return generation::ErrorCode::Internal;
+    if (error.httpStatus == 400) return platform::ErrorCode::BadRequest;
+    if (error.httpStatus == 401) return platform::ErrorCode::Unauthorized;
+    if (error.httpStatus == 403) return platform::ErrorCode::Forbidden;
+    if (error.httpStatus == 404) return platform::ErrorCode::NotFound;
+    if (error.httpStatus == 409) return platform::ErrorCode::Conflict;
+    if (error.httpStatus == 429) return platform::ErrorCode::RateLimited;
+    if (error.httpStatus == 504 || error.httpStatus == 408) return platform::ErrorCode::Timeout;
+    if (error.httpStatus == 502) return platform::ErrorCode::ProviderError;
+    if (error.httpStatus == 499) return platform::ErrorCode::Cancelled;
+    return platform::ErrorCode::Internal;
 }
 
 void emitUseCaseErrorToSink(const aiapi::Error& error, IResponseSink& sink)

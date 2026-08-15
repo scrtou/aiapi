@@ -5,7 +5,6 @@
 #include <list>
 #include <optional>
 #include <shared_mutex>
-#include <drogon/drogon.h>
 #include <domain/port/IChannelStore.h>
 #include <domain/port/IChannelCatalog.h>
 

@@ -1,8 +1,8 @@
 #ifndef RETOOLAPI_H
 #define RETOOLAPI_H
 
-#include <apipoint/retoolapi/RetoolClock.h>
-#include <apipoint/retoolapi/RetoolHttpTransport.h>
+#include <infrastructure/provider/retool/RetoolClock.h>
+#include <infrastructure/provider/retool/RetoolHttpTransport.h>
 #include <domain/port/IChannelCatalog.h>
 #include <domain/port/IProviderModelCatalog.h>
 #include <domain/port/IProviderThreadContext.h>

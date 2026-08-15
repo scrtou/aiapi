@@ -69,7 +69,7 @@ DROGON_TEST(GenerationServiceEmitContract_CollectError)
     CollectingSink sink;
 
     generation::Error error;
-    error.code = generation::ErrorCode::ProviderError;
+    error.code = platform::ErrorCode::ProviderError;
     error.message = "provider failed";
     sink.onEvent(error);
 

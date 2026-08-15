@@ -8,15 +8,17 @@ GenerationService::GenerationService(
     chatSession* sessionStore,
     IResponseIndex* responseIndex,
     session::IExecutionGate* executionGate,
-    IChannelCatalog* channelCatalog)
+    IChannelCatalog* channelCatalog,
+    Json::Value runtimeConfig)
     : pipeline_(std::make_unique<generation::GenerationPipeline>(
-          providerRegistry, sessionStore, responseIndex, executionGate, channelCatalog))
+          providerRegistry, sessionStore, responseIndex, executionGate, channelCatalog,
+          std::move(runtimeConfig)))
 {
 }
 
 GenerationService::~GenerationService() = default;
 
-std::optional<error::AppError> GenerationService::runGuarded(
+std::optional<platform::Error> GenerationService::runGuarded(
     const GenerationRequest& request,
     IResponseSink& sink,
     session::ConcurrencyPolicy policy)

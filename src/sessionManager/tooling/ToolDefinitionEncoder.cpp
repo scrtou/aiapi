@@ -4,7 +4,7 @@
 #include <sessionManager/tooling/StrictClientRules.h>
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
 #include <cctype>
 #include <exception>
@@ -13,7 +13,6 @@
 #include <string_view>
 #include <utility>
 
-using namespace drogon;
 using namespace bridge;
 
 namespace {
@@ -98,16 +97,6 @@ bool codexRequestLikelyNeedsExternalState(const std::string& message)
         if (lower.find(keyword) != std::string::npos) return true;
     }
     return false;
-}
-
-Json::Value toolBridgeConfiguration()
-{
-    const auto& custom = drogon::app().getCustomConfig();
-    if (custom.isObject() && custom.isMember("tool_bridge") &&
-        custom["tool_bridge"].isObject()) {
-        return custom["tool_bridge"];
-    }
-    return Json::Value(Json::objectValue);
 }
 
 toolcall::BridgeDefinitionOptions definitionOptions(const Json::Value& config)
@@ -294,7 +283,8 @@ void wrapUserRequestWithBridgeInstructions(session_st& session,
 
 } // namespace
 
-void toolcall::transformRequestForToolBridge(session_st& session)
+void toolcall::transformRequestForToolBridge(session_st& session,
+                                             const Json::Value& runtimeConfig)
 {
     const std::string clientType = safeJsonAsString(
         session.provider.clientInfo.get("client_type", ""), "");
@@ -302,7 +292,10 @@ void toolcall::transformRequestForToolBridge(session_st& session)
         clientType, session.request.parallelToolCalls);
     const bool strictToolClient = capabilities.isStrictToolClient();
     const bool codexCompat = capabilities.family == actionproto::ClientFamily::Codex;
-    const Json::Value config = toolBridgeConfiguration();
+    const Json::Value config = runtimeConfig.isObject() && runtimeConfig.isMember("tool_bridge") &&
+        runtimeConfig["tool_bridge"].isObject()
+        ? runtimeConfig["tool_bridge"]
+        : Json::Value(Json::objectValue);
 
     session.provider.toolBridgeFormat = toolcall::resolveBridgeWireFormat(
         config, clientType, session.request.api, session.request.model);

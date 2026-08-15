@@ -1,34 +1,31 @@
 #include <accountManager/accountManager.h>
 
 #include <accountManager/AccountWorkflowSupport.h>
-#include <utils/LoginResponseLogSummary.h>
-
-#include <drogon/drogon.h>
+#include <accountManager/LoginResponseLogSummary.h>
+#include <platform/Log.h>
 
 #include <chrono>
 #include <vector>
 
-using namespace drogon;
-
 bool AccountManager::checkChaynsToken(string token)
 {
     LOG_INFO << "[账户管理] 开始校验 Chayns 令牌";
-    auto request = HttpRequest::newHttpRequest();
-    request->setMethod(HttpMethod::Get);
-    request->setPath("/AccountService/v1.0/Chayns/User");
-    request->addHeader("Authorization", "Bearer " + token);
+    account::HttpRequest request;
+    request.method = account::HttpMethod::Get;
+    request.path = "/AccountService/v1.0/Chayns/User";
+    request.headers["Authorization"] = "Bearer " + token;
     auto [result, response] = sendHttpRequest(
         "https://webapi.tobit.com/AccountService/v1.0/Chayns/User", request, 30.0);
-    if (result != ReqResult::Ok || !response) {
+    if (result != account::HttpResultCode::Ok || !response) {
         LOG_ERROR << "[账户管理] 令牌校验请求失败, result=" << static_cast<int>(result);
         return false;
     }
-    return response->getStatusCode() == k200OK;
+    return response->statusCode == 200;
 }
 
 Json::Value AccountManager::getChaynsToken(string username, string passwd)
 {
-    const string fullUrl = account::workflow::loginServiceUrl("chaynsapi");
+    const string fullUrl = account::workflow::loginServiceUrl(runtimeConfig_, "chaynsapi");
     if (fullUrl.empty()) {
         LOG_ERROR << "[账户管理] 配置中未找到 chaynsapi 的登录服务地址";
         return {};
@@ -45,42 +42,43 @@ Json::Value AccountManager::getChaynsToken(string username, string passwd)
         return {};
     }
 
-    auto request = HttpRequest::newHttpRequest();
+    account::HttpRequest request;
     Json::Value payload;
     payload["site"] = "chayns";
     payload["credentials"]["email"] = username;
     payload["credentials"]["password"] = passwd;
     payload["strategy"]["mode"] = "api_first";
-    request->setMethod(HttpMethod::Post);
-    request->setPath(path);
-    request->setContentTypeString("application/json");
-    request->setBody(payload.toStyledString());
-    const auto downstreamApiKey = account::workflow::downstreamBearerApiKey("chaynsapi");
+    request.method = account::HttpMethod::Post;
+    request.path = path;
+    request.headers["Content-Type"] = "application/json";
+    request.body = payload.toStyledString();
+    const auto downstreamApiKey = account::workflow::downstreamBearerApiKey(
+        runtimeConfig_, "chaynsapi");
     if (!downstreamApiKey.empty()) {
-        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
+        request.headers["Authorization"] = "Bearer " + downstreamApiKey;
     }
 
     auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
-    if (result != ReqResult::Ok || !response) {
+    if (result != account::HttpResultCode::Ok || !response) {
         LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
         return {};
     }
 
-    const int httpStatus = static_cast<int>(response->getStatusCode());
-    const std::string body = httpStatus == k200OK ? std::string(response->getBody()) : "";
+    const int httpStatus = response->statusCode;
+    const std::string body = httpStatus == 200 ? response->body : "";
     Json::Value envelope;
     string errors;
     if (!account::workflow::parseJsonBody(body, envelope, errors)) {
         LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: "
                   << account_logging::summarizeLoginTransport(
-                         httpStatus, response->getHeader("content-type"), body.size())
+                         httpStatus, response->header("content-type"), body.size())
                   << ", " << account_logging::summarizeParseError(errors);
         return {};
     }
     if (!account::workflow::isSuccessEnvelope(envelope)) {
         LOG_ERROR << "[账户管理] 登录服务返回失败: "
                   << account_logging::summarizeLoginTransport(
-                         httpStatus, response->getHeader("content-type"), body.size())
+                         httpStatus, response->header("content-type"), body.size())
                   << ", " << account_logging::summarizeLoginError(envelope);
         return {};
     }
@@ -189,11 +187,11 @@ bool AccountManager::isServerReachable(const string& host, int maxRetries)
     while (retryCount < maxRetries && !backgroundStopRequested_.load()) {
         try {
             for (const auto& path : candidatePaths) {
-                auto request = HttpRequest::newHttpRequest();
-                request->setMethod(HttpMethod::Get);
-                request->setPath(path);
+                account::HttpRequest request;
+                request.method = account::HttpMethod::Get;
+                request.path = path;
                 const auto [_, response] = sendHttpRequest(host, request, 30.0);
-                if (response && response->getStatusCode() == k200OK) {
+                if (response && response->statusCode == 200) {
                     return true;
                 }
             }

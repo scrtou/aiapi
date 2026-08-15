@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 |---|---|
-| 状态 | 已接受，实施中 |
-| 当前版本 | v3.0 |
+| 状态 | 已接受，已实施（P8-W1） |
+| 当前版本 | v4.0 |
 | 语言 | C++17 |
 | Provider 目标范围 | 保留 chayns + retool；下线 nexos + 不可触达的 OpenAiProvider |
 | 工期 | 不纳入本文；按门禁推进 |
@@ -25,6 +25,16 @@
 | [`CHANGELOG.md`](../history/CHANGELOG.md) | 历史纠错和版本演进 |
 
 当前执行文档不再保留“先写错误结论、再在末尾撤回”的叙事。历史由 git 和 CHANGELOG 保存。
+
+## 实施结论
+
+P8-W1 已完成：全部 production implementation 已迁入六个正式 target，`aiapi_legacy` 与其
+source list 已删除；ProviderResult/重复 ErrorCode compatibility 已清理；Provider、queue、配置、
+response stream 与零宽编码已归位；ADR-09 HTTP/IO seam 由静态 selftest 和运行时配置接线共同保护。
+当前发布证据、验证命令与回滚说明见
+[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)，机器指标以
+[`architecture-baseline.md`](../audits/architecture-baseline.md) 为唯一真值。
+
 
 ## 2. 问题
 

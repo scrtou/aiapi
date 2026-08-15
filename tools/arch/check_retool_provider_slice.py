@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 FAIL = 4
 
-RETOOL_HEADER = SRC / "apipoint/retoolapi/retoolapi.h"
-RETOOL_CPP = SRC / "apipoint/retoolapi/retoolapi.cpp"
+RETOOL_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
+RETOOL_CPP = SRC / "infrastructure/provider/retool/retoolapi.cpp"
 WIRING = SRC / "runtime/AppWiring.cpp"
 GENERATION_PIPELINE = SRC / "sessionManager/core/GenerationPipeline.cpp"
 REGISTRY_PORT = SRC / "domain/port/IProviderRegistry.h"
@@ -59,13 +59,13 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     # Retool itself must receive only value DTOs plus read-only controls.  Its
     # workflow/agent state stays private and may not rediscover global owners.
     provider_sources: list[Path] = []
-    retool_dir = SRC / "apipoint/retoolapi"
+    retool_dir = SRC / "infrastructure/provider/retool"
     if retool_dir.is_dir():
         for path in sorted(retool_dir.rglob("*")):
             if path.suffix in {".h", ".hpp", ".cpp", ".cc"}:
                 provider_sources.append(path)
     else:
-        errors.append("missing src/apipoint/retoolapi directory")
+        errors.append("missing src/infrastructure/provider/retool directory")
 
     forbidden_literals = (
         "session_st",

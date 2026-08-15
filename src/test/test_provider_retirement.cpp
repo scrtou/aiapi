@@ -5,7 +5,7 @@
 #include <channelManager/channelManager.h>
 #include <domain/port/IAccountStore.h>
 #include <domain/port/IChannelStore.h>
-#include <utils/ConfigValidator.h>
+#include <infrastructure/config/ConfigValidator.h>
 #include <domain/policy/RetiredProviderPolicy.h>
 
 #include <array>

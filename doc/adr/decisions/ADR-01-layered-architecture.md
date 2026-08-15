@@ -2,12 +2,12 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，迁移中 |
-| 当前版本 | v3.0 |
+| 状态 | 已接受，已实施（P8-W1） |
+| 当前版本 | v4.0 |
 
 ## 决策
 
-项目划分为四类组件和一个横切基础 target。它们不是按编号排列的线性层级：
+项目按端口与适配器划分；它们不是编号式的线性层：
 
 ```text
 transport ───────> application ───────> domain
@@ -18,31 +18,33 @@ infrastructure ─────────────────────�
 platform <── domain/application/infrastructure/transport
 ```
 
-- `domain`：业务值类型、纯规则和 ports。
-- `application`：用例与流程编排；可以调用 port 触发 IO，但不知道具体 DB、HTTP 或 Drogon 类型。
-- `infrastructure`：DB、Provider、HTTP、时钟等 port 实现。
-- `transport`：Drogon Controller、Filter、协议编解码和 Sink。
-- `platform`：`Result`、日志抽象、进程配置值等无业务方向的公共设施。
-- `AppContext/main.cc` 是唯一允许同时知道所有具体实现的组合根。
+- `domain`：业务值类型、纯规则和 ports；
+- `application`：用例与流程编排，只通过 port 发起所需 IO；
+- `infrastructure`：DB、Provider、HTTP、clock 等 port 实现；
+- `transport`：Drogon Controller、Filter、协议编解码和 Sink；
+- `platform`：`Result`、错误、日志、时间/并发值对象等无业务方向设施；
+- `runtime/AppContext/main.cc`：唯一能同时知道具体实现的组合根。
 
-依赖规则是：**适配器依赖内侧端口，内侧不依赖适配器**。
+适配器依赖内侧 port，内侧不依赖具体适配器。目录名不是边界证明；正式 CMake target、include/layer
+规则和 source-owner gate 才是可执行边界。
 
 ## Domain 依赖政策
 
-目标态 `aiapi_domain` 只允许 C++ 标准库和 `aiapi_platform`，禁止直接依赖 JsonCpp、Drogon、PostgreSQL、OpenSSL 及任何具体 Provider/DbManager/Controller。
+`aiapi_domain` 只允许 C++ 标准库和 `aiapi_platform`。`src/domain/` 中 `Json::`、Drogon、
+PostgreSQL、OpenSSL、具体 Provider/DbManager/Controller 类型均为 0。
 
-当前 `src/domain/model/` 中的 JsonCpp 依赖是迁移债务，不是永久豁免：
+JSON 可以在边缘 codec 使用。P8 保留的 application 请求适配入口只接收 transport 已复制的
+`Json::Value` 与 `RequestHeaders`，随后构造结构化 request；它不把 Drogon request、HTTP client 或
+JSON 类型带入 domain。Provider metadata 以 string map 表示，JSON materialization 留在边缘。
 
-1. domain 类型只保留强类型字段；
-2. `fromJson()/toJson()` 移到 transport 或 infrastructure codec；
-3. 暂时无法迁出的依赖登记到 `tools/arch/layer-rules.json` 的有上限债务清单；
-4. 清单只能减少，最终归零。
+## 实施与验收
 
-“domain 无 IO”的准确含义是 domain 不直接执行具体 IO，也不包含协议/驱动类型；不是说 application 不能经 port 发起 IO。
+- 六个正式 target 已接管全部 89 个 production implementation；`aiapi_legacy` 和所有 transition
+  allowlist 已删除；
+- `check_target_layers.py --require-no-legacy`、`check_source_ownership.py --require-no-legacy` 与
+  layer/include/cycle gates 强制依赖方向；
+- `check_http_io_boundary.py` 扫描 application include closure 与 domain，拒绝 Drogon/Trantor、
+  `HttpClient`、`DbClient` 和直接 `sleep_for`；
+- `AppContext` 显式拥有状态对象，Controller 只绑定 use case，具体 adapter 只在 runtime 接线。
 
-## 验收
-
-- `aiapi_domain` 可独立编译和运行单元测试；
-- domain 中 `Json::`、Drogon、PostgreSQL、OpenSSL 引用为 0；
-- 依赖方向由 ADR-02 的 target DAG 和架构规则共同检查；
-- 边缘 JSON codec 有往返或契约测试。
+边缘 JSON codec 必须有契约或往返测试；真实执行覆盖仍以 gcov/llvm-cov 而非 include 关系判断。

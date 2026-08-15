@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P3-W3 gate: enforce the declared CMake target DAG and legacy ratchet."""
+"""Enforce the final ADR-02 CMake target DAG and absence of legacy owners."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def main() -> int:
     parser.add_argument(
         "--require-no-legacy",
         action="store_true",
-        help="final P3-W3 exit gate: reject aiapi_legacy and its source list",
+        help="assert the final no-legacy invariant (now the default)",
     )
     args = parser.parse_args()
 
@@ -153,7 +153,7 @@ def main() -> int:
     # controller implementation moves to aiapi_transport there is no normal
     # undefined-symbol edge that would extract its object from a static archive.
     # Production must retain transport; tests intentionally must not.
-    retained_targets = r"aiapi_transport" if args.require_no_legacy else r"aiapi_legacy\s+aiapi_transport"
+    retained_targets = r"aiapi_transport"
     whole_archive_pattern = re.compile(
         r'"-Wl,--whole-archive"\s+' + retained_targets +
         r'\s+"-Wl,--no-whole-archive"')
@@ -163,31 +163,15 @@ def main() -> int:
 
     legacy_values = variable_values(text, "AIAPI_LEGACY_SOURCES")
     legacy_declared = "aiapi_legacy" in declared
-    if args.require_no_legacy:
-        if legacy_values is not None:
-            failures.append("AIAPI_LEGACY_SOURCES still exists")
-        if legacy_declared:
-            failures.append("aiapi_legacy target still exists")
-    else:
-        if legacy_values is None or not legacy_declared:
-            failures.append(
-                "transitional gate expects both legacy list/target; use --require-no-legacy at exit")
-        # P7-W2 has moved the complete AccountManager workflow closure out of
-        # legacy.  Keep this as a ratchet rather than merely reporting the
-        # smaller list: later slices may only reduce 19 further until P8
-        # enables --require-no-legacy.
-        elif len(legacy_values) > 19:
-            failures.append(
-                f"legacy source ceiling regressed: {len(legacy_values)} > 19")
+    if legacy_values is not None:
+        failures.append("AIAPI_LEGACY_SOURCES still exists")
+    if legacy_declared:
+        failures.append("aiapi_legacy target still exists")
 
     if failures:
         fail(failures)
 
-    legacy_count = 0 if legacy_values is None else len(legacy_values)
-    mode = "final" if args.require_no_legacy else "transitional"
-    print(
-        f"PASS target layers ({mode}): six formal targets obey ADR-02 DAG; "
-        f"legacy_sources={legacy_count}")
+    print("PASS target layers: six formal targets obey ADR-02 DAG; legacy_sources=0")
     return 0
 
 

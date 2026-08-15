@@ -41,11 +41,11 @@ def main():
     # deadline-aware join) is owned by AccountWorkers.cpp; checking the old
     # facade would make this gate demand the very monolith the slice removed.
     account_workers = read("src/accountManager/AccountWorkers.cpp")
-    reaper_h = read("src/apipoint/chaynsapi/chaynsThreadReaper.h")
-    reaper_cpp = read("src/apipoint/chaynsapi/chaynsThreadReaper.cpp")
+    reaper_h = read("src/infrastructure/provider/chayns/chaynsThreadReaper.h")
+    reaper_cpp = read("src/infrastructure/provider/chayns/chaynsThreadReaper.cpp")
     session_h = read("src/sessionManager/core/Session.h")
     session_cpp = read("src/sessionManager/core/Session.cpp")
-    queue_h = read("src/utils/BackgroundTaskQueue.h")
+    queue_h = read("src/infrastructure/executor/BackgroundTaskQueue.h")
     stats_h = read("src/metrics/ErrorStatsService.h")
     stats_cpp = read("src/metrics/ErrorStatsService.cpp")
 
@@ -74,15 +74,15 @@ def main():
     check_file("src/accountManager/AccountWorkers.cpp", account_workers,
                [("四个账号 worker 的 joinUntil", r"joinUntil\s*\("),
                 ("账号 worker completion", r"tokenCheckDone_|tokenUpdateDone_|accountCountDone_|accountTypeDone_")], problems)
-    check_file("src/apipoint/chaynsapi/chaynsThreadReaper.h", reaper_h,
+    check_file("src/infrastructure/provider/chayns/chaynsThreadReaper.h", reaper_h,
                [("限时 stop 声明", r"stop\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\s*\)"),
                 ("reaper completion", r"workerDone_")], problems)
-    check_file("src/apipoint/chaynsapi/chaynsThreadReaper.cpp", reaper_cpp,
+    check_file("src/infrastructure/provider/chayns/chaynsThreadReaper.cpp", reaper_cpp,
                [("reaper joinUntil", r"joinUntil\s*\("),
                 ("reaper completion signal", r"workerDone_\s*=\s*std::make_shared")], problems)
     check_file("src/sessionManager/core/Session.cpp", session_cpp,
                [("session cleaner joinUntil", r"joinUntil\s*\(")], problems)
-    check_file("src/utils/BackgroundTaskQueue.h", queue_h,
+    check_file("src/infrastructure/executor/BackgroundTaskQueue.h", queue_h,
                [("队列限时 shutdown", r"shutdown\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\)"),
                 ("队列 joinUntil", r"joinUntil\s*\(")], problems)
     check_file("src/metrics/ErrorStatsService.h", stats_h,

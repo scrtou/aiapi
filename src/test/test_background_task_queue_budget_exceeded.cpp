@@ -4,7 +4,7 @@
 #include <chrono>
 #include <thread>
 
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 // ---------------------------------------------------------------------------
 // P4-D5：BackgroundTaskQueue 限时停机的【超时路径】验收。

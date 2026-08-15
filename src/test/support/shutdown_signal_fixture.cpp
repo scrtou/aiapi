@@ -2,7 +2,7 @@
 
 #include <platform/ThreadJoin.h>
 #include <runtime/AppContext.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <chrono>
 #include <condition_variable>

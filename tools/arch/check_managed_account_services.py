@@ -14,7 +14,7 @@ for relative in (
     "managedAccount/backends/RetoolWorkspaceBackend.cpp",
     "managedAccount/service/ManagedAccountService.h",
     "managedAccount/service/ManagedAccountService.cpp",
-    "apipoint/retoolapi/retoolapi.cpp",
+    "infrastructure/provider/retool/retoolapi.cpp",
 ):
     text = (SRC / relative).read_text(errors="replace")
     for match in re.finditer(r"::\s*(?:getInstance|instance)\s*\(", text):
@@ -29,7 +29,7 @@ if "static ManagedAccountService" in service:
 if "std::shared_ptr<IManagedAccountBackend>" not in service:
     errors.append("ManagedAccountService must own injected backend interfaces")
 
-provider_header = (SRC / "apipoint/retoolapi/retoolapi.h").read_text(errors="replace")
+provider_header = (SRC / "infrastructure/provider/retool/retoolapi.h").read_text(errors="replace")
 if re.search(r"\bretoolapi\s*\(\s*\)\s*;", provider_header):
     errors.append("retoolapi must not expose a dependency-free constructor")
 

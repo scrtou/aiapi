@@ -6,6 +6,8 @@
 #include <sessionManager/contracts/LegacySessionData.h>
 #include <platform/result/Error.h>
 
+#include <json/json.h>
+
 #include <string>
 #include <vector>
 
@@ -20,10 +22,11 @@ namespace generation {
 class GenerationResponsePipeline {
 public:
     GenerationResponsePipeline(chatSession* sessionStore,
-                               IChannelCatalog* channelCatalog) noexcept;
+                               IChannelCatalog* channelCatalog,
+                               Json::Value runtimeConfig = Json::Value(Json::objectValue)) noexcept;
 
     void emit(const session_st& session, IResponseSink& sink) const;
-    void emitError(ErrorCode code, const std::string& message,
+    void emitError(platform::ErrorCode code, const std::string& message,
                    IResponseSink& sink) const;
     void emitError(const platform::Error& error, IResponseSink& sink) const;
 
@@ -32,6 +35,7 @@ public:
 private:
     chatSession* sessionStore_ = nullptr;
     IChannelCatalog* channelCatalog_ = nullptr;
+    Json::Value runtimeConfig_;
 };
 
 } // namespace generation

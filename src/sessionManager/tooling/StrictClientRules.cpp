@@ -1,12 +1,11 @@
 #include <sessionManager/tooling/StrictClientRules.h>
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 #include <array>
 #include <iomanip>
 #include <random>
 #include <sstream>
 
-using namespace drogon;
 
 namespace {
 

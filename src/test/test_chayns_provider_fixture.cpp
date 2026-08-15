@@ -1,9 +1,9 @@
 #include <drogon/drogon_test.h>
 
 #include <accountManager/accountManager.h>
-#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
-#include <apipoint/chaynsapi/ChaynsClock.h>
-#include <apipoint/chaynsapi/chaynsapi.h>
+#include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
+#include <infrastructure/provider/chayns/ChaynsClock.h>
+#include <infrastructure/provider/chayns/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
 #include <sessionManager/continuity/ResponseIndex.h>

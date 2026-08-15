@@ -59,8 +59,9 @@ P6-W3 已完成 Retool 的同一路径：它经 `ProviderBase` 返回 `Result<Pr
 的 HTTP、polling 和 sleep 均受只读 cancellation/absolute deadline 约束；只复制非敏感 workspace selector
 到 `ProviderRequest::routingHints`，不再接收 session aggregate。`APIinterface`、`findProvider()`、
 `registerProvider()` 与 registry legacy storage 已删除，两家活跃 Provider 都仅以 chat/model/thread 窄能力
-发布。P7 仍需拆除 GenerationService 内保留的 event/session JSON materialization，因此 ADR-05 作为全系统
-跨层 Result 迁移仍是“部分实施”。
+发布。P8 已删除 `ProviderResult` compatibility codec、重复 generation `ErrorCode` 和 `Errors.h`；
+成功结果由 `ProviderResponse` 承担，失败由 `platform::Error` 承担。DB/account/session 的其余公共 port
+仍按垂直切片迁移，因此 ADR-05 保持“部分实施”，而不是为状态好看机械改写所有私有函数签名。
 
 ## 迁移顺序
 

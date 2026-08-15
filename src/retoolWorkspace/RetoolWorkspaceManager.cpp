@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <domain/port/IRetoolWorkspaceStore.h>
-#include <trantor/utils/Logger.h>
+#include <platform/Log.h>
 
 #include <utility>
 

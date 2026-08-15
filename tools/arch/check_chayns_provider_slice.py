@@ -19,13 +19,13 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 FAIL = 4
 
-CHAYNS_HEADER = SRC / "apipoint/chaynsapi/chaynsapi.h"
-CHAYNS_CPP = SRC / "apipoint/chaynsapi/chaynsapi.cpp"
-RETOOL_HEADER = SRC / "apipoint/retoolapi/retoolapi.h"
+CHAYNS_HEADER = SRC / "infrastructure/provider/chayns/chaynsapi.h"
+CHAYNS_CPP = SRC / "infrastructure/provider/chayns/chaynsapi.cpp"
+RETOOL_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
 WIRING = SRC / "runtime/AppWiring.cpp"
 GENERATION_PIPELINE = SRC / "sessionManager/core/GenerationPipeline.cpp"
 SESSION = SRC / "sessionManager/core/Session.cpp"
-REAPER = SRC / "apipoint/chaynsapi/chaynsThreadReaper.cpp"
+REAPER = SRC / "infrastructure/provider/chayns/chaynsThreadReaper.cpp"
 REGISTRY_PORT = SRC / "domain/port/IProviderRegistry.h"
 EXECUTION_GATE = SRC / "domain/port/IExecutionGate.h"
 SESSION_GATE = SRC / "sessionManager/core/SessionExecutionGate.h"
@@ -65,13 +65,13 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     # The provider itself, not merely its happy-path adapter, must be detached
     # from the old aggregate and project service locators.
     provider_sources: list[Path] = []
-    chayns_dir = SRC / "apipoint/chaynsapi"
+    chayns_dir = SRC / "infrastructure/provider/chayns"
     if chayns_dir.is_dir():
         for path in sorted(chayns_dir.rglob("*")):
             if path.suffix in {".h", ".hpp", ".cpp", ".cc"}:
                 provider_sources.append(path)
     else:
-        errors.append("missing src/apipoint/chaynsapi directory")
+        errors.append("missing src/infrastructure/provider/chayns directory")
 
     forbidden_literals = (
         "session_st",
@@ -89,21 +89,17 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         if singleton.search(code):
             errors.append(f"{relative} revived a project singleton lookup")
 
-    # Both active providers remain in apipoint during this transition.  These
-    # two headers are the only approved apipoint -> infrastructure edge.
-    infrastructure_includes: list[Path] = []
-    for path in sorted(SRC.joinpath("apipoint").rglob("*")):
-        if path.suffix not in {".h", ".hpp", ".cpp", ".cc"}:
-            continue
-        if re.search(r"#\s*include\s*[<\"]infrastructure/", read(path)):
-            infrastructure_includes.append(path)
-    expected_includes = [CHAYNS_HEADER, RETOOL_HEADER]
-    if infrastructure_includes != expected_includes:
-        actual = ", ".join(str(path.relative_to(ROOT)) for path in infrastructure_includes) or "none"
-        expected = ", ".join(str(path.relative_to(ROOT)) for path in expected_includes)
-        errors.append(
-            "apipoint -> infrastructure transition edges must be only "
-            f"{expected}; found: {actual}")
+    # P8 closes the last source-directory transition: active providers are
+    # infrastructure adapters, not an ``apipoint`` exception that happens to
+    # include ProviderBase.  Do not reintroduce compatibility forwarding
+    # headers at the old location; they would hide a second physical owner
+    # from the source-ownership and include-path gates.
+    legacy_provider_root = SRC / "apipoint"
+    if legacy_provider_root.exists():
+        errors.append("src/apipoint must stay absent; providers belong under src/infrastructure/provider")
+    for path in (CHAYNS_HEADER, RETOOL_HEADER):
+        if "infrastructure/provider/" not in path.relative_to(SRC).as_posix():
+            errors.append(f"provider header is outside final infrastructure location: {path.relative_to(ROOT)}")
 
     if not re.search(
         r"class\s+chaynsapi\s+final\s*:\s*public\s+provider::ProviderBase",

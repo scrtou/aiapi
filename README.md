@@ -2,13 +2,13 @@
 
 基于 Drogon 框架的 AI API 网关服务，提供 OpenAI 兼容的 Chat Completions 和 Responses API 接口。
 
-> 最后更新：2026-08-05 14:35:00 CEST（中欧夏令时间）
+> 最后更新：2026-08-15
 
 ## 目录
 
 - [功能特性](#功能特性)
 - [架构概览](#架构概览)
-- [项目结构](#项目结构)
+- [当前源码与 target](#当前源码与-target)
 - [完整 API 端点清单](#完整-api-端点清单)
   - [AI 核心 API](#ai-核心-apiaiapicontroller)
   - [账号管理 API](#账号管理-apiaccountcontroller)
@@ -26,7 +26,8 @@
   - [并发门控](#并发门控)
   - [错误统计系统](#错误统计系统)
 - [API 使用示例](#api-使用示例)
-- [构建与运行](#构建与运行)
+- [构建、测试与运行](#构建测试与运行)
+- [Provider 数据归档与恢复](#provider-数据归档与恢复)
 - [配置说明](#配置说明)
 - [错误码](#错误码)
 - [详细文档](#详细文档)
@@ -55,7 +56,7 @@
 - ✅ 响应索引（ResponseIndex）— Responses API GET/DELETE 支持
 - ✅ 并发门控（SessionExecutionGate + CancellationToken + RAII Guard）
 - ✅ 输出清洗（ClientOutputSanitizer）
-- ✅ 统一错误模型（Errors）+ 错误统计（ErrorStatsService + ErrorStatsConfig）
+- ✅ 统一错误模型（`platform::Error/ErrorCode`）+ 错误统计（ErrorStatsService + ErrorStatsConfig）
 - ✅ 账号池管理（自动注册、Token 刷新、类型检测、轮转、备份）
 - ✅ ManagedAccount 抽象层（传统账号 + Retool Workspace 统一管理入口）
 - ✅ Retool Workspace 资产管理（workspace/session/workflow/agent 元数据持久化）
@@ -68,7 +69,7 @@
 - ✅ 配置校验（ConfigValidator）
 - ✅ 后台任务队列（BackgroundTaskQueue）
 - ✅ 健康检查端点（/health + /ready）
-- ✅ 完善的单元测试（当前包含 18 个测试源文件 + `test_main.cc` 测试入口）
+- ✅ 正式 production target 复用的 CTest 行为/集成测试套件
 - ✅ Chat/Responses JSON 与 SSE Sink 分离，统一处理流式和非流式输出
 
 ## 架构概览
@@ -105,7 +106,7 @@
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │ GenerationService（稳定 facade）→ GenerationPipeline     │    │
 │  │  - materializeRequest() + ContinuityResolver              │    │
-│  │  - ExecutionGuard + Provider Result / retry / commit      │    │
+│  │  - ExecutionGuard + ProviderResponse / retry / commit    │    │
 │  │  - GenerationResponsePipeline（结果处理 + 事件发送）      │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │     │           │              │              │              │   │
@@ -132,8 +133,8 @@
 │  └─────────────┘     └─────────────────────────────────────┘   │
 │        │                 ├─ IProviderModelCatalog              │
 │        │                 └─ IProviderThreadContext              │
-│        ├── chaynsapi (Chayns AI Provider)                       │
-│        └── retoolapi (Retool Workspace Provider)                │
+│        ├── chayns (infrastructure/provider/chayns)            │
+│        └── retool (infrastructure/provider/retool)              │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -153,215 +154,65 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 当前源码结构
+## 当前源码与 target
 
-项目当前采用按职责拆分的模块化结构：
+每个 production `.cpp/.cc` 由一个且仅一个正式 CMake target 拥有；测试只链接这些 target，
+不会重新编译生产实现。目录名保留了部分历史业务名，但**职责边界以 target owner 和架构门禁为准**。
+`aiapi_legacy` 及其 source list 已删除。
+
+```text
+aiapi_platform
+└─ aiapi_domain                 -> aiapi_platform
+   └─ aiapi_application         -> aiapi_domain, aiapi_platform
+aiapi_infrastructure            -> aiapi_domain, aiapi_platform, Drogon/OpenSSL/PostgreSQL
+aiapi_transport                 -> aiapi_application, aiapi_domain, aiapi_platform, Drogon
+aiapi_runtime                   -> aiapi_application, aiapi_infrastructure, aiapi_transport
+aiapi (main.cc)                 -> aiapi_runtime
+```
+
+`aiapi_transport` 仍以 whole-archive 链接到最终可执行文件，仅用于保留 Drogon 的静态 Controller
+注册对象；这不是 application 到 transport/infrastructure 的反向依赖。
 
 ```text
 src/
-├── controllers/             HTTP 控制器、过滤器及 Chat/Responses Sink
-├── domain/                  Provider 值 DTO 与窄 port（IChatProvider 等）
-├── infrastructure/provider/ ProviderBase、Registry 与 production factory
-├── apipoint/                Chayns / Retool Provider 协议实现
-├── apiManager/              仅保留历史 ApiChannel 公共枚举（无 Provider 工厂/定位器）
-├── accountManager/          账号选择、注册、Token/健康 workflow 与后台 worker（见 README）
-├── managedAccount/          统一 ManagedAccount 抽象及后端实现
-├── channelManager/          渠道状态、并发和路由管理
-├── dbManager/               账号、渠道、配置、指标和 Workspace 持久化
-├── sessionManager/          会话、生成编排、连续性和工具调用
-│   ├── continuity/          连续性、历史预算、响应索引和文本提取
-│   ├── core/                GenerationService、请求适配和会话门控
-│   └── tooling/             工具桥接、验证、规范化、编码和 XML 编解码
-├── retoolWorkspace/         Retool Workspace 管理与服务
-├── metrics/                 错误事件、错误统计与状态指标
-├── tools/                   ZeroWidth 编码及账号登录客户端
-├── utils/                   配置校验、后台任务、响应流等公共工具
-└── test/                    功能测试与测试入口
+├── platform/                   Result、ErrorCode、UUID、日志与 ZeroWidth 编码
+├── domain/                     纯值对象、规则和 ports；不含 JsonCpp/Drogon/DB 类型
+├── application/                Controller-facing use case（账号/渠道/健康/指标/Workspace）
+├── accountManager/             application-owned 账号选择、注册、Token、健康与 worker stage
+├── sessionManager/             application-owned generation、连续性、工具 bridge 与 session 编排
+├── channelManager/             application-owned 渠道路由与状态
+├── managedAccount/             application-owned ManagedAccount backend/service
+├── retoolWorkspace/            application-owned Workspace 编排；其 store adapter 在 infrastructure
+├── infrastructure/
+│   ├── account/                Drogon account HTTP adapter
+│   ├── config/                 ConfigValidator
+│   ├── executor/               BackgroundTaskQueue
+│   └── provider/
+│       ├── chayns/             Chayns Provider、HTTP、clock、reaper 与 browser helper
+│       └── retool/             Retool Provider、HTTP 与 clock
+├── dbManager/                  infrastructure-owned persistence adapters
+├── metrics/                    infrastructure-owned metrics/store adapters
+├── controllers/                transport Controller、Filter、JSON/SSE codec 和 sinks
+├── runtime/                    AppContext 与唯一组合根 AppWiring
+├── apiManager/、models/        仍在使用的共享枚举/模型资源
+└── test/                       CTest 注册的单元、fixture 与停机测试
 ```
 
-## 项目结构
+### HTTP / IO 边界（ADR-09）
 
-```
-aiapi/
-├── CMakeLists.txt                  # CMake 构建配置（根目录）
-├── Dockerfile                      # Docker 构建文件
-├── config.example.json             # 配置文件模板（JSON）
-├── config.sqlite.example.json      # SQLite 配置模板
-├── docker-compose.env.yml          # Docker Compose（环境变量方式）
-├── docker-compose.volume.yml       # Docker Compose（卷挂载方式）
-├── requirements.txt                # Python 依赖（登录/注册服务）
-├── doc/                            # 文档目录
-│   ├── aiapi_callflow_and_api_examples.md  # 详细调用关系与接口样例
-│   ├── development-plan.md                 # 开发计划
-│   ├── optimization-report.md              # 优化报告
-│   ├── error_stats_dev_plan.md             # 错误统计开发计划
-│   ├── service_status_monitoring_design.md # 服务状态监控设计
-│   ├── aiapi 错误统计与监控方案（设计文档）   # 错误统计与监控方案设计
-│   └── session/                            # 会话连续性模块文档
-│       ├── README.md                       #   会话模块索引
-│       ├── session_continuity_refactor_design.md          # 重构设计
-│       └── session_continuity_refactor_development_plan.md # 重构开发计划
-│
-├── tools/                         # 不链入 production target 的独立运维/架构工具
-│   └── accountlogin/               # 账号登录运维脚本
-│       ├── README.md               # 用途、依赖与安全边界
-│       ├── login_client.cpp        # 独立 C++ 登录客户端示例
-│       ├── loginlocal.py           # 本地登录脚本
-│       ├── loginremote.py          # 远程登录脚本
-│       ├── chayns-login.service   # systemd 服务文件样例
-│       └── test.py                 # 手工调试脚本
-│
-└── src/
-    ├── CMakeLists.txt              # CMake 构建配置（源码）
-    ├── main.cc                     # 程序入口
-    ├── config.yaml                 # Drogon YAML 运行配置
-    │
-    ├── controllers/                # HTTP 控制器 + 过滤器
-    │   ├── AiApiController.h/cc    # AI 核心 API 路由控制器
-    │   ├── AccountController.h/cc  # 账号管理 API 控制器
-    │   ├── RetoolWorkspaceController.h/cc # Retool Workspace API 控制器
-    │   ├── ChannelController.h/cc  # 渠道管理 API 控制器
-    │   ├── MetricsController.h/cc  # 监控指标 API 控制器
-    │   ├── LogController.h/cc      # 日志查看 API 控制器
-    │   ├── HealthController.h/cc   # 健康检查 API 控制器
-    │   ├── ControllerUtils.h       # 控制器公共工具
-    │   ├── AdminAuthFilter.h       # 管理接口 Bearer Token 认证过滤器
-    │   ├── RateLimitFilter.h       # 请求限流过滤器（令牌桶）
-    │   └── sinks/                  # 输出 Sink 实现
-    │       ├── ChatJsonSink.h/cpp      # Chat 非流式 JSON 输出
-    │       ├── ChatSseSink.h/cpp       # Chat 流式 SSE 输出
-    │       ├── ResponsesJsonSink.h/cpp # Responses 非流式 JSON 输出
-    │       └── ResponsesSseSink.h/cpp  # Responses 流式 SSE 输出
-    │
-    ├── sessionManager/             # 核心业务逻辑（分层组织）
-    │   ├── README.md               # sessionManager 模块文档
-    │   │
-    │   ├── contracts/              # 接口契约与数据结构
-    │   │   ├── README.md           # 契约层文档
-    │   │   ├── GenerationRequest.h # 统一请求结构
-    │   │   ├── GenerationEvent.h   # 统一事件模型
-    │   │   └── IResponseSink.h     # 输出通道接口
-    │   │
-│   ├── core/                   # 核心服务
-│   │   ├── README.md           # 核心层文档
-│   │   ├── GenerationService.h/cpp              # 稳定生成入口（薄 facade）
-│   │   ├── GenerationPipeline.h/cpp             # 请求/Provider/提交编排
-│   │   ├── GenerationResponsePipeline.h/cpp     # 响应/工具/事件编排
-    │   │   ├── RequestAdapters.h/cpp   # HTTP 请求 → GenerationRequest 适配器
-    │   │   ├── Session.h/cpp           # 会话管理 + ZeroWidth/Hash 追踪
-    │   │   ├── SessionExecutionGate.h  # 并发门控（单例 + RAII Guard）
-    │   │   ├── ClientOutputSanitizer.h/cpp # 输出清洗
-    │   │   └── Errors.h                # 统一错误模型
-    │   │
-    │   ├── continuity/             # 会话连续性
-    │   │   ├── README.md           # 连续性模块文档
-    │   │   ├── ContinuityResolver.h/cpp # 会话连续性决策器
-    │   │   ├── HistoryReplayBudget.h/cpp # 历史回放预算控制
-    │   │   ├── ResponseIndex.h/cpp      # 响应存储索引（Responses API GET/DELETE）
-    │   │   └── TextExtractor.h/cpp      # 文本提取工具
-    │   │
-    │   └── tooling/                # 工具调用相关
-    │       ├── README.md           # 工具调用模块文档
-    │       ├── ToolCallBridge.h/cpp         # 工具调用桥接（Native / TextBridge）
-    │       ├── ToolDefinitionEncoder.h/cpp  # 工具定义编码（compact/full）
-    │       ├── XmlTagToolCallCodec.h/cpp    # XML 格式工具调用编解码
-    │       ├── ToolCallValidator.h/cpp      # 工具调用 Schema 校验
-    │       ├── ToolCallNormalizer.h/cpp     # 参数形状规范化
-    │       ├── ForcedToolCallGenerator.h/cpp # 强制工具调用兜底生成
-    │       ├── StrictClientRules.h/cpp      # 严格客户端规则
-    │       └── BridgeHelpers.h/cpp          # 桥接辅助函数
-    │
-    ├── domain/
-    │   ├── model/                  # ProviderRequest/Response/CallContext 等值对象
-    │   └── port/                   # IChatProvider、模型/线程/Registry 窄能力
-    │
-    ├── apipoint/                   # Provider 协议实现（均继承 ProviderBase）
-    │   ├── chaynsapi/              # Chayns Provider 实现
-    │   │   └── chaynsapi.h/cpp
-    │   └── retoolapi/              # Retool Workspace Provider 实现
-    │       └── retoolapi.h/cpp
-    │
-    ├── infrastructure/provider/    # ProviderBase、生产 factory 与运行时注册表
-    │   ├── ProviderBase.h/cpp       # final NVI、取消/截止/错误边界
-    │   └── ProviderRegistry.h/cpp   # 显式窄注册、发布前冻结、只读能力查找
-    ├── apiManager/
-    │   └── Apicomn.h               # 历史 ApiChannel 公共枚举（无 Provider 宽接口）
-    │
-    ├── accountManager/             # 账号池管理
-    │   └── accountManager.h/cpp    # 账号 CRUD + Token 刷新 + 自动注册
-    │
-    ├── managedAccount/            # 更高层账号/工作区抽象
-    │   ├── contracts/
-    │   │   └── ManagedAccount.h    # 统一资产记录 / 执行上下文
-    │   ├── backends/
-    │   │   ├── IManagedAccountBackend.h
-    │   │   ├── ClassicProviderAccountBackend.h/cpp
-    │   │   └── RetoolWorkspaceBackend.h/cpp
-    │   └── service/
-    │       └── ManagedAccountService.h/cpp
-    │
-    ├── retoolWorkspace/           # Retool Workspace 子系统
-    │   ├── RetoolWorkspaceInfo.h
-    │   ├── RetoolWorkspaceManager.h/cpp
-    │   └── RetoolWorkspaceService.h/cpp
-    │
-    ├── channelManager/             # 渠道管理
-    │   └── channelManager.h/cpp    # 渠道 CRUD + 状态控制
-    │
-    ├── dbManager/                  # 数据库管理
-    │   ├── DbType.h                # 数据库类型枚举（PostgreSQL/MySQL/SQLite3）
-    │   ├── account/
-    │   │   ├── accountDbManager.h/cpp       # 账号持久化
-    │   │   └── accountBackupDbManager.h/cpp # 账号备份持久化
-    │   ├── channel/
-    │   │   └── channelDbManager.h/cpp       # 渠道持久化
-    │   ├── config/
-    │   │   └── ConfigDbManager.h/cpp        # 配置持久化（app_config 表）
-    │   ├── retoolWorkspace/
-    │   │   └── RetoolWorkspaceDbManager.h/cpp # Retool Workspace 持久化
-    │   └── metrics/
-    │       ├── ErrorStatsDbManager.h/cpp    # 错误统计持久化
-    │       └── StatusDbManager.h/cpp        # 服务状态持久化
-    │
-    ├── metrics/                    # 错误统计服务
-    │   ├── ErrorEvent.h            # 错误事件定义
-    │   ├── ErrorStatsConfig.h/cpp  # 错误统计配置
-    │   └── ErrorStatsService.h/cpp # 错误记录服务
-    │
-    ├── models/                     # 数据模型
-    │   └── model.json              # 模型定义文件
-    │
-    ├── tools/                      # production 工具类
-    │   └── ZeroWidthEncoder.h/cpp  # 零宽字符编码/解码
-    │
-    ├── utils/                      # 通用工具
-    │   ├── BackgroundTaskQueue.h   # 后台任务队列
-    │   ├── ConfigValidator.h/cpp   # 配置校验器
-    │   ├── IoLoopResponseStream.h  # IO 循环响应流
-    │   ├── LoginResponseLogSummary.h # 登录响应日志摘要
-    │   └── RetiredProviderPolicy.h # 已退役 Provider 键策略
-    │
-    └── test/                       # 单元测试
-        ├── CMakeLists.txt          # 测试构建配置
-        ├── test_main.cc            # 测试入口
-        ├── test_chayns_model_catalog.cpp            # chayns 模型目录测试
-        ├── test_continuity_resolver.cpp             # ContinuityResolver 测试
-        ├── test_error_event.cpp                     # ErrorEvent 测试
-        ├── test_error_stats_config.cpp              # ErrorStatsConfig 测试
-        ├── test_forced_tool_call.cpp                # ForcedToolCallGenerator 测试
-        ├── test_generation_service_emit.cpp         # GenerationService emit 测试
-        ├── test_history_replay_budget.cpp           # HistoryReplayBudget 测试
-        ├── test_io_loop_response_stream.cpp         # IoLoopResponseStream 测试
-        ├── test_login_response_log_summary.cpp      # LoginResponseLogSummary 测试
-        ├── test_provider_retirement.cpp             # Provider 退役边界测试
-        ├── test_normalize_tool_args.cpp             # ToolCallNormalizer 测试
-        ├── test_request_adapters.cpp                # RequestAdapters 测试
-        ├── test_response_index.cpp                  # ResponseIndex 测试
-        ├── test_sinks.cpp                           # Sink 输出测试
-        ├── test_strict_client_rules.cpp             # StrictClientRules 测试
-        ├── test_tool_call_validator.cpp             # ToolCallValidator 测试
-        └── test_xml_tool_call_codec.cpp             # XmlTagToolCallCodec 测试
-```
+- Controller 在 transport 层读取 Drogon request，再把复制的 `Json::Value` 和
+  `aiapi::RequestHeaders` 交给 `RequestAdapters`/use case；application 不接收
+  `drogon::HttpRequestPtr`。
+- Account 生命周期使用框架无关的 `IAccountHttpTransport` DTO；
+  `infrastructure/account/DrogonAccountHttpTransport` 是唯一 Drogon adapter。
+- `AppWiring` 在组合根读取 `custom_config`，按值注入 Account workflow 和 AI use case；
+  application worker 不重新查询 Drogon runtime config。
+- `controllers/sinks/IoLoopResponseStream.h` 是 worker 回到 Drogon event loop 的 adapter；
+  sink/application 不直接操作 loop-affine response。
+
+`tools/arch/check_http_io_boundary.py` 扫描 application include closure 与全部 domain 文件，
+同时检查 CMake link、Account adapter 和 runtime-config 接线；`--selftest` 会以内存变异证明
+Drogon include 会被拒绝。
 
 ## 完整 API 端点清单
 
@@ -755,43 +606,48 @@ curl "http://localhost:55555/ready"
 curl "http://localhost:55555/metrics"
 ```
 
-## 构建与运行
+## 构建、测试与运行
 
 ### 依赖
 
-- C++17 或更高版本
-- Drogon 框架
-- JsonCpp
-- OpenSSL
-- spdlog
-- PostgreSQL / MySQL / SQLite3（可选，通过 `dbtype` 配置切换）
+- C++17 编译器、CMake、Drogon、JsonCpp、OpenSSL、spdlog；
+- 持久化按配置使用 PostgreSQL / MySQL / SQLite3；
+- 运行 Provider 退役脚本还需要 `sqlite3` CLI。
 
-### 本地构建
+### 从仓库根目录构建
 
 ```bash
-cd aiapi/src
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+cd aiapi
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j"$(nproc)"
 ```
 
-### 运行测试
+### 测试与架构门禁
 
 ```bash
-cd aiapi/src/build
-ctest --output-on-failure
-# 或直接运行测试可执行文件
-./test/aiapi_test
+# CTest 与直接 runner（runner 用于排查单个 Drogon case）
+ctest --test-dir build --output-on-failure
+build/src/test/aiapi_test
+
+# 已实施的结构门禁
+python3 tools/architecture_audit.py --selftest
+python3 tools/architecture_audit.py --baseline doc/adr/audits/audit-baseline.json
+python3 tools/arch/check_source_ownership.py --require-no-legacy
+python3 tools/arch/check_target_layers.py --require-no-legacy
+python3 tools/arch/check_http_io_boundary.py --selftest
 ```
+
+覆盖、Address/Undefined sanitizer 与 ThreadSanitizer 的完整发布命令见
+[`doc/adr/work-products/P08-transition-cleanup.md`](doc/adr/work-products/P08-transition-cleanup.md)。
+TSan 必须从干净的 `build-tsan/` 开始：`rm -rf build-tsan && tools/run-tsan.sh`。
 
 ### 运行
 
 ```bash
-cd aiapi/src/build
-./aiapi
+build/src/aiapi
 ```
 
-服务默认监听 `0.0.0.0:55555`
+服务默认监听 `0.0.0.0:55555`。
 
 ### Docker 构建与运行
 
@@ -816,6 +672,23 @@ docker compose -f docker-compose.volume.yml up --build aiapi
 Docker 入口脚本支持：
 - `CONFIG_JSON` 环境变量 → 直接覆盖配置文件
 - `CUSTOM_CONFIG` 环境变量 → 使用 jq 合并到现有配置
+
+## Provider 数据归档与恢复
+
+退役的是 `nexosapi` / `openai` 的**具体上游 Provider 数据**，不是 OpenAI 兼容 HTTP 协议，也不包括
+Retool 的合法 `openai_resource_*` 字段。迁移脚本只针对当前 SQLite schema：
+
+```text
+tools/migrations/provider_retirement_preflight_v1.sql  # 只读预检
+tools/migrations/retire_providers_v1.sql               # 事务归档并删除目标 live rows
+tools/migrations/restore_retired_providers_v1.sql      # 冲突即停止的恢复
+tools/migrations/test_provider_retirement.py           # 离线往返/失败路径演练
+```
+
+先阅读 [`tools/migrations/README.md`](tools/migrations/README.md)，再在维护窗口按“备份 → 只读
+preflight → 副本往返演练 → 原库 retire”的顺序执行。archive snapshot 含账号凭据和 session payload，
+不得写入日志或提交到仓库。代码回滚不会自动恢复数据；需要恢复时只能使用同一
+`retirement_id` 的 restore 脚本，主键或 `channelname` 冲突会整批终止而不会覆盖 live 数据。
 
 ## 配置说明
 
@@ -979,27 +852,16 @@ Docker 入口脚本支持：
 
 ## 单元测试
 
-项目包含 18 个功能测试文件（另有 `test_main.cc` 作为测试入口），覆盖核心模块：
+测试列表的唯一真值是 [`src/test/CMakeLists.txt`](src/test/CMakeLists.txt) 的 `TEST_SOURCES`。
+它链接 `aiapi_runtime` 和正式 production target，`check_test_registration.py --require-strict`
+在已配置 build 中核对源文件、Drogon case 和 CTest 注册是否一致。
 
-| 测试文件 | 覆盖模块 |
-|----------|----------|
-| `test_request_adapters.cpp` | HTTP 请求适配器 |
-| `test_xml_tool_call_codec.cpp` | XML 工具调用编解码 |
-| `test_tool_call_validator.cpp` | 工具调用 Schema 校验 |
-| `test_normalize_tool_args.cpp` | 参数形状规范化 |
-| `test_forced_tool_call.cpp` | 强制工具调用兜底 |
-| `test_strict_client_rules.cpp` | 严格客户端规则 |
-| `test_sinks.cpp` | 输出 Sink |
-| `test_generation_service_emit.cpp` | GenerationService 事件发送 |
-| `test_continuity_resolver.cpp` | 会话连续性决策 |
-| `test_response_index.cpp` | 响应索引 |
-| `test_error_event.cpp` | 错误事件模型 |
-| `test_error_stats_config.cpp` | 错误统计配置 |
-| `test_chayns_model_catalog.cpp` | chayns 模型目录 |
-| `test_io_loop_response_stream.cpp` | IO 循环响应流 |
-| `test_login_response_log_summary.cpp` | 登录响应日志摘要 |
-| `test_provider_retirement.cpp` | Provider 退役配置与 410 tombstone |
-| `test_history_replay_budget.cpp` | HistoryReplayBudget 历史回放预算 |
+覆盖范围包括：RequestAdapters/JSON contract、generation pipeline 与 tool bridge、Chayns/Retool
+离线 fixture、Account lifecycle/worker、统一 `Result/Error` 与 ProviderBase NVI、Controller injection、
+队列背压、AppContext shutdown 与五类 SIGTERM 场景。P8 收口时 Debug `ctest` 为 **396/396**，
+直接 runner 为 **396 cases / 2075 assertions**；运行时覆盖快照见
+[`P08-coverage.md`](doc/adr/work-products/P08-coverage.md)。请使用上面的 root-level
+`ctest --test-dir build` 命令，而不要从 `src/test` 单独配置一个会复制 production source 的测试工程。
 
 ## 开发路线
 
@@ -1016,7 +878,7 @@ Docker 入口脚本支持：
 - [x] 会话追踪（Hash/ZeroWidth + ContinuityResolver + TextExtractor）
 - [x] 并发门控（SessionExecutionGate + CancellationToken + RAII Guard）
 - [x] 输出清洗（ClientOutputSanitizer）
-- [x] 统一错误模型（Errors）
+- [x] 统一错误模型（`platform::Error/ErrorCode`）
 - [x] 错误统计系统（ErrorStatsService + ErrorStatsConfig + 4 域分类）
 - [x] 账号池管理（自动注册 + Token 刷新 + 类型检测 + 备份）
 - [x] 渠道管理（CRUD + 状态控制 + supports_tool_calls）
@@ -1033,11 +895,12 @@ Docker 入口脚本支持：
 - [x] 控制器拆分（6 个独立控制器）
 - [x] sessionManager 分层重构（contracts / core / continuity / tooling）
 - [x] HistoryReplayBudget（多 Provider 历史回放预算与完整 turn 截取）
-- [x] 核心单元测试（18 个功能测试源文件 + `test_main.cc` 测试入口）
+- [x] P8 架构收口（六个正式 target、无 legacy owner、ADR-09 IO boundary）
+- [x] 正式 target 复用的 CTest 行为、fixture、sanitizer 与 SIGTERM 测试
 
 ## License
 
 MIT
 
 
-最后更新时间：2026年8月5日 08:35（美国东部时间，ET，UTC-4）
+最后更新时间：2026-08-15

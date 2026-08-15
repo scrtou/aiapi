@@ -1,9 +1,9 @@
 #include <drogon/drogon_test.h>
 
 #include <accountManager/accountManager.h>
-#include <apipoint/chaynsapi/chaynsThreadReaper.h>
-#include <apipoint/chaynsapi/ChaynsHttpTransport.h>
-#include <apipoint/chaynsapi/chaynsapi.h>
+#include <infrastructure/provider/chayns/chaynsThreadReaper.h>
+#include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
+#include <infrastructure/provider/chayns/chaynsapi.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
 #include <sessionManager/core/Session.h>
@@ -233,13 +233,13 @@ class CountingAccountTransport final : public account::IAccountHttpTransport
 {
   public:
     account::HttpResult send(const std::string&,
-                             const drogon::HttpRequestPtr&,
+                             const account::HttpRequest&,
                              double) override
     {
         ++calls;
-        auto response = drogon::HttpResponse::newHttpResponse();
-        response->setStatusCode(drogon::k503ServiceUnavailable);
-        return {drogon::ReqResult::Ok, response};
+        auto response = std::make_shared<account::HttpResponse>();
+        response->statusCode = 503;
+        return {account::HttpResultCode::Ok, std::move(response)};
     }
 
     std::atomic<int> calls{0};

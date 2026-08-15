@@ -87,25 +87,30 @@ class LifecycleHttpTransport final : public account::IAccountHttpTransport
         responses.push_back({status, std::move(body)});
     }
     account::HttpResult send(const std::string& baseUrl,
-                             const drogon::HttpRequestPtr& request,
+                             const account::HttpRequest& request,
                              double timeoutSeconds) override
     {
         baseUrls.push_back(baseUrl);
-        paths.push_back(request ? request->getPath() : "<null>");
-        methods.push_back(request ? request->method() : drogon::HttpMethod::Invalid);
-        authorizationPresent.push_back(request && !request->getHeader("authorization").empty());
-        if (!request || timeoutSeconds <= 0 || responses.empty())
-            return {drogon::ReqResult::BadResponse, nullptr};
+        paths.push_back(request.path);
+        methods.push_back(request.method);
+        authorizationPresent.push_back(
+            request.headers.find("Authorization") != request.headers.end());
+        if (timeoutSeconds <= 0 || responses.empty())
+            return {account::HttpResultCode::BadResponse, nullptr};
         const auto scripted = responses.front();
         responses.pop_front();
-        auto response = drogon::HttpResponse::newHttpJsonResponse(scripted.body);
-        response->setStatusCode(static_cast<drogon::HttpStatusCode>(scripted.status));
-        return {drogon::ReqResult::Ok, response};
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        auto response = std::make_shared<account::HttpResponse>();
+        response->statusCode = scripted.status;
+        response->body = Json::writeString(writer, scripted.body);
+        response->headers["content-type"] = "application/json";
+        return {account::HttpResultCode::Ok, std::move(response)};
     }
     std::deque<ScriptedResponse> responses;
     std::vector<std::string> baseUrls;
     std::vector<std::string> paths;
-    std::vector<drogon::HttpMethod> methods;
+    std::vector<account::HttpMethod> methods;
     std::vector<bool> authorizationPresent;
 };
 
@@ -226,7 +231,7 @@ DROGON_TEST(AccountLifecycle_CheckTokenUsesFakeHttpAndInvalidatesPool)
     CHECK(eligible == nullptr);
     REQUIRE(transport->paths.size() == 1);
     CHECK(transport->paths[0] == "/AccountService/v1.0/Chayns/User");
-    CHECK(transport->methods[0] == drogon::HttpMethod::Get);
+    CHECK(transport->methods[0] == account::HttpMethod::Get);
     CHECK(transport->authorizationPresent[0]);
 }
 

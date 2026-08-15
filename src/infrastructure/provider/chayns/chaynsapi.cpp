@@ -1,5 +1,5 @@
 #include <drogon/drogon.h>
-#include <apipoint/chaynsapi/chaynsapi.h>
+#include <infrastructure/provider/chayns/chaynsapi.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 #include <algorithm>
 #include <chrono>
@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
-#include <utils/chaynsBrowserImpersonation.h>
+#include <infrastructure/provider/chayns/ChaynsBrowserImpersonation.h>
 using namespace drogon;
 using std::string;
 

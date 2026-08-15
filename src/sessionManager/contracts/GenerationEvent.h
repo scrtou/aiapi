@@ -83,15 +83,11 @@ struct Completed {
     Json::Value meta{Json::objectValue}; // 附加元信息（如实际路由到的 workspaceId）
 };
 
-// P6-W1: event emission shares the platform cross-layer ErrorCode rather than
-// maintaining a second enum with a drifting HTTP/string mapping.
-using ErrorCode = platform::ErrorCode;
-
 /**
  * @brief 错误事件
  */
 struct Error {
-    ErrorCode code = ErrorCode::Internal;
+    platform::ErrorCode code = platform::ErrorCode::Internal;
     std::string message;        // 错误信息
     std::string providerCode;   // 上游 原始错误码（可选）
     std::string detail;         // 详细信息（可选）
@@ -144,14 +140,14 @@ inline std::string getEventTypeName(const GenerationEvent& event) {
 /**
  * @brief ErrorCode 转换为 HTTP 状态码
  */
-inline int errorCodeToHttpStatus(ErrorCode code) {
+inline int errorCodeToHttpStatus(platform::ErrorCode code) {
     return platform::defaultHttpStatus(code);
 }
 
 /**
  * @brief ErrorCode 转换为字符串
  */
-inline std::string errorCodeToString(ErrorCode code) {
+inline std::string errorCodeToString(platform::ErrorCode code) {
     return std::string(platform::errorCodeName(code));
 }
 

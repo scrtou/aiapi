@@ -26,6 +26,39 @@ HttpRequestPtr makeJsonRequest(const Json::Value& body,
     return req;
 }
 
+aiapi::RequestHeaders headersFromRequest(const HttpRequestPtr& req)
+{
+    aiapi::RequestHeaders headers;
+    if (!req) return headers;
+    headers.requestId = req->getHeader("x-request-id");
+    headers.correlationId = req->getHeader("x-correlation-id");
+    headers.userAgent = req->getHeader("user-agent");
+    headers.originator = req->getHeader("originator");
+    headers.codexWindowId = req->getHeader("x-codex-window-id");
+    headers.threadId = req->getHeader("thread-id");
+    headers.sessionId = req->getHeader("session-id");
+    headers.sessionIdUnderscore = req->getHeader("session_id");
+    headers.conversationId = req->getHeader("conversation-id");
+    headers.conversationIdUnderscore = req->getHeader("conversation_id");
+    headers.authorization = req->getHeader("authorization");
+    if (headers.authorization.empty()) headers.authorization = req->getHeader("Authorization");
+    return headers;
+}
+
+GenerationRequest buildChatRequest(const HttpRequestPtr& req)
+{
+    const auto body = req ? req->getJsonObject() : nullptr;
+    return RequestAdapters::buildGenerationRequestFromChat(
+        body ? *body : Json::Value(), headersFromRequest(req));
+}
+
+GenerationRequest buildResponsesRequest(const HttpRequestPtr& req)
+{
+    const auto body = req ? req->getJsonObject() : nullptr;
+    return RequestAdapters::buildGenerationRequestFromResponses(
+        body ? *body : Json::Value(), headersFromRequest(req));
+}
+
 }
 
 DROGON_TEST(RequestAdapters_Chat_BasicFields)
@@ -50,7 +83,7 @@ DROGON_TEST(RequestAdapters_Chat_BasicFields)
     body["messages"] = msgs;
 
     auto req = makeJsonRequest(body, "Kilo-Code/1.0", "Bearer test-key");
-    auto genReq = RequestAdapters::buildGenerationRequestFromChat(req);
+    auto genReq = buildChatRequest(req);
 
     CHECK(genReq.endpointType == EndpointType::ChatCompletions);
     CHECK(genReq.model == "GPT-4o");
@@ -90,7 +123,7 @@ DROGON_TEST(RequestAdapters_Chat_ContentArrayWithImage)
     body["messages"] = msgs;
 
     auto req = makeJsonRequest(body);
-    auto genReq = RequestAdapters::buildGenerationRequestFromChat(req);
+    auto genReq = buildChatRequest(req);
 
     CHECK(genReq.currentInput.find("look this image") != std::string::npos);
     CHECK(genReq.images.size() == 1);
@@ -122,7 +155,7 @@ DROGON_TEST(RequestAdapters_Chat_ToolsAndToolChoice)
     body["tool_choice"] = choice;
 
     auto req = makeJsonRequest(body);
-    auto genReq = RequestAdapters::buildGenerationRequestFromChat(req);
+    auto genReq = buildChatRequest(req);
 
     CHECK(genReq.tools.isArray());
     CHECK(genReq.tools.size() == 1);
@@ -153,7 +186,7 @@ DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeav
     tools.append(namespaceTool);
     body["tools"] = tools;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body));
 
     REQUIRE(genReq.toolsRaw.isArray());
@@ -189,7 +222,7 @@ DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
     namespaceTool["tools"].append(function);
     body["tools"].append(namespaceTool);
 
-    const auto request = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto request = buildResponsesRequest(
         makeJsonRequest(body));
     CHECK(request.tools.empty());
     REQUIRE(request.toolsRaw.size() == 1);
@@ -228,7 +261,7 @@ DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayD
     body["tools"].append(workspace);
     body["tools"].append(archive);
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body));
 
     REQUIRE(genReq.toolsRaw.size() == 2);
@@ -252,7 +285,7 @@ DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
     body["previous_response_id"] = "resp_123";
 
     auto req = makeJsonRequest(body, "RooCode/2.0");
-    auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    auto genReq = buildResponsesRequest(req);
 
     CHECK(genReq.endpointType == EndpointType::Responses);
     CHECK(genReq.model == "GPT-4o-mini");
@@ -296,7 +329,7 @@ DROGON_TEST(RequestAdapters_Responses_InputSystemAndDeveloperInstructions)
     }
     body["input"] = input;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body));
 
     CHECK(genReq.systemPrompt.find("base instruction") != std::string::npos);
@@ -314,12 +347,12 @@ DROGON_TEST(RequestAdapters_RequestIdHeaders)
     auto requestWithBoth = makeJsonRequest(body);
     requestWithBoth->addHeader("x-request-id", "client-request-123");
     requestWithBoth->addHeader("x-correlation-id", "correlation-ignored");
-    const auto chatReq = RequestAdapters::buildGenerationRequestFromChat(requestWithBoth);
+    const auto chatReq = buildChatRequest(requestWithBoth);
     CHECK(chatReq.requestId == "client-request-123");
 
     auto correlationOnly = makeJsonRequest(body);
     correlationOnly->addHeader("x-correlation-id", "corr:456");
-    const auto responsesReq = RequestAdapters::buildGenerationRequestFromResponses(correlationOnly);
+    const auto responsesReq = buildResponsesRequest(correlationOnly);
     CHECK(responsesReq.requestId == "corr:456");
 }
 
@@ -332,7 +365,7 @@ DROGON_TEST(RequestAdapters_CodexCliStableSessionFromHeader)
     auto req = makeJsonRequest(body, "codex_cli_rs/0.133.0");
     req->addHeader("session-id", "codex-session-123");
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    const auto genReq = buildResponsesRequest(req);
     CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
     CHECK(genReq.clientInfo["client_session_id"].asString() == "codex-session-123");
     CHECK(genReq.clientInfo["client_session_source"].asString() == "header.session-id");
@@ -345,7 +378,7 @@ DROGON_TEST(RequestAdapters_CodexCliStableSessionFromBodyFallback)
     body["input"] = "hello";
     body["conversation_id"] = "conversation-body-456";
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body, "codex_cli_rs/0.133.0"));
 
     CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
@@ -361,7 +394,7 @@ DROGON_TEST(RequestAdapters_CodexWindowIdAloneDoesNotEnableCodexProtocol)
 
     auto req = makeJsonRequest(body, "compatible-client/1.0");
     req->addHeader("x-codex-window-id", "window-only-789");
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    const auto genReq = buildResponsesRequest(req);
 
     CHECK(genReq.clientInfo["client_type"].asString() == "compatible-client/1.0");
     CHECK(!genReq.clientInfo.isMember("client_session_id"));
@@ -375,7 +408,7 @@ DROGON_TEST(RequestAdapters_RealCodexMayIncludeWindowId)
 
     auto req = makeJsonRequest(body, "codex_cli_rs/0.133.0");
     req->addHeader("x-codex-window-id", "window-789");
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    const auto genReq = buildResponsesRequest(req);
 
     CHECK(genReq.clientInfo["client_type"].asString() == "Codex");
     CHECK(!genReq.clientInfo.isMember("client_session_id"));
@@ -400,7 +433,7 @@ DROGON_TEST(RequestAdapters_Responses_InputItems)
     body["input_items"] = inputItems;
 
     auto req = makeJsonRequest(body);
-    auto genReq = RequestAdapters::buildGenerationRequestFromResponses(req);
+    auto genReq = buildResponsesRequest(req);
 
     CHECK(genReq.currentInput.find("from input_items") != std::string::npos);
     CHECK(genReq.images.size() == 1);
@@ -452,7 +485,7 @@ DROGON_TEST(RequestAdapters_Responses_FullTranscriptDoesNotReplayHistoricalToolO
     }
     body["input"] = input;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body, "codex_cli_rs/0.133.0"));
 
     CHECK(genReq.currentInput.find("new question") != std::string::npos);
@@ -508,7 +541,7 @@ DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsLatestParallelToolResults)
     }
     body["input"] = input;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body, "codex_cli_rs/0.133.0"));
 
     CHECK(genReq.currentInput.find("LATEST_RESULT_A") != std::string::npos);
@@ -530,7 +563,7 @@ DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsIncrementalToolOutputWithout
     input.append(item);
     body["input"] = input;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body, "codex_cli_rs/0.133.0"));
 
     CHECK(genReq.currentInput.find("INCREMENTAL_TOOL_RESULT") != std::string::npos);
@@ -575,7 +608,7 @@ DROGON_TEST(RequestAdapters_Responses_XmlBridgeOnlyReplaysNewestToolCycle)
     appendOutput("call_new_cycle", "NEW_CYCLE_RESULT");
     body["input"] = input;
 
-    const auto genReq = RequestAdapters::buildGenerationRequestFromResponses(
+    const auto genReq = buildResponsesRequest(
         makeJsonRequest(body, "codex_cli_rs/0.133.0"));
 
     CHECK(genReq.currentInput.find("NEW_CYCLE_RESULT") != std::string::npos);

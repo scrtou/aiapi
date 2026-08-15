@@ -10,7 +10,8 @@
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
 #include <domain/port/IChannelCatalog.h>
-#include <drogon/drogon.h>
+#include <json/json.h>
+#include <platform/Log.h>
 
 #include <algorithm>
 #include <cctype>
@@ -22,7 +23,6 @@
 
 #include <sessionManager/core/Session.h>
 
-using namespace drogon;
 using namespace bridge;
 
 namespace {
@@ -83,9 +83,10 @@ ToolChoiceSpec parseToolChoiceSpec(const std::string& encoded)
 
 bool isStrictSentinelEnabled(const session_st& session,
                              bool strictToolClient,
-                             bool toolChoiceRequired)
+                             bool toolChoiceRequired,
+                             const Json::Value& runtimeConfig)
 {
-    const auto& custom = drogon::app().getCustomConfig();
+    const auto& custom = runtimeConfig;
     if (!custom.isObject() || !custom.isMember("tool_bridge") ||
         !custom["tool_bridge"].isObject()) {
         return strictToolClient || toolChoiceRequired;
@@ -168,7 +169,9 @@ void annotateToolCallIdentities(const session_st& session,
     }
 }
 
-ResponseAssembly makeAssembly(const session_st& session, bool supportsToolCalls)
+ResponseAssembly makeAssembly(const session_st& session,
+                              bool supportsToolCalls,
+                              const Json::Value& runtimeConfig)
 {
     ResponseAssembly assembly;
     assembly.clientType = safeJsonAsString(session.provider.clientInfo.get("client_type", ""), "");
@@ -180,7 +183,7 @@ ResponseAssembly makeAssembly(const session_st& session, bool supportsToolCalls)
     assembly.toolChoice = parseToolChoiceSpec(session.request.toolChoice);
     assembly.strictSentinel = isStrictSentinelEnabled(
         session, assembly.strictToolClient || assembly.codexRooCompat,
-        assembly.toolChoice.required);
+        assembly.toolChoice.required, runtimeConfig);
     return assembly;
 }
 
@@ -487,9 +490,11 @@ void emitProtocolEvents(const session_st& session,
 
 generation::GenerationResponsePipeline::GenerationResponsePipeline(
     chatSession* sessionStore,
-    IChannelCatalog* channelCatalog) noexcept
+    IChannelCatalog* channelCatalog,
+    Json::Value runtimeConfig) noexcept
     : sessionStore_(sessionStore),
-      channelCatalog_(channelCatalog)
+      channelCatalog_(channelCatalog),
+      runtimeConfig_(std::move(runtimeConfig))
 {
 }
 
@@ -497,7 +502,7 @@ void generation::GenerationResponsePipeline::emit(const session_st& session,
                                                    IResponseSink& sink) const
 {
     const bool supportsToolCalls = channelSupportsToolCalls(session.request.api);
-    ResponseAssembly assembly = makeAssembly(session, supportsToolCalls);
+    ResponseAssembly assembly = makeAssembly(session, supportsToolCalls, runtimeConfig_);
     extractResponseOutput(session, supportsToolCalls, assembly);
 
     annotateToolCallIdentities(session, assembly.toolCalls);
@@ -515,7 +520,7 @@ void generation::GenerationResponsePipeline::emit(const session_st& session,
 }
 
 void generation::GenerationResponsePipeline::emitError(
-    generation::ErrorCode code,
+    platform::ErrorCode code,
     const std::string& message,
     IResponseSink& sink) const
 {

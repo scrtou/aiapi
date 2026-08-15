@@ -1,4 +1,4 @@
-#include <apipoint/chaynsapi/chaynsThreadReaper.h>
+#include <infrastructure/provider/chayns/chaynsThreadReaper.h>
 
 #include <drogon/drogon.h>
 
@@ -7,7 +7,7 @@
 #include <ctime>
 #include <utility>
 
-#include <apipoint/chaynsapi/ChaynsPollingPolicy.h>
+#include <infrastructure/provider/chayns/ChaynsPollingPolicy.h>
 #include <dbManager/chaynsThread/chaynsThreadDbManager.h>
 
 chaynsThreadReaper::chaynsThreadReaper(

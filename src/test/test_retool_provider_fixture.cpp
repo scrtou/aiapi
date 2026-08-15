@@ -1,8 +1,8 @@
 #include <drogon/drogon_test.h>
 
-#include <apipoint/retoolapi/RetoolClock.h>
-#include <apipoint/retoolapi/RetoolHttpTransport.h>
-#include <apipoint/retoolapi/retoolapi.h>
+#include <infrastructure/provider/retool/RetoolClock.h>
+#include <infrastructure/provider/retool/RetoolHttpTransport.h>
+#include <infrastructure/provider/retool/retoolapi.h>
 #include <application/workspace/RetoolWorkspaceUseCase.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
 #include <managedAccount/backends/RetoolWorkspaceBackend.h>

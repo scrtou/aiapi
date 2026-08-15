@@ -1,10 +1,9 @@
 #include <sessionManager/tooling/BridgeHelpers.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 #include <iomanip>
 #include <random>
 #include <sstream>
 
-using namespace drogon;
 
 namespace bridge {
 

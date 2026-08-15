@@ -22,6 +22,7 @@ class IAccountAdminCommands : public IAccountSettingsQuery
     virtual void checkToken() = 0;
     virtual void updateAllAccountTypes() = 0;
     virtual bool autoRegisterAccount(std::string apiName) = 0;
+    virtual void autoRegisterAccounts(std::string apiName, int count) = 0;
     virtual AccountAutomationSettings getAccountAutomationSettings() const = 0;
     virtual bool updateAccountAutomationSettings(
         const AccountAutomationSettings& settings, bool persistToConfig,

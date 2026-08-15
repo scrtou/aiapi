@@ -3,15 +3,12 @@
 #include <accountManager/AccountWorkflowSupport.h>
 #include <accountManager/RetoolProvisionHealth.h>
 #include <domain/policy/RetiredProviderPolicy.h>
-#include <utils/LoginResponseLogSummary.h>
-
-#include <drogon/drogon.h>
+#include <accountManager/LoginResponseLogSummary.h>
+#include <platform/Log.h>
 
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
-
-using namespace drogon;
 
 namespace {
 
@@ -151,7 +148,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
     const std::string firstName = "User" + randomLetters(5);
     const std::string lastName = "Auto" + randomLetters(5);
     const std::string password = "Pwd" + randomLetters(8) + "!";
-    const std::string fullUrl = account::workflow::registrationServiceUrl(apiName);
+    const std::string fullUrl = account::workflow::registrationServiceUrl(runtimeConfig_, apiName);
     if (fullUrl.empty()) {
         rollbackWaitingAccount(waitingId);
         return false;
@@ -165,25 +162,25 @@ bool AccountManager::autoRegisterAccount(string apiName)
         return false;
     }
 
-    auto request = HttpRequest::newHttpRequest();
-    request->setMethod(HttpMethod::Post);
-    request->setPath(path);
-    request->setContentTypeString("application/json");
-    request->setBody(buildRegistrationWorkflowBody(firstName, lastName, password).toStyledString());
-    const auto downstreamApiKey = account::workflow::downstreamBearerApiKey(apiName);
+    account::HttpRequest request;
+    request.method = account::HttpMethod::Post;
+    request.path = path;
+    request.headers["Content-Type"] = "application/json";
+    request.body = buildRegistrationWorkflowBody(firstName, lastName, password).toStyledString();
+    const auto downstreamApiKey = account::workflow::downstreamBearerApiKey(runtimeConfig_, apiName);
     if (!downstreamApiKey.empty()) {
-        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
+        request.headers["Authorization"] = "Bearer " + downstreamApiKey;
     }
 
     auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
-    if (result != ReqResult::Ok || !response || response->getStatusCode() != k200OK) {
+    if (result != account::HttpResultCode::Ok || !response || response->statusCode != 200) {
         rollbackWaitingAccount(waitingId);
         return false;
     }
 
     Json::Value created;
     std::string parseErrors;
-    const std::string createdBody(response->getBody());
+    const std::string createdBody(response->body);
     if (!account::workflow::parseJsonBody(createdBody, created, parseErrors) ||
         !account::workflow::isSuccessEnvelope(created)) {
         LOG_ERROR << "[自动注册] workflow 创建响应无效: "
@@ -201,20 +198,20 @@ bool AccountManager::autoRegisterAccount(string apiName)
     bool succeeded = false;
     constexpr int kWorkflowPollAttempts = 300;
     for (int attempt = 0; attempt < kWorkflowPollAttempts; ++attempt) {
-        auto detailRequest = HttpRequest::newHttpRequest();
-        detailRequest->setMethod(HttpMethod::Get);
-        detailRequest->setPath(workflowDetailPath(path, taskId));
+        account::HttpRequest detailRequest;
+        detailRequest.method = account::HttpMethod::Get;
+        detailRequest.path = workflowDetailPath(path, taskId);
         if (!downstreamApiKey.empty()) {
-            detailRequest->addHeader("Authorization", "Bearer " + downstreamApiKey);
+            detailRequest.headers["Authorization"] = "Bearer " + downstreamApiKey;
         }
         auto [detailResult, detailResponse] = sendHttpRequest(baseUrl, detailRequest, 30.0);
-        if (detailResult != ReqResult::Ok || !detailResponse) {
+        if (detailResult != account::HttpResultCode::Ok || !detailResponse) {
             clock_->sleepFor(std::chrono::seconds(3));
             continue;
         }
         Json::Value detail;
         parseErrors.clear();
-        if (!account::workflow::parseJsonBody(std::string(detailResponse->getBody()), detail,
+        if (!account::workflow::parseJsonBody(detailResponse->body, detail,
                                                parseErrors) ||
             !account::workflow::isSuccessEnvelope(detail) || !detail["data"].isObject() ||
             !detail["data"].isMember("task")) {
@@ -256,7 +253,7 @@ bool AccountManager::autoRegisterAccount(string apiName)
         loginJson["site_result"].get("has_pro_access", false).asBool();
     Accountinfo_st account(apiName, email, responsePassword, token, 0, true, true,
                            loginJson["site_result"].get("userid", 0).asInt(), personId,
-                           trantor::Date::now().toDbStringLocal(),
+                           account::workflow::currentLocalDbTimestamp(),
                            hasProAccess ? "pro" : "free", AccountStatus::ACTIVE);
     if (!registrationStateMachine_->activate(waitingId, account)) {
         rollbackWaitingAccount(waitingId);
@@ -267,6 +264,14 @@ bool AccountManager::autoRegisterAccount(string apiName)
                account.userTobitId, account.personId, account.createTime,
                account.accountType, account.status, account.workspaceUacId);
     return true;
+}
+
+void AccountManager::autoRegisterAccounts(std::string apiName, int count)
+{
+    for (int index = 0; index < count; ++index) {
+        if (!autoRegisterAccount(apiName)) break;
+        if (index + 1 < count && !backgroundSleep(std::chrono::seconds(5))) break;
+    }
 }
 
 bool AccountManager::isAccountRegistering(int pendingId)

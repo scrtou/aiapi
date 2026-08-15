@@ -34,7 +34,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 | 特性 | 在本方案中的用途 |
 |------|------------------|
-| `std::optional` | 可空返回值；`ProviderResult::usage` 保持现状 |
+| `std::optional` | 可空返回值；`ProviderResponse::usage` 保持现状 |
 | `std::variant` | `Result<T, Error>` 的判别式实现（见 §4.5） |
 | `std::string_view` | Provider 分片解析零拷贝（`parseChunk`） |
 | `if constexpr` | Pipeline / 编解码的编译期分支 |

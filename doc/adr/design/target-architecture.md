@@ -7,30 +7,40 @@
 
 ## 1. 顶层依赖图
 
+箭头指向被依赖 target。P8 后不存在 `aiapi_legacy` 或反向内部 link：
+
 ```text
-platform  ← domain  ← application
-                      ↑       ↑
-                 infrastructure ──→ transport
-                           ↑             ↑
-                           └──── runtime ┘
+aiapi_application ──> aiapi_domain ──> aiapi_platform
+aiapi_infrastructure ─┬─> aiapi_domain
+                       └─> aiapi_platform
+aiapi_transport ──────┬─> aiapi_application
+                       ├─> aiapi_domain
+                       └─> aiapi_platform
+aiapi_runtime ────────┬─> aiapi_application
+                       ├─> aiapi_infrastructure
+                       └─> aiapi_transport
+aiapi (main.cc) ──────> aiapi_runtime
 ```
 
-实际 CMake DAG：
+实际 CMake DAG（`aiapi_transport` 还以 whole-archive 形式进入最终可执行文件，以保留
+Drogon 的静态 Controller 注册对象）：
 
 ```text
 aiapi_platform
-  └── aiapi_domain
-        └── aiapi_application
-              ├── aiapi_infrastructure
-              └── aiapi_transport
-                    └── aiapi_runtime
-                          └── aiapi (main.cc)
+└── aiapi_domain
+    └── aiapi_application
+
+aiapi_infrastructure ──> aiapi_domain, aiapi_platform, Drogon/OpenSSL/PostgreSQL
+aiapi_transport      ──> aiapi_application, aiapi_domain, aiapi_platform, Drogon
+aiapi_runtime        ──> aiapi_application, aiapi_infrastructure, aiapi_transport
+aiapi (main.cc)      ──> aiapi_runtime (+ whole-archive aiapi_transport)
 ```
 
 约束：
 
 - `domain` 只依赖标准库和 `aiapi_platform`；禁止 JsonCpp、Drogon、DB、OpenSSL。
-- `application` 只依赖 domain port；禁止 include concrete Provider、DbManager、Drogon。
+- `application` 通过 domain port 编排；可在 request/event 值边界使用 JsonCpp，但禁止 include
+  concrete Provider、DbManager 或 Drogon。
 - `infrastructure` 实现 port，可依赖第三方库；不得被 domain 反向 include。
 - `transport` 只做 HTTP/SSE/JSON 映射和 use-case 调度，不持有业务状态。
 - `runtime` 是唯一组合根，负责构造、注入、启动和停机。

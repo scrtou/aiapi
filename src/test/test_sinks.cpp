@@ -84,7 +84,7 @@ DROGON_TEST(Sinks_ChatJson_ErrorResponse)
     );
 
     generation::Error err;
-    err.code = generation::ErrorCode::ProviderError;
+    err.code = platform::ErrorCode::ProviderError;
     err.message = "upstream failed";
     sink.onEvent(err);
 

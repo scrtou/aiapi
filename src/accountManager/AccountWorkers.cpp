@@ -1,10 +1,8 @@
 #include <accountManager/accountManager.h>
 
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
 #include <chrono>
-
-using namespace drogon;
 
 namespace {
 

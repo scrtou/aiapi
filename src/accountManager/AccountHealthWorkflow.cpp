@@ -2,17 +2,16 @@
 
 #include <accountManager/AccountWorkflowSupport.h>
 #include <accountManager/RetoolProvisionHealth.h>
-#include <utils/LoginResponseLogSummary.h>
-
-#include <drogon/drogon.h>
+#include <accountManager/LoginResponseLogSummary.h>
+#include <platform/Base64.h>
+#include <platform/LocalDateTime.h>
+#include <platform/Log.h>
 
 #include <algorithm>
 #include <chrono>
 #include <map>
 #include <sstream>
 #include <vector>
-
-using namespace drogon;
 
 void AccountManager::checkChannelAccountCounts()
 {
@@ -75,61 +74,60 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
         return false;
     }
     const std::string credentials = account.userName + ":" + account.passwd;
-    const std::string basic = drogon::utils::base64Encode(
-        reinterpret_cast<const unsigned char*>(credentials.data()), credentials.size());
+    const std::string basic = platform::base64Encode(credentials);
     try {
-        auto confirmationRequest = HttpRequest::newHttpRequest();
-        confirmationRequest->setMethod(HttpMethod::Post);
-        confirmationRequest->setPath("/v2/token");
-        confirmationRequest->addHeader("Authorization", "Basic " + basic);
-        confirmationRequest->setContentTypeString("application/json; charset=utf-8");
+        account::HttpRequest confirmationRequest;
+        confirmationRequest.method = account::HttpMethod::Post;
+        confirmationRequest.path = "/v2/token";
+        confirmationRequest.headers["Authorization"] = "Basic " + basic;
+        confirmationRequest.headers["Content-Type"] = "application/json; charset=utf-8";
         Json::Value confirmationBody;
         confirmationBody["tokenType"] = 12;
         confirmationBody["isConfirmation"] = false;
         confirmationBody["locationId"] = 234191;
         confirmationBody["deviceId"] = "1a0e1c3b-bc2e-4dd8-863a-e7061e35ccff";
         confirmationBody["createIfNotExists"] = false;
-        confirmationRequest->setBody(confirmationBody.toStyledString());
+        confirmationRequest.body = confirmationBody.toStyledString();
         const auto [confirmationResult, confirmationResponse] = sendHttpRequest(
             "https://auth.tobit.com", confirmationRequest, 30.0);
-        if (confirmationResult != ReqResult::Ok || !confirmationResponse ||
-            confirmationResponse->getStatusCode() != k200OK) {
+        if (confirmationResult != account::HttpResultCode::Ok || !confirmationResponse ||
+            confirmationResponse->statusCode != 200) {
             return false;
         }
 
         Json::Value confirmation;
         std::string errors;
-        if (!account::workflow::parseJsonBody(std::string(confirmationResponse->getBody()),
+        if (!account::workflow::parseJsonBody(confirmationResponse->body,
                                                confirmation, errors)) {
             return false;
         }
         const std::string confirmationToken = confirmation.get("token", "").asString();
         if (confirmationToken.empty()) return false;
 
-        auto deleteRequest = HttpRequest::newHttpRequest();
-        deleteRequest->setMethod(HttpMethod::Delete);
-        deleteRequest->setPath("/AccountService/v1.0/chayns/User");
-        deleteRequest->addHeader("Authorization", "Bearer " + account.authToken);
-        deleteRequest->addHeader("x-confirmation-token", "bearer " + confirmationToken);
-        deleteRequest->setContentTypeString("application/json");
+        account::HttpRequest deleteRequest;
+        deleteRequest.method = account::HttpMethod::Delete;
+        deleteRequest.path = "/AccountService/v1.0/chayns/User";
+        deleteRequest.headers["Authorization"] = "Bearer " + account.authToken;
+        deleteRequest.headers["x-confirmation-token"] = "bearer " + confirmationToken;
+        deleteRequest.headers["Content-Type"] = "application/json";
         Json::Value deleteBody;
         deleteBody["PersonId"] = account.personId;
         deleteBody["ForceDelete"] = true;
-        deleteRequest->setBody(deleteBody.toStyledString());
+        deleteRequest.body = deleteBody.toStyledString();
         const auto [deleteResult, deleteResponse] = sendHttpRequest(
             "https://webapi.tobit.com", deleteRequest, 30.0);
-        if (deleteResult != ReqResult::Ok || !deleteResponse ||
-            deleteResponse->getStatusCode() != k200OK) {
+        if (deleteResult != account::HttpResultCode::Ok || !deleteResponse ||
+            deleteResponse->statusCode != 200) {
             return false;
         }
 
-        auto invalidateRequest = HttpRequest::newHttpRequest();
-        invalidateRequest->setMethod(HttpMethod::Post);
-        invalidateRequest->setPath("/v2/invalidToken");
-        invalidateRequest->setContentTypeString("application/json; charset=utf-8");
+        account::HttpRequest invalidateRequest;
+        invalidateRequest.method = account::HttpMethod::Post;
+        invalidateRequest.path = "/v2/invalidToken";
+        invalidateRequest.headers["Content-Type"] = "application/json; charset=utf-8";
         Json::Value invalidateBody;
         invalidateBody["token"] = account.authToken;
-        invalidateRequest->setBody(invalidateBody.toStyledString());
+        invalidateRequest.body = invalidateBody.toStyledString();
         (void)sendHttpRequest("https://auth.tobit.com", invalidateRequest, 30.0);
         return true;
     } catch (const std::exception& error) {
@@ -141,19 +139,19 @@ bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
 bool AccountManager::getUserProAccess(const string& token, const string& personId)
 {
     if (token.empty() || personId.empty()) return false;
-    auto request = HttpRequest::newHttpRequest();
-    request->setMethod(HttpMethod::Get);
-    request->setPath("/ai-proxy/v1/userSettings/personId/" + personId);
-    request->addHeader("Content-Type", "application/json");
-    request->addHeader("Authorization", "Bearer " + token);
+    account::HttpRequest request;
+    request.method = account::HttpMethod::Get;
+    request.path = "/ai-proxy/v1/userSettings/personId/" + personId;
+    request.headers["Content-Type"] = "application/json";
+    request.headers["Authorization"] = "Bearer " + token;
     try {
         const auto [result, response] = sendHttpRequest("https://cube.tobit.cloud", request, 30.0);
-        if (result != ReqResult::Ok || !response || response->getStatusCode() != k200OK) {
+        if (result != account::HttpResultCode::Ok || !response || response->statusCode != 200) {
             return false;
         }
         Json::Value body;
         std::string errors;
-        return account::workflow::parseJsonBody(std::string(response->getBody()), body, errors) &&
+        return account::workflow::parseJsonBody(response->body, body, errors) &&
                body.get("hasProAccess", false).asBool();
     } catch (const std::exception& error) {
         LOG_ERROR << "[账户管理] 查询 Pro 权限时捕获异常: " << error.what();
@@ -194,7 +192,7 @@ void AccountManager::cleanExpiredAccounts()
     const auto settings = getAccountAutomationSettings();
     if (!settings.autoDeleteEnabled) return;
 
-    const auto now = trantor::Date::now();
+    const auto now = std::chrono::system_clock::now();
     const double defaultLifetime = static_cast<double>(settings.deleteAfterDays) * 24.0 * 3600.0;
     std::map<std::string, int> retentionDays;
     for (const auto& channel : requireChannelStore()->getChannelList()) {
@@ -208,8 +206,9 @@ void AccountManager::cleanExpiredAccounts()
                 account->createTime.empty() || account->accountType != "free") {
                 continue;
             }
-            const auto created = trantor::Date::fromDbStringLocal(account->createTime);
-            const double age = now.secondsSinceEpoch() - created.secondsSinceEpoch();
+            const auto created = platform::parseLocalDbTimestamp(account->createTime);
+            if (!created.has_value()) continue;
+            const double age = std::chrono::duration<double>(now - *created).count();
             const auto channelIt = retentionDays.find(account->apiName);
             const int channelDays = channelIt == retentionDays.end() ? 0 : channelIt->second;
             if (age >= defaultLifetime ||
@@ -227,8 +226,9 @@ void AccountManager::cleanExpiredAccounts()
                 workspace.createdAt.empty()) continue;
             const std::string reference = workspace.lastUsedAt.empty()
                 ? workspace.createdAt : workspace.lastUsedAt;
-            const auto date = trantor::Date::fromDbStringLocal(reference);
-            const double age = now.secondsSinceEpoch() - date.secondsSinceEpoch();
+            const auto date = platform::parseLocalDbTimestamp(reference);
+            if (!date.has_value()) continue;
+            const double age = std::chrono::duration<double>(now - *date).count();
             if (age >= static_cast<double>(retoolIt->second) * 24.0 * 3600.0) {
                 expiredWorkspaces.push_back(workspace.workspaceId);
             }

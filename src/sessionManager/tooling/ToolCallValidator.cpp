@@ -1,7 +1,7 @@
 #include <sessionManager/tooling/StrictClientRules.h>
 #include <sessionManager/tooling/ToolCallValidator.h>
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 #include <sstream>
 #include <random>
 #include <iomanip>

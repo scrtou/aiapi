@@ -1,8 +1,7 @@
 #include <accountManager/AccountWorkflowSupport.h>
 
 #include <domain/port/IKeyValueConfigStore.h>
-
-#include <drogon/drogon.h>
+#include <platform/LocalDateTime.h>
 
 #include <cstdlib>
 #include <sstream>
@@ -111,9 +110,13 @@ std::string extractErrorMessageFromEnvelope(const Json::Value& json,
     return fallback;
 }
 
-std::string loginServiceUrl(const std::string& provider)
+std::string currentLocalDbTimestamp()
 {
-    const auto customConfig = drogon::app().getCustomConfig();
+    return platform::localDbTimestampNow();
+}
+
+std::string loginServiceUrl(const Json::Value& customConfig, const std::string& provider)
+{
     if (customConfig.isMember("login_service_urls") && customConfig["login_service_urls"].isArray()) {
         for (const auto& service : customConfig["login_service_urls"]) {
             if (service.isMember("name") && service["name"].asString() == provider &&
@@ -133,9 +136,8 @@ std::string loginServiceUrl(const std::string& provider)
     return provider == "chaynsapi" ? "http://127.0.0.1:8004/api/v1/logins" : "";
 }
 
-std::string registrationServiceUrl(const std::string& provider)
+std::string registrationServiceUrl(const Json::Value& customConfig, const std::string& provider)
 {
-    const auto customConfig = drogon::app().getCustomConfig();
     if (customConfig.isMember("regist_service_urls") && customConfig["regist_service_urls"].isArray()) {
         for (const auto& service : customConfig["regist_service_urls"]) {
             if (service.isMember("name") && service["name"].asString() == provider &&
@@ -157,9 +159,9 @@ std::string registrationServiceUrl(const std::string& provider)
         : "";
 }
 
-std::string downstreamBearerApiKey(const std::string& provider)
+std::string downstreamBearerApiKey(const Json::Value& customConfig,
+                                   const std::string& provider)
 {
-    const auto customConfig = drogon::app().getCustomConfig();
     if (customConfig.isMember("downstream_service_api_keys") &&
         customConfig["downstream_service_api_keys"].isArray()) {
         for (const auto& service : customConfig["downstream_service_api_keys"]) {

@@ -36,7 +36,6 @@ base_header = source("infrastructure/provider/ProviderBase.h")
 base_cpp = source("infrastructure/provider/ProviderBase.cpp")
 factory = source("infrastructure/provider/ProductionProviderFactory.h")
 generation_event = source("sessionManager/contracts/GenerationEvent.h")
-legacy_errors = source("sessionManager/core/Errors.h")
 test_cmake = source("test/CMakeLists.txt")
 
 for name in (
@@ -46,14 +45,18 @@ for name in (
     if name not in error_code:
         errors.append(f"platform ErrorCode missing stable value: {name}")
 
-for source_name, text in {
-    "sessionManager/contracts/GenerationEvent.h": generation_event,
-    "sessionManager/core/Errors.h": legacy_errors,
-}.items():
-    if "using ErrorCode = platform::ErrorCode" not in text:
-        errors.append(f"{source_name} did not alias the single platform ErrorCode")
-    if "platform::defaultHttpStatus" not in text:
-        errors.append(f"{source_name} kept an independent ErrorCode -> HTTP mapping")
+if "platform::ErrorCode" not in generation_event:
+    errors.append("GenerationEvent must use the single platform ErrorCode")
+if "using ErrorCode" in generation_event:
+    errors.append("GenerationEvent kept a compatibility ErrorCode alias")
+
+for removed in (
+    "domain/model/ProviderResult.h",
+    "sessionManager/core/ProviderResultCodec.h",
+    "sessionManager/core/Errors.h",
+):
+    if (SRC / removed).exists():
+        errors.append(f"P8 compatibility artifact still exists: src/{removed}")
 
 for needle in (
     "std::variant<Value, Error>",

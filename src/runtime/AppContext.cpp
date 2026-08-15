@@ -11,12 +11,12 @@
 #include <dbManager/metrics/StatusDbManager.h>
 #include <dbManager/retoolWorkspace/RetoolWorkspaceDbManager.h>
 #include <dbManager/session/SessionDbManager.h>
-#include <apipoint/chaynsapi/chaynsThreadReaper.h>
+#include <infrastructure/provider/chayns/chaynsThreadReaper.h>
 #include <drogon/drogon.h>
 #include <metrics/ErrorStatsService.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
 #include <sessionManager/core/Session.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <utility>
 

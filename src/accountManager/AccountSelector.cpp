@@ -3,13 +3,10 @@
 #include <accountManager/AccountSelectionPolicy.h>
 #include <accountManager/AccountWorkflowSupport.h>
 #include <domain/policy/RetiredProviderPolicy.h>
-
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
 #include <algorithm>
 #include <vector>
-
-using namespace drogon;
 
 namespace {
 using AccountQueue = std::priority_queue<std::shared_ptr<Accountinfo_st>,
@@ -54,7 +51,7 @@ void AccountManager::loadAccount()
 void AccountManager::loadAccountFromConfig()
 {
     LOG_INFO << "[账户管理] 从配置文件加载账户开始";
-    const auto configAccountList = app().getCustomConfig()["account"];
+    const auto configAccountList = runtimeConfig_["account"];
     for (const auto& account : configAccountList) {
         const auto apiName = account["apiname"].empty() ? "" : account["apiname"].asString();
         const auto userName = account["username"].empty() ? "" : account["username"].asString();

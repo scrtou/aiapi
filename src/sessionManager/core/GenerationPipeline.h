@@ -3,13 +3,14 @@
 
 #include <sessionManager/contracts/GenerationRequest.h>
 #include <sessionManager/contracts/IResponseSink.h>
-#include <sessionManager/core/Errors.h>
 #include <sessionManager/core/GenerationResponsePipeline.h>
 #include <domain/port/IProviderRegistry.h>
 #include <platform/Cancellation.h>
 #include <platform/Deadline.h>
+#include <platform/result/Error.h>
 #include <sessionManager/core/SessionExecutionGate.h>
 
+#include <json/json.h>
 #include <optional>
 
 class chatSession;
@@ -27,9 +28,10 @@ public:
                        chatSession* sessionStore,
                        IResponseIndex* responseIndex,
                        session::IExecutionGate* executionGate,
-                       IChannelCatalog* channelCatalog);
+                       IChannelCatalog* channelCatalog,
+                       Json::Value runtimeConfig = Json::Value(Json::objectValue));
 
-    std::optional<error::AppError> run(
+    std::optional<platform::Error> run(
         const GenerationRequest& request,
         IResponseSink& sink,
         session::ConcurrencyPolicy policy);
@@ -41,7 +43,7 @@ private:
         bool hasToolDefinitions = false;
     };
 
-    std::optional<error::AppError> execute(
+    std::optional<platform::Error> execute(
         session_st& session,
         IResponseSink& sink,
         bool stream,
@@ -71,6 +73,7 @@ private:
     chatSession* sessionStore_ = nullptr;
     IResponseIndex* responseIndex_ = nullptr;
     session::IExecutionGate* executionGate_ = nullptr;
+    Json::Value runtimeConfig_;
     GenerationResponsePipeline responsePipeline_;
 };
 

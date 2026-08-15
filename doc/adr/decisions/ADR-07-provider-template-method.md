@@ -4,7 +4,7 @@
 
 | 项 | 值 |
 |---|---|
-| 状态 | 已接受，部分实施（P6-W3：两家活跃 Provider 已切片） |
+| 状态 | 已接受，已实施（P6-W3/P8-W1） |
 | 当前版本 | v3.2 |
 
 ## Provider 范围
@@ -106,7 +106,7 @@ composition root 用 `makeProductionProvider<retoolapi>()`、`initialize()` 与 
 3. [完成] 切换 application、model catalog、thread cleanup/reaper 与 transport Error 接线；
 4. [完成] 迁移 Retool 并删除旧 registry lane；
 5. 比较两家真实重复代码，再抽公共策略；
-6. [完成] 删除旧 `APIinterface`；名称硬判断随 P7/P8 继续收口。
+6. [完成] 删除旧 `APIinterface`、ProviderResult compatibility 与 legacy registry lane。
 
 不再迁移准备删除的 OpenAiProvider/nexos 作为样板。
 

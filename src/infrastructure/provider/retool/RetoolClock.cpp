@@ -1,11 +1,11 @@
-#include <apipoint/chaynsapi/ChaynsClock.h>
+#include <infrastructure/provider/retool/RetoolClock.h>
 
 #include <thread>
 
-namespace chayns {
+namespace retool {
 namespace {
 
-class RealChaynsClock final : public IChaynsClock
+class RealRetoolClock final : public IRetoolClock
 {
   public:
     Clock::time_point now() const override { return Clock::now(); }
@@ -18,9 +18,9 @@ class RealChaynsClock final : public IChaynsClock
 
 }  // namespace
 
-std::shared_ptr<IChaynsClock> makeRealChaynsClock()
+std::shared_ptr<IRetoolClock> makeRealRetoolClock()
 {
-    return std::make_shared<RealChaynsClock>();
+    return std::make_shared<RealRetoolClock>();
 }
 
-}  // namespace chayns
+}  // namespace retool

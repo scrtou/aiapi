@@ -6,6 +6,7 @@
 #include <domain/port/IExecutionGate.h>
 #include <domain/port/IProviderRegistry.h>
 #include <domain/port/IResponseIndex.h>
+#include <json/json.h>
 
 class chatSession;
 
@@ -24,7 +25,8 @@ class AiApiUseCase final : public aiapi::IAiApiUseCase
                  IResponseIndex* responses,
                  session::IExecutionGate* executionGate,
                  IChannelCatalog* channels,
-                 IBackgroundExecutor* executor);
+                 IBackgroundExecutor* executor,
+                 Json::Value runtimeConfig = Json::Value(Json::objectValue));
 
     aiapi::SubmissionResult submitGeneration(
         aiapi::GenerationInput input,
@@ -42,4 +44,5 @@ class AiApiUseCase final : public aiapi::IAiApiUseCase
     session::IExecutionGate* executionGate_ = nullptr;
     IChannelCatalog* channels_ = nullptr;
     IBackgroundExecutor* executor_ = nullptr;
+    Json::Value runtimeConfig_;
 };

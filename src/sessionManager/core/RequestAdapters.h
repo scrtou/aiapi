@@ -3,7 +3,6 @@
 
 #include <sessionManager/contracts/GenerationRequest.h>
 #include <sessionManager/contracts/LegacySessionData.h>
-#include <drogon/HttpRequest.h>
 #include <json/json.h>
 #include <domain/port/IAccountSettingsQuery.h>
 #include <domain/model/AiApiData.h>
@@ -21,47 +20,13 @@ public:
     static void setTrackingMode(SessionTrackingMode mode) { trackingMode_ = mode; }
     static void setAccountSettingsQuery(IAccountSettingsQuery* query)
     { accountSettings_ = query; }
-    /**
-     * @brief 从 Chat Completions API 请求构建 GenerationRequest
-     * 
-     * 解析 OpenAI Chat Completions API 格式的请求，提取：
-     * - model: 模型名称
-     * - messages: 消息数组（包含 system/user/assistant 角色）
-     * - stream: 是否流式输出
-     * - 客户端信息（从 HTTP 头提取）
-     * 
-     * @param req HTTP 请求
-     * @return GenerationRequest 统一生成请求
-     */
-    static GenerationRequest buildGenerationRequestFromChat(
-        const drogon::HttpRequestPtr& req
-    );
-
-    /// Same normalization entry point for the controller-facing AI use case.
-    /// HTTP metadata is copied into a value object before background admission.
+    /// Normalize a Chat Completions payload and copied HTTP metadata.
     static GenerationRequest buildGenerationRequestFromChat(
         const Json::Value& requestBody,
         const aiapi::RequestHeaders& headers
     );
     
-    /**
-     * @brief 从 Responses API 请求构建 GenerationRequest
-     * 
-     * 解析 OpenAI Responses API 格式的请求，提取：
-     * - model: 模型名称
-     * - input: 输入内容（字符串或数组）
-     * - instructions: 系统指令（映射到 systemPrompt）
-     * - previous_response_id: 前一个响应ID（用于续聊）
-     * - stream: 是否流式输出
-     * - 客户端信息（从 HTTP 头提取）
-     * 
-     * @param req HTTP 请求
-     * @return GenerationRequest 统一生成请求
-     */
-    static GenerationRequest buildGenerationRequestFromResponses(
-        const drogon::HttpRequestPtr& req
-    );
-
+    /// Normalize a Responses payload and copied HTTP metadata.
     static GenerationRequest buildGenerationRequestFromResponses(
         const Json::Value& requestBody,
         const aiapi::RequestHeaders& headers

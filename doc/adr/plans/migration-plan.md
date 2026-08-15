@@ -23,10 +23,10 @@
 | 模块依赖环 | ✅ | `check_cycles.py` 当前为 0 环 |
 | layer rules 基础门禁 | ✅ | 当前检查通过 |
 | 架构审计 v4 口径 | ✅ | 直接/显式 test owner；覆盖 `.cc`；不再把 production owner 误称为 test-linked |
-| 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
+| 可复现架构基线 | ✅ | P8 实现提交后的 clean snapshot 生成；CI 拒绝 `git.dirty != false` 的 baseline |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
-| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；P7-W1/P7-W2 已将 Generation 与 Account workflow closure 迁入 application，legacy source 由 38 降至 19，最终删除在 P8 |
+| 独立 CMake libraries | ✅ | 六个正式 target 唯一拥有全部 89 个 production implementation；`aiapi_legacy` 与 source list 已在 P8 删除 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
@@ -34,7 +34,7 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 8（收口）；P7-W1/P7-W2 已完成，下一工作项为 P8-W1（过渡代码和 debt 清理）。**
+**RFC-001 已实施：P0-W1 至 P8-W1 均已完成，当前没有活跃重构工作项。后续变更须建立新的 RFC/工作项。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
@@ -113,8 +113,17 @@ infrastructure adapter，`AppWiring` 在 `init()` 前显式注入，因而不新
 反向内部 target edge。新增 `check_account_workflow_slice.py`（含内存 rollback mutation selftest）及纯 stage、
 fake-HTTP lifecycle、worker regression。397/397 `ctest`、直接 runner 397 cases / 2080 assertions、严格注册
 和全量 gates 通过；legacy sources 从 20 降至 19，R1=0、R3=6/2563。详见
-[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足，下一项为
-P8-W1 过渡代码和 debt 清理。
+[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足；P8-W1 随后完成
+最终收口。
+
+P8-W1 已收口：`aiapi_legacy` 与全部 transition source owner 已删除，89 个 production implementation
+由 platform/domain/application/infrastructure/transport/runtime 六个正式 target 唯一拥有；ProviderResult/
+重复 ErrorCode compatibility 和历史目录 debt 已清理。ADR-09 现在由 framework-neutral Account HTTP DTO、
+infrastructure Drogon adapter、transport header/JSON copy 和 runtime-config 显式接线共同落实。Debug、coverage
+与 ASan+UBSan 均为 396/396 PASS；TSan 全绿（396 cases / 2075 assertions、0 data race），停机专项与五类
+SIGTERM harness 均为 5/5；30/30 架构/迁移 gate 通过。完整记录见
+[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)。P8 实现提交后从干净工作树生成
+新的 audit baseline 并单独提交，RFC-001 至此完成。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 
@@ -535,17 +544,17 @@ characterization 通过后允许整体替换，但必须保持同一 port contra
 
 ---
 
-## 阶段 8 · 收口
+## 阶段 8 · 收口（已完成）
 
-- 运行 `check_target_layers.py --require-no-legacy` 和
+- [x] 运行 `check_target_layers.py --require-no-legacy` 和
   `check_source_ownership.py --require-no-legacy`，删除 legacy target/source list；
-- 删除届时仍存在的 ProviderResult compatibility codec、重复 ErrorCode、无效配置和过渡 allowlist；
-- 删除所有已归零 layer debt；
-- 重新生成干净发布基线；
-- clean build、全量测试、coverage、ASan/TSan、架构门禁、SIGTERM 集成测试通过；
-- 更新 README 架构与运维章节；
-- 为 Provider 数据 archive 保留独立运维说明，不随代码清理丢失；
-- RFC 状态改为“已实施”。
+- [x] 删除 ProviderResult compatibility codec、重复 ErrorCode、无效配置和过渡 allowlist；
+- [x] 删除所有已归零 layer debt；
+- [x] 在 P8 实现提交后从干净工作树重新生成发布 baseline，并作为独立机器快照提交；
+- [x] clean build、全量测试、coverage、ASan/TSan、架构门禁、SIGTERM 集成测试通过；
+- [x] 更新 README 架构与运维章节；
+- [x] 为 Provider 数据 archive 保留独立运维说明，不随代码清理丢失；
+- [x] RFC 状态改为“已实施”。
 
 ## 每阶段通用规则
 

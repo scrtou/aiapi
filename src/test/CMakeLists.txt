@@ -6,8 +6,8 @@ project(aiapi_test CXX)
 # reaches this file via add_subdirectory(src/test).
 #     cmake -S . -B build/test_root -DCMAKE_BUILD_TYPE=Debug
 # Standalone configuration (cmake -S src/test) is intentionally
-# rejected below: since P3-W1 tests link aiapi_legacy instead of
-# recompiling production sources, and that target only exists when
+# rejected below: since P3-W1 tests link the canonical production targets
+# instead of recompiling production sources, and those targets only exist when
 # the root project has been configured.  See the FATAL_ERROR guard.
 # ------------------------------------------------------------------
 if (NOT TARGET Drogon::Drogon)
@@ -92,7 +92,6 @@ set(TEST_SOURCES
     test_retool_workspace_use_case.cpp
     test_managed_account_service.cpp
     test_retool_provider_fixture.cpp
-    test_provider_result_codec.cpp
     test_domain_json_codecs.cpp
     test_channel_store_port.cpp
     test_account_store_port.cpp
@@ -122,9 +121,9 @@ set(TEST_SOURCES
 # P3-W1: tests no longer compile production .cpp files.  The canonical target
 # is created by src/CMakeLists.txt; standalone configuration is intentionally
 # rejected so source ownership cannot silently fork again.
-if (NOT TARGET aiapi_legacy)
+if (NOT TARGET aiapi_runtime)
     message(FATAL_ERROR
-        "Configure tests from the repository root: aiapi_test must link aiapi_legacy")
+        "Configure tests from the repository root: aiapi_test must link formal production targets")
 endif()
 
 add_executable(${PROJECT_NAME} ${TEST_SOURCES})
@@ -136,7 +135,7 @@ aiapi_enable_coverage(${PROJECT_NAME})
 # target_link_libraries(${PROJECT_NAME} PRIVATE drogon)
 #
 # and comment out the following lines
-target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_legacy aiapi_runtime Drogon::Drogon)
+target_link_libraries(${PROJECT_NAME} PRIVATE aiapi_runtime Drogon::Drogon)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
@@ -145,7 +144,7 @@ if (UNIX)
         support/shutdown_signal_fixture.cpp)
     aiapi_enable_coverage(aiapi_shutdown_signal_fixture)
     target_link_libraries(aiapi_shutdown_signal_fixture PRIVATE
-        aiapi_legacy aiapi_runtime Drogon::Drogon)
+        aiapi_runtime Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_shutdown_signal_fixture)
 endif()
 

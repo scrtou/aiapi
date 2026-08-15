@@ -29,7 +29,11 @@ def source_text() -> str:
 all_source = source_text()
 controller = (SRC / "controllers/AiApiController.h").read_text(encoding="utf-8")
 channels = (SRC / "channelManager/channelManager.cpp").read_text(encoding="utf-8")
-accounts = (SRC / "accountManager/accountManager.cpp").read_text(encoding="utf-8")
+account_write_sources = (
+    SRC / "accountManager/AccountSelector.cpp",
+    SRC / "accountManager/AccountRegistrationWorkflow.cpp",
+)
+accounts = "\n".join(path.read_text(encoding="utf-8") for path in account_write_sources)
 
 for relative in ("src/apipoint/openai", "src/apipoint/nexosapi"):
     require(not (ROOT / relative).exists(), f"retired implementation directory still exists: {relative}")
@@ -43,8 +47,10 @@ require("nexosapi" not in channels and "openai" not in channels,
         "retired key remains in ChannelManager active/default whitelist")
 require('return name == "chaynsapi" || name == "retoolapi";' in channels,
         "ChannelManager built-in whitelist is not exactly chaynsapi/retoolapi")
-require("isRetiredProviderKey(apiName)" in accounts,
-        "AccountManager does not guard retired provider writes/registration")
+require("retired_provider::isRetiredProviderKey(apiName)" in accounts,
+        "account write/registration workflows do not guard retired provider apiName")
+require("retired_provider::isRetiredProviderKey(accountinfo.apiName)" in accounts,
+        "account add/update workflow does not guard retired provider accountinfo.apiName")
 
 legacy_routes = {
     ('retiredNexos', '/nexosapi/v1/chat/completions', 'Post'),

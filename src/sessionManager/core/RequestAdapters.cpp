@@ -1,7 +1,8 @@
 #include <sessionManager/core/RequestAdapters.h>
-#include <tools/ZeroWidthEncoder.h>
-#include <drogon/drogon.h>
-#include <drogon/utils/Utilities.h>
+#include <platform/ZeroWidthEncoder.h>
+#include <json/json.h>
+#include <platform/Log.h>
+#include <platform/Uuid.h>
 #include <algorithm>
 #include <cctype>
 #include <iterator>
@@ -9,7 +10,6 @@
 #include <unordered_set>
 #include <sessionManager/core/Session.h>
 
-using namespace drogon;
 
 namespace {
 
@@ -49,32 +49,9 @@ std::string requestIdFromHeaders(const aiapi::RequestHeaders& headers)
         requestId = normalizeIncomingRequestId(headers.correlationId);
     }
     if (requestId.empty()) {
-        requestId = "req_" + drogon::utils::getUuid();
+        requestId = "req_" + platform::generateUuidV4();
     }
     return requestId;
-}
-
-aiapi::RequestHeaders requestHeadersFromHttp(const HttpRequestPtr& req)
-{
-    aiapi::RequestHeaders headers;
-    if (!req) {
-        return headers;
-    }
-    headers.requestId = req->getHeader("x-request-id");
-    headers.correlationId = req->getHeader("x-correlation-id");
-    headers.userAgent = req->getHeader("user-agent");
-    headers.originator = req->getHeader("originator");
-    headers.codexWindowId = req->getHeader("x-codex-window-id");
-    headers.threadId = req->getHeader("thread-id");
-    headers.sessionId = req->getHeader("session-id");
-    headers.sessionIdUnderscore = req->getHeader("session_id");
-    headers.conversationId = req->getHeader("conversation-id");
-    headers.conversationIdUnderscore = req->getHeader("conversation_id");
-    headers.authorization = req->getHeader("authorization");
-    if (headers.authorization.empty()) {
-        headers.authorization = req->getHeader("Authorization");
-    }
-    return headers;
 }
 
 bool assignClientSessionId(Json::Value& clientInfo,
@@ -391,15 +368,6 @@ bool isResponsesModelOutputBoundary(const Json::Value& item)
 }  // namespace
 
 GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
-    const HttpRequestPtr& req
-) {
-    const auto headers = requestHeadersFromHttp(req);
-    const auto json = req ? req->getJsonObject() : nullptr;
-    return buildGenerationRequestFromChat(
-        json ? *json : Json::Value(), headers);
-}
-
-GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     const Json::Value& reqBody,
     const aiapi::RequestHeaders& headers
 ) {
@@ -499,15 +467,6 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
              << ", images: " << images.size();
     
     return genReq;
-}
-
-GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
-    const HttpRequestPtr& req
-) {
-    const auto headers = requestHeadersFromHttp(req);
-    const auto json = req ? req->getJsonObject() : nullptr;
-    return buildGenerationRequestFromResponses(
-        json ? *json : Json::Value(), headers);
 }
 
 GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(

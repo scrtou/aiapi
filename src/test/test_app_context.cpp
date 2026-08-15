@@ -21,7 +21,7 @@
 #include <domain/port/IBackgroundExecutor.h>
 #include <metrics/ErrorStatsService.h>
 #include <retoolWorkspace/RetoolWorkspaceManager.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <atomic>
 #include <chrono>

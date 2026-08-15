@@ -5,8 +5,9 @@
 #include <sessionManager/tooling/ToolDefinitionEncoder.h>
 #include <sessionManager/tooling/BridgeProtocolCodec.h>
 #include <sessionManager/actionProtocol/ActionProtocolCompiler.h>
-#include <drogon/drogon.h>
-#include <drogon/utils/Utilities.h>
+#include <json/json.h>
+#include <platform/Log.h>
+#include <platform/Uuid.h>
 
 #include <chrono>
 #include <exception>
@@ -16,10 +17,8 @@
 
 #include <sessionManager/core/Session.h>
 
-using namespace drogon;
 using namespace provider;
 using namespace session;
-using namespace error;
 using namespace bridge;
 
 namespace {
@@ -44,12 +43,14 @@ generation::GenerationPipeline::GenerationPipeline(
     chatSession* sessionStore,
     IResponseIndex* responseIndex,
     session::IExecutionGate* executionGate,
-    IChannelCatalog* channelCatalog)
+    IChannelCatalog* channelCatalog,
+    Json::Value runtimeConfig)
     : providerRegistry_(providerRegistry),
       sessionStore_(sessionStore),
       responseIndex_(responseIndex),
       executionGate_(executionGate),
-      responsePipeline_(sessionStore, channelCatalog)
+      runtimeConfig_(std::move(runtimeConfig)),
+      responsePipeline_(sessionStore, channelCatalog, runtimeConfig_)
 {
 }
 
@@ -87,7 +88,7 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
     session.request.parallelToolCalls = req.parallelToolCalls;
     session.request.rawMessage = req.currentInput; // 保留原始输入（工具桥接注入前）
     session.state.requestId = req.requestId.empty()
-        ? ("req_" + drogon::utils::getUuid())
+        ? ("req_" + platform::generateUuidV4())
         : req.requestId;
     session.state.lastActiveAt = time(nullptr);
     session.state.createdAt = time(nullptr);
@@ -174,7 +175,7 @@ void emitStartedEvent(const session_st& session, IResponseSink& sink)
     sink.onEvent(started);
 }
 
-std::optional<AppError> emitCancellation(
+std::optional<platform::Error> emitCancellation(
     const session_st& session,
     const std::string& logMessage,
     const std::string& metricMessage,
@@ -184,9 +185,9 @@ std::optional<AppError> emitCancellation(
     LOG_INFO << "[生成服务] " << logMessage;
     recordWarnStat(session, metrics::Domain::SESSION_GATE,
                    metrics::EventType::SESSIONGATE_CANCELLED, metricMessage);
-    responsePipeline.emitError(generation::ErrorCode::Cancelled, "请求已取消", sink);
+    responsePipeline.emitError(platform::ErrorCode::Cancelled, "请求已取消", sink);
     sink.onClose();
-    return AppError::cancelled("请求已取消");
+    return platform::Error::cancelled("请求已取消");
 }
 
 void prepareNextSessionId(chatSession& sessionStore, session_st& session)
@@ -239,7 +240,7 @@ generation::GenerationPipeline::ToolBridgeState
         session.request.tools.size() == 0) {
         session.request.tools = toolsForBridge;
     }
-    toolcall::transformRequestForToolBridge(session);
+    toolcall::transformRequestForToolBridge(session, runtimeConfig_);
     return state;
 }
 
@@ -317,7 +318,7 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
     }
 }
 
-std::optional<AppError> generation::GenerationPipeline::execute(
+std::optional<platform::Error> generation::GenerationPipeline::execute(
     session_st& session,
     IResponseSink& sink,
     bool stream,
@@ -329,7 +330,7 @@ std::optional<AppError> generation::GenerationPipeline::execute(
              << ", 策略: " << (policy == ConcurrencyPolicy::RejectConcurrent
                  ? "拒绝并发" : "取消前一个");
     if (!executionGate_ || !sessionStore_ || !responseIndex_) {
-        return AppError::internal("生成服务依赖未注入");
+        return platform::Error::internal("生成服务依赖未注入");
     }
 
     ExecutionGuard guard(*executionGate_, sessionKey, policy);
@@ -339,11 +340,11 @@ std::optional<AppError> generation::GenerationPipeline::execute(
             recordErrorStat(session, metrics::Domain::SESSION_GATE,
                             metrics::EventType::SESSIONGATE_REJECTED_CONFLICT,
                             "并发冲突，请求被拒绝");
-            return AppError::conflict("当前会话已有进行中的请求，请稍后重试");
+            return platform::Error::conflict("当前会话已有进行中的请求，请稍后重试");
         }
         LOG_ERROR << "[生成服务] 意外的门控结果: "
                   << static_cast<int>(guard.getResult());
-        return AppError::internal("获取执行门控失败");
+        return platform::Error::internal("获取执行门控失败");
     }
 
     const auto cancellation = guard.cancellationToken();
@@ -384,12 +385,12 @@ std::optional<AppError> generation::GenerationPipeline::execute(
         LOG_ERROR << "[生成服务] 执行门控会话异常: " << error.what();
         recordErrorStat(session, metrics::Domain::INTERNAL,
                         metrics::EventType::INTERNAL_EXCEPTION, error.what(), 500);
-        responsePipeline_.emitError(generation::ErrorCode::Internal, error.what(), sink);
+        responsePipeline_.emitError(platform::ErrorCode::Internal, error.what(), sink);
     } catch (...) {
         LOG_ERROR << "[生成服务] 执行门控会话未知异常";
         recordErrorStat(session, metrics::Domain::INTERNAL,
                         metrics::EventType::INTERNAL_UNKNOWN, "发生未知错误", 500);
-        responsePipeline_.emitError(generation::ErrorCode::Internal, "发生未知错误", sink);
+        responsePipeline_.emitError(platform::ErrorCode::Internal, "发生未知错误", sink);
     }
 
     sink.onClose();
@@ -398,7 +399,7 @@ std::optional<AppError> generation::GenerationPipeline::execute(
 
 // ========== 新主入口实现（ 统一调用） ==========
 
-std::optional<AppError> generation::GenerationPipeline::run(
+std::optional<platform::Error> generation::GenerationPipeline::run(
     const GenerationRequest& req,
     IResponseSink& sink,
     ConcurrencyPolicy policy
@@ -408,7 +409,7 @@ std::optional<AppError> generation::GenerationPipeline::run(
              << ", 流式: " << req.stream;
 
     if (!sessionStore_ || !responseIndex_) {
-        return AppError::internal("生成 pipeline 连续性依赖未注入");
+        return platform::Error::internal("生成 pipeline 连续性依赖未注入");
     }
 
     // 1. 物化请求：Generation请求 → 会话_st
@@ -584,4 +585,3 @@ std::optional<platform::Error> generation::GenerationPipeline::invokeProvider(
 
     return platform::Error::notFound("未找到上游提供者: " + session.request.api);
 }
-

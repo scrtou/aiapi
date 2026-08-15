@@ -1,8 +1,5 @@
 #include <application/account/AccountAdminUseCase.h>
 
-#include <chrono>
-#include <thread>
-
 AccountAdminUseCase::AccountAdminUseCase(
     IAccountCatalog* catalog, IAccountAdminCommands* commands,
     IAccountStore* store, IAccountBackupStore* backups,
@@ -118,10 +115,7 @@ TaskSubmitResult AccountAdminUseCase::autoRegister(std::string apiName, int coun
     if (!executor_ || !commands_) return TaskSubmitResult::Stopped;
     auto* commands = commands_;
     return executor_->submit("accountAutoRegister", [apiName = std::move(apiName), count, commands]() {
-        for (int i = 0; i < count; ++i) {
-            if (!commands->autoRegisterAccount(apiName)) break;
-            if (i < count - 1) std::this_thread::sleep_for(std::chrono::seconds(5));
-        }
+        commands->autoRegisterAccounts(apiName, count);
     });
 }
 

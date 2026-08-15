@@ -1,12 +1,13 @@
 #include <runtime/AppWiring.h>
 
 #include <accountManager/accountManager.h>
+#include <infrastructure/account/DrogonAccountHttpTransport.h>
 #include <accountManager/AccountClock.h>
 #include <accountManager/AccountHttpTransport.h>
 #include <accountManager/RetoolProvisionClock.h>
-#include <apipoint/chaynsapi/chaynsapi.h>
-#include <apipoint/chaynsapi/chaynsThreadReaper.h>
-#include <apipoint/retoolapi/retoolapi.h>
+#include <infrastructure/provider/chayns/chaynsapi.h>
+#include <infrastructure/provider/chayns/chaynsThreadReaper.h>
+#include <infrastructure/provider/retool/retoolapi.h>
 #include <channelManager/channelManager.h>
 #include <controllers/AiApiController.h>
 #include <controllers/AccountController.h>
@@ -45,7 +46,7 @@
 #include <sessionManager/core/RequestAdapters.h>
 #include <sessionManager/tooling/BridgeHelpers.h>
 #include <sessionManager/core/RetiredProviderTelemetry.h>
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 #include <drogon/drogon.h>
 
@@ -205,7 +206,7 @@ void addAccountWorkersOwner(AppContext& ctx, std::shared_ptr<AccountManager> acc
 
 // Store 注入必须早于各自的 init()：init() 会立刻建表/迁移数据。漏注入不会崩溃，
 // 只会静默走 Null 实现，所以这一步的存在本身就是那道门禁。
-StartupResult stepInjectStores(AppContext& ctx)
+StartupResult stepInjectStores(AppContext& ctx, const Json::Value& runtimeConfig)
 {
     auto* executor = ctx.backgroundExecutor();
     if (!executor) {
@@ -259,6 +260,10 @@ StartupResult stepInjectStores(AppContext& ctx)
     accounts->setRetoolProvisionClock(
         retoolProvision::makeSystemRetoolProvisionClock());
     accounts->setConfigStore(configStore);
+    // Capture configuration once at the composition root and pass a value to
+    // application workflows.  They must not rediscover Drogon's runtime from
+    // a background worker.
+    accounts->setRuntimeConfig(runtimeConfig);
     accounts->init();
     // init() has just started the AccountManager workers; register their
     // teardown before any later wiring can fail.
@@ -419,7 +424,7 @@ StartupResult stepSessionServices(AppContext& ctx)
 // The controller gets this one facade rather than six individual runtime
 // services.  The facade snapshots those collaborators when a job is admitted,
 // so revoking this raw Drogon binding during shutdown cannot race a worker.
-StartupResult stepAiApiUseCase(AppContext& ctx)
+StartupResult stepAiApiUseCase(AppContext& ctx, const Json::Value& runtimeConfig)
 {
     const auto& registry = ctx.providerRegistry();
     const auto& sessionStore = ctx.sessionStore();
@@ -436,7 +441,7 @@ StartupResult stepAiApiUseCase(AppContext& ctx)
 
     auto aiApiUseCase = std::make_shared<AiApiUseCase>(
         registry.get(), sessionStore.get(), responseIndex.get(), executionGate.get(),
-        channels.get(), executor);
+        channels.get(), executor, runtimeConfig);
     ctx.setAiApiUseCase(aiApiUseCase);
     AiApiController::setUseCase(aiApiUseCase.get());
     // Drogon owns Controller instances.  Revoke this non-owning static pointer
@@ -719,12 +724,16 @@ void registerApplicationSteps(
         return stepSessionTrackingMode(customConfig, ctx);
     });
     ctx.addStep("runtime persistence stores", [&ctx] { return stepRuntimeDataServices(ctx); });
-    ctx.addStep("inject stores",         [&ctx] { return stepInjectStores(ctx); });
+    ctx.addStep("inject stores",         [&customConfig, &ctx] {
+        return stepInjectStores(ctx, customConfig);
+    });
     ctx.addStep("provider registry",     [&ctx, processStartTime] {
         return stepProviderRegistry(ctx, processStartTime);
     });
     ctx.addStep("session services",      [&ctx] { return stepSessionServices(ctx); });
-    ctx.addStep("AI API use case",       [&ctx] { return stepAiApiUseCase(ctx); });
+    ctx.addStep("AI API use case",       [&customConfig, &ctx] {
+        return stepAiApiUseCase(ctx, customConfig);
+    });
     ctx.addStep("error stats",           [&customConfig, &ctx] { return stepErrorStats(customConfig, ctx); });
     ctx.addStep("session persistence",   [&ctx] { return stepSessionPersistence(ctx); });
     ctx.addStep("chayns thread ledger",  [&customConfig, &ctx] { return stepchaynsThreadLedger(customConfig, ctx); });

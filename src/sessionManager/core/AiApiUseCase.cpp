@@ -1,11 +1,10 @@
 #include <sessionManager/core/AiApiUseCase.h>
 
 #include <sessionManager/contracts/IResponseSink.h>
-#include <sessionManager/core/Errors.h>
 #include <sessionManager/core/GenerationService.h>
 #include <sessionManager/core/RequestAdapters.h>
 
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 #include <json/json.h>
 
 #include <sstream>
@@ -66,7 +65,7 @@ aiapi::SubmissionOutcome toSubmissionOutcome(TaskSubmitResult result)
     return aiapi::SubmissionOutcome::Stopped;
 }
 
-aiapi::Error toUseCaseError(const error::AppError& source)
+aiapi::Error toUseCaseError(const platform::Error& source)
 {
     aiapi::Error result;
     result.httpStatus = source.httpStatus();
@@ -74,9 +73,9 @@ aiapi::Error toUseCaseError(const error::AppError& source)
     result.message = source.message.empty() ? "Internal server error" : source.message;
     result.detail = source.detail;
     result.providerCode = source.providerCode;
-    if (source.code == error::ErrorCode::Conflict) {
+    if (source.code == platform::ErrorCode::Conflict) {
         result.code = "concurrent_request";
-    } else if (source.code == error::ErrorCode::Cancelled) {
+    } else if (source.code == platform::ErrorCode::Cancelled) {
         result.code = "cancelled";
     }
     return result;
@@ -130,13 +129,15 @@ AiApiUseCase::AiApiUseCase(IProviderRegistry* providers,
                            IResponseIndex* responses,
                            session::IExecutionGate* executionGate,
                            IChannelCatalog* channels,
-                           IBackgroundExecutor* executor)
+                           IBackgroundExecutor* executor,
+                           Json::Value runtimeConfig)
     : providers_(providers),
       sessions_(sessions),
       responses_(responses),
       executionGate_(executionGate),
       channels_(channels),
-      executor_(executor)
+      executor_(executor),
+      runtimeConfig_(std::move(runtimeConfig))
 {
 }
 
@@ -175,6 +176,7 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
     auto* const executionGate = executionGate_;
     auto* const channels = channels_;
     auto* const executor = executor_;
+    const Json::Value runtimeConfig = runtimeConfig_;
 
     if (!providers || !sessions || !responses || !executionGate || !executor) {
         aiapi::SubmissionResult result;
@@ -189,7 +191,8 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
             : "chat_generation",
         [request = std::move(request), presentation = std::move(presentation),
          makeSink = std::move(makeSink), onComplete = std::move(onComplete),
-         providers, sessions, responses, executionGate, channels]() mutable {
+         providers, sessions, responses, executionGate, channels,
+         runtimeConfig = std::move(runtimeConfig)]() mutable {
             std::shared_ptr<IResponseSink> sink;
             try {
                 sink = makeSink ? makeSink(presentation) : nullptr;
@@ -216,7 +219,7 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
             }
 
             GenerationService generation(
-                providers, sessions, responses, executionGate, channels);
+                providers, sessions, responses, executionGate, channels, runtimeConfig);
             const auto executionError = generation.runGuarded(
                 request, *sink, session::ConcurrencyPolicy::RejectConcurrent);
 

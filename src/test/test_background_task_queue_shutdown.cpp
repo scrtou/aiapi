@@ -5,7 +5,7 @@
 #include <thread>
 #include <stdexcept>
 
-#include <utils/BackgroundTaskQueue.h>
+#include <infrastructure/executor/BackgroundTaskQueue.h>
 
 // N2 停机 fail-fast 验证
 //

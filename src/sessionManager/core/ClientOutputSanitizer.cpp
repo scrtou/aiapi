@@ -1,7 +1,6 @@
 #include <sessionManager/core/ClientOutputSanitizer.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
-using namespace drogon;
 
 const std::vector<std::string>& ClientOutputSanitizer::getKiloTools() {
     static const std::vector<std::string> tools = {

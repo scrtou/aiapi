@@ -15,7 +15,7 @@ namespace toolcall {
  *
  * @param session 会话状态（会被修改）
  */
-void transformRequestForToolBridge(session_st& session);
+void transformRequestForToolBridge(session_st& session, const Json::Value& runtimeConfig);
 
 }
 

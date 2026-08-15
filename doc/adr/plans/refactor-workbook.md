@@ -14,10 +14,12 @@
 
 状态：`TODO`、`DOING`、`DONE`、`BLOCKED`。
 
-## 当前下一步
+## 当前状态
 
-当前是 **P8（阶段 8，过渡代码和 debt 清理）**；P7-W1、P7-W2 均已 DONE，
-**当前工作项为 P8-W1 过渡代码和 debt 清理（TODO，待开工）**。
+RFC-001 的 P0-W1 至 P8-W1 均已 **DONE**。P8 已删除 `aiapi_legacy` 与过渡 owner，
+完成 ADR-09 HTTP/IO seam、目录/debt 清理以及 Debug、coverage、ASan+UBSan、TSan、SIGTERM 和
+全部架构门禁验证；当前没有活跃的重构工作项。后续架构变化必须先登记新的 RFC/工作项，不能复用已收口
+的 P8-W1。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -93,8 +95,15 @@ token、registration、health 和 worker 均迁入 application 专职 source。�
 `waiting` 后 delete，HTTP/clock concrete adapter 保留 infrastructure 并由 AppWiring 在 `init()` 前注入。
 新增 Account slice gate 及内存 rollback mutation selftest；397/397 `ctest`、直接 runner 397 cases /
 2080 assertions、全量架构门禁通过，legacy source 由 20 降至 19，R1=0、R3=6/2563。详见
-[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足，下一项为
-P8-W1 过渡代码和 debt 清理。
+[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足；随后由
+P8-W1 完成最终收口。
+
+P8-W1 已收口：全部 89 个 production implementation 只属于六个正式 target，
+`aiapi_legacy`、ProviderResult compatibility 与历史目录 debt 已删除；application 不再接收或链接
+Drogon HTTP 类型，Account HTTP adapter 和 runtime config 均由 infrastructure/runtime 显式接线。
+Debug/coverage/ASan+UBSan 均为 396/396 PASS，TSan 全绿（396 cases / 2075 assertions、0 data race），
+30/30 架构与迁移 gate 通过。完整调用边界、验证与回滚记录见
+[`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md)。
 
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
@@ -135,7 +144,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P6-W3 | 阶段 6 | Retool Provider 垂直切片 | [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md) | DONE |
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | [`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md) | DONE |
 | P7-W2 | 阶段 7 | Account workflows 重写 | [`P07-account-workflows.md`](../work-products/P07-account-workflows.md) | DONE |
-| P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | clean baseline、完整发布验证 | TODO |
+| P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | [`P08-transition-cleanup.md`](../work-products/P08-transition-cleanup.md) | DONE |
 
 ## 产物保存规则
 

@@ -1,8 +1,8 @@
 {
   "_comment": "业务层直接 include dbManager 的文件白名单（棘轮）。新增即 FAIL(4)。冻结现状，不主张现状即目标态。",
   "allowed_files": [
-    "apipoint/chaynsapi/chaynsThreadReaper.cpp",
-    "apipoint/chaynsapi/chaynsapi.cpp",
+    "infrastructure/provider/chayns/chaynsThreadReaper.cpp",
+    "infrastructure/provider/chayns/chaynsapi.cpp",
     "runtime/AppContext.cpp",
     "runtime/AppWiring.cpp"
   ],

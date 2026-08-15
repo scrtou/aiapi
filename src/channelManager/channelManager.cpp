@@ -1,4 +1,5 @@
 #include <channelManager/channelManager.h>
+#include <platform/Log.h>
 #include <domain/policy/RetiredProviderPolicy.h>
 
 namespace {

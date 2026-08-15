@@ -1,6 +1,5 @@
 #include <drogon/drogon_test.h>
 
-#include <domain/model/ProviderResult.h>
 #include <platform/result/Result.h>
 
 #include <memory>
@@ -75,21 +74,9 @@ DROGON_TEST(Result_VoidSpecializationHasTheSameExplicitSemantics)
     CHECK(throwsLogicError([&failure] { failure.value(); }));
 }
 
-DROGON_TEST(Result_ErrorCodeMappingAndLegacyProviderProjectionAreStable)
+DROGON_TEST(Result_ErrorCodeMappingIsStable)
 {
     CHECK(platform::defaultHttpStatus(platform::ErrorCode::BadRequest) == 400);
     CHECK(platform::defaultHttpStatus(platform::ErrorCode::ProviderError) == 502);
     CHECK(platform::errorCodeName(platform::ErrorCode::Cancelled) == "cancelled");
-
-    provider::ProviderError legacy;
-    legacy.code = provider::ProviderErrorCode::RateLimited;
-    legacy.message = "retry later";
-    legacy.providerCode = "slow_down";
-    legacy.httpStatusCode = 429;
-
-    const auto projected = provider::toPlatformError(legacy);
-    CHECK(projected.code == platform::ErrorCode::RateLimited);
-    CHECK(projected.message == "retry later");
-    CHECK(projected.providerCode == "slow_down");
-    CHECK(projected.upstreamHttpStatus == 429);
 }

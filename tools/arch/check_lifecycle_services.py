@@ -47,8 +47,8 @@ for path in SRC.rglob("*"):
             errors.append(f"{relative}:{line}: lifecycle service locator revived: {symbol}")
 
 session_header = (SRC / "sessionManager/core/Session.h").read_text(errors="replace")
-reaper_header = (SRC / "apipoint/chaynsapi/chaynsThreadReaper.h").read_text(errors="replace")
-queue_header = (SRC / "utils/BackgroundTaskQueue.h").read_text(errors="replace")
+reaper_header = (SRC / "infrastructure/provider/chayns/chaynsThreadReaper.h").read_text(errors="replace")
+queue_header = (SRC / "infrastructure/executor/BackgroundTaskQueue.h").read_text(errors="replace")
 session_db_header = (SRC / "dbManager/session/SessionDbManager.h").read_text(errors="replace")
 thread_db_header = (SRC / "dbManager/chaynsThread/chaynsThreadDbManager.h").read_text(errors="replace")
 error_stats_db_header = (SRC / "dbManager/metrics/ErrorStatsDbManager.h").read_text(errors="replace")
@@ -486,7 +486,7 @@ for relative in (
     if "executor_->submit(" not in text:
         errors.append(f"{relative}: async write-through no longer uses injected executor")
 
-provider = (SRC / "apipoint/chaynsapi/chaynsapi.cpp").read_text(errors="replace")
+provider = (SRC / "infrastructure/provider/chayns/chaynsapi.cpp").read_text(errors="replace")
 if "m_threadLedger->" not in provider:
     errors.append("chaynsapi no longer uses its injected thread ledger")
 

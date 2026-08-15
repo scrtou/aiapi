@@ -144,3 +144,27 @@ DROGON_TEST(AccountWorkflow_SupportParsesWorkflowEndpointsAndEnvelopes)
     success["success"] = false;
     CHECK(!account::workflow::isSuccessEnvelope(success));
 }
+
+DROGON_TEST(AccountWorkflow_RuntimeConfigOverridesLifecycleEndpointsAndCredential)
+{
+    Json::Value config(Json::objectValue);
+    config["login_service_urls"] = Json::arrayValue;
+    config["login_service_urls"].append(Json::Value(Json::objectValue));
+    config["login_service_urls"][0]["name"] = "chaynsapi";
+    config["login_service_urls"][0]["url"] = "https://login.fixture.invalid/v2/login";
+    config["regist_service_urls"] = Json::arrayValue;
+    config["regist_service_urls"].append(Json::Value(Json::objectValue));
+    config["regist_service_urls"][0]["name"] = "chaynsapi";
+    config["regist_service_urls"][0]["url"] = "https://register.fixture.invalid/v2/register";
+    config["downstream_service_api_keys"] = Json::arrayValue;
+    config["downstream_service_api_keys"].append(Json::Value(Json::objectValue));
+    config["downstream_service_api_keys"][0]["name"] = "chaynsapi";
+    config["downstream_service_api_keys"][0]["api_key"] = "fixture-runtime-key";
+
+    CHECK(account::workflow::loginServiceUrl(config, "chaynsapi") ==
+          "https://login.fixture.invalid/v2/login");
+    CHECK(account::workflow::registrationServiceUrl(config, "chaynsapi") ==
+          "https://register.fixture.invalid/v2/register");
+    CHECK(account::workflow::downstreamBearerApiKey(config, "chaynsapi") ==
+          "fixture-runtime-key");
+}

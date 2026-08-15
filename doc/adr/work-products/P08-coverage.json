@@ -1,0 +1,1707 @@
+{
+  "implementation_files": [
+    {
+      "branch_percent": 4.56,
+      "branches": 482,
+      "branches_covered": 22,
+      "file": "src/accountManager/AccountHealthWorkflow.cpp",
+      "line_percent": 9.78,
+      "lines": 184,
+      "lines_covered": 18,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 52.33,
+      "branches": 86,
+      "branches_covered": 45,
+      "file": "src/accountManager/AccountRegistrationStateMachine.cpp",
+      "line_percent": 94.55,
+      "lines": 55,
+      "lines_covered": 52,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 33.96,
+      "branches": 589,
+      "branches_covered": 200,
+      "file": "src/accountManager/AccountRegistrationWorkflow.cpp",
+      "line_percent": 60.82,
+      "lines": 194,
+      "lines_covered": 118,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 80.0,
+      "branches": 30,
+      "branches_covered": 24,
+      "file": "src/accountManager/AccountSelectionPolicy.cpp",
+      "line_percent": 100.0,
+      "lines": 24,
+      "lines_covered": 24,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 30.12,
+      "branches": 767,
+      "branches_covered": 231,
+      "file": "src/accountManager/AccountSelector.cpp",
+      "line_percent": 70.27,
+      "lines": 296,
+      "lines_covered": 208,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 8.44,
+      "branches": 569,
+      "branches_covered": 48,
+      "file": "src/accountManager/AccountTokenWorkflow.cpp",
+      "line_percent": 20.44,
+      "lines": 181,
+      "lines_covered": 37,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 22.03,
+      "branches": 118,
+      "branches_covered": 26,
+      "file": "src/accountManager/AccountWorkers.cpp",
+      "line_percent": 61.11,
+      "lines": 90,
+      "lines_covered": 55,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 31.07,
+      "branches": 338,
+      "branches_covered": 105,
+      "file": "src/accountManager/AccountWorkflowSupport.cpp",
+      "line_percent": 61.0,
+      "lines": 100,
+      "lines_covered": 61,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 55.0,
+      "branches": 40,
+      "branches_covered": 22,
+      "file": "src/accountManager/RetoolProvisionClock.cpp",
+      "line_percent": 100.0,
+      "lines": 34,
+      "lines_covered": 34,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 58.89,
+      "branches": 90,
+      "branches_covered": 53,
+      "file": "src/accountManager/RetoolProvisionHealth.cpp",
+      "line_percent": 97.83,
+      "lines": 46,
+      "lines_covered": 45,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 12.62,
+      "branches": 214,
+      "branches_covered": 27,
+      "file": "src/accountManager/accountManager.cpp",
+      "line_percent": 20.23,
+      "lines": 173,
+      "lines_covered": 35,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 6.52,
+      "branches": 184,
+      "branches_covered": 12,
+      "file": "src/application/account/AccountAdminUseCase.cpp",
+      "line_percent": 19.28,
+      "lines": 83,
+      "lines_covered": 16,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 29.25,
+      "branches": 106,
+      "branches_covered": 31,
+      "file": "src/application/channel/ChannelAdminUseCase.cpp",
+      "line_percent": 51.65,
+      "lines": 91,
+      "lines_covered": 47,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 54.35,
+      "branches": 46,
+      "branches_covered": 25,
+      "file": "src/application/health/HealthUseCase.cpp",
+      "line_percent": 75.76,
+      "lines": 33,
+      "lines_covered": 25,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 21.43,
+      "branches": 14,
+      "branches_covered": 3,
+      "file": "src/application/metrics/MetricsUseCase.cpp",
+      "line_percent": 47.62,
+      "lines": 21,
+      "lines_covered": 10,
+      "state": "executed"
+    },
+    {
+      "branch_percent": null,
+      "branches": 0,
+      "branches_covered": 0,
+      "file": "src/application/workspace/RetoolWorkspaceAdminUseCase.cpp",
+      "line_percent": 35.71,
+      "lines": 28,
+      "lines_covered": 10,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 40.65,
+      "branches": 214,
+      "branches_covered": 87,
+      "file": "src/application/workspace/RetoolWorkspaceUseCase.cpp",
+      "line_percent": 82.14,
+      "lines": 112,
+      "lines_covered": 92,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 33.49,
+      "branches": 212,
+      "branches_covered": 71,
+      "file": "src/channelManager/channelManager.cpp",
+      "line_percent": 55.83,
+      "lines": 120,
+      "lines_covered": 67,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 2.63,
+      "branches": 1028,
+      "branches_covered": 27,
+      "file": "src/controllers/AccountController.cc",
+      "line_percent": 6.09,
+      "lines": 312,
+      "lines_covered": 19,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 7.83,
+      "branches": 868,
+      "branches_covered": 68,
+      "file": "src/controllers/AiApiController.cc",
+      "line_percent": 14.06,
+      "lines": 320,
+      "lines_covered": 45,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 12.28,
+      "branches": 562,
+      "branches_covered": 69,
+      "file": "src/controllers/ChannelController.cc",
+      "line_percent": 26.39,
+      "lines": 144,
+      "lines_covered": 38,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 33.33,
+      "branches": 66,
+      "branches_covered": 22,
+      "file": "src/controllers/HealthController.cc",
+      "line_percent": 65.52,
+      "lines": 29,
+      "lines_covered": 19,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 9.78,
+      "branches": 818,
+      "branches_covered": 80,
+      "file": "src/controllers/MetricsController.cc",
+      "line_percent": 20.16,
+      "lines": 248,
+      "lines_covered": 50,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 49.15,
+      "branches": 118,
+      "branches_covered": 58,
+      "file": "src/controllers/RetiredProviderTombstone.cc",
+      "line_percent": 95.35,
+      "lines": 43,
+      "lines_covered": 41,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 50.0,
+      "branches": 222,
+      "branches_covered": 111,
+      "file": "src/controllers/sinks/ChatJsonSink.cpp",
+      "line_percent": 86.24,
+      "lines": 109,
+      "lines_covered": 94,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 26.54,
+      "branches": 520,
+      "branches_covered": 138,
+      "file": "src/controllers/sinks/ChatSseSink.cpp",
+      "line_percent": 51.08,
+      "lines": 186,
+      "lines_covered": 95,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 40.0,
+      "branches": 360,
+      "branches_covered": 144,
+      "file": "src/controllers/sinks/ResponsesJsonSink.cpp",
+      "line_percent": 78.68,
+      "lines": 136,
+      "lines_covered": 107,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 34.7,
+      "branches": 974,
+      "branches_covered": 338,
+      "file": "src/controllers/sinks/ResponsesSseSink.cpp",
+      "line_percent": 69.1,
+      "lines": 343,
+      "lines_covered": 237,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 254,
+      "branches_covered": 0,
+      "file": "src/dbManager/account/accountBackupDbManager.cpp",
+      "line_percent": 0.0,
+      "lines": 96,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 1014,
+      "branches_covered": 0,
+      "file": "src/dbManager/account/accountDbManager.cpp",
+      "line_percent": 0.0,
+      "lines": 350,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 696,
+      "branches_covered": 0,
+      "file": "src/dbManager/channel/channelDbManager.cpp",
+      "line_percent": 0.0,
+      "lines": 217,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 954,
+      "branches_covered": 0,
+      "file": "src/dbManager/metrics/ErrorStatsDbManager.cpp",
+      "line_percent": 0.0,
+      "lines": 252,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 752,
+      "branches_covered": 0,
+      "file": "src/dbManager/metrics/StatusDbManager.cpp",
+      "line_percent": 0.0,
+      "lines": 327,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 0.84,
+      "branches": 474,
+      "branches_covered": 4,
+      "file": "src/dbManager/retoolWorkspace/RetoolWorkspaceDbManager.cpp",
+      "line_percent": 3.98,
+      "lines": 226,
+      "lines_covered": 9,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 5.01,
+      "branches": 878,
+      "branches_covered": 44,
+      "file": "src/dbManager/session/SessionDbManager.cpp",
+      "line_percent": 12.8,
+      "lines": 289,
+      "lines_covered": 37,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 25.7,
+      "branches": 646,
+      "branches_covered": 166,
+      "file": "src/infrastructure/config/ConfigValidator.cpp",
+      "line_percent": 43.79,
+      "lines": 153,
+      "lines_covered": 67,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 58.7,
+      "branches": 46,
+      "branches_covered": 27,
+      "file": "src/infrastructure/provider/ProviderBase.cpp",
+      "line_percent": 87.88,
+      "lines": 33,
+      "lines_covered": 29,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 68.42,
+      "branches": 38,
+      "branches_covered": 26,
+      "file": "src/infrastructure/provider/ProviderRegistry.cpp",
+      "line_percent": 95.83,
+      "lines": 24,
+      "lines_covered": 23,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 50.0,
+      "branches": 2,
+      "branches_covered": 1,
+      "file": "src/infrastructure/provider/chayns/ChaynsClock.cpp",
+      "line_percent": 100.0,
+      "lines": 6,
+      "lines_covered": 6,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 57.89,
+      "branches": 190,
+      "branches_covered": 110,
+      "file": "src/infrastructure/provider/chayns/ChaynsMessageCorrelation.cpp",
+      "line_percent": 88.37,
+      "lines": 86,
+      "lines_covered": 76,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 52.88,
+      "branches": 556,
+      "branches_covered": 294,
+      "file": "src/infrastructure/provider/chayns/ChaynsModelCatalog.cpp",
+      "line_percent": 89.95,
+      "lines": 219,
+      "lines_covered": 197,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 32.14,
+      "branches": 308,
+      "branches_covered": 99,
+      "file": "src/infrastructure/provider/chayns/chaynsThreadReaper.cpp",
+      "line_percent": 77.33,
+      "lines": 150,
+      "lines_covered": 116,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 29.89,
+      "branches": 3202,
+      "branches_covered": 957,
+      "file": "src/infrastructure/provider/chayns/chaynsapi.cpp",
+      "line_percent": 57.88,
+      "lines": 983,
+      "lines_covered": 569,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 24.46,
+      "branches": 3315,
+      "branches_covered": 811,
+      "file": "src/infrastructure/provider/retool/retoolapi.cpp",
+      "line_percent": 50.74,
+      "lines": 1011,
+      "lines_covered": 513,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 10.42,
+      "branches": 48,
+      "branches_covered": 5,
+      "file": "src/managedAccount/backends/RetoolWorkspaceBackend.cpp",
+      "line_percent": 29.55,
+      "lines": 44,
+      "lines_covered": 13,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 45.45,
+      "branches": 22,
+      "branches_covered": 10,
+      "file": "src/managedAccount/service/ManagedAccountService.cpp",
+      "line_percent": 70.27,
+      "lines": 37,
+      "lines_covered": 26,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 63.79,
+      "branches": 174,
+      "branches_covered": 111,
+      "file": "src/metrics/ErrorStatsConfig.cpp",
+      "line_percent": 100.0,
+      "lines": 56,
+      "lines_covered": 56,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 36.5,
+      "branches": 526,
+      "branches_covered": 192,
+      "file": "src/metrics/ErrorStatsService.cpp",
+      "line_percent": 67.23,
+      "lines": 238,
+      "lines_covered": 160,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 36.52,
+      "branches": 115,
+      "branches_covered": 42,
+      "file": "src/platform/ZeroWidthEncoder.cpp",
+      "line_percent": 49.57,
+      "lines": 117,
+      "lines_covered": 58,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 44.12,
+      "branches": 34,
+      "branches_covered": 15,
+      "file": "src/retoolWorkspace/RetoolWorkspaceManager.cpp",
+      "line_percent": 82.76,
+      "lines": 58,
+      "lines_covered": 48,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 0.57,
+      "branches": 348,
+      "branches_covered": 2,
+      "file": "src/retoolWorkspace/RetoolWorkspaceService.cpp",
+      "line_percent": 5.26,
+      "lines": 114,
+      "lines_covered": 6,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 57.61,
+      "branches": 184,
+      "branches_covered": 106,
+      "file": "src/runtime/AppContext.cpp",
+      "line_percent": 100.0,
+      "lines": 55,
+      "lines_covered": 55,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 59.09,
+      "branches": 66,
+      "branches_covered": 39,
+      "file": "src/sessionManager/actionProtocol/ActionProtocolAdapter.cpp",
+      "line_percent": 94.29,
+      "lines": 35,
+      "lines_covered": 33,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 47.65,
+      "branches": 596,
+      "branches_covered": 284,
+      "file": "src/sessionManager/actionProtocol/ActionProtocolCompiler.cpp",
+      "line_percent": 85.96,
+      "lines": 285,
+      "lines_covered": 245,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 50.76,
+      "branches": 197,
+      "branches_covered": 100,
+      "file": "src/sessionManager/continuity/ContinuityResolver.cpp",
+      "line_percent": 90.43,
+      "lines": 94,
+      "lines_covered": 85,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 49.7,
+      "branches": 332,
+      "branches_covered": 165,
+      "file": "src/sessionManager/continuity/HistoryReplayBudget.cpp",
+      "line_percent": 81.22,
+      "lines": 181,
+      "lines_covered": 147,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 30.36,
+      "branches": 112,
+      "branches_covered": 34,
+      "file": "src/sessionManager/continuity/OutboundBudget.cpp",
+      "line_percent": 67.65,
+      "lines": 68,
+      "lines_covered": 46,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 48.71,
+      "branches": 232,
+      "branches_covered": 113,
+      "file": "src/sessionManager/continuity/ResponseIndex.cpp",
+      "line_percent": 89.93,
+      "lines": 139,
+      "lines_covered": 125,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 11.11,
+      "branches": 18,
+      "branches_covered": 2,
+      "file": "src/sessionManager/continuity/TextExtractor.cpp",
+      "line_percent": 23.08,
+      "lines": 13,
+      "lines_covered": 3,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 8.99,
+      "branches": 267,
+      "branches_covered": 24,
+      "file": "src/sessionManager/core/AiApiUseCase.cpp",
+      "line_percent": 21.35,
+      "lines": 192,
+      "lines_covered": 41,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 3.8,
+      "branches": 158,
+      "branches_covered": 6,
+      "file": "src/sessionManager/core/ClientOutputSanitizer.cpp",
+      "line_percent": 15.22,
+      "lines": 46,
+      "lines_covered": 7,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 36.73,
+      "branches": 953,
+      "branches_covered": 350,
+      "file": "src/sessionManager/core/GenerationPipeline.cpp",
+      "line_percent": 70.41,
+      "lines": 365,
+      "lines_covered": 257,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 33.8,
+      "branches": 938,
+      "branches_covered": 317,
+      "file": "src/sessionManager/core/GenerationResponsePipeline.cpp",
+      "line_percent": 63.88,
+      "lines": 371,
+      "lines_covered": 237,
+      "state": "executed"
+    },
+    {
+      "branch_percent": null,
+      "branches": 0,
+      "branches_covered": 0,
+      "file": "src/sessionManager/core/GenerationService.cpp",
+      "line_percent": 100.0,
+      "lines": 8,
+      "lines_covered": 8,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 36.62,
+      "branches": 2736,
+      "branches_covered": 1002,
+      "file": "src/sessionManager/core/RequestAdapters.cpp",
+      "line_percent": 68.36,
+      "lines": 787,
+      "lines_covered": 538,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 1.61,
+      "branches": 62,
+      "branches_covered": 1,
+      "file": "src/sessionManager/core/RetiredProviderTelemetry.cpp",
+      "line_percent": 8.7,
+      "lines": 23,
+      "lines_covered": 2,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 19.72,
+      "branches": 1668,
+      "branches_covered": 329,
+      "file": "src/sessionManager/core/Session.cpp",
+      "line_percent": 41.4,
+      "lines": 744,
+      "lines_covered": 308,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 0.0,
+      "branches": 382,
+      "branches_covered": 0,
+      "file": "src/sessionManager/core/SessionCodec.cpp",
+      "line_percent": 0.0,
+      "lines": 137,
+      "lines_covered": 0,
+      "state": "instrumented_not_executed"
+    },
+    {
+      "branch_percent": 52.52,
+      "branches": 278,
+      "branches_covered": 146,
+      "file": "src/sessionManager/tooling/BridgeHelpers.cpp",
+      "line_percent": 96.21,
+      "lines": 132,
+      "lines_covered": 127,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 46.78,
+      "branches": 962,
+      "branches_covered": 450,
+      "file": "src/sessionManager/tooling/BridgeProtocolCodec.cpp",
+      "line_percent": 87.04,
+      "lines": 355,
+      "lines_covered": 309,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 28.02,
+      "branches": 496,
+      "branches_covered": 139,
+      "file": "src/sessionManager/tooling/ForcedToolCallGenerator.cpp",
+      "line_percent": 61.07,
+      "lines": 149,
+      "lines_covered": 91,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 51.85,
+      "branches": 216,
+      "branches_covered": 112,
+      "file": "src/sessionManager/tooling/StrictClientRules.cpp",
+      "line_percent": 86.73,
+      "lines": 113,
+      "lines_covered": 98,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 2.29,
+      "branches": 262,
+      "branches_covered": 6,
+      "file": "src/sessionManager/tooling/ToolCallBridge.cpp",
+      "line_percent": 14.09,
+      "lines": 149,
+      "lines_covered": 21,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 11.84,
+      "branches": 642,
+      "branches_covered": 76,
+      "file": "src/sessionManager/tooling/ToolCallNormalizer.cpp",
+      "line_percent": 37.8,
+      "lines": 164,
+      "lines_covered": 62,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 43.02,
+      "branches": 995,
+      "branches_covered": 428,
+      "file": "src/sessionManager/tooling/ToolCallValidator.cpp",
+      "line_percent": 75.84,
+      "lines": 356,
+      "lines_covered": 270,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 27.62,
+      "branches": 822,
+      "branches_covered": 227,
+      "file": "src/sessionManager/tooling/ToolDefinitionEncoder.cpp",
+      "line_percent": 64.94,
+      "lines": 231,
+      "lines_covered": 150,
+      "state": "executed"
+    },
+    {
+      "branch_percent": 29.38,
+      "branches": 1249,
+      "branches_covered": 367,
+      "file": "src/sessionManager/tooling/XmlTagToolCallCodec.cpp",
+      "line_percent": 55.41,
+      "lines": 601,
+      "lines_covered": 333,
+      "state": "executed"
+    }
+  ],
+  "not_instrumented": [
+    "src/accountManager/AccountClock.cpp",
+    "src/controllers/LogController.cc",
+    "src/controllers/RetoolWorkspaceController.cc",
+    "src/dbManager/chaynsThread/chaynsThreadDbManager.cpp",
+    "src/dbManager/config/ConfigDbManager.cpp",
+    "src/infrastructure/account/DrogonAccountHttpTransport.cpp",
+    "src/infrastructure/provider/chayns/ChaynsHttpTransport.cpp",
+    "src/infrastructure/provider/retool/RetoolClock.cpp",
+    "src/infrastructure/provider/retool/RetoolHttpTransport.cpp",
+    "src/main.cc",
+    "src/managedAccount/backends/ClassicProviderAccountBackend.cpp",
+    "src/runtime/AppWiring.cpp"
+  ],
+  "provenance": {
+    "build_dir": "/home/vps/code/aiapi/build-coverage",
+    "gcda_files": 142,
+    "gcov": "gcov (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "note": "Production implementations are compiled once by their canonical aiapi_* production library; tests link those targets and provide execution evidence for pulled objects.",
+    "repository": "/home/vps/code/aiapi"
+  },
+  "schema_version": 1,
+  "scope": "production code exercised through test-linked production objects",
+  "summary": {
+    "branch_percent": 25.16,
+    "branches": 39050,
+    "branches_covered": 9826,
+    "instrumented_implementation_files": 77,
+    "line_percent": 49.99,
+    "lines": 14614,
+    "lines_covered": 7306,
+    "not_instrumented_implementation_files": 12,
+    "production_implementation_files": 89
+  },
+  "targets": [
+    {
+      "branch_percent": 29.89,
+      "branches": 3202,
+      "branches_covered": 957,
+      "file": "src/infrastructure/provider/chayns/chaynsapi.cpp",
+      "functions": [
+        {
+          "blocks": 3151,
+          "blocks_executed": 1311,
+          "branch_percent": 34.52,
+          "branches": 2225,
+          "branches_covered": 768,
+          "end_line": 1220,
+          "execution_count": 22,
+          "line_percent": 63.94,
+          "lines": 635,
+          "lines_covered": 406,
+          "name": "chaynsapi::doGenerate(provider::ProviderRequest const&, provider::ProviderCallContext&)",
+          "requested": "chaynsapi::doGenerate(",
+          "start_line": 328,
+          "state": "executed"
+        },
+        {
+          "blocks": 17,
+          "blocks_executed": 14,
+          "branch_percent": 50.0,
+          "branches": 10,
+          "branches_covered": 5,
+          "end_line": 225,
+          "execution_count": 40,
+          "line_percent": 85.71,
+          "lines": 7,
+          "lines_covered": 6,
+          "name": "chaynsapi::sendWithinContext(provider::ProviderCallContext const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::shared_ptr<drogon::HttpRequest> const&, double)",
+          "requested": "chaynsapi::sendWithinContext(",
+          "start_line": 212,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 57.88,
+      "lines": 983,
+      "lines_covered": 569,
+      "name": "Chayns provider generate/upstream request",
+      "requested_functions": [
+        "chaynsapi::doGenerate(",
+        "chaynsapi::sendWithinContext("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 36.73,
+      "branches": 953,
+      "branches_covered": 350,
+      "file": "src/sessionManager/core/GenerationPipeline.cpp",
+      "functions": [
+        {
+          "blocks": 107,
+          "blocks_executed": 58,
+          "branch_percent": 48.72,
+          "branches": 78,
+          "branches_covered": 38,
+          "end_line": 442,
+          "execution_count": 22,
+          "line_percent": 95.65,
+          "lines": 23,
+          "lines_covered": 22,
+          "name": "generation::GenerationPipeline::run(GenerationRequest const&, IResponseSink&, session::ConcurrencyPolicy)",
+          "requested": "generation::GenerationPipeline::run(",
+          "start_line": 402,
+          "state": "executed"
+        },
+        {
+          "blocks": 407,
+          "blocks_executed": 73,
+          "branch_percent": 23.78,
+          "branches": 164,
+          "branches_covered": 39,
+          "end_line": 398,
+          "execution_count": 22,
+          "line_percent": 62.96,
+          "lines": 54,
+          "lines_covered": 34,
+          "name": "generation::GenerationPipeline::execute(session_st&, IResponseSink&, bool, session::ConcurrencyPolicy)",
+          "requested": "generation::GenerationPipeline::execute(",
+          "start_line": 321,
+          "state": "executed"
+        },
+        {
+          "blocks": 65,
+          "blocks_executed": 27,
+          "branch_percent": 46.88,
+          "branches": 32,
+          "branches_covered": 15,
+          "end_line": 587,
+          "execution_count": 22,
+          "line_percent": 85.71,
+          "lines": 14,
+          "lines_covered": 12,
+          "name": "generation::GenerationPipeline::invokeProvider(session_st&, platform::CancellationToken const&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "generation::GenerationPipeline::invokeProvider(",
+          "start_line": 565,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 70.41,
+      "lines": 365,
+      "lines_covered": 257,
+      "name": "Generation pipeline request/provider/commit",
+      "requested_functions": [
+        "generation::GenerationPipeline::run(",
+        "generation::GenerationPipeline::execute(",
+        "generation::GenerationPipeline::invokeProvider("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 33.8,
+      "branches": 938,
+      "branches_covered": 317,
+      "file": "src/sessionManager/core/GenerationResponsePipeline.cpp",
+      "functions": [
+        {
+          "blocks": 24,
+          "blocks_executed": 20,
+          "branch_percent": 50.0,
+          "branches": 32,
+          "branches_covered": 16,
+          "end_line": 520,
+          "execution_count": 18,
+          "line_percent": 93.75,
+          "lines": 16,
+          "lines_covered": 15,
+          "name": "generation::GenerationResponsePipeline::emit(session_st const&, IResponseSink&) const",
+          "requested": "generation::GenerationResponsePipeline::emit(",
+          "start_line": 501,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 63.88,
+      "lines": 371,
+      "lines_covered": 237,
+      "name": "Generation response decode/normalize/emit",
+      "requested_functions": [
+        "generation::GenerationResponsePipeline::emit("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 27.62,
+      "branches": 822,
+      "branches_covered": 227,
+      "file": "src/sessionManager/tooling/ToolDefinitionEncoder.cpp",
+      "functions": [
+        {
+          "blocks": 240,
+          "blocks_executed": 117,
+          "branch_percent": 36.63,
+          "branches": 202,
+          "branches_covered": 74,
+          "end_line": 359,
+          "execution_count": 8,
+          "line_percent": 74.58,
+          "lines": 59,
+          "lines_covered": 44,
+          "name": "toolcall::transformRequestForToolBridge(session_st&, Json::Value const&)",
+          "requested": "toolcall::transformRequestForToolBridge(",
+          "start_line": 286,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 64.94,
+      "lines": 231,
+      "lines_covered": 150,
+      "name": "Generation tool bridge request transform",
+      "requested_functions": [
+        "toolcall::transformRequestForToolBridge("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 11.84,
+      "branches": 642,
+      "branches_covered": 76,
+      "file": "src/sessionManager/tooling/ToolCallNormalizer.cpp",
+      "functions": [
+        {
+          "blocks": 104,
+          "blocks_executed": 70,
+          "branch_percent": 44.87,
+          "branches": 78,
+          "branches_covered": 35,
+          "end_line": 257,
+          "execution_count": 28,
+          "line_percent": 95.83,
+          "lines": 24,
+          "lines_covered": 23,
+          "name": "toolcall::normalizeToolCallArguments(session_st const&, std::vector<generation::ToolCallDone, std::allocator<generation::ToolCallDone> >&)",
+          "requested": "toolcall::normalizeToolCallArguments(",
+          "start_line": 222,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 37.8,
+      "lines": 164,
+      "lines_covered": 62,
+      "name": "Generation tool argument normalization",
+      "requested_functions": [
+        "toolcall::normalizeToolCallArguments("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 28.02,
+      "branches": 496,
+      "branches_covered": 139,
+      "file": "src/sessionManager/tooling/ForcedToolCallGenerator.cpp",
+      "functions": [
+        {
+          "blocks": 135,
+          "blocks_executed": 91,
+          "branch_percent": 56.52,
+          "branches": 92,
+          "branches_covered": 52,
+          "end_line": 237,
+          "execution_count": 16,
+          "line_percent": 97.22,
+          "lines": 36,
+          "lines_covered": 35,
+          "name": "toolcall::generateForcedToolCall(session_st const&, std::vector<generation::ToolCallDone, std::allocator<generation::ToolCallDone> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&)",
+          "requested": "toolcall::generateForcedToolCall(",
+          "start_line": 187,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 61.07,
+      "lines": 149,
+      "lines_covered": 91,
+      "name": "Generation forced tool fallback",
+      "requested_functions": [
+        "toolcall::generateForcedToolCall("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 30.12,
+      "branches": 767,
+      "branches_covered": 231,
+      "file": "src/accountManager/AccountSelector.cpp",
+      "functions": [
+        {
+          "blocks": 110,
+          "blocks_executed": 80,
+          "branch_percent": 45.71,
+          "branches": 70,
+          "branches_covered": 32,
+          "end_line": 242,
+          "execution_count": 12,
+          "line_percent": 87.5,
+          "lines": 32,
+          "lines_covered": 28,
+          "name": "AccountManager::getAccount(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::shared_ptr<Accountinfo_st>&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)",
+          "requested": "AccountManager::getAccount(",
+          "start_line": 200,
+          "state": "executed"
+        },
+        {
+          "blocks": 141,
+          "blocks_executed": 84,
+          "branch_percent": 41.41,
+          "branches": 99,
+          "branches_covered": 41,
+          "end_line": 303,
+          "execution_count": 20,
+          "line_percent": 77.78,
+          "lines": 45,
+          "lines_covered": 35,
+          "name": "AccountManager::getEligibleAccount(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::shared_ptr<Accountinfo_st>&, AccountRequirement, std::set<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::less<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&)",
+          "requested": "AccountManager::getEligibleAccount(",
+          "start_line": 244,
+          "state": "executed"
+        },
+        {
+          "blocks": 54,
+          "blocks_executed": 41,
+          "branch_percent": 50.0,
+          "branches": 30,
+          "branches_covered": 15,
+          "end_line": 428,
+          "execution_count": 10,
+          "line_percent": 100.0,
+          "lines": 18,
+          "lines_covered": 18,
+          "name": "AccountManager::setStatusTokenStatus(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool)",
+          "requested": "AccountManager::setStatusTokenStatus(",
+          "start_line": 408,
+          "state": "executed"
+        },
+        {
+          "blocks": 41,
+          "blocks_executed": 37,
+          "branch_percent": 60.71,
+          "branches": 28,
+          "branches_covered": 17,
+          "end_line": 150,
+          "execution_count": 56,
+          "line_percent": 100.0,
+          "lines": 12,
+          "lines_covered": 12,
+          "name": "AccountManager::rebuildPoolLocked(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)",
+          "requested": "AccountManager::rebuildPoolLocked(",
+          "start_line": 132,
+          "state": "executed"
+        },
+        {
+          "blocks": 50,
+          "blocks_executed": 34,
+          "branch_percent": 53.57,
+          "branches": 28,
+          "branches_covered": 15,
+          "end_line": 49,
+          "execution_count": 46,
+          "line_percent": 93.75,
+          "lines": 16,
+          "lines_covered": 15,
+          "name": "AccountManager::loadAccount()",
+          "requested": "AccountManager::loadAccount(",
+          "start_line": 23,
+          "state": "executed"
+        },
+        {
+          "blocks": 55,
+          "blocks_executed": 42,
+          "branch_percent": 54.76,
+          "branches": 42,
+          "branches_covered": 23,
+          "end_line": 130,
+          "execution_count": 6,
+          "line_percent": 100.0,
+          "lines": 17,
+          "lines_covered": 17,
+          "name": "AccountManager::addAccountbyPost(Accountinfo_st)",
+          "requested": "AccountManager::addAccountbyPost(",
+          "start_line": 109,
+          "state": "executed"
+        },
+        {
+          "blocks": 48,
+          "blocks_executed": 41,
+          "branch_percent": 53.33,
+          "branches": 30,
+          "branches_covered": 16,
+          "end_line": 180,
+          "execution_count": 6,
+          "line_percent": 92.0,
+          "lines": 25,
+          "lines_covered": 23,
+          "name": "AccountManager::updateAccount(Accountinfo_st)",
+          "requested": "AccountManager::updateAccount(",
+          "start_line": 152,
+          "state": "executed"
+        },
+        {
+          "blocks": 27,
+          "blocks_executed": 24,
+          "branch_percent": 57.14,
+          "branches": 14,
+          "branches_covered": 8,
+          "end_line": 198,
+          "execution_count": 4,
+          "line_percent": 92.86,
+          "lines": 14,
+          "lines_covered": 13,
+          "name": "AccountManager::deleteAccountbyPost(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)",
+          "requested": "AccountManager::deleteAccountbyPost(",
+          "start_line": 182,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 70.27,
+      "lines": 296,
+      "lines_covered": 208,
+      "name": "Account selection/invalidation/pool rebuild",
+      "requested_functions": [
+        "AccountManager::getAccount(",
+        "AccountManager::getEligibleAccount(",
+        "AccountManager::setStatusTokenStatus(",
+        "AccountManager::rebuildPoolLocked(",
+        "AccountManager::loadAccount(",
+        "AccountManager::addAccountbyPost(",
+        "AccountManager::updateAccount(",
+        "AccountManager::deleteAccountbyPost("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 33.96,
+      "branches": 589,
+      "branches_covered": 200,
+      "file": "src/accountManager/AccountRegistrationWorkflow.cpp",
+      "functions": [
+        {
+          "blocks": 5,
+          "blocks_executed": 5,
+          "branch_percent": 50.0,
+          "branches": 2,
+          "branches_covered": 1,
+          "end_line": 79,
+          "execution_count": 2,
+          "line_percent": 100.0,
+          "lines": 4,
+          "lines_covered": 4,
+          "name": "AccountManager::rollbackWaitingAccount(int)",
+          "requested": "AccountManager::rollbackWaitingAccount(",
+          "start_line": 74,
+          "state": "executed"
+        },
+        {
+          "blocks": 780,
+          "blocks_executed": 281,
+          "branch_percent": 32.06,
+          "branches": 471,
+          "branches_covered": 151,
+          "end_line": 267,
+          "execution_count": 6,
+          "line_percent": 54.05,
+          "lines": 148,
+          "lines_covered": 80,
+          "name": "AccountManager::autoRegisterAccount(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)",
+          "requested": "AccountManager::autoRegisterAccount(",
+          "start_line": 81,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 60.82,
+      "lines": 194,
+      "lines_covered": 118,
+      "name": "Account registration rollback",
+      "requested_functions": [
+        "AccountManager::rollbackWaitingAccount(",
+        "AccountManager::autoRegisterAccount("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 8.44,
+      "branches": 569,
+      "branches_covered": 48,
+      "file": "src/accountManager/AccountTokenWorkflow.cpp",
+      "functions": [
+        {
+          "blocks": 94,
+          "blocks_executed": 59,
+          "branch_percent": 50.0,
+          "branches": 46,
+          "branches_covered": 23,
+          "end_line": 128,
+          "execution_count": 2,
+          "line_percent": 83.33,
+          "lines": 18,
+          "lines_covered": 15,
+          "name": "AccountManager::checkToken()",
+          "requested": "AccountManager::checkToken(",
+          "start_line": 105,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 20.44,
+      "lines": 181,
+      "lines_covered": 37,
+      "name": "Account token refresh",
+      "requested_functions": [
+        "AccountManager::checkToken("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 61.05,
+      "branches": 285,
+      "branches_covered": 174,
+      "file": "src/infrastructure/executor/BackgroundTaskQueue.h",
+      "functions": [
+        {
+          "blocks": 92,
+          "blocks_executed": 64,
+          "branch_percent": 58.82,
+          "branches": 68,
+          "branches_covered": 40,
+          "end_line": 160,
+          "execution_count": 254,
+          "line_percent": 100.0,
+          "lines": 21,
+          "lines_covered": 21,
+          "name": "BackgroundTaskQueue::enqueue(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::function<void ()>)",
+          "requested": "BackgroundTaskQueue::enqueue(",
+          "start_line": 113,
+          "state": "executed"
+        },
+        {
+          "blocks": 4,
+          "blocks_executed": 4,
+          "branch_percent": 50.0,
+          "branches": 2,
+          "branches_covered": 1,
+          "end_line": 181,
+          "execution_count": 64,
+          "line_percent": 100.0,
+          "lines": 1,
+          "lines_covered": 1,
+          "name": "BackgroundTaskQueue::shutdown()",
+          "requested": "BackgroundTaskQueue::shutdown(",
+          "start_line": 181,
+          "state": "executed"
+        },
+        {
+          "blocks": 6,
+          "blocks_executed": 6,
+          "branch_percent": 50.0,
+          "branches": 2,
+          "branches_covered": 1,
+          "end_line": 200,
+          "execution_count": 6,
+          "line_percent": 100.0,
+          "lines": 2,
+          "lines_covered": 2,
+          "name": "BackgroundTaskQueue::shutdown(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "BackgroundTaskQueue::shutdown(",
+          "start_line": 197,
+          "state": "executed"
+        },
+        {
+          "blocks": 133,
+          "blocks_executed": 94,
+          "branch_percent": 60.38,
+          "branches": 106,
+          "branches_covered": 64,
+          "end_line": 378,
+          "execution_count": 58,
+          "line_percent": 90.0,
+          "lines": 30,
+          "lines_covered": 27,
+          "name": "BackgroundTaskQueue::workerLoop(unsigned long)",
+          "requested": "BackgroundTaskQueue::workerLoop(",
+          "start_line": 339,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 94.78,
+      "lines": 134,
+      "lines_covered": 127,
+      "name": "BackgroundTaskQueue shutdown/drain",
+      "requested_functions": [
+        "BackgroundTaskQueue::enqueue(",
+        "BackgroundTaskQueue::shutdown(",
+        "BackgroundTaskQueue::workerLoop("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 22.03,
+      "branches": 118,
+      "branches_covered": 26,
+      "file": "src/accountManager/AccountWorkers.cpp",
+      "functions": [
+        {
+          "blocks": 3,
+          "blocks_executed": 3,
+          "branch_percent": null,
+          "branches": 0,
+          "branches_covered": 0,
+          "end_line": 35,
+          "execution_count": 66,
+          "line_percent": 100.0,
+          "lines": 3,
+          "lines_covered": 3,
+          "name": "AccountManager::stopBackgroundThreads()",
+          "requested": "AccountManager::stopBackgroundThreads(",
+          "start_line": 32,
+          "state": "executed"
+        },
+        {
+          "blocks": 18,
+          "blocks_executed": 17,
+          "branch_percent": 40.0,
+          "branches": 30,
+          "branches_covered": 12,
+          "end_line": 72,
+          "execution_count": 66,
+          "line_percent": 88.89,
+          "lines": 27,
+          "lines_covered": 24,
+          "name": "AccountManager::stopBackgroundThreads(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "AccountManager::stopBackgroundThreads(",
+          "start_line": 37,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 61.11,
+      "lines": 90,
+      "lines_covered": 55,
+      "name": "Account worker interrupt/join",
+      "requested_functions": [
+        "AccountManager::stopBackgroundThreads("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 19.72,
+      "branches": 1668,
+      "branches_covered": 329,
+      "file": "src/sessionManager/core/Session.cpp",
+      "functions": [
+        {
+          "blocks": 2,
+          "blocks_executed": 2,
+          "branch_percent": null,
+          "branches": 0,
+          "branches_covered": 0,
+          "end_line": 822,
+          "execution_count": 52,
+          "line_percent": 100.0,
+          "lines": 3,
+          "lines_covered": 3,
+          "name": "chatSession::stopClearExpiredSession()",
+          "requested": "chatSession::stopClearExpiredSession(",
+          "start_line": 819,
+          "state": "executed"
+        },
+        {
+          "blocks": 3,
+          "blocks_executed": 3,
+          "branch_percent": null,
+          "branches": 0,
+          "branches_covered": 0,
+          "end_line": 827,
+          "execution_count": 4,
+          "line_percent": 100.0,
+          "lines": 2,
+          "lines_covered": 2,
+          "name": "chatSession::stopClearExpiredSession(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "chatSession::stopClearExpiredSession(",
+          "start_line": 824,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 41.4,
+      "lines": 744,
+      "lines_covered": 308,
+      "name": "Session cleaner interrupt/join",
+      "requested_functions": [
+        "chatSession::stopClearExpiredSession("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 32.14,
+      "branches": 308,
+      "branches_covered": 99,
+      "file": "src/infrastructure/provider/chayns/chaynsThreadReaper.cpp",
+      "functions": [
+        {
+          "blocks": 4,
+          "blocks_executed": 4,
+          "branch_percent": 50.0,
+          "branches": 2,
+          "branches_covered": 1,
+          "end_line": 70,
+          "execution_count": 14,
+          "line_percent": 100.0,
+          "lines": 3,
+          "lines_covered": 3,
+          "name": "chaynsThreadReaper::stop()",
+          "requested": "chaynsThreadReaper::stop(",
+          "start_line": 67,
+          "state": "executed"
+        },
+        {
+          "blocks": 6,
+          "blocks_executed": 6,
+          "branch_percent": 50.0,
+          "branches": 2,
+          "branches_covered": 1,
+          "end_line": 75,
+          "execution_count": 8,
+          "line_percent": 100.0,
+          "lines": 2,
+          "lines_covered": 2,
+          "name": "chaynsThreadReaper::stop(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "chaynsThreadReaper::stop(",
+          "start_line": 72,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 77.33,
+      "lines": 150,
+      "lines_covered": 116,
+      "name": "Chayns reaper interrupt/join",
+      "requested_functions": [
+        "chaynsThreadReaper::stop("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 53.03,
+      "branches": 66,
+      "branches_covered": 35,
+      "file": "src/controllers/sinks/IoLoopResponseStream.h",
+      "functions": [
+        {
+          "blocks": 28,
+          "blocks_executed": 20,
+          "branch_percent": 50.0,
+          "branches": 12,
+          "branches_covered": 6,
+          "end_line": 64,
+          "execution_count": 8,
+          "line_percent": 91.67,
+          "lines": 12,
+          "lines_covered": 11,
+          "name": "IoLoopResponseStream::send(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >)",
+          "requested": "IoLoopResponseStream::send(",
+          "start_line": 44,
+          "state": "executed"
+        },
+        {
+          "blocks": 14,
+          "blocks_executed": 12,
+          "branch_percent": 62.5,
+          "branches": 8,
+          "branches_covered": 5,
+          "end_line": 132,
+          "execution_count": 6,
+          "line_percent": 83.33,
+          "lines": 6,
+          "lines_covered": 5,
+          "name": "IoLoopResponseStream::sendInLoop(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)",
+          "requested": "IoLoopResponseStream::sendInLoop(",
+          "start_line": 121,
+          "state": "executed"
+        },
+        {
+          "blocks": 15,
+          "blocks_executed": 13,
+          "branch_percent": 66.67,
+          "branches": 6,
+          "branches_covered": 4,
+          "end_line": 145,
+          "execution_count": 8,
+          "line_percent": 100.0,
+          "lines": 7,
+          "lines_covered": 7,
+          "name": "IoLoopResponseStream::closeInLoop()",
+          "requested": "IoLoopResponseStream::closeInLoop(",
+          "start_line": 134,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 85.45,
+      "lines": 55,
+      "lines_covered": 47,
+      "name": "Streaming disconnect boundary",
+      "requested_functions": [
+        "IoLoopResponseStream::send(",
+        "IoLoopResponseStream::sendInLoop(",
+        "IoLoopResponseStream::closeInLoop("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 7.83,
+      "branches": 868,
+      "branches_covered": 68,
+      "file": "src/controllers/AiApiController.cc",
+      "functions": [
+        {
+          "blocks": 270,
+          "blocks_executed": 0,
+          "branch_percent": 0.0,
+          "branches": 174,
+          "branches_covered": 0,
+          "end_line": 286,
+          "execution_count": 0,
+          "line_percent": 0.0,
+          "lines": 71,
+          "lines_covered": 0,
+          "name": "AiApiController::chaynsapichat(std::shared_ptr<drogon::HttpRequest> const&, std::function<void (std::shared_ptr<drogon::HttpResponse> const&)>&&)",
+          "requested": "AiApiController::chaynsapichat(",
+          "start_line": 189,
+          "state": "not_executed"
+        },
+        {
+          "blocks": 303,
+          "blocks_executed": 0,
+          "branch_percent": 0.0,
+          "branches": 202,
+          "branches_covered": 0,
+          "end_line": 422,
+          "execution_count": 0,
+          "line_percent": 0.0,
+          "lines": 77,
+          "lines_covered": 0,
+          "name": "AiApiController::responsesCreate(std::shared_ptr<drogon::HttpRequest> const&, std::function<void (std::shared_ptr<drogon::HttpResponse> const&)>&&)",
+          "requested": "AiApiController::responsesCreate(",
+          "start_line": 320,
+          "state": "not_executed"
+        }
+      ],
+      "line_percent": 14.06,
+      "lines": 320,
+      "lines_covered": 45,
+      "name": "HTTP Controller Chat/Responses route edge",
+      "requested_functions": [
+        "AiApiController::chaynsapichat(",
+        "AiApiController::responsesCreate("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 24.46,
+      "branches": 3315,
+      "branches_covered": 811,
+      "file": "src/infrastructure/provider/retool/retoolapi.cpp",
+      "functions": [
+        {
+          "blocks": 997,
+          "blocks_executed": 301,
+          "branch_percent": 32.7,
+          "branches": 474,
+          "branches_covered": 155,
+          "end_line": 953,
+          "execution_count": 18,
+          "line_percent": 62.31,
+          "lines": 130,
+          "lines_covered": 81,
+          "name": "retoolapi::requestWorkflow(provider::ProviderRequest const&, provider::ProviderCallContext&)",
+          "requested": "retoolapi::requestWorkflow(",
+          "start_line": 785,
+          "state": "executed"
+        },
+        {
+          "blocks": 1193,
+          "blocks_executed": 334,
+          "branch_percent": 17.18,
+          "branches": 1385,
+          "branches_covered": 238,
+          "end_line": 1413,
+          "execution_count": 6,
+          "line_percent": 36.68,
+          "lines": 379,
+          "lines_covered": 139,
+          "name": "retoolapi::requestAgent(provider::ProviderRequest const&, provider::ProviderCallContext&)",
+          "requested": "retoolapi::requestAgent(",
+          "start_line": 955,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 50.74,
+      "lines": 1011,
+      "lines_covered": 513,
+      "name": "Retool workflow/agent upstream paths",
+      "requested_functions": [
+        "retoolapi::requestWorkflow(",
+        "retoolapi::requestAgent("
+      ],
+      "state": "instrumented"
+    },
+    {
+      "branch_percent": 57.61,
+      "branches": 184,
+      "branches_covered": 106,
+      "file": "src/runtime/AppContext.cpp",
+      "functions": [
+        {
+          "blocks": 21,
+          "blocks_executed": 18,
+          "branch_percent": 71.43,
+          "branches": 14,
+          "branches_covered": 10,
+          "end_line": 98,
+          "execution_count": 34,
+          "line_percent": 100.0,
+          "lines": 6,
+          "lines_covered": 6,
+          "name": "lifecycle::AppContext::shutdown(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >)",
+          "requested": "lifecycle::AppContext::shutdown(",
+          "start_line": 90,
+          "state": "executed"
+        }
+      ],
+      "line_percent": 100.0,
+      "lines": 55,
+      "lines_covered": 55,
+      "name": "Process shutdown orchestration after Drogon run",
+      "requested_functions": [
+        "lifecycle::AppContext::shutdown("
+      ],
+      "state": "instrumented"
+    }
+  ]
+}

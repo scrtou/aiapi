@@ -1,14 +1,13 @@
 #include <sessionManager/core/Session.h>
 #include <sessionManager/continuity/ResponseIndex.h>
 #include <time.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 #include <json/json.h>
 #include <apiManager/Apicomn.h>
-#include <tools/ZeroWidthEncoder.h>
+#include <platform/ZeroWidthEncoder.h>
 #include <random>
 #include <chrono>
 #include <sessionManager/core/SessionCodec.h>
-using namespace drogon;
 
 namespace {
 std::string compactJson(const Json::Value& value)

@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-#include <apipoint/chaynsapi/ChaynsMessageCorrelation.h>
-#include <apipoint/chaynsapi/ChaynsModelCatalog.h>
+#include <infrastructure/provider/chayns/ChaynsMessageCorrelation.h>
+#include <infrastructure/provider/chayns/ChaynsModelCatalog.h>
 
 namespace {
 

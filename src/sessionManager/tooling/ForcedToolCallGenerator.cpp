@@ -1,7 +1,7 @@
 #include <sessionManager/tooling/ForcedToolCallGenerator.h>
 #include <sessionManager/tooling/BridgeHelpers.h>
 #include <sessionManager/tooling/ToolDefinitionResolver.h>
-#include <drogon/drogon.h>
+#include <platform/Log.h>
 
 #include <algorithm>
 #include <optional>
@@ -11,7 +11,6 @@
 #include <vector>
 
 using namespace bridge;
-using namespace drogon;
 
 namespace {
 

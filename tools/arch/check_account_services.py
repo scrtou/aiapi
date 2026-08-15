@@ -19,7 +19,7 @@ for relative in (
     "accountManager/AccountRegistrationStateMachine.cpp",
     "accountManager/AccountWorkflowSupport.cpp",
     "application/account/AccountAdminUseCase.cpp",
-    "apipoint/chaynsapi/chaynsapi.cpp",
+    "infrastructure/provider/chayns/chaynsapi.cpp",
 ):
     text = (SRC / relative).read_text(errors="replace")
     for match in re.finditer(r"::\s*(?:getInstance|instance)\s*\(", text):
@@ -54,7 +54,7 @@ if "public IAccountSelector" not in account_header:
 if re.search(r"static\s+AccountManager\s*&\s*getInstance\s*\(", account_header):
     errors.append("AccountManager.h still exposes a process singleton")
 
-chayns_header = (SRC / "apipoint/chaynsapi/chaynsapi.h").read_text(errors="replace")
+chayns_header = (SRC / "infrastructure/provider/chayns/chaynsapi.h").read_text(errors="replace")
 if "IAccountSelector& accountSelector" not in chayns_header:
     errors.append("chaynsapi no longer requires an injected IAccountSelector")
 if "accountManager/accountManager.h" in chayns_header:

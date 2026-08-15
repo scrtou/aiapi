@@ -19,12 +19,6 @@
 #include <thread>
 #include <atomic>
 
-// 前向声明 类型，避免在头文件中直接
-namespace drogon {
-    class HttpRequest;
-    using HttpRequestPtr = std::shared_ptr<HttpRequest>;
-}
-
 // session_st / SessionTrackingMode / ApiType 已迁至 domain/model/SessionData.h
 #include <sessionManager/contracts/LegacySessionData.h>
 #include <platform/ThreadJoin.h>
