@@ -16,8 +16,8 @@
 
 ## 当前下一步
 
-当前是 **P7（阶段 7，拆解 GenerationService 与 AccountManager）**；P7-W1 已 DONE，
-**下一工作项为 P7-W2 Account workflows 重写**。
+当前是 **P8（阶段 8，过渡代码和 debt 清理）**；P7-W1、P7-W2 均已 DONE，
+**当前工作项为 P8-W1 过渡代码和 debt 清理（TODO，待开工）**。
 
 P5-W1 已收口：runtime 显式构造并注册 chayns/retool，Registry 发布前冻结；
 Controller、GenerationService、chatSession 与 reaper 全部改走 `IProviderRegistry`；
@@ -88,6 +88,14 @@ tooling/continuity/action-protocol support closure 迁入 `aiapi_application`，
 393 cases / 2053 assertions、全量架构门禁通过，R1=0、R3=7/2889。详见
 [`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md)。
 
+P7-W2 已收口：`AccountManager` 缩为注入、配置和启动 facade，选择/轮换、持久化 registration 状态机、
+token、registration、health 和 worker 均迁入 application 专职 source。失败 registration 固定先
+`waiting` 后 delete，HTTP/clock concrete adapter 保留 infrastructure 并由 AppWiring 在 `init()` 前注入。
+新增 Account slice gate 及内存 rollback mutation selftest；397/397 `ctest`、直接 runner 397 cases /
+2080 assertions、全量架构门禁通过，legacy source 由 20 降至 19，R1=0、R3=6/2563。详见
+[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足，下一项为
+P8-W1 过渡代码和 debt 清理。
+
 P4-W2 已于 2026-08-10 收口：C1～C8 全部 DONE。启动 27 步整体迁入 `AppContext::build()`，
 `StartupResult` 使失败可观测并支持逆序 teardown，`shutdown(deadline)` 具备绝对截止时间与幂等性，
 持线程单例经 `addOwner` 显式登记（G7 停机相关部分闭环）。新增门禁 `check_app_context.py`（A1～A5），
@@ -126,7 +134,7 @@ G5 停机 deadline 的五类 SIGTERM 集成测试、ASan/TSan 全量收口已完
 | P6-W2 | 阶段 6 | Chayns Provider 垂直切片 | [`P06-chayns-provider-slice.md`](../work-products/P06-chayns-provider-slice.md) | DONE |
 | P6-W3 | 阶段 6 | Retool Provider 垂直切片 | [`P06-retool-provider-slice.md`](../work-products/P06-retool-provider-slice.md) | DONE |
 | P7-W1 | 阶段 7 | Generation pipeline 重写 | [`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md) | DONE |
-| P7-W2 | 阶段 7 | Account workflows 重写 | selector/state machine/workers/回滚测试 | TODO |
+| P7-W2 | 阶段 7 | Account workflows 重写 | [`P07-account-workflows.md`](../work-products/P07-account-workflows.md) | DONE |
 | P8-W1 | 阶段 8 | 过渡代码和 debt 清理 | clean baseline、完整发布验证 | TODO |
 
 ## 产物保存规则

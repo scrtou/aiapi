@@ -72,6 +72,15 @@ set(AIAPI_PLATFORM_SOURCES
 )
 
 set(AIAPI_APPLICATION_SOURCES
+    accountManager/accountManager.cpp
+    accountManager/AccountWorkflowSupport.cpp
+    accountManager/AccountSelectionPolicy.cpp
+    accountManager/AccountRegistrationStateMachine.cpp
+    accountManager/AccountSelector.cpp
+    accountManager/AccountTokenWorkflow.cpp
+    accountManager/AccountRegistrationWorkflow.cpp
+    accountManager/AccountHealthWorkflow.cpp
+    accountManager/AccountWorkers.cpp
     accountManager/RetoolProvisionHealth.cpp
     application/account/AccountAdminUseCase.cpp
     application/channel/ChannelAdminUseCase.cpp
@@ -143,7 +152,6 @@ set(AIAPI_RUNTIME_SOURCES
 )
 
 set(AIAPI_LEGACY_SOURCES
-    accountManager/accountManager.cpp
     apipoint/chaynsapi/chaynsapi.cpp
     apipoint/chaynsapi/chaynsThreadReaper.cpp
     apipoint/retoolapi/retoolapi.cpp

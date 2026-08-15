@@ -45,6 +45,7 @@ python3 tools/arch/check_cycles.py --write-baseline
 | 4 | check_chayns_provider_slice | P6-W2 Chayns 重回 `session_st`、singleton 或旧 Provider lane，或丢失 Result/cancellation/thread/model capability 接线 |
 | 4 | check_retool_provider_slice | P6-W3 Retool 重回 `APIinterface/session_st`、ProviderResult/ProviderError、singleton 或 legacy registry lane，或丢失 workflow/agent/cancellation/narrow capability 接线 |
 | 4 | check_generation_pipeline_slice | P7-W1 旧大文件/GenerationService 业务成员复活、P7 source owner 回退 legacy，或请求/响应 stage 与生产 fixture 覆盖缺失 |
+| 4 | check_account_workflow_slice | P7-W2 Account workflow 回到单文件/legacy，rollback 不再 `waiting → delete`，或 selector、token、registration、health、worker stage 与回归覆盖缺失 |
 
 > 码 4 在多个脚本里都用到，但它们是**各自独立的程序**，不共享码空间；
 > workflow 中每道门禁是独立 step，不存在混淆。表里分列是为了让读者一眼看清归属。
@@ -115,12 +116,13 @@ python3 tools/arch/check_startup_wiring.py
 校验**组装根**中每条已登记的接线：注入**存在**，且**早于** `init()`。
 组装根候选由脚本内 `WIRING_SOURCES` 列出，当前为 `src/runtime/AppWiring.cpp`、`src/main.cc`，按序取第一个存在的文件。P4-W2 把接线从 `main.cc` 搬进 `AppWiring.cpp` 后，原先钉死 `src/main.cc` 的判据会在**新文件里一条规则都找不到**却仍返回 0（假绿），故改为多候选 + 同文件内比较行号。
 规则表 `REQUIRED` 为六元组 `(类, 接线名, 注入正则, init 正则, 说明, 漏接后果)`，FAIL 时打印该条各自的后果；
-另有 `REQUIRED_STATIC` 只校验存在性（无对应 `init()` 时序）。当前共 11 条：
+另有 `REQUIRED_STATIC` 只校验存在性（无对应 `init()` 时序）。当前共 13 条：
 `ChannelDbManager.context-owned construction`、`ChannelManager.setStore`、
 `ConfigDbManager.context-owned construction`、`AccountDbManager.context-owned construction`、
 `AccountBackupDbManager.context-owned construction`、`RetoolWorkspaceDbManager.context-owned construction`、
 `RetoolWorkspaceManager.constructor store injection`、`AccountManager.setStore`、
-`AccountManager.setChannelStore`、`AccountManager.setRetoolProvisionClock`、
+`AccountManager.setChannelStore`、`AccountManager.setHttpTransport`、`AccountManager.setClock`、
+`AccountManager.setRetoolProvisionClock`、
 `HealthController::setUseCase`（静态）。
 
 `ErrorStatsService` 不再属于本表：P5-W3 已将它和两个 metrics store 迁为 AppContext-owned
@@ -229,8 +231,8 @@ executor 或 `GenerationService`；这些 legacy collaborator 只允许在 concr
 
 ### `check_account_services.py`
 
-P5-W3 Account 增量门禁：AccountManager 与 `AccountAdminUseCase` 不得定位任何 singleton，
-并要求 runtime 保留 config/workspace/use-case 三组接线。
+P5-W3/P7-W2 Account 增量门禁：全部 Account workflow source 与 `AccountAdminUseCase` 不得定位任何
+singleton，并要求 runtime 保留 store/channel/config/workspace/use-case 及 HTTP/clock adapter 接线。
 
 ### `check_managed_account_services.py`
 
@@ -334,3 +336,21 @@ client rules/zero-width → emit 的顺序运行。fixture 同时锁定 bridge�
 Provider semantic error 的 `Started → Error → close` 序列。
 
 `--selftest` 不写工作树：在内存中将 facade delegation 改成空返回，同一判据必须以 rc=4 拒绝它。
+
+### `check_account_workflow_slice.py`
+
+P7-W2 Account workflow gate:
+
+```bash
+python3 tools/arch/check_account_workflow_slice.py
+python3 tools/arch/check_account_workflow_slice.py --selftest
+```
+
+它要求 Account workflow source closure 由 `aiapi_application` 唯一拥有，核心 `AccountManager.cpp`
+只保留注入、配置和启动。选择/轮换、`waiting → registering → active` 状态机、token refresh、
+registration、health 和 worker 必须留在各自 stage；rollback 中 `WAITING` 状态更新必须先于
+`deleteWaitingAccount`。测试同时固定纯 selector、状态机失败回滚、真实 fake HTTP registration/token
+路径和 worker 中断路径。
+
+`--selftest` 不写工作树：在内存中将 rollback 的 `AccountStatus::WAITING` 改为 `ACTIVE`，同一判据
+必须以 rc=4 拒绝它。

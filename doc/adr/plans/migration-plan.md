@@ -26,7 +26,7 @@
 | 可复现架构基线 | ✅ | 基于 clean commit `544bf44` 生成，CI 拒绝 dirty baseline |
 | 运行时行/分支覆盖基线 | ✅ | P1-W1 gcov 真实执行基线；不能由 R2 替代 |
 | Provider 下线 | ✅ | P2-W1/W2 已完成可恢复数据迁移、410 tombstone 和具体实现删除 |
-| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；P7-W1 将 Generation/session/tooling support closure 迁入 application，legacy source 由 38 降至 20，最终删除在 P8 |
+| 独立 CMake libraries | 🔄 | 六个正式 target 已建立；P7-W1/P7-W2 已将 Generation 与 Account workflow closure 迁入 application，legacy source 由 38 降至 19，最终删除在 P8 |
 | 单一 include 根 | ✅ | P3-W2 已完成 422/422 自有完整路径、0 CMake 子目录根和 CI 负向探针 |
 | domain 去 JsonCpp | ✅ | P3-W4 已完成 domain 模型与 JSON codec 分离，domain 层不再依赖 JsonCpp |
 | AppContext/业务单例清理 | ✅ | P4-W1～W3 与 P5-W1～W3 已完成；所有业务 Controller 只依赖注入 use case，运行期对象由 AppContext 显式持有 |
@@ -34,7 +34,7 @@
 | `src/` 全量职责审计 | ✅ | `source-audit-2026-08.md`；已逐模块/流程登记所有权和重写边界 |
 | 流程线程/错误/取消契约 | ✅ | P1-W1～W5 已建立真实入口 coverage、离线假上游、SIGTERM/积压/断连 harness；当前“不广播取消/无限 drain”等行为已登记 |
 
-**当前执行阶段：阶段 7（拆解 GenerationService 与 AccountManager）；P7-W1 已完成，当前工作项 P7-W2（Account workflows 重写）。**
+**当前执行阶段：阶段 8（收口）；P7-W1/P7-W2 已完成，下一工作项为 P8-W1（过渡代码和 debt 清理）。**
 
 P5-W1 已收口：`IProviderRegistry` 与 infrastructure `ProviderRegistry` 已落地，runtime 显式构造
 chayns/retool 并在发布前冻结 Registry；Controller、GenerationService、chatSession 和 reaper
@@ -104,7 +104,17 @@ tooling 实现。为保持 source-owner ratchet，Generation/session/tooling/con
 closure 由 legacy 迁入 `aiapi_application`，legacy sources 从 38 降至 20；P7 gate 和 CI selftest 固定该边界。
 393/393 `ctest`、直接 runner 393 cases / 2053 assertions、严格 test registration 与全量 architecture gates
 通过；R1=0、R3 从基线的 13/5006 降至 7/2889。详见
-[`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md)。下一项为 P7-W2 Account workflows。
+[`P07-generation-pipeline.md`](../work-products/P07-generation-pipeline.md)。P7-W2 已接续完成，详见下项。
+
+P7-W2 已收口：`AccountManager` 仅保留 composition/configuration，选择/轮换、registration 状态机、token、
+registration、health 和 worker 分属 application stage。状态机固定 `waiting → registering → active`，任一
+失败先恢复 `waiting` 再删除 reservation；RAII 清理 in-flight ID。HTTP transport 和 real clock 保持
+infrastructure adapter，`AppWiring` 在 `init()` 前显式注入，因而不新增 application 到 infrastructure 的
+反向内部 target edge。新增 `check_account_workflow_slice.py`（含内存 rollback mutation selftest）及纯 stage、
+fake-HTTP lifecycle、worker regression。397/397 `ctest`、直接 runner 397 cases / 2080 assertions、严格注册
+和全量 gates 通过；legacy sources 从 20 降至 19，R1=0、R3=6/2563。详见
+[`P07-account-workflows.md`](../work-products/P07-account-workflows.md)。P7 退出门禁已满足，下一项为
+P8-W1 过渡代码和 debt 清理。
 
 P4-W1 已收口：`BackgroundTaskQueue` 由三 bool + 无界队列改为四态 `State` 与 `kDefaultCapacity = 1024` 背压，`enqueue` 返回 `[[nodiscard]] EnqueueResult`，23/23 生产调用点显式处理：transport 11 处统一回 503，但只有瞬时背压（QueueFull）带 `Retry-After`，终态（ShuttingDown/Stopped）刻意不带，以免把客户端引回一个正在消失的实例；infrastructure 10 处写穿失败打 ERROR（内存态已变而磁盘态未跟进，已无处返回错误，只能保证可观测）；composition root 2 处显式 `start()`，隐式 spawn 已移除。`enqueueLegacy` 兼容 shim 已删除（生产命中 0）。新增门禁 `tools/arch/check_enqueue_result.py`（CI 第 10 个 step）：除 `[[nodiscard]]` 存在性外，还要求绑定变量被真正读取，否则 `const auto ignored = ...enqueue(...)` 会在不开 `-Werror` 的前提下惄无声息地退回静默丢弃。全量 282 用例 / 1513 断言在 normal / coverage / ASan 下一致 PASS，全部 10 个门禁 step rc=0，P1-W5 停机 harness 无回归。P4-W2 已收口，当前只允许执行 P4-W3，完成后继续下一项。
 
@@ -509,13 +519,13 @@ Retry、timeout、error mapping、metrics、polling 的协议细节继续使用�
 
 避免按“一个大文件拆成五个类”机械分配；每个组件必须有明确输入、输出和所有者。
 
-### 退出门禁
+### 退出门禁（P7-W1/W2 已满足）
 
-- R1 为 0；
-- R3 棘轮持续下降；
-- 修改过的复杂函数有分支覆盖和行为测试；
-- 不以文件行数作为唯一完成条件；
-- 旧实现删除。
+- [x] R1 为 0；
+- [x] R3 棘轮从 P7-W1 的 7/2889 继续降至 6/2563；
+- [x] 修改过的复杂函数有分支覆盖和行为测试；
+- [x] 不以文件行数作为唯一完成条件；
+- [x] 旧实现删除。
 
 #### 7.4 重写边界
 

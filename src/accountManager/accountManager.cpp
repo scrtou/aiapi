@@ -1,61 +1,19 @@
 #include <accountManager/accountManager.h>
-#include<drogon/drogon.h>
-#include <drogon/orm/Exception.h>
-#include <drogon/orm/DbClient.h>
-#include <algorithm>
-#include <cctype>
-#include <cstdlib>
-#include <optional>
-#include <chrono>
-#include <thread>
-#include <dbManager/channel/channelDbManager.h>
-#include <utils/LoginResponseLogSummary.h>
-#include <domain/policy/RetiredProviderPolicy.h>
-#include <accountManager/RetoolProvisionHealth.h>
-using namespace drogon;
-using namespace drogon::orm;
 
-// The Retool provision-health state machine moved to RetoolProvisionHealth.h/.cpp.
-// These using-declarations keep the call sites in the member functions unchanged.
-using retoolProvision::RetoolProvisionHealth;
-using retoolProvision::loadRetoolProvisionHealth;
-using retoolProvision::persistRetoolProvisionHealth;
-using retoolProvision::isRetoolProvisionCoolingDown;
-using retoolProvision::markRetoolProvisionSuccess;
-using retoolProvision::markRetoolProvisionFailure;
+#include <accountManager/AccountWorkflowSupport.h>
+
+#include <drogon/drogon.h>
+
+#include <chrono>
+#include <optional>
+#include <utility>
+
+using namespace drogon;
 
 namespace {
 
-constexpr const char* kAutoDeleteEnabledKey = "account_automation.auto_delete_enabled";
-constexpr const char* kDeleteAfterDaysKey = "account_automation.delete_after_days";
-constexpr const char* kAutoRegisterEnabledKey = "account_automation.auto_register_enabled";
-constexpr const char* kNamespaceToolBridgeEnabledKey = "tool_bridge.namespace_enabled";
-constexpr int kDefaultDeleteAfterDays = 6;
-
-AccountAutomationSettings loadAccountAutomationSettingsFromCustomConfig(const Json::Value& customConfig) {
-    AccountAutomationSettings settings;
-    if (customConfig.isMember("account_automation") && customConfig["account_automation"].isObject()) {
-        const auto& automation = customConfig["account_automation"];
-        settings.autoDeleteEnabled = automation.get("auto_delete_enabled", settings.autoDeleteEnabled).asBool();
-        settings.deleteAfterDays = automation.get("delete_after_days", settings.deleteAfterDays).asInt();
-        settings.autoRegisterEnabled = automation.get("auto_register_enabled", settings.autoRegisterEnabled).asBool();
-    }
-    if (customConfig.isMember("tool_bridge") && customConfig["tool_bridge"].isObject()) {
-        const auto& toolBridge = customConfig["tool_bridge"];
-        settings.namespaceToolBridgeEnabled = toolBridge.get(
-            "namespace_enabled", settings.namespaceToolBridgeEnabled).asBool();
-    }
-    if (settings.deleteAfterDays <= 0) {
-        settings.deleteAfterDays = kDefaultDeleteAfterDays;
-    }
-    return settings;
-}
-
-std::string boolToConfigValue(bool value) {
-    return value ? "true" : "false";
-}
-
-bool parseBoolConfigValue(const std::string& value, bool& parsed) {
+bool parseBoolConfigValue(const std::string& value, bool& parsed)
+{
     if (value == "true" || value == "1") {
         parsed = true;
         return true;
@@ -67,7 +25,8 @@ bool parseBoolConfigValue(const std::string& value, bool& parsed) {
     return false;
 }
 
-bool parsePositiveIntConfigValue(const std::string& value, int& parsed) {
+bool parsePositiveIntConfigValue(const std::string& value, int& parsed)
+{
     try {
         parsed = std::stoi(value);
         return parsed > 0;
@@ -76,226 +35,96 @@ bool parsePositiveIntConfigValue(const std::string& value, int& parsed) {
     }
 }
 
-bool shouldSkipLifecycleRefresh(const std::shared_ptr<Accountinfo_st>& account) {
-    if (!account) {
-        return false;
-    }
-    if (account->status == AccountStatus::WAITING ||
-        account->status == AccountStatus::REGISTERING) {
-        return true;
-    }
-    return false;
-}
-
-bool shouldExcludeFromPoolOnLoad(const std::shared_ptr<Accountinfo_st>& account) {
-    return shouldSkipLifecycleRefresh(account);
-}
-
-
-bool isRetoolWorkspaceActive(const RetoolWorkspaceInfo& workspace) {
-    return workspace.status != "disabled";
-}
-
-
-bool saveAccountAutomationSettingsToDb(IKeyValueConfigStore* configDbManager,
-                                       const AccountAutomationSettings& settings,
-                                       std::string* errorMessage) {
-    return configDbManager->setValues({
-        {kAutoDeleteEnabledKey, boolToConfigValue(settings.autoDeleteEnabled)},
-        {kDeleteAfterDaysKey, std::to_string(settings.deleteAfterDays)},
-        {kAutoRegisterEnabledKey, boolToConfigValue(settings.autoRegisterEnabled)},
-        {kNamespaceToolBridgeEnabledKey, boolToConfigValue(settings.namespaceToolBridgeEnabled)},
-    }, errorMessage);
-}
-
-bool splitUrl(const string& fullUrl, string& baseUrl, string& path) {
-    size_t protocolPos = fullUrl.find("://");
-    if (protocolPos == string::npos) {
-        return false;
-    }
-    size_t pathPos = fullUrl.find('/', protocolPos + 3);
-    if (pathPos == string::npos) {
-        baseUrl = fullUrl;
-        path = "/";
-    } else {
-        baseUrl = fullUrl.substr(0, pathPos);
-        path = fullUrl.substr(pathPos);
-    }
-    return true;
-}
-
-bool parseJsonBody(const std::string& body, Json::Value& out, std::string& errs) {
-    Json::CharReaderBuilder reader;
-    std::istringstream s(body);
-    return Json::parseFromStream(reader, s, &out, &errs);
-}
-
-bool isSuccessEnvelope(const Json::Value& json) {
-    return json.isObject() && json.isMember("success") && json["success"].asBool() && json.isMember("data");
-}
-
-std::string extractErrorMessageFromEnvelope(const Json::Value& json, const std::string& fallback) {
-    if (json.isObject() && json.isMember("error") && json["error"].isObject()) {
-        return json["error"].get("message", fallback).asString();
-    }
-    return fallback;
-}
-
-
-}
-
-// 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
-string getLoginServiceUrl(const string& name) {
-    // 1. 优先从配置文件读取
-    auto customConfig = drogon::app().getCustomConfig();
-    if (customConfig.isMember("login_service_urls") && customConfig["login_service_urls"].isArray()) {
-        for (const auto& service : customConfig["login_service_urls"]) {
-            if (service.isMember("name") && service["name"].asString() == name && service.isMember("url")) {
-                string url = service["url"].asString();
-                if (!url.empty()) {
-                    return url; // 返回完整的 URL，不再拼接
-                }
-            }
-        }
-    }
-
-    // 2. 其次从环境变量读取 (作为后备)
-    const char* envUrl = std::getenv("LOGIN_SERVICE_URL");
-    if (envUrl != nullptr && strlen(envUrl) > 0 &&
-        name == "chaynsapi") {
-        return string(envUrl);
-    }
-
-    // 3. 最后使用默认值 (作为后备)
-    if (name == "chaynsapi") {
-        return "http://127.0.0.1:8004/api/v1/logins";
-    }
-    
-    return ""; // 如果找不到，返回空字符串
-}
-// 从环境变量读取登录服务 URL，默认值为本地 127.0.0.1
-string getRegistServiceUrl(const string& name) {
-    // 1. 优先从配置文件读取
-    auto customConfig = drogon::app().getCustomConfig();
-    if (customConfig.isMember("regist_service_urls") && customConfig["regist_service_urls"].isArray()) {
-        for (const auto& service : customConfig["regist_service_urls"]) {
-            if (service.isMember("name") && service["name"].asString() == name && service.isMember("url")) {
-                string url = service["url"].asString();
-                if (!url.empty()) {
-                    return url; // 返回完整的 URL，不再拼接
-                }
-            }
-        }
-    }
-
-    // 2. 其次从环境变量读取 (作为后备)
-    const char* envUrl = std::getenv("REGIST_SERVICE_URL");
-    if (envUrl != nullptr && strlen(envUrl) > 0 &&
-        name == "chaynsapi") {
-        return string(envUrl);
-    }
-
-    // 3. 最后使用默认值 (作为后备)
-    if (name == "chaynsapi") {
-        return "http://127.0.0.1:8000/api/v1/workflows/register-and-login";
-    }
-    
-    return ""; // 如果找不到，返回空字符串
-}
-
-std::string getDownstreamBearerApiKey(const std::string& name) {
-    auto customConfig = drogon::app().getCustomConfig();
-    if (customConfig.isMember("downstream_service_api_keys") &&
-        customConfig["downstream_service_api_keys"].isArray()) {
-        for (const auto& service : customConfig["downstream_service_api_keys"]) {
-            if (service.isMember("name") && service["name"].asString() == name && service.isMember("api_key")) {
-                const std::string key = service["api_key"].asString();
-                if (!key.empty()) {
-                    return key;
-                }
-            }
-        }
-    }
-
-    const char* envUrl = std::getenv("DOWNSTREAM_SERVICE_API_KEY");
-    if (envUrl != nullptr && strlen(envUrl) > 0) {
-        return std::string(envUrl);
-    }
-
-    const char* legacyEnv = std::getenv("AIAPI_TOOL_BEARER_KEY");
-    if (legacyEnv != nullptr && strlen(legacyEnv) > 0) {
-        return std::string(legacyEnv);
-    }
-
-    return "";
-}
-
-// R4 试点 C：未注入实现时的 Null Object，与试点 B 的 NullChannelStore 同构。
-// 不崩溃（避免把接线遗漏升级成生产事故），但每次调用都留可诊断日志。
-//
-// 位置说明：本文件开头第 25 行起有一个跨越 300+ 行的匿名 namespace（至 357 行闭合）。
-// 成员函数定义若落在其内部，会触发
-// "definition of AccountManager::xxx is not in namespace enclosing AccountManager"。
-// 故这里另起独立匿名 namespace，且整块置于该闭合之后、init() 之前。
-namespace {
-class NullAccountStore : public IAccountStore
+class NullAccountStore final : public IAccountStore
 {
-    static void complain()
-    {
-        LOG_ERROR << "[账号管理] store 未注入（应由 main.cc 在 init() 前调 setStore）";
-    }
   public:
-    bool addAccount(struct Accountinfo_st) override { complain(); return false; }
-    bool updateAccount(struct Accountinfo_st) override { complain(); return false; }
-    bool deleteAccount(std::string, std::string) override { complain(); return false; }
-    bool isTableExist() override { complain(); return false; }
-    void createTable() override { complain(); }
-    void checkAndUpgradeTable() override { complain(); }
-    std::list<Accountinfo_st> getAccountDBList() override { complain(); return {}; }
-    int createWaitingAccount(std::string) override { complain(); return -1; }
-    bool activateAccount(int, struct Accountinfo_st) override { complain(); return false; }
-    bool deleteWaitingAccount(int) override { complain(); return false; }
-    int countAccountsByChannel(std::string, bool) override { complain(); return 0; }
-    bool updateAccountStatusById(int, std::string) override { complain(); return false; }
-    std::string getAccountStatusByUsername(std::string, std::string) override { complain(); return ""; }
+    bool addAccount(Accountinfo_st) override { return false; }
+    bool updateAccount(Accountinfo_st) override { return false; }
+    bool deleteAccount(std::string, std::string) override { return false; }
+    bool isTableExist() override { return false; }
+    void createTable() override {}
+    void checkAndUpgradeTable() override {}
+    std::list<Accountinfo_st> getAccountDBList() override { return {}; }
+    int createWaitingAccount(std::string) override { return -1; }
+    bool activateAccount(int, Accountinfo_st) override { return false; }
+    bool deleteWaitingAccount(int) override { return false; }
+    int countAccountsByChannel(std::string, bool) override { return 0; }
+    bool updateAccountStatusById(int, std::string) override { return false; }
+    std::string getAccountStatusByUsername(std::string, std::string) override { return {}; }
 };
 
-// 同上：channelStore 未注入时的 Null Object，与 NullAccountStore 同构。
-// 不崩溃，但每次调用留可诊断日志，便于定位接线遗漏。
-class NullChannelStoreForAccount : public IChannelStore
+class NullChannelStoreForAccount final : public IChannelStore
 {
-    static void complain()
-    {
-        LOG_ERROR << "[账号管理] channelStore 未注入（应由 main.cc 在 init() 前调 setChannelStore）";
-    }
   public:
-    bool addChannel(struct Channelinfo_st) override { complain(); return false; }
-    bool updateChannel(struct Channelinfo_st) override { complain(); return false; }
-    bool deleteChannel(int) override { complain(); return false; }
-    bool getChannel(std::string, struct Channelinfo_st&) override { complain(); return false; }
-    std::list<Channelinfo_st> getChannelList() override { complain(); return {}; }
-    bool isTableExist() override { complain(); return false; }
-    void createTable() override { complain(); }
-    void checkAndUpgradeTable() override { complain(); }
-    bool updateChannelStatus(std::string, bool) override { complain(); return false; }
+    bool addChannel(Channelinfo_st) override { return false; }
+    bool updateChannel(Channelinfo_st) override { return false; }
+    bool deleteChannel(int) override { return false; }
+    bool getChannel(std::string, Channelinfo_st&) override { return false; }
+    std::list<Channelinfo_st> getChannelList() override { return {}; }
+    bool isTableExist() override { return false; }
+    void createTable() override {}
+    void checkAndUpgradeTable() override {}
+    bool updateChannelStatus(std::string, bool) override { return false; }
 };
 
-class NullConfigStoreForAccount : public IKeyValueConfigStore
+class NullConfigStoreForAccount final : public IKeyValueConfigStore
 {
   public:
     bool ensureTable(std::string* error) override
-    { if (error) *error = "AccountManager: config store 未注入"; return false; }
+    {
+        if (error) *error = "AccountManager: config store 未注入";
+        return false;
+    }
     std::optional<std::string> getValue(const std::string&, std::string*) override
-    { return std::nullopt; }
+    {
+        return std::nullopt;
+    }
     bool setValues(const std::map<std::string, std::string>&, std::string* error) override
-    { if (error) *error = "AccountManager: config store 未注入"; return false; }
+    {
+        if (error) *error = "AccountManager: config store 未注入";
+        return false;
+    }
 };
 
-}  // namespace（NullAccountStore 专用）
+// AccountManager is an application service.  Concrete network/time adapters
+// belong to infrastructure and are injected by AppWiring before init(); these
+// fallbacks make an omitted test injection safe without recreating a reverse
+// application -> infrastructure target edge.
+class UnconfiguredAccountHttpTransport final : public account::IAccountHttpTransport
+{
+  public:
+    account::HttpResult send(const std::string&, const drogon::HttpRequestPtr&, double) override
+    {
+        return {drogon::ReqResult::BadResponse, nullptr};
+    }
+};
+
+class UnconfiguredAccountClock final : public account::IAccountClock
+{
+  public:
+    void sleepFor(std::chrono::milliseconds) override {}
+};
+
+}  // namespace
+
+AccountManager::AccountManager()
+    : httpTransport_(std::make_shared<UnconfiguredAccountHttpTransport>()),
+      clock_(std::make_shared<UnconfiguredAccountClock>()),
+      registrationStateMachine_(std::make_unique<account::AccountRegistrationStateMachine>())
+{
+    static NullConfigStoreForAccount nullConfig;
+    configStore_ = std::shared_ptr<IKeyValueConfigStore>(&nullConfig, [](IKeyValueConfigStore*) {});
+}
+
+AccountManager::~AccountManager()
+{
+    stopBackgroundThreads();
+}
 
 void AccountManager::setStore(std::shared_ptr<IAccountStore> store)
 {
     accountDbManager = std::move(store);
+    registrationStateMachine_->setStore(accountDbManager.get());
 }
 
 void AccountManager::setChannelStore(std::shared_ptr<IChannelStore> store)
@@ -321,7 +150,7 @@ void AccountManager::setRetoolProvisionClock(
 
 void AccountManager::setConfigStore(std::shared_ptr<IKeyValueConfigStore> store)
 {
-    configStore_ = std::move(store);
+    if (store) configStore_ = std::move(store);
 }
 
 void AccountManager::setRetoolWorkspaceServices(
@@ -337,194 +166,71 @@ account::HttpResult AccountManager::sendHttpRequest(
     const drogon::HttpRequestPtr& request,
     double timeoutSeconds) const
 {
-    if (!httpTransport_)
-    {
-        return {drogon::ReqResult::BadResponse, nullptr};
-    }
-    return httpTransport_->send(baseUrl, request, timeoutSeconds);
-}
-
-IChannelStore* AccountManager::requireChannelStore()
-{
-    if (channelStore)
-        return channelStore.get();
-    static NullChannelStoreForAccount nullStore;
-    LOG_ERROR << "[账号管理] channelStore 未注入，回退 NullChannelStoreForAccount";
-    // 自定义空删除器：静态存储期对象不能被 shared_ptr 释放。
-    channelStore = std::shared_ptr<IChannelStore>(&nullStore, [](IChannelStore*){});
-    return channelStore.get();
+    return httpTransport_ ? httpTransport_->send(baseUrl, request, timeoutSeconds)
+                          : account::HttpResult{drogon::ReqResult::BadResponse, nullptr};
 }
 
 IAccountStore* AccountManager::requireStore()
 {
-    if (accountDbManager)
-        return accountDbManager.get();
+    if (accountDbManager) return accountDbManager.get();
     static NullAccountStore nullStore;
     LOG_ERROR << "[账号管理] store 未注入，回退 NullAccountStore";
-    // 自定义空删除器：nullStore 是静态存储期对象，不能被 shared_ptr 释放。
-    accountDbManager = std::shared_ptr<IAccountStore>(&nullStore, [](IAccountStore*){});
+    accountDbManager = std::shared_ptr<IAccountStore>(&nullStore, [](IAccountStore*) {});
+    registrationStateMachine_->setStore(accountDbManager.get());
     return accountDbManager.get();
 }
 
-AccountManager::AccountManager()
-    : httpTransport_(account::makeDrogonAccountHttpTransport()),
-      clock_(account::makeRealAccountClock())
+IChannelStore* AccountManager::requireChannelStore()
 {
-    static NullConfigStoreForAccount nullConfig;
-    configStore_ = std::shared_ptr<IKeyValueConfigStore>(
-        &nullConfig, [](IKeyValueConfigStore*) {});
-}
-bool AccountManager::backgroundSleep(std::chrono::milliseconds duration)
-{
-    std::unique_lock<std::mutex> lock(backgroundWakeMutex_);
-    // wait_for 带谓词：睡满周期返回 false（谓词仍为假），被停机唤醒返回 true。
-    // 这里取反，把返回值语义统一成“是否应继续下一轮”。
-    const bool stopped = backgroundWakeCv_.wait_for(
-        lock, duration, [this] { return backgroundStopRequested_.load(); });
-    return !stopped;
-}
-
-void AccountManager::stopBackgroundThreads()
-{
-    (void)stopBackgroundThreads(std::chrono::steady_clock::time_point::max());
-}
-
-bool AccountManager::stopBackgroundThreads(std::chrono::steady_clock::time_point deadline)
-{
-    // 修改等待谓词时与 backgroundSleep() 使用同一把锁，避免以下丢失唤醒：
-    // worker 已检查谓词但尚未真正进入 wait，stop 线程在此窗口 notify。
-    // 置位是幂等的，但不能在已经请求过停机时直接 return：上一次限时停机
-    // 可能留下 joinable 线程，后续调用必须仍能把它收割掉。
-    {
-        std::lock_guard<std::mutex> lock(backgroundWakeMutex_);
-        backgroundStopRequested_.store(true);
-    }
-
-    // 两组唤醒缺一不可：
-    //   1) backgroundWakeCv_ —— 唤醒三个定时巡检线程的可中断睡眠（最长 5 小时）；
-    //   2) accountListNeedUpdateCondition —— 唤醒阻塞在待更新队列上的工作线程，
-    //      其等待谓词已从“队列非空”扩展为“队列非空 || 已请求停机”。
-    backgroundWakeCv_.notify_all();
-    {
-        std::lock_guard<std::mutex> lock(accountListNeedUpdateMutex);
-        accountListNeedUpdateCondition.notify_all();
-    }
-
-    bool allJoined = true;
-    auto joinIfRunning = [&](std::thread& t,
-                             const platform::ThreadCompletionPtr& done,
-                             const char* name) {
-        if (t.joinable()) {
-            bool joined = true;
-            if (deadline != std::chrono::steady_clock::time_point::max() && done) {
-                joined = platform::joinUntil(t, *done, deadline);
-            } else {
-                t.join();
-            }
-            if (joined) {
-                LOG_INFO << "[账户管理] 后台线程已回收: " << name;
-            } else {
-                allJoined = false;
-                LOG_WARN << "[账户管理] 后台线程未在停机预算内退出，未 join、未 detach: "
-                         << name;
-            }
-        }
-    };
-    joinIfRunning(tokenCheckThread_, tokenCheckDone_, "令牌巡检");
-    joinIfRunning(tokenUpdateWorker_, tokenUpdateDone_, "令牌更新工作线程");
-    joinIfRunning(accountCountThread_, accountCountDone_, "账号数量巡检");
-    joinIfRunning(accountTypeThread_, accountTypeDone_, "账号类型巡检");
-    if (allJoined) {
-        tokenCheckDone_.reset();
-        tokenUpdateDone_.reset();
-        accountCountDone_.reset();
-        accountTypeDone_.reset();
-    }
-    return allJoined;
-}
-
-AccountManager::~AccountManager()
-{
-    // 兜底：正常路径由 main.cc 在停机阶段显式调用，此处防止漏调。
-    stopBackgroundThreads();
+    if (channelStore) return channelStore.get();
+    static NullChannelStoreForAccount nullStore;
+    LOG_ERROR << "[账号管理] channelStore 未注入，回退 NullChannelStoreForAccount";
+    channelStore = std::shared_ptr<IChannelStore>(&nullStore, [](IChannelStore*) {});
+    return channelStore.get();
 }
 
 void AccountManager::loadAccountAutomationSettings()
 {
-    const auto defaultSettings = loadAccountAutomationSettingsFromCustomConfig(drogon::app().getCustomConfig());
-    AccountAutomationSettings settings = defaultSettings;
-
-    auto* configDbManager = configStore_.get();
-    std::string errorMessage;
+    const auto defaults = account::workflow::loadAutomationSettingsFromCustomConfig(
+        drogon::app().getCustomConfig());
+    auto settings = defaults;
+    auto* configStore = configStore_.get();
+    std::string error;
     bool loadedFromDb = false;
 
-    if (!configDbManager->ensureTable(&errorMessage)) {
-        LOG_WARN << "[账户管理] " << errorMessage << "，账号自动化策略回退为配置文件默认值";
+    if (!configStore->ensureTable(&error)) {
+        LOG_WARN << "[账户管理] " << error << "，账号自动化策略回退为配置文件默认值";
     } else {
-        bool hasAnyStoredValue = false;
-        bool shouldSeedDefaults = false;
-
-        if (auto storedAutoDelete = configDbManager->getValue(kAutoDeleteEnabledKey, &errorMessage)) {
-            bool parsedValue = defaultSettings.autoDeleteEnabled;
-            if (parseBoolConfigValue(*storedAutoDelete, parsedValue)) {
-                settings.autoDeleteEnabled = parsedValue;
-                hasAnyStoredValue = true;
+        bool hasStored = false;
+        bool seedDefaults = false;
+        const auto loadBool = [&](const char* key, bool& value) {
+            if (const auto stored = configStore->getValue(key, &error)) {
+                if (parseBoolConfigValue(*stored, value)) {
+                    hasStored = true;
+                } else {
+                    seedDefaults = true;
+                }
+            }
+        };
+        loadBool("account_automation.auto_delete_enabled", settings.autoDeleteEnabled);
+        loadBool("account_automation.auto_register_enabled", settings.autoRegisterEnabled);
+        loadBool("tool_bridge.namespace_enabled", settings.namespaceToolBridgeEnabled);
+        if (const auto stored = configStore->getValue("account_automation.delete_after_days", &error)) {
+            if (parsePositiveIntConfigValue(*stored, settings.deleteAfterDays)) {
+                hasStored = true;
             } else {
-                shouldSeedDefaults = true;
-                LOG_WARN << "[账户管理] 配置项 " << kAutoDeleteEnabledKey << " 非法，使用默认值覆盖";
+                seedDefaults = true;
+                settings.deleteAfterDays = defaults.deleteAfterDays;
             }
         }
-
-        if (auto storedDeleteDays = configDbManager->getValue(kDeleteAfterDaysKey, &errorMessage)) {
-            int parsedValue = defaultSettings.deleteAfterDays;
-            if (parsePositiveIntConfigValue(*storedDeleteDays, parsedValue)) {
-                settings.deleteAfterDays = parsedValue;
-                hasAnyStoredValue = true;
-            } else {
-                shouldSeedDefaults = true;
-                LOG_WARN << "[账户管理] 配置项 " << kDeleteAfterDaysKey << " 非法，使用默认值覆盖";
-            }
-        }
-
-        if (auto storedAutoRegister = configDbManager->getValue(kAutoRegisterEnabledKey, &errorMessage)) {
-            bool parsedValue = defaultSettings.autoRegisterEnabled;
-            if (parseBoolConfigValue(*storedAutoRegister, parsedValue)) {
-                settings.autoRegisterEnabled = parsedValue;
-                hasAnyStoredValue = true;
-            } else {
-                shouldSeedDefaults = true;
-                LOG_WARN << "[账户管理] 配置项 " << kAutoRegisterEnabledKey << " 非法，使用默认值覆盖";
-            }
-        }
-
-        if (auto storedNamespaceBridge = configDbManager->getValue(kNamespaceToolBridgeEnabledKey, &errorMessage)) {
-            bool parsedValue = defaultSettings.namespaceToolBridgeEnabled;
-            if (parseBoolConfigValue(*storedNamespaceBridge, parsedValue)) {
-                settings.namespaceToolBridgeEnabled = parsedValue;
-                hasAnyStoredValue = true;
-            } else {
-                shouldSeedDefaults = true;
-                LOG_WARN << "[账户管理] 配置项 " << kNamespaceToolBridgeEnabledKey << " 非法，使用默认值覆盖";
-            }
-        }
-
-        if (!errorMessage.empty()) {
-            LOG_WARN << "[账户管理] " << errorMessage << "，账号自动化策略部分回退为配置文件默认值";
-            errorMessage.clear();
-        }
-
-        if (!hasAnyStoredValue) {
-            shouldSeedDefaults = true;
-            settings = defaultSettings;
-            LOG_INFO << "[账户管理] 配置表中未找到账号自动化策略，使用配置文件默认值初始化到数据库";
+        if (!hasStored) {
+            seedDefaults = true;
+            settings = defaults;
         } else {
             loadedFromDb = true;
         }
-
-        if (shouldSeedDefaults) {
-            if (!saveAccountAutomationSettingsToDb(configDbManager, settings, &errorMessage)) {
-                LOG_WARN << "[账户管理] 初始化账号自动化配置到数据库失败: " << errorMessage;
-            }
+        if (seedDefaults && !account::workflow::saveAutomationSettings(*configStore, settings, &error)) {
+            LOG_WARN << "[账户管理] 初始化账号自动化配置到数据库失败: " << error;
         }
     }
 
@@ -532,11 +238,7 @@ void AccountManager::loadAccountAutomationSettings()
         std::lock_guard<std::mutex> lock(accountAutomationSettingsMutex_);
         accountAutomationSettings_ = settings;
     }
-    LOG_INFO << "[账户管理] 自动化策略已加载(" << (loadedFromDb ? "db" : "config")
-             << "): autoDeleteEnabled=" << settings.autoDeleteEnabled
-             << ", deleteAfterDays=" << settings.deleteAfterDays
-             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled
-             << ", namespaceToolBridgeEnabled=" << settings.namespaceToolBridgeEnabled;
+    LOG_INFO << "[账户管理] 自动化策略已加载(" << (loadedFromDb ? "db" : "config") << ")";
 }
 
 AccountAutomationSettings AccountManager::getAccountAutomationSettings() const
@@ -546,1940 +248,48 @@ AccountAutomationSettings AccountManager::getAccountAutomationSettings() const
 }
 
 bool AccountManager::updateAccountAutomationSettings(const AccountAutomationSettings& settings,
-                                                    bool persistToConfig,
-                                                    std::string* errorMessage)
+                                                     bool persistToConfig,
+                                                     std::string* errorMessage)
 {
     if (settings.deleteAfterDays <= 0) {
-        if (errorMessage) {
-            *errorMessage = "deleteAfterDays 必须为正整数";
-        }
+        if (errorMessage) *errorMessage = "deleteAfterDays 必须为正整数";
         return false;
     }
-
     if (persistToConfig) {
-        auto* configDbManager = configStore_.get();
-        if (!configDbManager->ensureTable(errorMessage)) {
-            return false;
-        }
-        if (!saveAccountAutomationSettingsToDb(configDbManager, settings, errorMessage)) {
+        if (!configStore_->ensureTable(errorMessage) ||
+            !account::workflow::saveAutomationSettings(*configStore_, settings, errorMessage)) {
             return false;
         }
     }
-
     {
         std::lock_guard<std::mutex> lock(accountAutomationSettingsMutex_);
         accountAutomationSettings_ = settings;
     }
-
-    LOG_INFO << "[账户管理] 自动化策略已更新并保存到数据库: autoDeleteEnabled=" << settings.autoDeleteEnabled
-             << ", deleteAfterDays=" << settings.deleteAfterDays
-             << ", autoRegisterEnabled=" << settings.autoRegisterEnabled;
     return true;
 }
 
 void AccountManager::init()
 {
     LOG_INFO << "[账户管理] 初始化开始";
-    // R4 试点 C：不再自取 AccountDbManager 单例。store 由 main.cc 在 init() 前注入。
-    // 未注入时 requireStore() 回退 NullAccountStore 并打错误日志，便于定位接线遗漏。
-    // 此处提前调用一次，是为了让「接线遗漏」在启动阶段就出现在日志里，
-    // 而不是等到某个业务分支才暴露。所有实际访问也都经由 requireStore()（步骤 88）。
-    (void)requireStore();
-    if(!requireStore()->isTableExist())
-    {
-        requireStore()->createTable();
-    }
-    else
-    {
-        requireStore()->checkAndUpgradeTable();
+    auto* store = requireStore();
+    if (!store->isTableExist()) {
+        store->createTable();
+    } else {
+        store->checkAndUpgradeTable();
     }
     loadAccountAutomationSettings();
     loadAccount();
-    auto customConfig = app().getCustomConfig();
-    const bool enableBackgroundThreads =
-        !customConfig.isMember("account_background_threads_enabled") ||
-        customConfig["account_background_threads_enabled"].asBool();
-    if (enableBackgroundThreads)
-    {
-        // 旧方案：直接触发一次令牌更新（已保留注释以便排查）
+
+    const auto config = app().getCustomConfig();
+    const bool startWorkers = !config.isMember("account_background_threads_enabled") ||
+        config["account_background_threads_enabled"].asBool();
+    if (startWorkers) {
         checkUpdateTokenthread();
         waitUpdateAccountTokenThread();
-        //checkAccountCountThread();  // 已改为事件驱动，不再定时检查
-        checkAccountTypeThread();   // 已改为事件驱动，不再定时检查
-    }
-    else
-    {
-        LOG_WARN << "[账户管理] account_background_threads_enabled=false，跳过后台线程启动";
-    }
-    LOG_INFO << "[账户管理] 配置信息:";
-    const string fullUrl = getLoginServiceUrl("chaynsapi");
-    const string fullUrl1 = getRegistServiceUrl("chaynsapi");
-    LOG_INFO << "[账户管理] 登录服务URL: " << fullUrl;
-    LOG_INFO << "[账户管理] 注册服务URL: " << fullUrl1;
-    const string downstreamKey = getDownstreamBearerApiKey("chaynsapi");
-    LOG_INFO << "[账户管理] 下游 Bearer API Key: " << (downstreamKey.empty() ? "未配置" : "已配置");
-    LOG_INFO << "[账户管理] 初始化完成";
-}
-
-
- 
-void AccountManager::loadAccount()
-{
-    // 重载语义：accountPoolMap（调度池）与 accountList（apiName->userName 二级索引）必须一起失效。
-    // 历史实现只清 accountPoolMap，导致 accountList 残留「DB 已删、内存仍在」的幽灵账号：
-    // 数据库记录消失后不会再回填索引，但旧索引本身没有任何清理入口。
-    // 幽灵条目会被 getAccountList() 的所有消费者读到（例如健康探针账号计数和账号列表接口）。
-    // 在同一临界区内原子清空两者，避免读到「池空索引旧」的中间态。
-    // 注意：accountListMutex 是非递归 std::mutex，addAccount() 内部会自行加锁，
-    // 因此这里必须用独立作用域，锁不得跨到下面的加载调用。
-    {
-        std::lock_guard<std::mutex> lock(accountListMutex);
-        accountPoolMap.clear();
-        accountList.clear();
-    }
-    LOG_INFO << "[账户管理] 加载账户开始";
-    // 旧设计备注：可从配置文件加载账号，当前优先从数据库加载
-    if(requireStore()->isTableExist())
-    {
-        loadAccountFromDatebase();
-    }
-    else
-    {
-        loadAccountFromConfig();
-    }
-
-    for(auto& apiName : accountPoolMap)
-    {
-        LOG_INFO << "[账户管理] API名称: " << apiName.first << ", 账户队列大小: " << apiName.second->size();
-
-    }
-    LOG_INFO << "[账户管理] 加载账户完成";
-    // 调试入口：如需排查账号池分配，可临时开启打印
-}
-void AccountManager::loadAccountFromConfig()
-{
-    LOG_INFO << "[账户管理] 从配置文件加载账户开始";
-     auto customConfig = app().getCustomConfig();
-    auto configAccountList = customConfig["account"];
-
-    // 将配置中的账号逐条写入内存账号池，供调度器按权重获取
-    for(auto& account : configAccountList)
-    {
-        auto apiName =account["apiname"].empty()?"":account["apiname"].asString();
-        auto userName = account["username"].empty()?"":account["username"].asString();
-        auto passwd = account["passwd"].empty()?"":account["passwd"].asString();
-        auto authToken =account["authToken"].empty()?"":account["authToken"].asString();
-        auto useCount = account["usecount"].empty()?0:account["usecount"].asInt();
-        auto tokenStatus = account["tokenStatus"].empty()?false:account["tokenStatus"].asBool();
-        auto accountStatus = account["accountStatus"].empty()?false:account["accountStatus"].asBool();
-        auto userTobitId = account["usertobitid"].empty()?0:account["usertobitid"].asInt();
-        auto personId = account["personId"].empty()?"":account["personId"].asString();
-        auto createTime = account["createTime"].empty()?"":account["createTime"].asString();
-        auto accountType = account["accountType"].empty()?"free":account["accountType"].asString();
-        auto workspaceUacId = account["workspaceUacId"].empty()
-            ? 0
-            : account["workspaceUacId"].asInt64();
-        addAccount(apiName,userName,passwd,authToken,useCount,tokenStatus,accountStatus,
-                   userTobitId,personId,createTime,accountType,
-                   AccountStatus::ACTIVE,workspaceUacId);
-    }
-    LOG_INFO << "[账户管理] 从配置文件加载账户完成";
-}
-void AccountManager::addAccount(string apiName,string userName,string passwd,string authToken,int useCount,bool tokenStatus,bool accountStatus,int userTobitId,string personId,string createTime,string accountType,string status,std::int64_t workspaceUacId)
-{
-    if (retired_provider::isRetiredProviderKey(apiName)) {
-        LOG_ERROR << "[账户管理] 拒绝加载已退役 Provider 账号: apiName=" << apiName;
-        return;
-    }
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    auto account = make_shared<Accountinfo_st>(apiName,userName,passwd,authToken,useCount,
-        tokenStatus,accountStatus,userTobitId,personId,createTime,accountType,status,
-        workspaceUacId);
-    accountList[apiName][userName] = account;
-    
-    if (shouldExcludeFromPoolOnLoad(account)) {
-        LOG_WARN << "[账户管理] 账号处于非 active 生命周期状态，已从账号池排除: "
-                 << userName << ", apiName=" << apiName
-                 << ", status=" << status
-                 << ", tokenStatus=" << tokenStatus
-                 << ", accountStatus=" << accountStatus;
-        return;
-    }
-
-    // 只有 active 状态的账号才加入账号池
-    if (status == AccountStatus::ACTIVE) {
-        if(accountPoolMap[apiName] == nullptr)
-        {
-            accountPoolMap[apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
-        }
-        accountPoolMap[apiName]->push(account);
-    } else {
-        LOG_INFO << "[账户管理] 账号 " << userName << " 状态为 " << status << ", 不加入账号池";
-    }
-}
-bool AccountManager::addAccountbyPost(Accountinfo_st accountinfo)
-{
-    if (retired_provider::isRetiredProviderKey(accountinfo.apiName)) {
-        LOG_ERROR << "[账户管理] 拒绝新增已退役 Provider 账号: apiName=" << accountinfo.apiName;
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountList[accountinfo.apiName].find(accountinfo.userName) != accountList[accountinfo.apiName].end())
-    {
-        return false;
-    }
-    // 注意：这里不能调用 addAccount，因为它也会获取锁，会导致死锁
-    auto account = make_shared<Accountinfo_st>(accountinfo.apiName,accountinfo.userName,
-        accountinfo.passwd,accountinfo.authToken,accountinfo.useCount,
-        accountinfo.tokenStatus,accountinfo.accountStatus,accountinfo.userTobitId,
-        accountinfo.personId,accountinfo.createTime,accountinfo.accountType,
-        accountinfo.status,accountinfo.workspaceUacId);
-    accountList[accountinfo.apiName][accountinfo.userName] = account;
-    
-    // 只有 active 状态的账号才加入账号池
-    if (accountinfo.status == AccountStatus::ACTIVE) {
-        if(accountPoolMap[accountinfo.apiName] == nullptr)
-        {
-            accountPoolMap[accountinfo.apiName] = make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
-        }
-        accountPoolMap[accountinfo.apiName]->push(account);
-    } else {
-        LOG_INFO << "[账户管理] 账号 " << accountinfo.userName << " 状态为 " << accountinfo.status << ", 不加入账号池";
-    }
-    return true;
-}
-void AccountManager::rebuildPoolLocked(const std::string& apiName)
-{
-    // Voraussetzung: accountListMutex wird vom Aufrufer gehalten.
-    // Der Sortierschluessel (tokenStatus, useCount) ist veraenderlich; eine bereits
-    // eingefuegte Entry bleibt bei Aenderung an falscher Heap-Position. Deshalb wird
-    // der Pool aus dem Index accountList neu aufgebaut (gleiche Filterregel wie beim Laden).
-    auto listIt = accountList.find(apiName);
-    if (listIt == accountList.end() || listIt->second.empty()) {
-        accountPoolMap.erase(apiName);
-        return;
-    }
-    auto rebuiltQueue = std::make_shared<priority_queue<shared_ptr<Accountinfo_st>,vector<shared_ptr<Accountinfo_st>>,AccountCompare>>();
-    for (const auto& [_, account] : listIt->second) {
-        if (!account || account->status != AccountStatus::ACTIVE || shouldExcludeFromPoolOnLoad(account)) {
-            continue;
-        }
-        rebuiltQueue->push(account);
-    }
-    accountPoolMap[apiName] = rebuiltQueue;
-}
-bool AccountManager::updateAccount(Accountinfo_st accountinfo)
-{
-    if (retired_provider::isRetiredProviderKey(accountinfo.apiName)) {
-        LOG_ERROR << "[账户管理] 拒绝更新已退役 Provider 账号: apiName=" << accountinfo.apiName;
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountList.find(accountinfo.apiName) == accountList.end() ||
-       accountList[accountinfo.apiName].find(accountinfo.userName) == accountList[accountinfo.apiName].end())
-    {
-        return false;
-    }
-    auto account = accountList[accountinfo.apiName][accountinfo.userName];
-    account->passwd = accountinfo.passwd;
-    account->authToken = accountinfo.authToken;
-    account->useCount = accountinfo.useCount;
-    account->tokenStatus = accountinfo.tokenStatus;
-    account->accountStatus = accountinfo.accountStatus;
-    account->userTobitId = accountinfo.userTobitId;
-    account->personId = accountinfo.personId;
-    account->accountType = accountinfo.accountType;
-    account->status = accountinfo.status;
-    account->workspaceUacId = accountinfo.workspaceUacId;
-    // Schluesselfelder (tokenStatus/useCount) koennen sich geaendert haben -> Heap neu ordnen.
-    rebuildPoolLocked(accountinfo.apiName);
-    return true;
-}
-bool AccountManager::deleteAccountbyPost(string apiName,string userName)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
-    {
-        accountList[apiName][userName]->tokenStatus = false;
-        accountList[apiName][userName]->accountStatus = false;
-        accountList[apiName].erase(userName);
-
-        // Identisch zur Neuaufbau-Logik in rebuildPoolLocked(): dort wird der leere Fall
-        // ebenfalls durch Entfernen des Pool-Eintrags behandelt. Eine zweite Kopie hier
-        // wuerde bei kuenftigen Aenderungen der Filterregel auseinanderlaufen.
-        rebuildPoolLocked(apiName);
-        return true;
-    }
-    return false;
-}
-void AccountManager::getAccount(string apiName,shared_ptr<Accountinfo_st>& account, string accountType)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountPoolMap.find(apiName) == accountPoolMap.end() || accountPoolMap[apiName] == nullptr || accountPoolMap[apiName]->empty())
-    {
-        LOG_ERROR << "[账户管理] 账户池 [" << apiName << "] 为空或未找到";
-        return;
-    }
-
-    if (accountType.empty()) {
-        account = accountPoolMap[apiName]->top();
-        accountPoolMap[apiName]->pop();
-        if(account->tokenStatus)
-        {
-            account->useCount++;
-            LOG_INFO << "[账户管理] 使用次数已增加: " << account->userName << ", 新值: " << account->useCount;
-            if (accountList.find(apiName) != accountList.end() &&
-                accountList[apiName].find(account->userName) != accountList[apiName].end()) {
-                LOG_INFO << "[账户管理] 账户列表已更新: " << accountList[apiName][account->userName]->userName << ", 新值: " << accountList[apiName][account->userName]->useCount;
-            }
-        }
-        // useCount wurde erhoeht -> Position im Heap ist veraltet; Pool neu aufbauen
-        // (der zuvor entnommene Account ist ueber accountList weiterhin enthalten).
-        rebuildPoolLocked(apiName);
-    } else {
-        vector<shared_ptr<Accountinfo_st>> tempAccounts;
-        bool found = false;
-        
-        while(!accountPoolMap[apiName]->empty()) {
-            auto currentAccount = accountPoolMap[apiName]->top();
-            accountPoolMap[apiName]->pop();
-            
-            if (currentAccount->accountType == accountType) {
-                account = currentAccount;
-                found = true;
-                if(account->tokenStatus)
-                {
-                    account->useCount++;
-                    LOG_INFO << "[账户管理] 使用次数已增加: " << account->userName << " (" << accountType << "), 新值: " << account->useCount;
-                }
-                accountPoolMap[apiName]->push(account);
-                break;
-            }
-            tempAccounts.push_back(currentAccount);
-        }
-        
-        for(const auto& acc : tempAccounts) {
-            accountPoolMap[apiName]->push(acc);
-        }
-        
-        if (!found) {
-            LOG_ERROR << "[账户管理] 未找到类型为 " << accountType << " 的账户, API: " << apiName;
-        }
-    }
-}
-
-bool AccountManager::getEligibleAccount(const string& apiName,
-                                        shared_ptr<Accountinfo_st>& account,
-                                        AccountRequirement requirement,
-                                        const set<string>& excludedUsers)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    account.reset();
-
-    auto poolIt = accountPoolMap.find(apiName);
-    if (poolIt == accountPoolMap.end() || !poolIt->second || poolIt->second->empty()) {
-        LOG_ERROR << "[账户管理] 账户池 [" << apiName << "] 为空或未找到";
-        return false;
-    }
-
-    const auto requirementName = [&]() -> const char* {
-        switch (requirement) {
-            case AccountRequirement::FreeOnly:
-                return "FreeOnly";
-            case AccountRequirement::ProOnly:
-                return "ProOnly";
-            case AccountRequirement::AnyValid:
-            default:
-                return "AnyValid";
-        }
-    };
-
-    auto isValid = [&](const shared_ptr<Accountinfo_st>& candidate) {
-        if (!candidate || excludedUsers.count(candidate->userName) > 0) {
-            return false;
-        }
-        if (!candidate->tokenStatus || !candidate->accountStatus ||
-            candidate->status != AccountStatus::ACTIVE || candidate->authToken.empty()) {
-            return false;
-        }
-        if (apiName == "chaynsapi" && candidate->accountType == "pro" &&
-            candidate->workspaceUacId <= 0) {
-            return false;
-        }
-        if (requirement == AccountRequirement::FreeOnly) {
-            return candidate->accountType == "free";
-        }
-        if (requirement == AccountRequirement::ProOnly) {
-            return candidate->accountType == "pro";
-        }
-        return true;
-    };
-
-    vector<shared_ptr<Accountinfo_st>> accounts;
-    shared_ptr<Accountinfo_st> preferred;
-    shared_ptr<Accountinfo_st> fallback;
-    auto& pool = *poolIt->second;
-
-    while (!pool.empty()) {
-        auto candidate = pool.top();
-        pool.pop();
-        accounts.push_back(candidate);
-
-        if (!isValid(candidate)) {
-            continue;
-        }
-        if (requirement != AccountRequirement::AnyValid) {
-            preferred = candidate;
-            break;
-        }
-        if (!fallback) {
-            fallback = candidate;
-        }
-        if (candidate->accountType == "free") {
-            preferred = candidate;
-            break;
-        }
-    }
-
-    account = preferred ? preferred : fallback;
-    if (account) {
-        account->useCount++;
-    }
-
-    for (const auto& candidate : accounts) {
-        pool.push(candidate);
-    }
-
-    if (!account) {
-        if (excludedUsers.empty()) {
-            LOG_ERROR << "[账户管理] 未找到满足要求的有效账户, API: " << apiName
-                      << ", 要求: " << requirementName();
-        } else {
-            LOG_WARN << "[账户管理] 未找到可切换的其它有效账户, API: " << apiName
-                     << ", 要求: " << requirementName()
-                     << ", 已排除: " << excludedUsers.size();
-        }
-        return false;
-    }
-
-    LOG_INFO << "[账户管理] 已选择有效账户: " << account->userName
-             << " (" << account->accountType << "), 要求: " << requirementName()
-             << ", 新使用次数: " << account->useCount;
-    return true;
-}
-
-void AccountManager::getAccountByUserName(const string& apiName,
-                                          const string& userName,
-                                          shared_ptr<Accountinfo_st>& account)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if (accountList.find(apiName) != accountList.end() &&
-        accountList[apiName].find(userName) != accountList[apiName].end()) {
-        account = accountList[apiName][userName];
-        if (account && account->tokenStatus) {
-            account->useCount++;
-            LOG_INFO << "[账户管理] 按用户名获取账户: 使用次数已增加 " << account->userName << ", 新值: " << account->useCount;
-        }
-    } else {
-        LOG_ERROR << "[账户管理] 按用户名获取账户: 未找到账户 apiName=" << apiName << ", userName=" << userName;
-        account = nullptr;
-    }
-}
-void AccountManager::checkAccount()
-{
-    LOG_INFO << "[账户管理] 检查账户开始";
-    // 预留检查点：可在此加入 accountList 与账号池一致性校验
-    // 将配置中的账号逐条写入内存账号池，供调度器按权重获取
-    LOG_INFO << "[账户管理] 检查账户完成";
-}   
-void AccountManager::refreshAccountQueue(string apiName)
-{
-    shared_ptr<Accountinfo_st> account = accountPoolMap[apiName]->top();
-    accountPoolMap[apiName]->pop();
-    accountPoolMap[apiName]->push(account);
-}
-void AccountManager::printAccountPoolMap()
-{
-    LOG_INFO << "[账户管理] 打印账户池映射开始";
-    for(auto& apiName : accountPoolMap)
-    {
-        LOG_INFO << "[账户管理] API名称: " << apiName.first << ", 账户队列大小: " << apiName.second->size();
-        auto tempQueue = *apiName.second;
-       while(!tempQueue.empty())
-       {
-            auto account = tempQueue.top();
-            LOG_INFO << "[账户管理] 账户摘要: userNamePresent=" << !account->userName.empty()
-                     << ", passwordPresent=" << !account->passwd.empty();
-            LOG_INFO << "[账户管理] Token状态: " << account->tokenStatus;
-            LOG_INFO << "[账户管理] 账户状态: " << account->accountStatus;
-            LOG_INFO << "[账户管理] 用户 TobitId 已提供=" << (account->userTobitId != 0);
-            LOG_INFO << "[账户管理] 使用次数: " << account->useCount;
-            LOG_INFO << "[账户管理] 认证 Token 已提供=" << !account->authToken.empty();
-            LOG_INFO << "[账户管理] --------------------------------"; 
-            tempQueue.pop();
-       }
-    }
-    LOG_INFO << "[账户管理] 打印账户池映射完成";
-}
-bool AccountManager::checkChaynsToken(string token)
-{
-    LOG_INFO << "[账户管理] 开始校验 Chayns 令牌";
-    auto request = HttpRequest::newHttpRequest();
-    request->setMethod(HttpMethod::Get);
-    request->setPath("/AccountService/v1.0/Chayns/User");
-    request->addHeader("Authorization","Bearer " + token);
-    auto [result, response] = sendHttpRequest(
-        "https://webapi.tobit.com/AccountService/v1.0/Chayns/User", request, 30.0);
-    if (result != ReqResult::Ok || !response) {
-        LOG_ERROR << "[账户管理] 令牌校验请求失败, result=" << static_cast<int>(result);
-        LOG_INFO << "[账户管理] Chayns 令牌校验结束";
-        return false;
-    }
-    LOG_INFO << "[账户管理] 令牌校验接口响应状态码: " << response->getStatusCode();
-    LOG_INFO << "[账户管理] Chayns 令牌校验结束";
-    if(response->getStatusCode()!=200)
-    {
-        return false;
-    }
-    return true;
-}
-
-
-
-Json::Value AccountManager::getChaynsToken(string username,string passwd)
-{
-    LOG_INFO << "[账户管理] 开始获取 Chayns 令牌";
-    const string fullUrl = getLoginServiceUrl("chaynsapi");
-    if (fullUrl.empty()) {
-        LOG_ERROR << "[账户管理] 配置中未找到 chaynsapi 的登录服务地址";
-        return Json::Value();
-    }
-    LOG_INFO << "[账户管理] 完整登录地址: "<<fullUrl;
-
-    string baseUrl, path;
-    if (!splitUrl(fullUrl, baseUrl, path)) {
-        LOG_ERROR << "[账户管理] 登录服务地址格式无效: " << fullUrl;
-        return Json::Value();
-    }
-    LOG_INFO << "[账户管理] 解析出的主机地址: "<<baseUrl;
-
-     // 等待服务器可用
-    if (!isServerReachable(baseUrl)) {
-        LOG_ERROR << "[账户管理] 达到最大重试次数后仍无法连通目标主机: " << baseUrl;
-        return Json::Value(); // 返回空的Json对象
-    }
-    auto request = HttpRequest::newHttpRequest();
-    Json::Value json;
-    json["site"] = "chayns";
-    json["credentials"]["email"] = username;
-    json["credentials"]["password"] = passwd;
-    json["strategy"]["mode"] = "api_first";
-    request->setMethod(HttpMethod::Post);
-    request->setPath(path);
-    request->setContentTypeString("application/json");
-    request->setBody(json.toStyledString());
-    const std::string downstreamApiKey = getDownstreamBearerApiKey("chaynsapi");
-    if (!downstreamApiKey.empty()) {
-        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
-    }
-    auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
-    if (result != ReqResult::Ok || !response) {
-        LOG_ERROR << "[账户管理] 登录服务请求失败, result=" << static_cast<int>(result);
-        return Json::Value();
-    }
-    Json::Value responsejson;
-    Json::Value normalized;
-    const int httpStatus = static_cast<int>(response->getStatusCode());
-    const std::string contentType = response->getHeader("content-type");
-    string body="";
-    if(httpStatus==200)
-    {
-        body=std::string(response->getBody());
-    }
-    string errs;
-    if (!parseJsonBody(body, responsejson, errs)) {
-        LOG_ERROR << "[账户管理] 解析登录响应 JSON 失败: "
-                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
-                  << ", " << account_logging::summarizeParseError(errs);
-        return Json::Value();
-    }
-
-    if (!isSuccessEnvelope(responsejson)) {
-        LOG_ERROR << "[账户管理] 登录服务返回失败: "
-                  << account_logging::summarizeLoginTransport(httpStatus, contentType, body.size())
-                  << ", " << account_logging::summarizeLoginError(responsejson);
-        return Json::Value();
-    }
-
-    LOG_INFO << "[账户管理] 登录服务响应摘要: "
-             << account_logging::summarizeLoginResponse(responsejson, httpStatus, contentType, body.size());
-
-    const auto& resultJson = responsejson["data"]["result"];
-    if (!resultJson.isObject()) {
-        LOG_ERROR << "[账户管理] 登录服务响应缺少 data.result";
-        return Json::Value();
-    }
-
-    normalized["token"] = resultJson["session"].get("access_token", "").asString();
-    normalized["userid"] = resultJson["site_result"].get("userid", 0).asInt();
-    normalized["personid"] = resultJson["site_result"].get("personid", "").asString();
-    normalized["email"] = resultJson["account"].get("email", username).asString();
-    normalized["password"] = passwd;
-    normalized["has_pro_access"] = resultJson["site_result"].get("has_pro_access", false).asBool();
-
-    if (normalized["token"].asString().empty() || normalized["personid"].asString().empty()) {
-        LOG_ERROR << "[账户管理] 登录服务响应缺少关键字段";
-        return Json::Value();
-    }
-    return normalized;
-}
-
-
-void AccountManager::checkToken()
-{
-    LOG_INFO << "[账户管理] 开始批量校验账号令牌";
-    LOG_INFO << "[账户管理] 令牌校验函数映射数量: " << checkTokenMap.size();
-    
-    // 先复制需要检查的账号列表，避免长时间持有锁
-    std::vector<shared_ptr<Accountinfo_st>> accountsToCheck;
-    {
-        std::lock_guard<std::mutex> lock(accountListMutex);
-        for(auto& apiName : accountList)
-        {
-            for(auto& userName : apiName.second)
-            {
-                accountsToCheck.push_back(userName.second);
-            }
-        }
-    }
-    
-    // 在锁外进行检查操作
-    for(auto& account : accountsToCheck)
-    {
-        if (shouldSkipLifecycleRefresh(account)) {
-            LOG_INFO << "[账户管理] 跳过非 active 账号令牌校验: "
-                     << account->userName;
-            continue;
-        }
-        LOG_INFO << "[账户管理] 正在校验账号: " << account->apiName << " " << account->userName;
-        if(checkTokenMap[account->apiName])
-        {
-            bool result = (this->*checkTokenMap[account->apiName])(account->authToken);
-            LOG_INFO << "[账户管理] 令牌校验结果: " << result;
-            setStatusTokenStatus(account->apiName, account->userName, result);
-        }
-        else
-        {
-            LOG_ERROR << "[账户管理] 不支持的上游渠道 apiName: " << account->apiName << " is not supported";
-        }
-    }
-    LOG_INFO << "[账户管理] 批量令牌校验结束";
-}
-
-void AccountManager::updateToken()
-{
-    LOG_INFO << "[账户管理] 开始批量更新令牌";
-    
-    // 先复制需要更新的账号列表，避免长时间持有锁
-    std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
-    {
-        std::lock_guard<std::mutex> lock(accountListMutex);
-        for(auto& apiName : accountList)
-        {
-            for(auto& userName : apiName.second)
-            {
-                if (shouldSkipLifecycleRefresh(userName.second)) {
-                    continue;
-                }
-                if(!userName.second->tokenStatus || userName.second->authToken.empty())
-                {
-                    accountsToUpdate.push_back(userName.second);
-                }
-            }
-        }
-    }
-    
-    // 在锁外进行更新操作
-    for(auto& account : accountsToUpdate)
-    {
-        if(updateTokenMap[account->apiName])
-        {
-            (this->*updateTokenMap[account->apiName])(account);
-            if(account->tokenStatus)
-            {
-                requireStore()->updateAccount(*account);
-                refreshAccountQueue(account->apiName);
-            }
-        }
-        else
-        {
-            LOG_ERROR << "[账户管理] 不支持的上游渠道 apiName: " << account->apiName << " is not supported";
-        }
-    }
-    LOG_INFO << "[账户管理] 批量令牌更新结束";
-}
-
-void AccountManager::updateChaynsToken(shared_ptr<Accountinfo_st> accountinfo)
-{
-    LOG_INFO << "[账户管理] 开始更新 Chayns 令牌，用户: " << accountinfo->userName;
-    auto token = getChaynsToken(accountinfo->userName,accountinfo->passwd);
-    LOG_INFO << "[账户管理] Chayns 令牌更新结果: " << (token.empty()?"empty":"not empty");
-    if(!token.empty())
-    {
-                accountinfo->tokenStatus = true;
-                accountinfo->authToken = token["token"].asString();
-                accountinfo->accountStatus = true;
-                accountinfo->useCount = 0;
-                accountinfo->userTobitId = token["userid"].asInt();
-                accountinfo->personId = token["personid"].asString();
-                bool hasProAccess = false;
-                if (token.isMember("has_pro_access") && token["has_pro_access"].asBool()) {
-                    hasProAccess = true;
-                }
-                string accountType = hasProAccess ? "pro" : "free";
-                accountinfo->accountType=accountType;
-    }
-    LOG_INFO << "[账户管理] Chayns 令牌更新流程结束";
-}
-void AccountManager::checkUpdateTokenthread()
-{
-    if (tokenCheckThread_.joinable()) {
-        LOG_WARN << "[账户管理] 令牌巡检线程已在运行，忽略重复启动";
-        return;
-    }
-    // N4: 原为 [&] 捕获——在成员函数里捕获 this 之外的栈引用本就危险，
-    // 改为显式 this，语义等价但不再依赖已退栈的局部作用域。
-    tokenCheckDone_ = std::make_shared<platform::ThreadCompletion>();
-    tokenCheckThread_ = std::thread([this, done = tokenCheckDone_]{
-        struct Signaler {
-            platform::ThreadCompletionPtr done;
-            ~Signaler() { done->signal(); }
-        } signaler{done};
-        while (!backgroundStopRequested_.load())
-        {
-            checkToken();
-            // 清理创建超过配置天数的过期账号
-            cleanExpiredAccounts();
-            if (!backgroundSleep(std::chrono::hours(5))) break;
-        }
-        LOG_INFO << "[账户管理] 令牌巡检线程已退出";
-    });
-}
-void AccountManager::checkUpdateAccountToken()  
-{
-    checkToken();
-}  
-
-// 添加检测服务可用性的函数
-bool AccountManager::isServerReachable(const string& host, int maxRetries ) {
-    const std::vector<std::string> candidatePaths = {
-        "/api/v1/health",
-        "/health",
-        "/"
-    };
-
-    int retryCount = 0;
-    // 停机检查必须在循环条件里：本函数位于 waitUpdateAccountToken 工作线程的调用链上
-    // （updatechaynsToken -> getchaynsToken -> 此处），maxRetries 默认 300、每轮最坏
-    // 3x30s+1s，改前停机最坏要等约 7.6 小时。停机时提前放弃剩余重试并返回 false，
-    // 调用方走既有的“达到最大重试次数”失败分支，不新增失败模式。
-    while (retryCount < maxRetries && !backgroundStopRequested_.load()) {
-        try {
-            for (const auto& path : candidatePaths) {
-                auto checkRequest = HttpRequest::newHttpRequest();
-                checkRequest->setMethod(HttpMethod::Get);
-                checkRequest->setPath(path);
-                auto [checkResult, checkResponse] = sendHttpRequest(host, checkRequest, 30.0);
-                if (checkResponse && checkResponse->getStatusCode() == 200) {
-                    LOG_INFO << "[账户管理] 目标主机已连通，探测路径: " << path
-                             << "，累计重试次数: " << retryCount << " 次";
-                    return true;
-                }
-            }
-        } catch (...) {
-            LOG_INFO << "[账户管理] 目标主机暂不可达，准备第 N 次重试: " << retryCount + 1;
-        }
-        
-        retryCount++;
-        // 原为 clock_->sleepFor(seconds(1))——其生产实现是 std::this_thread::sleep_for，
-        // 停机时照睡不误。改用 backgroundSleep 挂在 backgroundWakeCv_ 上，可被唤醒打断。
-        if (!backgroundSleep(std::chrono::seconds(1))) {
-            LOG_INFO << "[账户管理] 停机中，放弃剩余主机连通性重试，已重试: " << retryCount << " 次";
-            return false;
-        }
-    }
-
-    if (backgroundStopRequested_.load()) {
-        LOG_INFO << "[账户管理] 停机中，主机连通性探测提前结束: " << host;
-    }
-    return false;
-}
-void AccountManager::loadAccountFromDatebase()
-{
-    LOG_INFO << "[账户管理] 开始从数据库加载账号";
-    auto accountDBList = requireStore()->getAccountDBList();
-    int retiredCount = 0;
-    for(auto& accountinfo:accountDBList)
-    {
-        LOG_INFO << "[账户管理] 从数据库加载账号记录: " << accountinfo.userName << ", personId: " << accountinfo.personId << ", createTime: " << accountinfo.createTime << ", status: " << accountinfo.status;
-        if (retired_provider::isRetiredProviderKey(accountinfo.apiName)) {
-            ++retiredCount;
-            LOG_ERROR << "[账户管理] 数据库仍含已退役 Provider 账号，已拒绝加载: apiName="
-                      << accountinfo.apiName
-                      << "；请先执行 retire_providers_v1.sql";
-            continue;
-        }
-        addAccount(accountinfo.apiName,accountinfo.userName,accountinfo.passwd,
-                   accountinfo.authToken,accountinfo.useCount,accountinfo.tokenStatus,
-                   accountinfo.accountStatus,accountinfo.userTobitId,
-                   accountinfo.personId,accountinfo.createTime,accountinfo.accountType,
-                   accountinfo.status,accountinfo.workspaceUacId);
-    }
-    LOG_INFO << "[账户管理] 数据库加载完成，账号总数: " << accountDBList.size()
-             << "，拒绝加载已退役 Provider 账号数: " << retiredCount;
-}
-void AccountManager::saveAccountToDatebase()
-{
-    LOG_INFO << "[账户管理] 开始将账号写回数据库";
-    for(auto& apiName:accountList)
-    {
-        for(auto& userName:apiName.second)
-        {
-            requireStore()->addAccount(*(userName.second.get()));
-        }
-    }
-    LOG_INFO << "[账户管理] 账号写回数据库完成";
-}
-
-map<string,map<string,shared_ptr<Accountinfo_st>>> AccountManager::getAccountList()
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    return accountList;
-}
-void AccountManager::setStatusAccountStatus(string apiName,string userName,bool status)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
-    {
-        accountList[apiName][userName]->accountStatus = status;
-        rebuildPoolLocked(apiName);
-    }
-}
-void AccountManager::setStatusTokenStatus(string apiName,string userName,bool status)
-{
-    std::lock_guard<std::mutex> lock(accountListMutex);
-    if(accountList.find(apiName) != accountList.end() && accountList[apiName].find(userName) != accountList[apiName].end())
-    {
-        accountList[apiName][userName]->tokenStatus = status;
-        // tokenStatus ist primaeres Sortierkriterium -> Pool sofort neu ordnen,
-        // sonst liefert getAccount() weiterhin den entwerteten Account aus.
-        rebuildPoolLocked(apiName);
-        if(!status && !shouldSkipLifecycleRefresh(accountList[apiName][userName]))
-            {
-                std::lock_guard<std::mutex> lock2(accountListNeedUpdateMutex);
-                accountListNeedUpdate.push_back(accountList[apiName][userName]);
-                accountListNeedUpdateCondition.notify_one();
-            }
-    }
-}
-void AccountManager::waitUpdateAccountToken()
-{
-    LOG_INFO << "[账户管理] 账号令牌更新线程已启动";
-    while (!backgroundStopRequested_.load()) {  // 持续运行的工作循环
-        shared_ptr<Accountinfo_st> account;
-        
-        // 获取待更新账号，仅在访问共享队列时加锁
-        {
-            std::unique_lock<std::mutex> lock(accountListNeedUpdateMutex);
-            // N4: 等待谓词必须同时包含停机条件，否则队列长期为空时该线程
-            // 永远卡在 wait 上，stopBackgroundThreads() 的 join 会死等。
-            accountListNeedUpdateCondition.wait(lock, [this] {
-                return !accountListNeedUpdate.empty() || backgroundStopRequested_.load();
-            });
-
-            // 停机优先：残留待更新账号不再处理，下次启动时由巡检重新入队。
-            if (backgroundStopRequested_.load()) {
-                break;
-            }
-            
-            account = accountListNeedUpdate.front();
-            accountListNeedUpdate.pop_front();
-            LOG_INFO << "[账户管理] 正在处理账号更新，用户: " << account->userName;
-        }
-
-        // 验证账号
-        if (!account) {
-            LOG_ERROR << "[账户管理] 账号指针无效，跳过本次更新";
-            continue;
-        }
-
-        if (shouldSkipLifecycleRefresh(account)) {
-            LOG_INFO << "[账户管理] 跳过非 active 账号令牌刷新: "
-                     << account->userName;
-            continue;
-        }
-
-        // 查找更新函数
-        auto updateFunc = updateTokenMap.find(account->apiName);
-        if (updateFunc == updateTokenMap.end()) {
-            LOG_ERROR << "[账户管理] 不支持的 API 名称: " << account->apiName;
-            continue;
-        }
-
-        try {
-            // 执行token更新
-            (this->*(updateFunc->second))(account);
-
-            // 仅在更新成功时更新数据库和刷新队列
-            if (account->tokenStatus) {
-                if (!requireStore()->updateAccount(*account)) {
-                    LOG_ERROR << "[账户管理] 更新数据库账号记录失败";
-                    continue;
-                }
-                refreshAccountQueue(account->apiName);
-                
-                // Token 更新成功后，检查并更新 accountType
-                LOG_INFO << "[账户管理] 令牌更新完成，开始校验账号类型，用户: " << account->userName;
-                // 若需要强制刷新账号类型，可在此处启用单账号更新
-            }
-        }
-        catch (const std::exception& e) {
-            LOG_ERROR << "[账户管理] 执行账号更新时发生异常: " << e.what() 
-                     << " for user: " << account->userName;
-        }
-    }
-    LOG_INFO << "[账户管理] 账号令牌更新线程已退出";
-}
-void AccountManager::waitUpdateAccountTokenThread()
-{
-    if (tokenUpdateWorker_.joinable()) {
-        LOG_WARN << "[账户管理] 令牌更新工作线程已在运行，忽略重复启动";
-        return;
-    }
-    tokenUpdateDone_ = std::make_shared<platform::ThreadCompletion>();
-    tokenUpdateWorker_ = std::thread([this, done = tokenUpdateDone_] {
-        struct Signaler {
-            platform::ThreadCompletionPtr done;
-            ~Signaler() { done->signal(); }
-        } signaler{done};
-        waitUpdateAccountToken();
-    });
-}
-
-void AccountManager::checkAccountCountThread()
-{
-    if (accountCountThread_.joinable()) {
-        LOG_WARN << "[账户管理] 账号数量巡检线程已在运行，忽略重复启动";
-        return;
-    }
-    accountCountDone_ = std::make_shared<platform::ThreadCompletion>();
-    accountCountThread_ = std::thread([this, done = accountCountDone_]{
-        struct Signaler {
-            platform::ThreadCompletionPtr done;
-            ~Signaler() { done->signal(); }
-        } signaler{done};
-        while (!backgroundStopRequested_.load())
-        {
-            LOG_INFO << "[账户管理] 开始检查各渠道账号数量";
-            checkChannelAccountCounts();
-            // 定时巡检周期：每 10 分钟执行一次账号数量检查
-            if (!backgroundSleep(std::chrono::minutes(10))) break;
-        }
-        LOG_INFO << "[账户管理] 账号数量巡检线程已退出";
-    });
-}
-
-void AccountManager::checkChannelAccountCounts()
-{
-    const auto automationSettings = getAccountAutomationSettings();
-    if (!automationSettings.autoRegisterEnabled) {
-        LOG_INFO << "[账户管理] 自动补注册已禁用，跳过渠道账号数量检查";
-        return;
-    }
-
-    auto* channelDbManager = requireChannelStore();
-    auto channelList = channelDbManager->getChannelList();
-
-    for(const auto& channel : channelList)
-    {
-        checkChannelAccountCount(channel.channelName);
-    }
-}
-
-void AccountManager::checkChannelAccountCount(string apiName)
-{
-    auto* channelDbManager = requireChannelStore();
-    auto channelList = channelDbManager->getChannelList();
-    auto channelIt = std::find_if(channelList.begin(), channelList.end(), [&](const auto& channel) {
-        return channel.channelName == apiName;
-    });
-    if (channelIt == channelList.end())
-    {
-        LOG_WARN << "[账户管理] 未找到渠道，跳过账号数量检查: " << apiName;
-        return;
-    }
-
-    const auto& channel = *channelIt;
-    if (!channel.channelStatus)
-    {
-        LOG_INFO << "[账户管理] 渠道已禁用，跳过自动补注册检查: " << channel.channelName;
-        return;
-    }
-    if (channel.accountCount <= 0)
-    {
-        return;
-    }
-
-    if (channel.channelName == "retoolapi")
-    {
-        if (!retoolProvisionClock_)
-        {
-            LOG_ERROR << "[账户管理] Retool provision clock 未注入，跳过自动补注册";
-            return;
-        }
-        const auto health = loadRetoolProvisionHealth(*configStore_, nullptr);
-        if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
-        {
-            LOG_WARN << "[账户管理] Retool 渠道处于冷却期，跳过自动补注册。cooldownUntil="
-                     << health.cooldownUntil << " reason=" << health.lastFailureReason;
-            return;
-        }
-
-        auto workspaces = workspaceUseCase_ ? workspaceUseCase_->list()
-                                            : std::vector<RetoolWorkspaceInfo>{};
-        int currentCount = 0;
-        for (const auto& workspace : workspaces)
-        {
-            if (isRetoolWorkspaceActive(workspace))
-            {
-                ++currentCount;
-            }
-        }
-
-        LOG_INFO << "[账户管理] Retool 渠道状态 -> 名称: " << channel.channelName
-                 << "，目标数量: " << channel.accountCount
-                 << "，当前数量（启用工作区）: " << currentCount;
-
-        if (currentCount < channel.accountCount)
-        {
-            int needed = channel.accountCount - currentCount;
-            LOG_INFO << "[账户管理] Retool 渠道需补充注册 workspace 数量: "
-                     << needed << "，渠道: " << channel.channelName;
-            for (int i = 0; i < needed; ++i)
-            {
-                if (!autoRegisterAccount(channel.channelName))
-                {
-                    break;
-                }
-                if (i < needed - 1)
-                {
-                    clock_->sleepFor(std::chrono::seconds(5));
-                }
-            }
-        }
-        return;
-    }
-
-    int currentCount = requireStore()->countAccountsByChannel(channel.channelName, true);
-    LOG_INFO << "[账户管理] 渠道状态 -> 名称: " << channel.channelName
-             << "，目标数量: " << channel.accountCount
-             << "，当前数量（含待注册）: " << currentCount;
-
-    if(currentCount < channel.accountCount)
-    {
-        int needed = channel.accountCount - currentCount;
-        LOG_INFO << "[账户管理] 该渠道需补充注册账号数量: " << needed << "，渠道: " << channel.channelName;
-        for(int i=0; i<needed; ++i)
-        {
-            if (!autoRegisterAccount(channel.channelName))
-            {
-                break;
-            }
-            clock_->sleepFor(std::chrono::seconds(5));
-        }
-    }
-}
-
-std::string generateRandomString(int length) {
-    const std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    std::string ret;
-    for (int i = 0; i < length; ++i) {
-        ret += chars[rand() % chars.length()];
-    }
-    return ret;
-}
-
-namespace {
-// 纯数据装配：按渠道构造 register-and-login 的 workflow 请求体。
-// 从 autoRegisterAccount 逐字搬迁，无副作用、不触库、不发请求。
-Json::Value buildRegistrationWorkflowBody(const std::string& apiName,
-                                          const std::string& firstName,
-                                          const std::string& lastName,
-                                          const std::string& password)
-{
-    Json::Value workflowBody;
-    workflowBody["mail_policy"]["expiry_time_ms"] = 3600000;
-    workflowBody["proxy_policy"]["enabled"] = false;
-    workflowBody["identity"]["first_name"] = firstName;
-    workflowBody["identity"]["last_name"] = lastName;
-    workflowBody["identity"]["password"] = password;
-
-    (void)apiName;
-    workflowBody["site"] = "chayns";
-    workflowBody["strategy"]["registration_mode"] = "api_first";
-    workflowBody["strategy"]["login_mode"] = "api_first";
-    workflowBody["strategy"]["timeout_seconds"] = 360;
-
-    return workflowBody;
-}
-}  // namespace
-
-void AccountManager::rollbackWaitingAccount(int waitingId)
-{
-    requireStore()->updateAccountStatusById(waitingId, AccountStatus::WAITING);
-    requireStore()->deleteWaitingAccount(waitingId);
-}
-
-bool AccountManager::autoRegisterAccount(string apiName)
-{
-    LOG_INFO << "[自动注册] 开始为渠道 " << apiName << " 自动注册账号";
-
-    if (retired_provider::isRetiredProviderKey(apiName)) {
-        LOG_ERROR << "[自动注册] 已退役 Provider 禁止自动注册: " << apiName;
-        return false;
-    }
-
-    for (const auto& channel : requireChannelStore()->getChannelList())
-    {
-        if (channel.channelName == apiName && !channel.channelStatus)
-        {
-            LOG_WARN << "[自动注册] 渠道已禁用，跳过自动注册: " << apiName;
-            return false;
-        }
-    }
-
-    if (apiName == "retoolapi")
-    {
-        if (!retoolProvisionClock_)
-        {
-            LOG_ERROR << "[自动注册] Retool provision clock 未注入";
-            return false;
-        }
-        const auto health = loadRetoolProvisionHealth(*configStore_, nullptr);
-        if (isRetoolProvisionCoolingDown(health, *retoolProvisionClock_))
-        {
-            LOG_WARN << "[自动注册] Retool 渠道处于冷却期，跳过自动注册。cooldownUntil="
-                     << health.cooldownUntil << " reason=" << health.lastFailureReason;
-            return false;
-        }
-
-        Json::Value requestBody(Json::objectValue);
-        requestBody["mail_providers"] = Json::Value(Json::arrayValue);
-        requestBody["mail_providers"].append("gptmail");
-        requestBody["password"] = "RetoolFlow123!!";
-        requestBody["full_name"] = "Codex Flow";
-        requestBody["workspace_prefix"] = "codexorg";
-
-        try
-        {
-            if (!workspaceProvisioner_)
-            {
-                throw std::runtime_error("Retool workspace provisioner 未注入");
-            }
-            Json::StreamWriterBuilder writer;
-            writer["indentation"] = "";
-            auto workspace = workspaceProvisioner_->provision(
-                Json::writeString(writer, requestBody));
-            if (workspace.workspaceId.empty())
-            {
-                const auto reason = std::string("unknown error");
-                markRetoolProvisionFailure(
-                    *configStore_, reason, *retoolProvisionClock_);
-                LOG_ERROR << "[自动注册] Retool workspace 创建失败: " << reason;
-                return false;
-            }
-            markRetoolProvisionSuccess(*configStore_);
-            LOG_INFO << "[自动注册] Retool workspace 创建成功: " << workspace.workspaceId;
-            return true;
-        }
-        catch (const std::exception& ex)
-        {
-            markRetoolProvisionFailure(
-                *configStore_, ex.what(), *retoolProvisionClock_);
-            LOG_ERROR << "[自动注册] Retool workspace 创建异常: " << ex.what();
-            return false;
-        }
-    }
-    
-    // Step 1: 创建待注册记录，预占位置
-    int waitingId = requireStore()->createWaitingAccount(apiName);
-    if (waitingId < 0) {
-        LOG_ERROR << "[自动注册] 创建待注册记录失败: " << apiName;
-        return false;
-    }
-    LOG_INFO << "[自动注册] 创建待注册账号成功, ID: " << waitingId;
-    
-    // Step 2: 标记为注册中状态，并加入内存追踪集合
-    {
-        std::lock_guard<std::mutex> lock(registeringMutex_);
-        registeringAccountIds_.insert(waitingId);
-    }
-    requireStore()->updateAccountStatusById(waitingId, AccountStatus::REGISTERING);
-    LOG_INFO << "[自动注册] 账号状态已更新为注册中, ID: " << waitingId;
-    
-    // 使用 RAII 确保无论如何都会从追踪集合中移除
-    struct RegisteringGuard {
-        AccountManager* manager;
-        int id;
-        ~RegisteringGuard() {
-            std::lock_guard<std::mutex> lock(manager->registeringMutex_);
-            manager->registeringAccountIds_.erase(id);
-            LOG_INFO << "[自动注册] 从注册中追踪集合移除, ID: " << id;
-        }
-    } guard{this, waitingId};
-    
-    string firstName = "User" + generateRandomString(5);
-    string lastName = "Auto" + generateRandomString(5);
-    string password = "Pwd" + generateRandomString(8) + "!";
-
-    Json::Value requestBody;
-    requestBody["first_name"] = firstName;
-    requestBody["last_name"] = lastName;
-    requestBody["password"] = password;
-
-    const string fullUrl = getRegistServiceUrl(apiName);
-    if (fullUrl.empty()) {
-        LOG_ERROR << "[自动注册] 未找到 " << apiName << " 的注册服务URL";
-        // 注册失败，回滚待注册记录（须先改回 WAITING，删除 SQL 带状态过滤）
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    string baseUrl, path;
-    if (!splitUrl(fullUrl, baseUrl, path)) {
-        LOG_ERROR << "[自动注册] 无效的注册服务URL格式: " << fullUrl;
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-    LOG_INFO << "[自动注册] baseUrl: " << baseUrl;
-
-    auto request = HttpRequest::newHttpRequest();
-    Json::Value workflowBody = buildRegistrationWorkflowBody(apiName, firstName, lastName, password);
-
-    request->setMethod(HttpMethod::Post);
-    request->setPath(path);
-    request->setContentTypeString("application/json");
-    request->setBody(workflowBody.toStyledString());
-    const std::string downstreamApiKey = getDownstreamBearerApiKey(apiName);
-    if (!downstreamApiKey.empty()) {
-        request->addHeader("Authorization", "Bearer " + downstreamApiKey);
-    }
-    
-    LOG_INFO << "[自动注册] 发送注册请求...";
-    auto [result, response] = sendHttpRequest(baseUrl, request, 300.0);
-
-    if (result != ReqResult::Ok || !response || response->getStatusCode() != 200) {
-        const int httpStatus = response ? static_cast<int>(response->getStatusCode()) : 0;
-        const std::string contentType = response ? response->getHeader("content-type") : "";
-        const std::size_t bodySize = response ? response->getBody().size() : 0;
-        LOG_ERROR << "[自动注册] 注册请求失败. Result: " << (int)result
-                  << ", " << account_logging::summarizeLoginTransport(
-                         httpStatus, contentType, bodySize);
-        // 注册失败，删除待注册记录（状态已经是 registering，需要先改回 waiting 才能删除）
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    Json::Value jsonResponse;
-    string errs;
-    std::string responseBody(response->getBody());
-    if (!parseJsonBody(responseBody, jsonResponse, errs)) {
-        LOG_ERROR << "[自动注册] 解析注册响应失败: "
-                  << account_logging::summarizeLoginTransport(
-                         static_cast<int>(response->getStatusCode()),
-                         response->getHeader("content-type"),
-                         responseBody.size())
-                  << ", " << account_logging::summarizeParseError(errs);
-        // 解析失败，删除待注册记录
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    if (!isSuccessEnvelope(jsonResponse)) {
-        LOG_ERROR << "[自动注册] workflow 创建失败: "
-                  << account_logging::summarizeLoginTransport(
-                         static_cast<int>(response->getStatusCode()),
-                         response->getHeader("content-type"),
-                         responseBody.size())
-                  << ", " << account_logging::summarizeLoginError(jsonResponse);
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    string taskId = jsonResponse["data"].get("task_id", "").asString();
-    if (taskId.empty()) {
-        LOG_ERROR << "[自动注册] workflow 响应缺少 task_id";
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    LOG_INFO << "[自动注册] workflow 任务已创建: " << taskId;
-
-    Json::Value workflowDetail;
-    bool workflowSucceeded = false;
-    bool workflowReachedTerminalState = false;
-    std::string finalWorkflowStatus;
-    std::string finalWorkflowState;
-    constexpr int kWorkflowPollAttempts = 300;  // 约 15 分钟（每次 3 秒）
-    for (int attempt = 0; attempt < kWorkflowPollAttempts; ++attempt) {
-        auto detailRequest = HttpRequest::newHttpRequest();
-        detailRequest->setMethod(HttpMethod::Get);
-        std::string detailPath = path;
-        const std::string workflowCreateSuffix = "/register-and-login";
-        if (detailPath.size() >= workflowCreateSuffix.size() && detailPath.compare(detailPath.size() - workflowCreateSuffix.size(), workflowCreateSuffix.size(), workflowCreateSuffix) == 0) {
-            detailPath = detailPath.substr(0, detailPath.size() - workflowCreateSuffix.size());
-        }
-        if (detailPath.empty()) {
-            detailPath = "/api/v1/workflows";
-        }
-        detailRequest->setPath(detailPath + "/" + taskId);
-        if (!downstreamApiKey.empty()) {
-            detailRequest->addHeader("Authorization", "Bearer " + downstreamApiKey);
-        }
-        auto [detailResult, detailResponse] = sendHttpRequest(baseUrl, detailRequest, 30.0);
-        if (detailResult != ReqResult::Ok || !detailResponse) {
-            LOG_WARN << "[自动注册] 查询 workflow 状态失败, attempt=" << attempt + 1;
-            clock_->sleepFor(std::chrono::seconds(3));
-            continue;
-        }
-
-        std::string detailBody(detailResponse->getBody());
-        Json::Value detailJson;
-        errs.clear();
-        if (!parseJsonBody(detailBody, detailJson, errs)) {
-            LOG_WARN << "[自动注册] 解析 workflow 详情失败: "
-                     << account_logging::summarizeLoginTransport(
-                            static_cast<int>(detailResponse->getStatusCode()),
-                            detailResponse->getHeader("content-type"),
-                            detailBody.size())
-                     << ", " << account_logging::summarizeParseError(errs);
-            clock_->sleepFor(std::chrono::seconds(3));
-            continue;
-        }
-        workflowDetail = detailJson;
-        if (!isSuccessEnvelope(detailJson) || !detailJson["data"].isObject() || !detailJson["data"].isMember("task")) {
-            clock_->sleepFor(std::chrono::seconds(3));
-            continue;
-        }
-
-        string status = detailJson["data"]["task"].get("status", "").asString();
-        string state = detailJson["data"]["task"].get("state", "").asString();
-        finalWorkflowStatus = status;
-        finalWorkflowState = state;
-        LOG_INFO << "[自动注册] workflow 状态: status="
-                 << account_logging::safeWorkflowField(detailJson["data"]["task"]["status"])
-                 << ", state="
-                 << account_logging::safeWorkflowField(detailJson["data"]["task"]["state"]);
-        if (status == "succeeded") {
-            workflowSucceeded = true;
-            workflowReachedTerminalState = true;
-            break;
-        }
-        if (status == "failed" || status == "cancelled") {
-            workflowReachedTerminalState = true;
-            break;
-        }
-        clock_->sleepFor(std::chrono::seconds(3));
-    }
-
-    if (!workflowSucceeded) {
-        if (!workflowReachedTerminalState && !finalWorkflowStatus.empty()) {
-            LOG_ERROR << "[自动注册] workflow 等待超时，最后状态已接收: statusPresent=true"
-                      << ", statePresent=" << (!finalWorkflowState.empty())
-                      << ", 已等待约 " << (kWorkflowPollAttempts * 3) << " 秒";
-        }
-        LOG_ERROR << "[自动注册] workflow 未成功完成: "
-                  << account_logging::summarizeWorkflowEnvelope(workflowDetail);
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    const auto& resultJson = workflowDetail["data"]["result"];
-    const auto& registrationJson = resultJson["registration"];
-    const auto& loginJson = resultJson["login"];
-
-    string email = registrationJson["account"].get("email", "").asString();
-    string respPassword = registrationJson["account"].get("password", password).asString();
-    int userid = 0;
-    string personid;
-    string token = loginJson["session"].get("access_token", "").asString();
-    userid = loginJson["site_result"].get("userid", 0).asInt();
-    personid = loginJson["site_result"].get("personid", "").asString();
-    bool hasProAccess =
-        loginJson.isMember("site_result") &&
-        loginJson["site_result"].get("has_pro_access", false).asBool();
-
-    if (email.empty() || personid.empty() || token.empty()) {
-        LOG_ERROR << "[自动注册] workflow 结果缺少关键字段: "
-                  << account_logging::summarizeWorkflowEnvelope(workflowDetail)
-                  << ", emailPresent=" << (!email.empty())
-                  << ", identityPresent=" << (!personid.empty())
-                  << ", sessionCredentialPresent=" << (!token.empty());
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    LOG_INFO << "[自动注册] 注册成功: emailPresent=true";
-    
-    string createTime = trantor::Date::now().toDbStringLocal();
-    string accountType = hasProAccess ? "pro" : "free";
-
-    // Step 3: 注册成功，激活账号记录
-    Accountinfo_st newAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
-    
-    if (requireStore()->activateAccount(waitingId, newAccount)) {
-        LOG_INFO << "[自动注册] 账号激活成功: emailPresent=true";
-        addAccount(apiName, email, respPassword, token, 0, true, true, userid, personid, createTime, accountType, AccountStatus::ACTIVE);
-        
-        // 自动注册账号后，检查并更新该账号的 accountType
-        shared_ptr<Accountinfo_st> newAccountPtr;
-        {
-            std::lock_guard<std::mutex> lock(accountListMutex);
-            if (accountList.find(apiName) != accountList.end() &&
-                accountList[apiName].find(email) != accountList[apiName].end()) {
-                newAccountPtr = accountList[apiName][email];
-            }
-        }
-        if (newAccountPtr) {
-            LOG_INFO << "[自动注册] 检查账号类型: emailPresent=true";
-            updateAccountType(newAccountPtr);
-        }
-    } else {
-        LOG_ERROR << "[自动注册] 账号激活失败, ID: " << waitingId;
-        // 激活失败，删除待注册记录（以防万一）
-        rollbackWaitingAccount(waitingId);
-        return false;
-    }
-
-    return true;
-}
-
-// 从上游服务删除账号
-// 流程: 1) 获取确认 token  2) 使用确认 token 删除账号
-bool AccountManager::deleteUpstreamAccount(const Accountinfo_st& account)
-{
-    LOG_INFO << "[上游删除] 开始删除上游账号: " << account.userName;
-
-    // 检查必要字段
-    if (account.userName.empty() || account.passwd.empty()) {
-        LOG_ERROR << "[上游删除] 缺少用户名或密码，无法删除上游账号";
-        return false;
-    }
-    if (account.authToken.empty()) {
-        LOG_ERROR << "[上游删除] 缺少 authToken，无法删除上游账号: " << account.userName;
-        return false;
-    }
-
-    // ====== 第一步: 获取确认 token ======
-    // Basic 认证: base64(username:password)
-    string credentials = account.userName + ":" + account.passwd;
-    string base64Credentials = drogon::utils::base64Encode(
-        reinterpret_cast<const unsigned char*>(credentials.data()),
-        credentials.size()
-    );
-
-    try {
-        auto authRequest = HttpRequest::newHttpRequest();
-        authRequest->setMethod(HttpMethod::Post);
-        authRequest->setPath("/v2/token");
-        authRequest->addHeader("Authorization", "Basic " + base64Credentials);
-        authRequest->setContentTypeString("application/json; charset=utf-8");
-
-        Json::Value tokenBody;
-        tokenBody["tokenType"] = 12;
-        tokenBody["isConfirmation"] = false;
-        tokenBody["locationId"] = 234191;
-        tokenBody["deviceId"] = "1a0e1c3b-bc2e-4dd8-863a-e7061e35ccff";
-        tokenBody["createIfNotExists"] = false;
-        authRequest->setBody(tokenBody.toStyledString());
-
-        LOG_INFO << "[上游删除] 请求确认 token...";
-        auto [authResult, authResponse] = sendHttpRequest("https://auth.tobit.com", authRequest, 30.0);
-
-        if (authResult != ReqResult::Ok || !authResponse || authResponse->getStatusCode() != 200) {
-            LOG_ERROR << "[上游删除] 获取确认 token 失败. Result: " << (int)authResult
-                      << ", Status: " << (authResponse ? authResponse->getStatusCode() : 0)
-                      << ", Body: " << (authResponse ? std::string(authResponse->getBody()) : "");
-            return false;
-        }
-
-        // 解析确认 token
-        Json::CharReaderBuilder reader;
-        Json::Value authJson;
-        string errs;
-        string authBody = string(authResponse->getBody());
-        istringstream authStream(authBody);
-
-        if (!Json::parseFromStream(reader, authStream, &authJson, &errs)) {
-            LOG_ERROR << "[上游删除] 解析确认 token 响应失败: " << errs;
-            return false;
-        }
-
-        string confirmationToken = authJson["token"].asString();
-        if (confirmationToken.empty()) {
-            LOG_ERROR << "[上游删除] 确认 token 为空";
-            return false;
-        }
-        LOG_INFO << "[上游删除] 获取确认 token 成功";
-
-        // ====== 第二步: 删除账号 ======
-        auto deleteRequest = HttpRequest::newHttpRequest();
-        deleteRequest->setMethod(HttpMethod::Delete);
-        deleteRequest->setPath("/AccountService/v1.0/chayns/User");
-        deleteRequest->addHeader("Authorization", "Bearer " + account.authToken);
-        deleteRequest->addHeader("x-confirmation-token", "bearer " + confirmationToken);
-        deleteRequest->setContentTypeString("application/json");
-
-        Json::Value deleteBody;
-        deleteBody["PersonId"] = account.personId;
-        deleteBody["ForceDelete"] = true;
-        deleteRequest->setBody(deleteBody.toStyledString());
-
-        LOG_INFO << "[上游删除] 发送删除请求...";
-        auto [delResult, delResponse] = sendHttpRequest("https://webapi.tobit.com", deleteRequest, 30.0);
-
-        if (delResult != ReqResult::Ok || !delResponse || delResponse->getStatusCode() != 200) {
-            LOG_ERROR << "[上游删除] 删除上游账号失败. Result: " << (int)delResult
-                      << ", Status: " << (delResponse ? delResponse->getStatusCode() : 0)
-                      << ", Body: " << (delResponse ? std::string(delResponse->getBody()) : "");
-            return false;
-        }
-
-        LOG_INFO << "[上游删除] 上游账号删除成功: " << account.userName;
-
-        // ====== 第三步: 撤销 token (logout / invalidate) ======
-        try {
-            auto invalidRequest = HttpRequest::newHttpRequest();
-            invalidRequest->setMethod(HttpMethod::Post);
-            invalidRequest->setPath("/v2/invalidToken");
-            invalidRequest->setContentTypeString("application/json; charset=utf-8");
-
-            Json::Value invalidBody;
-            invalidBody["token"] = account.authToken;
-            invalidRequest->setBody(invalidBody.toStyledString());
-
-            LOG_INFO << "[上游删除] 撤销 token...";
-            auto [invResult, invResponse] = sendHttpRequest("https://auth.tobit.com", invalidRequest, 30.0);
-
-            if (invResult == ReqResult::Ok && invResponse && invResponse->getStatusCode() == 200) {
-                LOG_INFO << "[上游删除] token 撤销成功: " << account.userName;
-            } else {
-                LOG_WARN << "[上游删除] token 撤销失败（账号已删除，非致命）. Status: "
-                         << (invResponse ? invResponse->getStatusCode() : 0);
-            }
-        } catch (const std::exception& ex) {
-            LOG_WARN << "[上游删除] token 撤销异常（账号已删除，非致命）: " << ex.what();
-        }
-
-        return true;
-
-    } catch (const std::exception& e) {
-        LOG_ERROR << "[上游删除] 异常: " << e.what() << ", 用户: " << account.userName;
-        return false;
-    }
-}
-
-// 获取用户 Pro 权限状态
-// 参考 Python autoregister.py 中的 get_user_pro_access 方法
-bool AccountManager::getUserProAccess(const string& token, const string& personId)
-{
-    LOG_INFO << "[账户管理] 开始查询 Pro 权限，personId: " << personId;
-    
-    // 接口地址示例（保留 URL 便于定位）：https://cube.tobit.cloud/ai-proxy/v1/userSettings/personId/{personId}
-    string baseUrl = "https://cube.tobit.cloud";
-    string path = "/ai-proxy/v1/userSettings/personId/" + personId;
-    
-    try {
-        auto request = HttpRequest::newHttpRequest();
-        request->setMethod(HttpMethod::Get);
-        request->setPath(path);
-        request->addHeader("Content-Type", "application/json");
-        request->addHeader("Authorization", "Bearer " + token);
-        
-        auto [result, response] = sendHttpRequest(baseUrl, request, 30.0);
-        
-        if (result != ReqResult::Ok || !response) {
-            LOG_ERROR << "[账户管理] 查询 Pro 权限请求失败";
-            return false;
-        }
-        
-        LOG_INFO << "[账户管理] 查询 Pro 权限响应状态码: " << response->getStatusCode();
-        
-        if (response->getStatusCode() == 200) {
-            Json::CharReaderBuilder reader;
-            Json::Value jsonResponse;
-            string errs;
-            string body = string(response->getBody());
-            
-
-            LOG_INFO << "[账户管理] 查询 Pro 权限响应"
-            << ", status=" << response->getStatusCode()
-            << ", personId=" << personId
-            << ", path=" << path
-            << ", tokenLength=" << token.size()
-            << ", tokenHasBearerPrefix="
-            << (token.rfind("Bearer ", 0) == 0)
-            << ", content-type="
-            << response->getHeader("content-type")
-            << ", request-id="
-            << response->getHeader("x-request-id")
-            << ", body="
-            << body.substr(0, 512);
-            
-            istringstream s(body);
-            
-            if (Json::parseFromStream(reader, s, &jsonResponse, &errs)) {
-                if (jsonResponse.isMember("hasProAccess")) {
-                    bool hasProAccess = jsonResponse["hasProAccess"].asBool();
-                    LOG_INFO << "[账户管理] 查询 Pro 权限结果，hasProAccess=" << hasProAccess;
-                    return hasProAccess;
-                }
-            } else {
-                LOG_ERROR << "[账户管理] 解析 Pro 权限响应 JSON 失败: "
-                          << account_logging::summarizeLoginTransport(
-                                 static_cast<int>(response->getStatusCode()),
-                                 response->getHeader("content-type"),
-                                 body.size())
-                          << ", " << account_logging::summarizeParseError(errs);
-            }
-        } else {
-            LOG_ERROR << "[账户管理] 查询 Pro 权限接口返回错误: " << response->getStatusCode()
-                      << ", " << account_logging::summarizeLoginTransport(
-                             static_cast<int>(response->getStatusCode()),
-                             response->getHeader("content-type"),
-                             response->getBody().size());
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR << "[账户管理] 查询 Pro 权限时捕获异常: " << e.what();
-    }
-    
-    return false;
-}
-
-// 更新单个账号的 accountType
-void AccountManager::updateAccountType(shared_ptr<Accountinfo_st> account)
-{
-    LOG_INFO << "[账户管理] 不需要更新账号类型: " << account->userName;
-    return;
-
-    if (!account || account->apiName != "chaynsapi") {
-        LOG_INFO << "[账户管理] 跳过账号类型刷新，渠道不需要 accountType 探测: "
-                 << (account ? account->apiName : "null");
-        return;
-    }
-
-    if (account->authToken.empty() || account->personId.empty()) {
-        LOG_ERROR << "[账户管理] 更新账号类型失败：账号数据无效";
-        return;
-    }
-    
-    LOG_INFO << "[账户管理] 开始更新账号类型，用户: " << account->userName;
-    
-
-    bool hasProAccess = getUserProAccess(account->authToken, account->personId);
-    string newAccountType = hasProAccess ? "pro" : "free";
-    
-    if (account->accountType != newAccountType) {
-        LOG_INFO << "[账户管理] 账号类型发生变化，用户: " << account->userName
-                 << ": " << account->accountType << " -> " << newAccountType;
-        account->accountType = newAccountType;
-        
-        // 更新数据库
-        if (requireStore()->updateAccount(*account)) {
-            LOG_INFO << "[账户管理] 账号类型已写入数据库，用户: " << account->userName;
-        } else {
-            LOG_ERROR << "[账户管理] 账号类型写入数据库失败，用户: " << account->userName;
-        }
-    } else {
-        LOG_INFO << "[账户管理] 账号类型未变化，用户: " << account->userName << ": " << account->accountType;
-    }
-}
-
-// 更新所有账号的 accountType
-void AccountManager::updateAllAccountTypes()
-{
-    LOG_INFO << "[账户管理] 开始全量刷新账号类型";
-    
-    // 先复制需要更新的账号列表，避免长时间持有锁
-    std::vector<shared_ptr<Accountinfo_st>> accountsToUpdate;
-    {
-        std::lock_guard<std::mutex> lock(accountListMutex);
-        for (auto& apiName : accountList) {
-            for (auto& userName : apiName.second) {
-                auto account = userName.second;
-                if (shouldSkipLifecycleRefresh(account)) {
-                    continue;
-                }
-                // 只更新 token 有效的账号
-                if (account && account->tokenStatus && !account->authToken.empty()) {
-                    accountsToUpdate.push_back(account);
-                }
-            }
-        }
-    }
-    
-    // 在锁外进行更新操作。
-    // 循环体内必须检查停机：本函数由 accountTypeThread_ 巡检线程调用，最坏耗时是
-    // N账号 x（单次上游请求 + 500ms 节流），与账号数成正比、无常量上界。改前该循环
-    // 跑到自然结束才回到 while 头看停机标志，账号一多就把停机拖成分钟级。
-    for (auto& account : accountsToUpdate) {
-        if (backgroundStopRequested_.load()) {
-            LOG_INFO << "[账户管理] 停机中，中止全量账号类型刷新";
-            break;
-        }
-        updateAccountType(account);
-        // 添加短暂延迟，避免请求过于频繁；改用可中断等待，停机时立即返回。
-        if (!backgroundSleep(std::chrono::milliseconds(500))) {
-            LOG_INFO << "[账户管理] 停机中，中止全量账号类型刷新";
-            break;
-        }
-    }
-    
-    LOG_INFO << "[账户管理] 全量刷新账号类型结束";
-}
-
-// 启动定时检查 accountType 的线程
-void AccountManager::checkAccountTypeThread()
-{
-    if (accountTypeThread_.joinable()) {
-        LOG_WARN << "[账户管理] 账号类型巡检线程已在运行，忽略重复启动";
-        return;
-    }
-    accountTypeDone_ = std::make_shared<platform::ThreadCompletion>();
-    accountTypeThread_ = std::thread([this, done = accountTypeDone_] {
-        struct Signaler {
-            platform::ThreadCompletionPtr done;
-            ~Signaler() { done->signal(); }
-        } signaler{done};
-        // 启动后先静默一段时间再执行第一次检查，让系统稳定
-        // （注释原写“5 分钟”而代码是 1 分钟，以代码为准并修正描述）
-        if (!backgroundSleep(std::chrono::minutes(1))) {
-            LOG_INFO << "[账户管理] 账号类型巡检线程在预热期收到停机信号，直接退出";
-            return;
-        }
-
-        while (!backgroundStopRequested_.load()) {
-            LOG_INFO << "[账户管理] 启动定时账号类型巡检任务";
-            updateAllAccountTypes();
-
-            // 每 3 小时检查一次
-            if (!backgroundSleep(std::chrono::hours(3))) break;
-        }
-        LOG_INFO << "[账户管理] 账号类型巡检线程已退出";
-    });
-    LOG_INFO << "[账户管理] 账号类型巡检线程已启动";
-}
-
-// 检查账号是否正在注册中（通过ID）
-bool AccountManager::isAccountRegistering(int pendingId)
-{
-    std::lock_guard<std::mutex> lock(registeringMutex_);
-    return registeringAccountIds_.find(pendingId) != registeringAccountIds_.end();
-}
-
-// 检查账号是否正在注册中（通过用户名）
-bool AccountManager::isAccountRegisteringByUsername(const string& userName)
-{
-    // 检查数据库中的状态
-    string status = requireStore()->getAccountStatusByUsername("chaynsapi", userName);
-    return status == AccountStatus::REGISTERING;
-}
-
-void AccountManager::cleanExpiredAccounts()
-{
-    const auto automationSettings = getAccountAutomationSettings();
-    if (!automationSettings.autoDeleteEnabled) {
-        // auto_delete_enabled 是自动清理的总闸：关闭时不仅停用全局保留天数规则，
-        // 也必须停用渠道级 accountRetentionDays 规则与 Retool workspace 回收，
-        // 否则运维关掉总开关后账号仍会被渠道配置悄悄删除。
-        LOG_INFO << "[自动清理] auto_delete_enabled=false，跳过本轮全部自动清理";
-        return;
-    }
-    LOG_INFO << "[自动清理] 开始检查过期账号...";
-    
-    // 获取当前时间
-    auto now = trantor::Date::now();
-    const double expireDurationSeconds =
-        static_cast<double>(automationSettings.deleteAfterDays) * 24.0 * 3600.0;
-
-    std::map<std::string, int> channelRetentionDays;
-    for (const auto& channel : requireChannelStore()->getChannelList()) {
-        channelRetentionDays[channel.channelName] = channel.accountRetentionDays;
-    }
-    
-    // 获取当前所有账号的快照
-    auto currentAccountMap = getAccountList();
-    auto currentRetoolWorkspaces = workspaceUseCase_ ? workspaceUseCase_->list()
-                                                     : std::vector<RetoolWorkspaceInfo>{};
-    
-    list<Accountinfo_st> expiredAccounts;
-    std::vector<std::string> expiredRetoolWorkspaceIds;
-    
-    for (auto &apiPair : currentAccountMap)
-    {
-        for (auto &accountPair : apiPair.second)
-        {
-            auto &account = accountPair.second;
-            if (!account) continue;
-
-            if (account->status == AccountStatus::WAITING || account->status == AccountStatus::REGISTERING) {
-                continue;
-            }
-            
-            // 检查 createTime 是否为空
-            if (account->createTime.empty()) {
-                LOG_WARN << "[自动清理] 账号 " << account->userName << " 没有 createTime，跳过";
-                continue;
-            }
-            
-            // 解析 createTime (格式: "2026-02-07 12:46:38")
-            auto createDate = trantor::Date::fromDbStringLocal(account->createTime);
-            
-            // 计算时间差（秒）
-            double ageSec = now.secondsSinceEpoch() - createDate.secondsSinceEpoch();
-
-            const int retentionDaysByChannel = channelRetentionDays.count(account->apiName)
-                ? channelRetentionDays[account->apiName]
-                : 0;
-            // 付费账号一律不参与自动删除：无论命中的是全局规则还是渠道规则。
-            // 渠道 accountRetentionDays 只应收紧 free 账号的保留窗口，不得越权删 pro。
-            const bool deletableType = (account->accountType == "free");
-            const bool hitGlobalRule = deletableType &&
-                                       ageSec >= expireDurationSeconds;
-            const bool hitChannelRule = deletableType &&
-                                        retentionDaysByChannel > 0 &&
-                                        ageSec >= static_cast<double>(retentionDaysByChannel) * 24.0 * 3600.0;
-
-            if (hitGlobalRule || hitChannelRule)
-            {
-                if (hitChannelRule) {
-                    LOG_INFO << "[自动清理] 账号 " << account->userName
-                             << " 创建于 " << account->createTime
-                             << "，已超过渠道保留天数 " << retentionDaysByChannel
-                             << " 天（" << (ageSec / 86400.0) << "天），标记为待删除";
-                } else {
-                    LOG_INFO << "[自动清理] 账号 " << account->userName
-                             << " 创建于 " << account->createTime
-                             << "，已超过全局保留天数 " << automationSettings.deleteAfterDays
-                             << " 天（" << (ageSec / 86400.0) << "天），标记为待删除";
-                }
-                
-                // 复制完整账号信息用于删除
-                Accountinfo_st expiredAccount;
-                expiredAccount.apiName = account->apiName;
-                expiredAccount.userName = account->userName;
-                expiredAccount.passwd = account->passwd;
-                expiredAccount.authToken = account->authToken;
-                expiredAccount.userTobitId = account->userTobitId;
-                expiredAccount.personId = account->personId;
-                expiredAccount.createTime = account->createTime;
-                expiredAccount.accountType = account->accountType;
-                expiredAccount.status = account->status;
-                expiredAccount.workspaceUacId = account->workspaceUacId;
-                
-                expiredAccounts.push_back(expiredAccount);
-            }
-        }
-    }
-
-    const int retoolRetentionDays = channelRetentionDays.count("retoolapi")
-        ? channelRetentionDays["retoolapi"]
-        : 0;
-    if (retoolRetentionDays > 0)
-    {
-        for (const auto& workspace : currentRetoolWorkspaces)
-        {
-            if (!isRetoolWorkspaceActive(workspace))
-            {
-                continue;
-            }
-            if (workspace.createdAt.empty())
-            {
-                LOG_WARN << "[自动清理] Retool workspace " << workspace.workspaceId << " 没有 createdAt，跳过";
-                continue;
-            }
-
-            if (workspace.inUseCount > 0)
-            {
-                LOG_INFO << "[自动清理] Retool workspace " << workspace.workspaceId
-                         << " 当前使用中(inUseCount=" << workspace.inUseCount << ")，跳过";
-                continue;
-            }
-
-            const auto referenceTime = workspace.lastUsedAt.empty() ? workspace.createdAt : workspace.lastUsedAt;
-            auto referenceDate = trantor::Date::fromDbStringLocal(referenceTime);
-            double ageSec = now.secondsSinceEpoch() - referenceDate.secondsSinceEpoch();
-            if (ageSec >= static_cast<double>(retoolRetentionDays) * 24.0 * 3600.0)
-            {
-                LOG_INFO << "[自动清理] Retool workspace " << workspace.workspaceId
-                         << " 最近参考时间 " << referenceTime
-                         << "，已超过渠道保留天数 " << retoolRetentionDays
-                         << " 天（" << (ageSec / 86400.0) << "天），标记为待禁用";
-                expiredRetoolWorkspaceIds.push_back(workspace.workspaceId);
-            }
-        }
-    }
-    
-    if (expiredAccounts.empty() && expiredRetoolWorkspaceIds.empty()) {
-        LOG_INFO << "[自动清理] 没有发现过期资源";
-        return;
-    }
-    
-    LOG_INFO << "[自动清理] 发现 " << expiredAccounts.size() << " 个过期账号，"
-             << expiredRetoolWorkspaceIds.size() << " 个过期 Retool workspace，开始处理...";
-    
-    for (auto &account : expiredAccounts)
-    {
-        // 1) 从内存中删除
-        if (!deleteAccountbyPost(account.apiName, account.userName)) {
-            LOG_WARN << "[自动清理] 从内存删除失败: " << account.userName;
-            continue;
-        }
-        
-        // 2) 从上游删除账号
-        bool upstreamDeleted = deleteUpstreamAccount(account);
-        if (upstreamDeleted) {
-            LOG_INFO << "[自动清理] 上游账号删除成功: " << account.userName;
-        } else {
-            LOG_WARN << "[自动清理] 上游账号删除失败（继续删除本地数据库）: " << account.userName;
-        }
-        
-        // 3) 从本地数据库删除
-        requireStore()->deleteAccount(account.apiName, account.userName);
-        LOG_INFO << "[自动清理] 数据库记录已删除: " << account.userName;
-    }
-
-    for (const auto& workspaceId : expiredRetoolWorkspaceIds)
-    {
-        std::string workspaceError;
-        if (workspaceUseCase_ && workspaceUseCase_->disable(workspaceId, &workspaceError))
-        {
-            LOG_INFO << "[自动清理] Retool workspace 已禁用: " << workspaceId;
-        }
-        else
-        {
-            LOG_WARN << "[自动清理] Retool workspace 禁用失败: " << workspaceId
-                     << " error=" << workspaceError;
-        }
-    }
-    
-    // 重新加载账号
-    loadAccount();
-    
-    // 检查渠道账号数量（可能需要补充账号）
-    checkChannelAccountCounts();
-    
-    LOG_INFO << "[自动清理] 过期资源清理完成，共删除 " << expiredAccounts.size()
-             << " 个传统账号，禁用 " << expiredRetoolWorkspaceIds.size()
-             << " 个 Retool workspace";
+        checkAccountTypeThread();
+    }
+    LOG_INFO << "[账户管理] 登录服务URL: "
+             << account::workflow::loginServiceUrl("chaynsapi");
+    LOG_INFO << "[账户管理] 注册服务URL: "
+             << account::workflow::registrationServiceUrl("chaynsapi");
 }

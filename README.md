@@ -164,7 +164,7 @@ src/
 ├── infrastructure/provider/ ProviderBase、Registry 与 production factory
 ├── apipoint/                Chayns / Retool Provider 协议实现
 ├── apiManager/              仅保留历史 ApiChannel 公共枚举（无 Provider 工厂/定位器）
-├── accountManager/          传统账号池管理
+├── accountManager/          账号选择、注册、Token/健康 workflow 与后台 worker（见 README）
 ├── managedAccount/          统一 ManagedAccount 抽象及后端实现
 ├── channelManager/          渠道状态、并发和路由管理
 ├── dbManager/               账号、渠道、配置、指标和 Workspace 持久化
@@ -499,6 +499,30 @@ runGuarded(req, sink, policy)
        │    └─ ToolCallDone → OutputTextDone → Completed
        └─ coverSessionresponse() → 会话上下文更新 + 转移
 ```
+
+### Account workflows（账号工作流）
+
+`AccountManager` 保持既有管理与 `IAccountSelector` port，但不再把所有流程放在一个实现文件：
+
+```text
+AccountManager（注入、配置、启动）
+  ├─ AccountSelector + AccountSelectionPolicy
+  │    └─ pool rebuild / rotation / free-pro eligibility / excluded users
+  ├─ AccountRegistrationStateMachine
+  │    └─ waiting → registering → active
+  │       failure: waiting → delete
+  ├─ AccountRegistrationWorkflow
+  │    └─ Chayns register-and-login poll / Retool provision dispatch
+  ├─ AccountTokenWorkflow
+  │    └─ token validation / refresh / queued retry / reachable probe
+  ├─ AccountHealthWorkflow
+  │    └─ quota replenishment / expiry cleanup / upstream deletion
+  └─ AccountWorkers
+       └─ interruptible waits + deadline-aware join
+```
+
+HTTP transport 与 clock 是 infrastructure adapter；`AppWiring` 在 `AccountManager::init()` 前显式注入它们。
+因此遗漏接线会安全降级而非由 application 层反向链接 infrastructure，且由启动接线门禁阻止。
 
 ### GenerationEvent（统一事件模型）
 

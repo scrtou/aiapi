@@ -11,6 +11,13 @@ errors = []
 
 for relative in (
     "accountManager/accountManager.cpp",
+    "accountManager/AccountSelector.cpp",
+    "accountManager/AccountTokenWorkflow.cpp",
+    "accountManager/AccountRegistrationWorkflow.cpp",
+    "accountManager/AccountHealthWorkflow.cpp",
+    "accountManager/AccountWorkers.cpp",
+    "accountManager/AccountRegistrationStateMachine.cpp",
+    "accountManager/AccountWorkflowSupport.cpp",
     "application/account/AccountAdminUseCase.cpp",
     "apipoint/chaynsapi/chaynsapi.cpp",
 ):
@@ -29,6 +36,8 @@ for needle in (
     "ctx.setConfigStore(configStore)",
     "accounts->setStore(accountStore)",
     "accounts->setChannelStore(channelStore)",
+    "accounts->setHttpTransport(account::makeDrogonAccountHttpTransport())",
+    "accounts->setClock(account::makeRealAccountClock())",
     "accounts->setConfigStore(configStore)",
     "accounts->setRetoolWorkspaceServices(",
     "ctx.setAccountAdminUseCase(accountAdmin)",

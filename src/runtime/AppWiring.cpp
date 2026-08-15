@@ -1,6 +1,8 @@
 #include <runtime/AppWiring.h>
 
 #include <accountManager/accountManager.h>
+#include <accountManager/AccountClock.h>
+#include <accountManager/AccountHttpTransport.h>
 #include <accountManager/RetoolProvisionClock.h>
 #include <apipoint/chaynsapi/chaynsapi.h>
 #include <apipoint/chaynsapi/chaynsThreadReaper.h>
@@ -252,6 +254,8 @@ StartupResult stepInjectStores(AppContext& ctx)
     ctx.setAccountManager(accounts);
     accounts->setStore(accountStore);
     accounts->setChannelStore(channelStore);
+    accounts->setHttpTransport(account::makeDrogonAccountHttpTransport());
+    accounts->setClock(account::makeRealAccountClock());
     accounts->setRetoolProvisionClock(
         retoolProvision::makeSystemRetoolProvisionClock());
     accounts->setConfigStore(configStore);

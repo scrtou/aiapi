@@ -172,9 +172,13 @@ def main() -> int:
         if legacy_values is None or not legacy_declared:
             failures.append(
                 "transitional gate expects both legacy list/target; use --require-no-legacy at exit")
-        elif len(legacy_values) > 39:
+        # P7-W2 has moved the complete AccountManager workflow closure out of
+        # legacy.  Keep this as a ratchet rather than merely reporting the
+        # smaller list: later slices may only reduce 19 further until P8
+        # enables --require-no-legacy.
+        elif len(legacy_values) > 19:
             failures.append(
-                f"legacy source ceiling regressed: {len(legacy_values)} > 39")
+                f"legacy source ceiling regressed: {len(legacy_values)} > 19")
 
     if failures:
         fail(failures)

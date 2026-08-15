@@ -6,6 +6,28 @@
 
 ---
 
+## P7-W2 收口 · Account workflows 重写（2026-08-15）
+
+- `AccountManager` 现仅承担 ports 注入、配置加载、schema/account 初始化和 worker 启动；选择/轮换、
+  token、registration、health、worker 和共享 workflow support 分别迁为 application 的专职 source，
+  `aiapi_legacy` source count 由 20 降至 19。
+- `AccountRegistrationStateMachine` 独占 `waiting → registering → active` 和 in-flight ID；transition 或
+  workflow 失败都固定先恢复 `waiting`，再删除状态受限的 reservation，RAII scope 最终释放 registering 标记。
+  新的纯 stage tests 固定 rollback 顺序、transition failure、free/pro + workspace binding 选择和 JSON/URL
+  边界；既有 fake HTTP lifecycle/worker regression 继续覆盖真实流程。
+- concrete Account HTTP transport/clock 留在 infrastructure，避免把 application 反向链接到 infrastructure；
+  `AppWiring` 在 `accounts->init()` 前显式注入它们，Null adapter 只用于未接线的局部 fixture。startup/account
+  service gates 同步固定接线和时序。
+- 新增 `check_account_workflow_slice.py` 及 CI selftest，冻结 source owner、stage 边界、rollback 顺序和测试
+  登记；selftest 在内存中把 `WAITING` rollback 转换破坏为 `ACTIVE`，必须返回 rc=4。既有 shutdown deadline
+  gate 的账号 worker owner 同步指向 `AccountWorkers.cpp`，仍检查同一组 completion/join invariant；db include
+  ratchet 把已无 concrete DB include 的 `accountManager` 移入 `must_stay_clean`。
+- 验证：Debug configure/build、397/397 `ctest`、直接 runner 397 cases / 2080 assertions、严格 test registration
+  和全量 architecture gates 通过；R1=0、R2=38、R3=6/2563。P7-W2 标记 `DONE`，阶段 7 完成，下一项为
+  P8-W1 过渡代码和 debt 清理。
+
+---
+
 ## P7-W1 收口 · Generation pipeline 重写（2026-08-14）
 
 - `GenerationService` 缩为稳定 facade，只持有 `GenerationPipeline`；请求物化、连续性、执行门控、

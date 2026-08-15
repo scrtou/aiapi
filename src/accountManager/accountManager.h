@@ -28,6 +28,7 @@ using namespace std;
 #include <domain/port/IRetoolWorkspaceUseCase.h>
 #include <accountManager/AccountHttpTransport.h>
 #include <accountManager/AccountClock.h>
+#include <accountManager/AccountRegistrationStateMachine.h>
 #include <platform/ThreadJoin.h>
 
 
@@ -44,8 +45,10 @@ class AccountManager : public IAccountCatalog,
     // Diese Helferfunktion baut den Pool einer API aus accountList neu auf.
     // Voraussetzung: accountListMutex ist vom Aufrufer bereits gehalten (nicht rekursiv!).
     void rebuildPoolLocked(const std::string& apiName);
-    std::set<int> registeringAccountIds_;     // 正在注册中的账号ID集合
-    mutable std::mutex registeringMutex_;     // 保护 registeringAccountIds_ 的互斥锁
+    // P7-W2: durable waiting/registering/active transitions and the in-flight
+    // registration set are owned by a dedicated state machine rather than
+    // being interleaved with selection and worker state.
+    std::unique_ptr<account::AccountRegistrationStateMachine> registrationStateMachine_;
     list<shared_ptr<Accountinfo_st>> accountListNeedUpdate;//需要更新的账号,
     std::mutex accountListNeedUpdateMutex;
     std::condition_variable accountListNeedUpdateCondition;

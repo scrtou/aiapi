@@ -36,7 +36,11 @@ def main():
     app_context = read("src/runtime/AppContext.h")
     wiring = read("src/runtime/AppWiring.cpp")
     account_h = read("src/accountManager/accountManager.h")
-    account_cpp = read("src/accountManager/accountManager.cpp")
+    # P7-W2 leaves AccountManager.cpp as the composition/configuration
+    # facade.  The actual four-worker lifecycle (and therefore the final
+    # deadline-aware join) is owned by AccountWorkers.cpp; checking the old
+    # facade would make this gate demand the very monolith the slice removed.
+    account_workers = read("src/accountManager/AccountWorkers.cpp")
     reaper_h = read("src/apipoint/chaynsapi/chaynsThreadReaper.h")
     reaper_cpp = read("src/apipoint/chaynsapi/chaynsThreadReaper.cpp")
     session_h = read("src/sessionManager/core/Session.h")
@@ -67,7 +71,7 @@ def main():
 
     check_file("src/accountManager/accountManager.h", account_h,
                [("限时 stop 声明", r"stopBackgroundThreads\s*\(\s*std::chrono::steady_clock::time_point\s+deadline\s*\)")], problems)
-    check_file("src/accountManager/accountManager.cpp", account_cpp,
+    check_file("src/accountManager/AccountWorkers.cpp", account_workers,
                [("四个账号 worker 的 joinUntil", r"joinUntil\s*\("),
                 ("账号 worker completion", r"tokenCheckDone_|tokenUpdateDone_|accountCountDone_|accountTypeDone_")], problems)
     check_file("src/apipoint/chaynsapi/chaynsThreadReaper.h", reaper_h,

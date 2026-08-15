@@ -188,6 +188,15 @@ jobs:
       - name: P7 - Generation pipeline stage gate selftest
         run: python3 tools/arch/check_generation_pipeline_slice.py --selftest
 
+      # P7-W2：AccountManager 不再以单文件同时持有选择/轮换、持久化状态转换、
+      # token refresh、注册、健康巡检和线程生命周期。该门禁固定 source owner、
+      # rollback 的 waiting -> delete 顺序，以及真实 workflow/worker 回归入口。
+      - name: P7 - Account workflow stages
+        run: python3 tools/arch/check_account_workflow_slice.py
+
+      - name: P7 - Account workflow stage gate selftest
+        run: python3 tools/arch/check_account_workflow_slice.py --selftest
+
       # 这道门禁既检查结构也检查 [[nodiscard]] 的 C++ 诊断。先真的删掉
       # 泛型 Result 的属性，再断言其以本门禁约定的 rc=4 失败；trap 保证本地
       # 运行也不会覆盖开发者已有改动。

@@ -97,6 +97,7 @@ set(TEST_SOURCES
     test_channel_store_port.cpp
     test_account_store_port.cpp
     test_account_lifecycle_fixture.cpp
+    test_account_workflow_stages.cpp
     test_account_reload_ghost_index.cpp
     test_account_pool_heap_order.cpp
     test_retool_provision_health.cpp
