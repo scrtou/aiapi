@@ -2,12 +2,14 @@
 #include <infrastructure/provider/chayns/chaynsapi.h>
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <mutex>
 #include <infrastructure/provider/limits/HistoryReplayBudget.h>
 #include <infrastructure/provider/limits/OutboundBudget.h>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +21,11 @@ namespace {
 
 constexpr auto MODEL_CACHE_TTL = std::chrono::minutes(15);
 constexpr auto MODEL_REFRESH_MIN_INTERVAL = std::chrono::seconds(30);
+constexpr std::size_t TOOL_BRIDGE_LOG_MAX_BYTES = 16U * 1024U;
+
+constexpr std::string_view TOOL_INSTRUCTIONS_OPEN = "<tool_instructions>\n";
+constexpr std::string_view TOOL_INSTRUCTIONS_CLOSE = "</tool_instructions>";
+constexpr std::string_view TOOL_BRIDGE_LOG_TRUNCATION = "...<truncated>";
 
 constexpr const char* CHAYNS_FREE_ORIGIN = "https://sidekick.ki";
 constexpr const char* CHAYNS_FREE_REFERER = "https://sidekick.ki/";
@@ -129,6 +136,86 @@ std::string compactJson(const Json::Value& value)
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
     return Json::writeString(writer, value);
+}
+
+// The application wraps bridge definitions in this exact tag block before it
+// reaches the provider.  Use the final generated opening tag so user content
+// (including the explanatory empty tag in the wrapper) is never mistaken for
+// provider-facing bridge instructions.
+std::optional<std::string_view> toolBridgeInstructionsForLog(const std::string& input)
+{
+    const auto start = input.rfind(TOOL_INSTRUCTIONS_OPEN);
+    if (start == std::string::npos) return std::nullopt;
+
+    const auto end = input.rfind(TOOL_INSTRUCTIONS_CLOSE);
+    if (end == std::string::npos || end < start + TOOL_INSTRUCTIONS_OPEN.size()) {
+        return std::nullopt;
+    }
+
+    return std::string_view(input).substr(
+        start, end + TOOL_INSTRUCTIONS_CLOSE.size() - start);
+}
+
+struct ToolBridgeLogPayload
+{
+    std::string text;
+    std::size_t sourceBytes = 0;
+    bool truncated = false;
+};
+
+std::string escapedLogByte(unsigned char value)
+{
+    switch (value) {
+        case '\\': return "\\\\";
+        case '\"': return "\\\"";
+        case '\n': return "\\n";
+        case '\r': return "\\r";
+        case '\t': return "\\t";
+        default: break;
+    }
+
+    if (value >= 0x20U && value != 0x7fU) {
+        return std::string(1, static_cast<char>(value));
+    }
+
+    constexpr char hex[] = "0123456789ABCDEF";
+    std::string escaped = "\\x00";
+    escaped[2] = hex[(value >> 4U) & 0x0fU];
+    escaped[3] = hex[value & 0x0fU];
+    return escaped;
+}
+
+ToolBridgeLogPayload makeToolBridgeLogPayload(std::string_view source)
+{
+    ToolBridgeLogPayload payload;
+    payload.sourceBytes = source.size();
+    payload.text.reserve(std::min(source.size(), TOOL_BRIDGE_LOG_MAX_BYTES));
+
+    const std::size_t textLimit = TOOL_BRIDGE_LOG_MAX_BYTES -
+        TOOL_BRIDGE_LOG_TRUNCATION.size();
+    for (const unsigned char byte : source) {
+        const std::string escaped = escapedLogByte(byte);
+        if (payload.text.size() + escaped.size() > textLimit) {
+            payload.truncated = true;
+            break;
+        }
+        payload.text += escaped;
+    }
+    if (payload.truncated) payload.text += TOOL_BRIDGE_LOG_TRUNCATION;
+    return payload;
+}
+
+void logToolBridgePayload(const char* direction, std::string_view source)
+{
+    const ToolBridgeLogPayload payload = makeToolBridgeLogPayload(source);
+    // Keep this single-line and bounded: Drogon's file logger then preserves
+    // a searchable request/response pair without allowing response content to
+    // forge additional log lines.
+    LOG_INFO << "[chaynsAPI][ToolBridge] " << direction
+             << ": sourceBytes=" << payload.sourceBytes
+             << ", loggedBytes=" << payload.text.size()
+             << ", truncated=" << payload.truncated
+             << ", payload=\"" << payload.text << "\"";
 }
 
 // Upstream bodies may carry conversation content, identifiers, cookies, or
@@ -333,6 +420,13 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
     }
 
     const Json::Value messageContext = historyForChayns(request.messages);
+    const auto toolBridgeInstructions = toolBridgeInstructionsForLog(request.input);
+    if (toolBridgeInstructions.has_value()) {
+        // `request.input` also contains the user request and may contain an
+        // environment context.  Log only the generated tool-instruction
+        // block, not the complete provider prompt.
+        logToolBridgePayload("上游请求桥接内容", *toolBridgeInstructions);
+    }
     LOG_INFO << "[chaynsAPI] 发送聊天消息";
     string modelname = request.model;
 
@@ -1138,6 +1232,10 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                                      << ", reasoningCount=" << reasoningMessages.size();
                             LOG_INFO << "[chaynsAPI] 回复已接收: textLength="
                                      << response_message.size();
+                            if (toolBridgeInstructions.has_value()) {
+                                logToolBridgePayload("上游响应桥接内容",
+                                                     response_message);
+                            }
                             LOG_DEBUG << "[chaynsAPI] 回复内容: " << response_message;
                             break;
                         }
