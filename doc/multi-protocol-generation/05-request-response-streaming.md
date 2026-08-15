@@ -90,6 +90,20 @@ Responses SSE 的 native tool item 会按 started/delta/done 分别发送
 `response.output_item.added`、参数 delta、参数 done 和 `response.output_item.done`，
 不会因为 terminal projection 再创建第二个 output item。
 
+Claude SSE Sink 将同一事件序列映射为：
+
+```text
+message_start
+  → content_block_start
+  → content_block_delta(text_delta | input_json_delta)*
+  → content_block_stop
+  → message_delta
+  → message_stop
+```
+
+工具参数按调用 ID 和 sequence 去重；`ToolCallDone` 只关闭已有 `tool_use` 内容块，
+不会重复发送参数。错误使用 `event: error` 和 Anthropic 的 `type/error` JSON 结构。
+
 ## 7. 不可无损映射
 
 对于某协议独有且统一模型无法表达的能力，必须选择：

@@ -10,7 +10,7 @@
  * 将 GenerationRequest 中可能包含会话连续性信息的文本统一抽取为文本集合。
  *
  * 说明：
- * - RequestAdapters 会尽量填充 GenerationRequest.continuityTexts（保留零宽字符）。
+ * - 协议 RequestAdapter 会尽量填充 GenerationRequest.continuityTexts（保留零宽字符）。
  * - 若该字段为空，则回退从 messages/currentInput 组合抽取。
  */
 class TextExtractor {
@@ -19,4 +19,3 @@ public:
 };
 
 #endif // 头文件保护结束
-

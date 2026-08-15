@@ -43,7 +43,6 @@ class ProtocolRegistry {
 };
 
 /** Build the production registry for the currently supported routes. */
-std::shared_ptr<ProtocolRegistry> makeDefaultProtocolRegistry(
-    ProtocolSinkFactoryCallback sinkFactory = {});
+std::shared_ptr<ProtocolRegistry> makeDefaultProtocolRegistry();
 
 }  // namespace generation::protocol

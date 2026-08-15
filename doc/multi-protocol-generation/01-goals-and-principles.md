@@ -4,7 +4,8 @@
 
 当前系统已经存在生成请求、生成事件、Provider、Pipeline、Controller 和响应 Sink 等组件。下一步不是简单增加一个新接口，而是把这些组件整理为稳定的边界，使未来增加新协议时不会持续污染核心代码。
 
-当前实现以 OpenAI-compatible 为第一协议完成了这次边界迁移；Claude 协议明确延后，不作为本轮完成标准。
+当前实现以 OpenAI-compatible 为第一协议完成边界迁移，并已按同一扩展边界接入
+Anthropic Messages API 作为第二协议；核心生成链路保持协议无关。
 
 ## 2. 目标
 

@@ -94,12 +94,22 @@ set(AIAPI_APPLICATION_SOURCES
     application/generation/core/ClientOutputSanitizer.cpp
     application/generation/core/AiApiUseCase.cpp
     application/generation/core/RetiredProviderTelemetry.cpp
-    application/generation/core/RequestAdapters.cpp
     application/generation/core/GenerationService.cpp
     application/generation/core/GenerationPipeline.cpp
     application/generation/core/GenerationResponsePipeline.cpp
     application/generation/protocol/common/ProtocolRegistry.cpp
+    application/generation/protocol/claude/ClaudeProtocolModule.cpp
+    application/generation/protocol/claude/ClaudeRequestAdapter.cpp
+    application/generation/protocol/claude/ClaudeJsonSink.cpp
+    application/generation/protocol/claude/ClaudeSseSink.cpp
+    application/generation/protocol/claude/ClaudeErrorFormatter.cpp
     application/generation/protocol/openai/OpenAiProtocolModule.cpp
+    application/generation/protocol/openai/OpenAiRequestAdapter.cpp
+    application/generation/protocol/openai/OpenAiChatJsonSink.cpp
+    application/generation/protocol/openai/OpenAiChatSseSink.cpp
+    application/generation/protocol/openai/OpenAiResponsesJsonSink.cpp
+    application/generation/protocol/openai/OpenAiResponsesSseSink.cpp
+    application/generation/protocol/openai/OpenAiErrorFormatter.cpp
     application/generation/tooling/BridgeHelpers.cpp
     application/generation/tooling/BridgeProtocolCodec.cpp
     application/generation/tooling/StrictClientRules.cpp
@@ -152,10 +162,6 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
 )
 
 set(AIAPI_TRANSPORT_SOURCES
-    transport/controllers/sinks/ChatSseSink.cpp
-    transport/controllers/sinks/ChatJsonSink.cpp
-    transport/controllers/sinks/ResponsesSseSink.cpp
-    transport/controllers/sinks/ResponsesJsonSink.cpp
     transport/controllers/AiApiController.cc
     transport/controllers/AccountController.cc
     transport/controllers/ChannelController.cc

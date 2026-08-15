@@ -4,6 +4,7 @@
 #include <transport/controllers/RetiredProviderTombstone.h>
 #include <transport/controllers/codecs/ProviderModelCatalogJsonCodec.h>
 #include <application/generation/contracts/IResponseSink.h>
+#include <application/generation/protocol/claude/ClaudeErrorFormatter.h>
 #include <transport/controllers/sinks/IoLoopResponseStream.h>
 
 #include <drogon/HttpResponse.h>
@@ -125,6 +126,36 @@ HttpResponsePtr unavailableResponse()
     return makeUseCaseError(error);
 }
 
+HttpResponsePtr makeClaudeError(const aiapi::Error& error)
+{
+    const auto body = generation::protocol::claude::formatApiError(error);
+    auto response = HttpResponse::newHttpJsonResponse(body);
+    response->setStatusCode(static_cast<HttpStatusCode>(error.httpStatus));
+    if (error.retryAfterSeconds > 0) {
+        response->addHeader("Retry-After", std::to_string(error.retryAfterSeconds));
+    }
+    return response;
+}
+
+std::string makeClaudeSseError(const aiapi::Error& error)
+{
+    Json::StreamWriterBuilder writer;
+    writer["indentation"] = "";
+    return "event: error\ndata: " +
+        Json::writeString(writer, generation::protocol::claude::formatApiError(error)) +
+        "\n\n";
+}
+
+HttpResponsePtr unavailableClaudeResponse()
+{
+    aiapi::Error error;
+    error.httpStatus = 503;
+    error.type = "service_unavailable";
+    error.message = "Server is shutting down";
+    error.code = "shutting_down";
+    return makeClaudeError(error);
+}
+
 platform::ErrorCode toGenerationErrorCode(const aiapi::Error& error)
 {
     if (error.httpStatus == 400) return platform::ErrorCode::BadRequest;
@@ -166,6 +197,26 @@ void finishJsonGeneration(
     }
     ctl::respondInLoop(callback, ctl::makeError(
         k500InternalServerError, "internal_error", "Failed to generate response"));
+}
+
+void finishClaudeJsonGeneration(
+    const std::shared_ptr<std::function<void(const HttpResponsePtr&)>>& callback,
+    const std::shared_ptr<JsonResponseState>& state,
+    const aiapi::GenerationResult& result)
+{
+    if (state && state->response) {
+        state->response->setStatusCode(static_cast<HttpStatusCode>(state->status));
+        state->response->setContentTypeString("application/json; charset=utf-8");
+        ctl::respondInLoop(callback, state->response);
+        return;
+    }
+    if (!result.succeeded()) {
+        ctl::respondInLoop(callback, makeClaudeError(*result.error));
+        return;
+    }
+    aiapi::Error error;
+    error.message = "Failed to generate response";
+    ctl::respondInLoop(callback, makeClaudeError(error));
 }
 
 bool parseStoredResponse(const std::string& serialized, Json::Value& out)
@@ -393,6 +444,108 @@ void AiApiController::responsesCreate(
             if (!submission.accepted()) {
                 LOG_WARN << "[AI] Responses ("
                          << static_cast<int>(submission.outcome) << ")，";
+                streamBridge->close();
+            }
+        },
+        true);
+
+    response->setContentTypeString("text/event-stream; charset=utf-8");
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("Connection", "keep-alive");
+    response->addHeader("X-Accel-Buffering", "no");
+    response->addHeader("Keep-Alive", "timeout=60");
+    callback(response);
+}
+
+void AiApiController::messagesCreate(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback)
+{
+    LOG_INFO << "[AI] Claude Messages";
+    logSafeRequestMetadata(req, "messages.create");
+
+    auto json = req ? req->getJsonObject() : nullptr;
+    if (!json) {
+        aiapi::Error error;
+        error.httpStatus = 400;
+        error.type = "invalid_request_error";
+        error.message = "Invalid JSON in request body";
+        callback(makeClaudeError(error));
+        return;
+    }
+
+    const bool stream = (*json).get("stream", false).asBool();
+    const auto input = generationInput(req, *json);
+    auto* const useCase = useCase_;
+
+    if (!stream) {
+        auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
+            std::move(callback));
+        if (!useCase) {
+            ctl::respondInLoop(cb, unavailableClaudeResponse());
+            return;
+        }
+
+        auto state = std::make_shared<JsonResponseState>();
+        aiapi::IAiApiUseCase::ResponseBinding binding;
+        binding.jsonResponse = [state](const Json::Value& response, int status) {
+            state->response = HttpResponse::newHttpJsonResponse(response);
+            state->status = status;
+        };
+        const auto submission = useCase->submitGeneration(
+            input,
+            std::move(binding),
+            [cb, state](const aiapi::GenerationResult& result,
+                        const std::shared_ptr<IResponseSink>&) {
+                finishClaudeJsonGeneration(cb, state, result);
+            });
+        if (!submission.accepted()) {
+            ctl::respondInLoop(cb, makeClaudeError(*submission.error));
+        }
+        return;
+    }
+
+    auto response = HttpResponse::newAsyncStreamResponse(
+        [input, useCase](ResponseStreamPtr streamResponse) mutable {
+            if (!streamResponse) {
+                LOG_WARN << "[AI] Claude Messages stream response unavailable";
+                return;
+            }
+            const auto streamBridge = IoLoopResponseStream::create(std::move(streamResponse));
+            if (!streamBridge) {
+                LOG_WARN << "[AI] Claude Messages IO bridge unavailable";
+                return;
+            }
+            if (!useCase) {
+                streamBridge->close();
+                return;
+            }
+
+            aiapi::IAiApiUseCase::ResponseBinding binding;
+            binding.stream = true;
+            binding.streamWriter = [streamBridge](const std::string& chunk) {
+                return streamBridge->send(chunk);
+            };
+            binding.close = [streamBridge] { streamBridge->close(); };
+            const auto submission = useCase->submitGeneration(
+                std::move(input),
+                std::move(binding),
+                [](const aiapi::GenerationResult& result,
+                   const std::shared_ptr<IResponseSink>& sink) {
+                    if (!result.succeeded() && sink && sink->isValid()) {
+                        emitUseCaseErrorToSink(*result.error, *sink);
+                        sink->onClose();
+                    }
+                });
+            if (!submission.accepted()) {
+                LOG_WARN << "[AI] Claude Messages submission rejected ("
+                         << static_cast<int>(submission.outcome) << ")"
+                         << (submission.error.has_value()
+                                 ? ": " + submission.error->message
+                                 : std::string());
+                if (submission.error.has_value()) {
+                    streamBridge->send(makeClaudeSseError(*submission.error));
+                }
                 streamBridge->close();
             }
         },

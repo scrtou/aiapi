@@ -50,9 +50,9 @@ GenerationError → 协议错误 JSON/SSE
 - 只新增协议模块、路由和测试；
 - 原有协议测试全部通过。
 
-当前已落地 `SimulatedProtocolModule`：它通过 `ProtocolRegistry::dispatch()` 返回
-自有 operation 和 Sink factory，并验证只需边界模块即可创建 Sink。该测试不接入
-Claude，也不修改核心生成服务或 Provider。
+当前已落地 `SimulatedProtocolModule` 和正式 Claude 模块：两者都通过
+`ProtocolRegistry::dispatch()` 返回自有 operation 和 Sink factory。Claude 接入没有
+修改核心生成服务、工具桥或 Provider。
 
 本轮新增的定向验收包括：
 
@@ -61,7 +61,14 @@ Claude，也不修改核心生成服务或 Provider。
 - `AiApiUseCase_RejectsCapabilityMissingFromDeclaredModel`；
 - `Sinks_ChatSse_ConsumesIncrementalToolLifecycle`；
 - `Sinks_ResponsesSse_StreamsIncrementalToolLifecycleOnce`；
-- `Sinks_ResponsesSse_ParallelToolsKeepOutputIndexOrder`。
+- `Sinks_ResponsesSse_ParallelToolsKeepOutputIndexOrder`；
+- `ClaudeProtocol_DefaultRoutesAndCapabilities`；
+- `ClaudeRequestAdapter_MapsCanonicalMessagesAndTools`；
+- `ClaudeRequestAdapter_SplitsParallelToolResultsInHistory`；
+- `ClaudeJsonSink_EncodesMessageAndToolUse`；
+- `ClaudeSseSink_EncodesAnthropicEventSequenceAndDeduplicatesArguments`；
+- `ClaudeJsonSink_FormatsAnthropicError`；
+- `ClaudeController_InvalidJsonUsesAnthropicErrorShape`。
 
 ## 5. 稳定性测试
 

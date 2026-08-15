@@ -1,8 +1,10 @@
 #include <drogon/drogon_test.h>
-#include <transport/controllers/sinks/ChatJsonSink.h>
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
-#include <transport/controllers/sinks/ChatSseSink.h>
-#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/protocol/openai/OpenAiChatJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiChatSseSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesSseSink.h>
+
+using namespace generation::protocol::openai;
 
 namespace {
 
@@ -28,7 +30,7 @@ size_t countOccurrences(const std::string& value, const std::string& needle)
 DROGON_TEST(Sinks_ChatJson_TextResponse)
 {
     CapturedResponse cap;
-    ChatJsonSink sink(
+    OpenAiChatJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -56,7 +58,7 @@ DROGON_TEST(Sinks_ChatJson_TextResponse)
 DROGON_TEST(Sinks_ChatJson_ToolCalls)
 {
     CapturedResponse cap;
-    ChatJsonSink sink(
+    OpenAiChatJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -85,7 +87,7 @@ DROGON_TEST(Sinks_ChatJson_ToolCalls)
 DROGON_TEST(Sinks_ChatJson_ErrorResponse)
 {
     CapturedResponse cap;
-    ChatJsonSink sink(
+    OpenAiChatJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -109,7 +111,7 @@ DROGON_TEST(Sinks_ChatJson_ErrorResponse)
 DROGON_TEST(Sinks_ResponsesJson_TextResponse)
 {
     CapturedResponse cap;
-    ResponsesJsonSink sink(
+    OpenAiResponsesJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -148,7 +150,7 @@ DROGON_TEST(Sinks_ResponsesJson_TextResponse)
 DROGON_TEST(Sinks_ResponsesJson_ToolCalls)
 {
     CapturedResponse cap;
-    ResponsesJsonSink sink(
+    OpenAiResponsesJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -181,7 +183,7 @@ DROGON_TEST(Sinks_ResponsesJson_ToolCalls)
 DROGON_TEST(Sinks_ResponsesJson_CodexNativeFunctionCall)
 {
     CapturedResponse cap;
-    ResponsesJsonSink sink(
+    OpenAiResponsesJsonSink sink(
         [&cap](const Json::Value& body, int statusCode) {
             cap.body = body;
             cap.status = statusCode;
@@ -228,7 +230,7 @@ DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
 {
     std::string stream;
     int closeCount = 0;
-    ResponsesSseSink sink(
+    OpenAiResponsesSseSink sink(
         [&stream](const std::string& chunk) {
             stream += chunk;
             return true;
@@ -282,7 +284,7 @@ DROGON_TEST(Sinks_ResponsesSse_CodexNativeFunctionCallSequence)
 DROGON_TEST(Sinks_ChatSse_ConsumesIncrementalToolLifecycle)
 {
     std::string stream;
-    ChatSseSink sink(
+    OpenAiChatSseSink sink(
         [&stream](const std::string& chunk) {
             stream += chunk;
             return true;
@@ -325,7 +327,7 @@ DROGON_TEST(Sinks_ChatSse_ConsumesIncrementalToolLifecycle)
 DROGON_TEST(Sinks_ResponsesSse_StreamsIncrementalToolLifecycleOnce)
 {
     std::string stream;
-    ResponsesSseSink sink(
+    OpenAiResponsesSseSink sink(
         [&stream](const std::string& chunk) {
             stream += chunk;
             return true;
@@ -378,7 +380,7 @@ DROGON_TEST(Sinks_ResponsesSse_StreamsIncrementalToolLifecycleOnce)
 DROGON_TEST(Sinks_ResponsesSse_ParallelToolsKeepOutputIndexOrder)
 {
     std::string stream;
-    ResponsesSseSink sink(
+    OpenAiResponsesSseSink sink(
         [&stream](const std::string& chunk) {
             stream += chunk;
             return true;
@@ -443,7 +445,7 @@ DROGON_TEST(Sinks_ResponsesSse_ParallelToolsKeepOutputIndexOrder)
 DROGON_TEST(Sinks_ChatSse_CloseOnStreamFailure_OnlyOnce)
 {
     int closeCount = 0;
-    ChatSseSink sink(
+    OpenAiChatSseSink sink(
         [](const std::string&) {
             return false;
         },
@@ -464,7 +466,7 @@ DROGON_TEST(Sinks_ChatSse_CloseOnStreamFailure_OnlyOnce)
 DROGON_TEST(Sinks_ResponsesSse_CloseOnStreamFailure_OnlyOnce)
 {
     int closeCount = 0;
-    ResponsesSseSink sink(
+    OpenAiResponsesSseSink sink(
         [](const std::string&) {
             return false;
         },

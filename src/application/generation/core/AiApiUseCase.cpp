@@ -7,6 +7,8 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <cstdlib>
+#include <fstream>
 #include <utility>
 
 namespace {
@@ -129,6 +131,26 @@ bool parseJsonBody(const std::string& body, Json::Value& out)
     return Json::parseFromStream(builder, stream, &out, &errors);
 }
 
+void dumpProtocolRequestIfEnabled(const aiapi::GenerationInput& input,
+                                 const Json::Value& body)
+{
+    const char* const dumpPath = std::getenv("AIAPI_PROTOCOL_REQUEST_DUMP");
+    if (!dumpPath || *dumpPath == '\0') return;
+
+    std::ofstream output(dumpPath, std::ios::out | std::ios::trunc);
+    if (!output) {
+        LOG_WARN << "[AI use case] unable to open protocol request dump: " << dumpPath;
+        return;
+    }
+    output << body.toStyledString();
+    if (!output) {
+        LOG_WARN << "[AI use case] failed writing protocol request dump: " << dumpPath;
+        return;
+    }
+    LOG_INFO << "[AI use case] protocol request dumped: path=" << dumpPath
+             << ", endpoint=" << input.path << ", bytes=" << input.jsonBody.size();
+}
+
 void invokeCompletion(const aiapi::IAiApiUseCase::Completion& completion,
                       const aiapi::GenerationResult& result,
                       const std::shared_ptr<IResponseSink>& sink)
@@ -196,6 +218,7 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
         result.error = invalidRequestError("Invalid JSON in request body");
         return result;
     }
+    dumpProtocolRequestIfEnabled(input, requestBody);
 
     if (!protocolRegistry_) {
         aiapi::SubmissionResult result;
@@ -212,6 +235,13 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
         generation::protocol::RawProtocolRequest{
             input.method, input.path, requestBody, input.headers});
     if (!dispatch.succeeded()) {
+        LOG_WARN << "[AI use case] protocol request rejected: method=" << input.method
+                 << ", path=" << input.path
+                 << ", operation=" << dispatch.operation
+                 << ", reason="
+                 << (dispatch.adaptation.error.has_value()
+                         ? dispatch.adaptation.error->message
+                         : "protocol adaptation failed");
         aiapi::SubmissionResult result;
         result.outcome = aiapi::SubmissionOutcome::InvalidRequest;
         result.error = dispatch.adaptation.error.has_value()
@@ -252,14 +282,20 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
     request.effectiveCapabilities = intersectCapabilities(
         protocolCapabilities, request.modelCapabilities, providerCapabilities);
     if (!request.images.empty() && !request.effectiveCapabilities.images) {
+        LOG_WARN << "[AI use case] Claude/OpenAI request rejected: unsupported capability=images"
+                 << ", model=" << request.model << ", provider=" << request.provider;
         return {aiapi::SubmissionOutcome::InvalidRequest,
                 unsupportedCapabilityError("images")};
     }
     if (request.stream && !request.effectiveCapabilities.streaming) {
+        LOG_WARN << "[AI use case] request rejected: unsupported capability=streaming"
+                 << ", model=" << request.model << ", provider=" << request.provider;
         return {aiapi::SubmissionOutcome::InvalidRequest,
                 unsupportedCapabilityError("streaming")};
     }
     if (!request.toolDefinitions.empty() && !request.effectiveCapabilities.tools) {
+        LOG_WARN << "[AI use case] request rejected: unsupported capability=tools"
+                 << ", model=" << request.model << ", provider=" << request.provider;
         return {aiapi::SubmissionOutcome::InvalidRequest,
                 unsupportedCapabilityError("tools")};
     }

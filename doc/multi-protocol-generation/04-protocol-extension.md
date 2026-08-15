@@ -92,7 +92,7 @@ struct ProtocolDescriptor {
 
 ```text
 + protocol/<id>/<Id>RequestAdapter.*
-+ protocol/<id>/<Id>ResponseSink.*
++ protocol/<id>/<Id>JsonSink.*
 + protocol/<id>/<Id>ToolAdapter.*
 + protocol/<id>/<Id>CapabilityMapper.*
 + protocol/<id>/<Id>ErrorFormatter.*
@@ -113,6 +113,13 @@ ContinuityResolver
 AccountSelectionPolicy
 ```
 
-本轮的模拟协议测试只新增模块、路由、Adapter、Sink Factory 和测试，即可完成
-dispatch 与 Sink 创建；`GenerationService`、`GenerationPipeline`、`IChatProvider`
-均未增加协议分支。Claude/Anthropic 模块不在本轮注册表中。
+模拟协议测试和正式 `anthropic-messages` 模块都只通过模块、路由、Adapter、Sink
+Factory、composition root 和测试完成接入；`GenerationService`、
+`GenerationPipeline`、`ToolCallBridge`、`IChatProvider` 均未增加 Claude 分支。
+
+当前生产 Registry 包含：
+
+| 协议 ID | 版本 | operation | 路由 |
+|---|---|---|---|
+| `openai-compatible` | `v1` | `chat.completions`、`responses.create` | `/v1/chat/completions`、`/v1/responses` 及 provider 前缀路由 |
+| `anthropic-messages` | `2023-06-01` | `messages.create` | `/v1/messages` 及 provider 前缀路由 |

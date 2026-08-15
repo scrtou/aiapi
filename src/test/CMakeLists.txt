@@ -58,8 +58,9 @@ set(TEST_SOURCES
     test_continuity_resolver.cpp
     test_history_replay_budget.cpp
     test_outbound_budget.cpp
-    test_request_adapters.cpp
+    test_openai_request_adapter.cpp
     test_protocol_registry.cpp
+    test_claude_protocol.cpp
     test_xml_tool_call_codec.cpp
     test_bridge_protocol_codec.cpp
     test_bridge_helpers.cpp

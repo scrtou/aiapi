@@ -1,9 +1,12 @@
-#include <transport/controllers/sinks/ChatJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiChatJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiErrorFormatter.h>
 #include <algorithm>
 #include <chrono>
 #include <random>
 
-ChatJsonSink::ChatJsonSink(
+namespace generation::protocol::openai {
+
+OpenAiChatJsonSink::OpenAiChatJsonSink(
     ResponseCallback responseCallback,
     const std::string& model
 ) : responseCallback_(std::move(responseCallback)),
@@ -12,7 +15,7 @@ ChatJsonSink::ChatJsonSink(
 {
 }
 
-void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
+void OpenAiChatJsonSink::onEvent(const generation::GenerationEvent& event) {
     if (closed_) {
         return;
     }
@@ -67,14 +70,14 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
             hasError_ = true;
+            errorCode_ = arg.code;
             errorMessage_ = arg.message;
-            errorType_ = generation::errorCodeToString(arg.code);
             statusCode_ = generation::errorCodeToHttpStatus(arg.code);
         }
     }, event);
 }
 
-void ChatJsonSink::onClose() {
+void OpenAiChatJsonSink::onClose() {
     if (!closed_) {
         closed_ = true;
         
@@ -85,17 +88,13 @@ void ChatJsonSink::onClose() {
     }
 }
 
-bool ChatJsonSink::isValid() const {
+bool OpenAiChatJsonSink::isValid() const {
     return !closed_;
 }
 
-Json::Value ChatJsonSink::buildResponse() {
+Json::Value OpenAiChatJsonSink::buildResponse() {
     if (hasError_) {
-        Json::Value error;
-        error["error"]["message"] = errorMessage_;
-        error["error"]["type"] = errorType_;
-        error["error"]["code"] = errorType_;
-        return error;
+        return formatError(errorCode_, errorMessage_);
     }
     
     Json::Value response;
@@ -172,7 +171,7 @@ Json::Value ChatJsonSink::buildResponse() {
     return response;
 }
 
-std::string ChatJsonSink::generateCompletionId() {
+std::string OpenAiChatJsonSink::generateCompletionId() {
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
@@ -183,3 +182,5 @@ std::string ChatJsonSink::generateCompletionId() {
     
     return "chatcmpl-" + std::to_string(timestamp) + std::to_string(dis(gen));
 }
+
+}  // namespace generation::protocol::openai

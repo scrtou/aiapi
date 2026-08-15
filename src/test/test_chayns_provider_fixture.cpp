@@ -10,11 +10,13 @@
 #include <application/generation/continuity/ResponseIndex.h>
 #include <application/generation/core/SessionExecutionGate.h>
 #include <application/generation/core/Session.h>
-#include <transport/controllers/sinks/ChatJsonSink.h>
-#include <transport/controllers/sinks/ChatSseSink.h>
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
-#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/protocol/openai/OpenAiChatJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiChatSseSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesSseSink.h>
 #include <application/generation/core/GenerationService.h>
+
+using namespace generation::protocol::openai;
 
 #include <algorithm>
 #include <deque>
@@ -622,7 +624,7 @@ DROGON_TEST(ChaynsProvider_ChatJsonRunsGenerationServiceAndProductionSink)
     GenerationFixtureHarness harness;
     Json::Value body;
     int status = 0;
-    ChatJsonSink sink(
+    OpenAiChatJsonSink sink(
         [&](const Json::Value& value, int valueStatus) {
             body = value;
             status = valueStatus;
@@ -647,7 +649,7 @@ DROGON_TEST(ChaynsProvider_ChatSseRunsGenerationServiceAndProductionSink)
     GenerationFixtureHarness harness;
     std::string chunks;
     int closes = 0;
-    ChatSseSink sink(
+    OpenAiChatSseSink sink(
         [&](const std::string& chunk) {
             chunks += chunk;
             return true;
@@ -672,7 +674,7 @@ DROGON_TEST(ChaynsProvider_ResponsesJsonRunsGenerationServiceAndProductionSink)
     GenerationFixtureHarness harness;
     Json::Value body;
     int status = 0;
-    ResponsesJsonSink sink(
+    OpenAiResponsesJsonSink sink(
         [&](const Json::Value& value, int valueStatus) {
             body = value;
             status = valueStatus;
@@ -700,7 +702,7 @@ DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
     GenerationFixtureHarness harness;
     std::string chunks;
     int closes = 0;
-    ResponsesSseSink sink(
+    OpenAiResponsesSseSink sink(
         [&](const std::string& chunk) {
             chunks += chunk;
             return true;
@@ -727,7 +729,7 @@ DROGON_TEST(ChaynsProvider_GenerationServicePreservesProviderErrorCodeForTranspo
     GenerationFixtureHarness harness;
     Json::Value body;
     int status = 0;
-    ChatJsonSink sink(
+    OpenAiChatJsonSink sink(
         [&](const Json::Value& value, int valueStatus) {
             body = value;
             status = valueStatus;

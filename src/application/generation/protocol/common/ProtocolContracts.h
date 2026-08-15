@@ -72,9 +72,6 @@ struct ResponseContext {
     std::function<void()> close;
 };
 
-using ProtocolSinkFactoryCallback =
-    std::function<std::shared_ptr<IResponseSink>(const ResponseContext&)>;
-
 class IProtocolResponseSinkFactory {
   public:
     virtual ~IProtocolResponseSinkFactory() = default;

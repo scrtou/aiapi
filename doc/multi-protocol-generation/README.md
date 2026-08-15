@@ -8,16 +8,22 @@
 
 ## 当前状态（2026-08-15）
 
-本轮已完成 OpenAI-compatible 协议链路的架构收敛：
+OpenAI-compatible 协议链路已经完成架构收敛，Claude/Anthropic Messages API 已作为
+第二个正式协议接入：
 
 - 生产请求通过 `ProtocolRegistry::dispatch()` 完成路由、操作、Request Adapter、Sink 工厂和协议能力绑定；
 - Controller 只提供 JSON/SSE IO 回调，具体 Sink 由协议模块工厂创建；
 - `Message` 仅保存 `ContentBlock`，工具定义和工具选择也只有强类型内部表示；协议 wire shape 只在 Adapter 和 Sink 边界转换；
 - 能力按协议、模型声明和 Provider 能力求交集，并对图片、流式、工具和并行工具给出明确错误或降级；
 - 工具流式生命周期支持 `ToolCallStarted → ToolArgumentsDelta* → ToolCallDone`，Sink 按调用 ID、序号和终态去重；
-- 模拟协议已完成 Registry/Dispatcher 边界验收，未修改 `GenerationService`、`GenerationPipeline` 或 Provider 接口。
+- 模拟协议已完成 Registry/Dispatcher 边界验收，未修改 `GenerationService`、`GenerationPipeline` 或 Provider 接口；
+- `anthropic-messages` 模块实现 `messages.create` 请求适配、非流式 JSON、Anthropic SSE、工具调用、错误格式和能力映射；
+- 已注册 `/v1/messages`、`/chaynsapi/v1/messages` 和 `/retoolapi/v1/messages`，并使用协议专用限流错误格式；
+- Claude 接入没有修改 `GenerationService`、`GenerationPipeline`、`ToolCallBridge` 或 Provider 接口。
 
-Claude 协议本轮不接入。下一阶段将以独立协议模块实现 Claude 的 Adapter、Sink、能力映射和契约测试，核心生成链路保持不变。
+当前 Claude 边界支持文本、base64/URL 图片、`tool_use`、`tool_result`、客户端工具、
+`tool_choice`、扩展思考请求字段、同步响应和流式响应。服务端工具、document/search
+内容块等无法映射到统一模型的类型会返回明确的不支持错误。
 
 ## 核心目标
 

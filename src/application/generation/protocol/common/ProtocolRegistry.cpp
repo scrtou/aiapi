@@ -1,4 +1,5 @@
 #include <application/generation/protocol/common/ProtocolRegistry.h>
+#include <application/generation/protocol/claude/ClaudeProtocolModule.h>
 #include <application/generation/protocol/openai/OpenAiProtocolModule.h>
 
 #include <algorithm>
@@ -139,12 +140,15 @@ bool ProtocolRegistry::validate(std::string* error) const
     return detail.empty();
 }
 
-std::shared_ptr<ProtocolRegistry> makeDefaultProtocolRegistry(
-    ProtocolSinkFactoryCallback sinkFactory)
+std::shared_ptr<ProtocolRegistry> makeDefaultProtocolRegistry()
 {
     auto registry = std::make_shared<ProtocolRegistry>();
-    auto module = openai::makeOpenAiProtocolModule(std::move(sinkFactory));
-    if (!registry->registerModule(module)) return nullptr;
+    auto openAiModule = openai::makeOpenAiProtocolModule();
+    auto claudeModule = claude::makeClaudeProtocolModule();
+    if (!registry->registerModule(openAiModule) ||
+        !registry->registerModule(claudeModule)) {
+        return nullptr;
+    }
 
     const auto registerRoute = [registry](const std::string& path,
                                            const std::string& operation) {
@@ -156,6 +160,16 @@ std::shared_ptr<ProtocolRegistry> makeDefaultProtocolRegistry(
         !registerRoute("/chaynsapi/v1/responses", "responses.create") ||
         !registerRoute("/retoolapi/v1/responses", "responses.create") ||
         !registerRoute("/v1/responses", "responses.create")) {
+        return nullptr;
+    }
+
+    const auto registerClaudeRoute = [registry](const std::string& path) {
+        return registry->registerRoute(
+            "POST", path, "anthropic-messages", "messages.create");
+    };
+    if (!registerClaudeRoute("/chaynsapi/v1/messages") ||
+        !registerClaudeRoute("/retoolapi/v1/messages") ||
+        !registerClaudeRoute("/v1/messages")) {
         return nullptr;
     }
     return registry;

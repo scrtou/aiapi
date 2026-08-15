@@ -26,7 +26,7 @@
 
 ## 目录快速入口
 
-- 请求入口适配：`protocol/<id>/`（当前 OpenAI Adapter 使用 `core/RequestAdapters.*` 构造统一请求）
+- 请求入口适配：`protocol/<id>/<Id>RequestAdapter.*`，协议模块将原始请求转换为统一请求
 - 会话状态与生命周期：`core/Session.*`
 - 稳定生成入口：`core/GenerationService.*`（薄 facade）
 - 请求/调用/提交编排：`core/GenerationPipeline.*`

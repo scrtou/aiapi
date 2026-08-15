@@ -1,5 +1,5 @@
-#ifndef CHAT_JSON_SINK_H
-#define CHAT_JSON_SINK_H
+#ifndef OPENAI_CHAT_JSON_SINK_H
+#define OPENAI_CHAT_JSON_SINK_H
 
 #include <application/generation/contracts/IResponseSink.h>
 #include <json/json.h>
@@ -7,6 +7,8 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace generation::protocol::openai {
 
 /**
  * @brief Chat Completions JSON 输出 Sink
@@ -16,7 +18,7 @@
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 7.1 节
  */
-class ChatJsonSink : public IResponseSink {
+class OpenAiChatJsonSink : public IResponseSink {
 public:
     using ResponseCallback = std::function<void(const Json::Value&, int statusCode)>;
     
@@ -26,17 +28,17 @@ public:
      * @param responseCallback 响应完成时的回调
      * @param model 模型名称
      */
-    ChatJsonSink(
+    OpenAiChatJsonSink(
         ResponseCallback responseCallback,
         const std::string& model
     );
     
-    ~ChatJsonSink() override = default;
+    ~OpenAiChatJsonSink() override = default;
     
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
-    std::string getSinkType() const override { return "ChatJsonSink"; }
+    std::string getSinkType() const override { return "OpenAiChatJsonSink"; }
     
     /**
      * @brief 获取收集到的完整文本
@@ -69,9 +71,11 @@ private:
     Json::Value meta_{Json::objectValue};
     int statusCode_ = 200;
     bool hasError_ = false;
+    platform::ErrorCode errorCode_ = platform::ErrorCode::Internal;
     std::string errorMessage_;
-    std::string errorType_;
     bool closed_ = false;
 };
+
+}  // namespace generation::protocol::openai
 
 #endif // 头文件保护结束

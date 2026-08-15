@@ -1,5 +1,5 @@
-#ifndef RESPONSES_JSON_SINK_H
-#define RESPONSES_JSON_SINK_H
+#ifndef OPENAI_RESPONSES_JSON_SINK_H
+#define OPENAI_RESPONSES_JSON_SINK_H
 
 #include <application/generation/contracts/IResponseSink.h>
 #include <json/json.h>
@@ -8,6 +8,8 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
+
+namespace generation::protocol::openai {
 
 /**
  * @brief Responses API JSON 输出 Sink
@@ -21,7 +23,7 @@
  * - Completed.usage -> 记录 usage（如果有）
  * - Error -> 构建 error 响应并设置 HTTP 状态码
  */
-class ResponsesJsonSink : public IResponseSink, public IResponsePersistenceSink {
+class OpenAiResponsesJsonSink : public IResponseSink, public IResponsePersistenceSink {
 public:
     using ResponseCallback = std::function<void(const Json::Value&, int statusCode)>;
 
@@ -32,19 +34,19 @@ public:
      * @param model 模型名称
      * @param inputTokensEstimated 输入 token 估算（可选，用于 usage 兜底）
      */
-    ResponsesJsonSink(
+    OpenAiResponsesJsonSink(
         ResponseCallback responseCallback,
         const std::string& model,
         int inputTokensEstimated = 0,
         bool nativeToolItems = false
     );
 
-    ~ResponsesJsonSink() override = default;
+    ~OpenAiResponsesJsonSink() override = default;
 
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
-    std::string getSinkType() const override { return "ResponsesJsonSink"; }
+    std::string getSinkType() const override { return "OpenAiResponsesJsonSink"; }
 
     const std::string& getCollectedText() const { return collectedText_; }
     std::optional<ResponsePersistenceRecord> responseRecord() const override
@@ -71,11 +73,13 @@ private:
 
     int statusCode_ = 200;
     bool hasError_ = false;
+    platform::ErrorCode errorCode_ = platform::ErrorCode::Internal;
     std::string errorMessage_;
-    std::string errorType_;
 
     bool closed_ = false;
     std::optional<ResponsePersistenceRecord> responseRecord_;
 };
+
+}  // namespace generation::protocol::openai
 
 #endif // 头文件保护结束

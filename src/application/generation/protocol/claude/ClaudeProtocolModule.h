@@ -4,13 +4,12 @@
 
 #include <memory>
 
-namespace generation::protocol::openai {
+namespace generation::protocol::claude {
 
-/** OpenAI-compatible boundary module for chat.completions and responses.create. */
-class OpenAiProtocolModule final : public IProtocolModule
+class ClaudeProtocolModule final : public IProtocolModule
 {
   public:
-    OpenAiProtocolModule();
+    ClaudeProtocolModule();
 
     std::string id() const override;
     std::string version() const override;
@@ -21,12 +20,11 @@ class OpenAiProtocolModule final : public IProtocolModule
     const ICapabilityMapper& capabilityMapper() const override;
 
   private:
-    std::unique_ptr<IProtocolRequestAdapter> chatAdapter_;
-    std::unique_ptr<IProtocolRequestAdapter> responsesAdapter_;
-    std::unique_ptr<IProtocolResponseSinkFactory> sinkFactory_;
+    std::unique_ptr<IProtocolRequestAdapter> requestAdapter_;
+    std::unique_ptr<IProtocolResponseSinkFactory> responseSinkFactory_;
     std::unique_ptr<ICapabilityMapper> capabilityMapper_;
 };
 
-std::shared_ptr<OpenAiProtocolModule> makeOpenAiProtocolModule();
+std::shared_ptr<ClaudeProtocolModule> makeClaudeProtocolModule();
 
-}  // namespace generation::protocol::openai
+}  // namespace generation::protocol::claude

@@ -43,12 +43,8 @@
 #include <application/generation/core/Session.h>
 #include <application/generation/core/AiApiUseCase.h>
 #include <application/generation/core/SessionExecutionGate.h>
-#include <application/generation/core/RequestAdapters.h>
 #include <application/generation/protocol/common/ProtocolRegistry.h>
-#include <transport/controllers/sinks/ChatJsonSink.h>
-#include <transport/controllers/sinks/ChatSseSink.h>
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
-#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/protocol/openai/OpenAiRequestAdapter.h>
 #include <application/generation/tooling/BridgeHelpers.h>
 #include <application/generation/core/RetiredProviderTelemetry.h>
 #include <infrastructure/executor/BackgroundTaskQueue.h>
@@ -78,36 +74,6 @@ std::chrono::milliseconds remainingBudget(std::chrono::steady_clock::time_point 
         return std::chrono::milliseconds::zero();
     }
     return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-}
-
-generation::protocol::ProtocolSinkFactoryCallback protocolSinkFactory()
-{
-    return [](const generation::protocol::ResponseContext& context)
-        -> std::shared_ptr<IResponseSink> {
-        if (context.operation == "chat.completions") {
-            if (context.stream) {
-                if (!context.streamWriter || !context.close) return nullptr;
-                return std::make_shared<ChatSseSink>(
-                    context.streamWriter, context.close, context.model);
-            }
-            if (!context.jsonResponse) return nullptr;
-            return std::make_shared<ChatJsonSink>(context.jsonResponse, context.model);
-        }
-
-        if (context.operation == "responses.create") {
-            if (context.stream) {
-                if (!context.streamWriter || !context.close) return nullptr;
-                return std::make_shared<ResponsesSseSink>(
-                    context.streamWriter, context.close, context.model,
-                    context.nativeResponsesToolItems, context.inputTokensEstimated);
-            }
-            if (!context.jsonResponse) return nullptr;
-            return std::make_shared<ResponsesJsonSink>(
-                context.jsonResponse, context.model,
-                context.inputTokensEstimated, context.nativeResponsesToolItems);
-        }
-        return nullptr;
-    };
 }
 
 }  // namespace
@@ -165,11 +131,13 @@ StartupResult stepSessionTrackingMode(const Json::Value& cfg, AppContext& ctx)
     }
     if (mode == "zerowidth" || mode == "zero_width") {
         sessionStore->setTrackingMode(SessionTrackingMode::ZeroWidth);
-        RequestAdapters::setTrackingMode(SessionTrackingMode::ZeroWidth);
+        generation::protocol::openai::OpenAiRequestAdapter::setTrackingMode(
+            SessionTrackingMode::ZeroWidth);
         LOG_INFO << "会话追踪模式：ZeroWidth（零宽字符嵌入）";
     } else {
         sessionStore->setTrackingMode(SessionTrackingMode::Hash);
-        RequestAdapters::setTrackingMode(SessionTrackingMode::Hash);
+        generation::protocol::openai::OpenAiRequestAdapter::setTrackingMode(
+            SessionTrackingMode::Hash);
         LOG_INFO << "会话追踪模式：Hash（内容哈希）";
     }
     return StartupResult::ok();
@@ -214,7 +182,8 @@ void addAccountWorkersOwner(AppContext& ctx, std::shared_ptr<AccountManager> acc
                      // Stop publishing the context-owned account services before
                      // their worker shutdown starts, so no late request can
                      // observe a manager that is draining.
-                     RequestAdapters::setAccountSettingsQuery(nullptr);
+                     generation::protocol::openai::OpenAiRequestAdapter::setAccountSettingsQuery(
+                         nullptr);
                      HealthController::setUseCase(nullptr);
                      ChannelController::setUseCase(nullptr);
                      AccountController::setUseCase(nullptr);
@@ -303,7 +272,8 @@ StartupResult stepInjectStores(AppContext& ctx, const Json::Value& runtimeConfig
     // init() has just started the AccountManager workers; register their
     // teardown before any later wiring can fail.
     addAccountWorkersOwner(ctx, accounts);
-    RequestAdapters::setAccountSettingsQuery(accounts.get());
+    generation::protocol::openai::OpenAiRequestAdapter::setAccountSettingsQuery(
+        accounts.get());
     auto accountAdmin = std::make_shared<AccountAdminUseCase>(
         accounts.get(), accounts.get(), accountStore.get(),
         accountBackupStore.get(), channels.get(), executor);
@@ -474,8 +444,7 @@ StartupResult stepAiApiUseCase(AppContext& ctx, const Json::Value& runtimeConfig
             "AI API use case requires registry/session/index/gate/channel/executor ownership");
     }
 
-    auto protocolRegistry = generation::protocol::makeDefaultProtocolRegistry(
-        protocolSinkFactory());
+    auto protocolRegistry = generation::protocol::makeDefaultProtocolRegistry();
     std::string protocolError;
     if (!protocolRegistry || !protocolRegistry->validate(&protocolError)) {
         return StartupResult::failed(

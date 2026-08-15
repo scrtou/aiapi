@@ -15,7 +15,7 @@
 - `GenerationService.*`：控制器/use case 使用的稳定薄 facade；只委派给 pipeline
 - `GenerationPipeline.*`：请求物化、连续性、执行门控、Provider 调用/重试和会话提交
 - `GenerationResponsePipeline.*`：输出清洗、工具解析/规范化/校验以及事件发射
-- `RequestAdapters.*`：复制的 JSON body + RequestHeaders 到 GenerationRequest 的协议转换（不接收 Drogon request）
+- 协议 Adapter 位于 `protocol/<id>/`；核心只接收 Adapter 生成的 GenerationRequest，不解析协议 JSON
 - `ClientOutputSanitizer.*`：客户端输出清洗
 - `platform/result/{Error,ErrorCode}.h`：跨层统一错误定义
 - `SessionExecutionGate.h`：并发执行门控

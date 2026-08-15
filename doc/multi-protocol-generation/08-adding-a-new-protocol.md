@@ -14,12 +14,33 @@ src/application/generation/protocol/<protocol-id>/
 
 ```text
 <Protocol>RequestAdapter.*
-<Protocol>ResponseSink.*
+<Protocol>JsonSink.*
 <Protocol>SseSink.*
 <Protocol>ToolAdapter.*
 <Protocol>CapabilityMapper.*
 <Protocol>ErrorFormatter.*
 <Protocol>Module.*
+```
+
+JSON 和 SSE Sink 属于同一协议目录，由该协议的 `IProtocolResponseSinkFactory`
+按 operation 和 IO binding 创建。组合根只注册模块和路由，不持有协议具体 Sink。
+当前目录形状如下：
+
+```text
+protocol/openai/
+  OpenAiProtocolModule.*
+  OpenAiRequestAdapter.*
+  OpenAiChatJsonSink.*
+  OpenAiChatSseSink.*
+  OpenAiResponsesJsonSink.*
+  OpenAiResponsesSseSink.*
+  OpenAiErrorFormatter.*
+protocol/claude/
+  ClaudeProtocolModule.*
+  ClaudeRequestAdapter.*
+  ClaudeJsonSink.*
+  ClaudeSseSink.*
+  ClaudeErrorFormatter.*
 ```
 
 ## 2. 定义协议边界
@@ -102,16 +123,43 @@ Controller 或核心层按协议字符串选择 Sink。
 - 连接和资源生命周期经过测试；
 - 可以通过配置关闭该协议并回滚。
 
-## 8. Claude 阶段的边界
+## 8. Claude 阶段的实施结果
 
-Claude 协议是下一阶段的实际第二协议，必须按本手册独立实现其消息内容块、工具
-输入/结果、非流式 JSON、SSE 事件、错误和能力映射。接入验收应证明只修改：
+Claude 协议已按本手册作为实际第二协议实现，覆盖消息内容块、工具输入/结果、
+非流式 JSON、SSE 事件、错误和能力映射。主要改动范围为：
 
 ```text
 protocol/claude/
 路由与 composition root 注册
 协议契约测试
+HTTP 路由和 Claude 限流错误格式
 ```
 
 不修改 `GenerationService`、`GenerationPipeline`、`ToolCallBridge` 或 Provider
-接口。Claude 在当前提交中保持未注册状态。
+接口。生产 Registry 已注册 `anthropic-messages@2023-06-01` 的
+`messages.create` operation。
+
+当前请求映射：
+
+- `model`、`max_tokens`、`stream`、`temperature`、`top_p`；
+- 顶层 `system` 以及 `messages[]` 中的 `role: "system"` 均映射到统一请求的
+  `systemPrompt`；两者都只接受字符串或 text blocks，system 指令不会进入会话历史或
+  当前用户输入；
+- user/assistant 文本、图片、`tool_use`、`tool_result`、thinking 历史块；
+- `tools[].input_schema`、`tool_choice`、并行工具开关；
+- `thinking`、`stop_sequences`、`top_k`、`service_tier` 等边界扩展字段。
+
+当前响应映射：
+
+- Anthropic `message` JSON；
+- `message_start/content_block_*/message_delta/message_stop` SSE；
+- `tool_use` 与 `input_json_delta`；
+- Anthropic `error` JSON/SSE 和 stop reason。
+
+无法映射到统一模型的 server tools、document/search 等内容块会明确拒绝，不静默
+降级。
+
+Claude Code 实际请求验收（`/tmp/claude-request.json`）还确认了以下边界：请求包含
+`GPT-5.6 Luna`、33 个工具和一个数组形式的 `messages[].role=system`；适配结果保留
+33 个强类型工具定义，将 system 文本合并到 `systemPrompt`，并从 `currentInput` 中
+排除该文本。

@@ -1,7 +1,10 @@
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesJsonSink.h>
+#include <application/generation/protocol/openai/OpenAiErrorFormatter.h>
 #include <algorithm>
 #include <chrono>
 #include <sstream>
+
+namespace generation::protocol::openai {
 
 namespace {
 std::string customInput(const generation::ToolCallDone& call)
@@ -37,7 +40,7 @@ Json::Value nativeToolItem(const generation::ToolCallDone& call)
 }
 }
 
-ResponsesJsonSink::ResponsesJsonSink(
+OpenAiResponsesJsonSink::OpenAiResponsesJsonSink(
     ResponseCallback responseCallback,
     const std::string& model,
     int inputTokensEstimated,
@@ -54,7 +57,7 @@ ResponsesJsonSink::ResponsesJsonSink(
     );
 }
 
-void ResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
+void OpenAiResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
     if (closed_) return;
 
     std::visit([this](auto&& arg) {
@@ -102,14 +105,14 @@ void ResponsesJsonSink::onEvent(const generation::GenerationEvent& event) {
         }
         else if constexpr (std::is_same_v<T, generation::Error>) {
             hasError_ = true;
+            errorCode_ = arg.code;
             errorMessage_ = arg.message;
-            errorType_ = generation::errorCodeToString(arg.code);
             statusCode_ = generation::errorCodeToHttpStatus(arg.code);
         }
     }, event);
 }
 
-void ResponsesJsonSink::onClose() {
+void OpenAiResponsesJsonSink::onClose() {
     if (closed_) return;
     closed_ = true;
 
@@ -124,17 +127,13 @@ void ResponsesJsonSink::onClose() {
     }
 }
 
-bool ResponsesJsonSink::isValid() const {
+bool OpenAiResponsesJsonSink::isValid() const {
     return !closed_;
 }
 
-Json::Value ResponsesJsonSink::buildResponse() {
+Json::Value OpenAiResponsesJsonSink::buildResponse() {
     if (hasError_) {
-        Json::Value error;
-        error["error"]["message"] = errorMessage_;
-        error["error"]["type"] = errorType_;
-        error["error"]["code"] = errorType_;
-        return error;
+        return formatError(errorCode_, errorMessage_);
     }
 
     Json::Value response;
@@ -217,3 +216,5 @@ Json::Value ResponsesJsonSink::buildResponse() {
 
     return response;
 }
+
+}  // namespace generation::protocol::openai

@@ -81,9 +81,9 @@ Use Case 不再二次解析路由或操作。
 现有接口行为保持不变，核心层不再依赖其字段名称。
 
 实施说明：Controller 只绑定 HTTP JSON/SSE IO，OpenAI Chat/Responses Sink 由协议
-模块注入的工厂在生产任务中创建。
+模块自有的工厂在生产任务中创建。
 
-## 阶段 5：实现第二个协议（延后：Claude）
+## 阶段 5：实现第二个协议（已完成：Claude）
 
 ### 任务
 
@@ -99,8 +99,9 @@ Use Case 不再二次解析路由或操作。
 
 第二个协议可以复用核心生成流程，并且不增加核心层协议分支。
 
-本轮不创建 Claude 路由、Adapter 或 Sink。开始该阶段前，先以当前模拟协议验收保证
-核心扩展点可用。
+实施结果：新增 `anthropic-messages` 模块和 `messages.create` operation，完成 Claude
+消息内容块、工具输入/结果、同步 JSON、SSE、错误格式、能力映射、路由和协议契约
+测试。核心生成服务、Pipeline、ToolCallBridge 和 Provider 接口保持不变。
 
 ## 阶段 6：完善通用能力（部分完成）
 
@@ -145,7 +146,7 @@ Use Case 不再二次解析路由或操作。
 3. 能力交集已执行，错误与降级行为明确。
 4. 工具 started/delta/done 状态机已由 SSE Sink 消费并支持重放去重。
 5. 路由、operation、Adapter、Sink factory 和协议能力由 Dispatcher 一次绑定。
-6. 模拟协议完成边界验收；Claude 作为真正第二协议延后。
+6. 模拟协议完成边界验收；Claude 已作为真正第二协议完成接入和契约验收。
 
 ## 推荐提交顺序
 

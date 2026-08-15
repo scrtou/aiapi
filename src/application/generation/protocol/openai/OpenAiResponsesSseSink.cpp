@@ -1,12 +1,14 @@
-#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/protocol/openai/OpenAiResponsesSseSink.h>
+#include <application/generation/protocol/openai/OpenAiErrorFormatter.h>
+#include <platform/Log.h>
 #include <json/json.h>
 #include <chrono>
 #include <algorithm>
 #include <sstream>
 
-using namespace drogon;
+namespace generation::protocol::openai {
 
-ResponsesSseSink::ResponsesSseSink(
+OpenAiResponsesSseSink::OpenAiResponsesSseSink(
     StreamCallback streamCallback,
     CloseCallback closeCallback,
     const std::string& model,
@@ -26,7 +28,7 @@ ResponsesSseSink::ResponsesSseSink(
     LOG_INFO << "[响应SSE] 已创建，模型：" << model_;
 }
 
-void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
+void OpenAiResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
     if (const auto* toolDone = std::get_if<generation::ToolCallDone>(&event)) {
         if (completedToolCalls_.count(toolStateKey(toolDone->id, toolDone->index)) != 0) {
             return;
@@ -77,7 +79,7 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
     }, event);
 }
 
-void ResponsesSseSink::onClose() {
+void OpenAiResponsesSseSink::onClose() {
     if (responseRecordSink_.isValid()) {
         responseRecordSink_.onClose();
     }
@@ -90,18 +92,18 @@ void ResponsesSseSink::onClose() {
     }
 }
 
-ResponsesSseSink::~ResponsesSseSink() = default;
+OpenAiResponsesSseSink::~OpenAiResponsesSseSink() = default;
 
-std::optional<ResponsePersistenceRecord> ResponsesSseSink::responseRecord() const
+std::optional<ResponsePersistenceRecord> OpenAiResponsesSseSink::responseRecord() const
 {
     return responseRecordSink_.responseRecord();
 }
 
-bool ResponsesSseSink::isValid() const {
+bool OpenAiResponsesSseSink::isValid() const {
     return !closed_;
 }
 
-void ResponsesSseSink::sendSseEvent(const std::string& eventType, const std::string& data) {
+void OpenAiResponsesSseSink::sendSseEvent(const std::string& eventType, const std::string& data) {
     if (closed_) return;
     
     std::string sseData = "event: " + eventType + "\ndata: " + data + "\n\n";
@@ -116,14 +118,14 @@ void ResponsesSseSink::sendSseEvent(const std::string& eventType, const std::str
     }
 }
 
-void ResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Value& data) {
+void OpenAiResponsesSseSink::sendSseEvent(const std::string& eventType, const Json::Value& data) {
     Json::StreamWriterBuilder writer;
     writer["indentation"] = "";
     writer["emitUTF8"] = true;
     sendSseEvent(eventType, Json::writeString(writer, data));
 }
 
-Json::Value ResponsesSseSink::buildTextOutputItem(const std::string& status) const {
+Json::Value OpenAiResponsesSseSink::buildTextOutputItem(const std::string& status) const {
     Json::Value item(Json::objectValue);
     item["type"] = "message";
     item["id"] = "msg_" + responseId_;
@@ -141,7 +143,7 @@ Json::Value ResponsesSseSink::buildTextOutputItem(const std::string& status) con
     return item;
 }
 
-void ResponsesSseSink::ensureTextItemAdded() {
+void OpenAiResponsesSseSink::ensureTextItemAdded() {
     if (textItemAdded_) return;
     textItemAdded_ = true;
     textOutputIndex_ = nativeToolItems_
@@ -155,7 +157,7 @@ void ResponsesSseSink::ensureTextItemAdded() {
     sendSseEvent("response.output_item.added", event);
 }
 
-void ResponsesSseSink::storeNativeOutputItem(int outputIndex, const Json::Value& item)
+void OpenAiResponsesSseSink::storeNativeOutputItem(int outputIndex, const Json::Value& item)
 {
     if (outputIndex < 0) return;
     while (nativeOutputItems_.size() <= static_cast<Json::ArrayIndex>(outputIndex)) {
@@ -164,7 +166,7 @@ void ResponsesSseSink::storeNativeOutputItem(int outputIndex, const Json::Value&
     nativeOutputItems_[static_cast<Json::ArrayIndex>(outputIndex)] = item;
 }
 
-std::string ResponsesSseSink::customToolInput(const generation::ToolCallDone& event) {
+std::string OpenAiResponsesSseSink::customToolInput(const generation::ToolCallDone& event) {
     Json::Value parsed;
     Json::CharReaderBuilder builder;
     std::string errors;
@@ -176,12 +178,12 @@ std::string ResponsesSseSink::customToolInput(const generation::ToolCallDone& ev
     return event.arguments;
 }
 
-std::string ResponsesSseSink::toolStateKey(const std::string& id, int index)
+std::string OpenAiResponsesSseSink::toolStateKey(const std::string& id, int index)
 {
     return id.empty() ? ("index:" + std::to_string(index)) : ("id:" + id);
 }
 
-void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event) {
+void OpenAiResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event) {
     const bool custom = event.type == "custom";
     const std::string callId = event.id.empty()
         ? ("call_" + responseId_ + "_" + std::to_string(nativeOutputItems_.size()))
@@ -241,7 +243,7 @@ void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event)
     sendSseEvent("response.output_item.done", itemDone);
 }
 
-void ResponsesSseSink::handleStarted(const generation::Started& event) {
+void OpenAiResponsesSseSink::handleStarted(const generation::Started& event) {
     LOG_INFO << "[响应SSE] 开始事件，响应ID：" << event.responseId;
 
     if (responseId_.empty()) {
@@ -279,7 +281,7 @@ void ResponsesSseSink::handleStarted(const generation::Started& event) {
     sendSseEvent("response.output_item.added", outputItemEvent);
 }
 
-void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& event) {
+void OpenAiResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& event) {
     ensureTextItemAdded();
     sawDelta_ = true;
     outputText_ += event.delta;
@@ -295,7 +297,7 @@ void ResponsesSseSink::handleOutputTextDelta(const generation::OutputTextDelta& 
     sendSseEvent("response.output_text.delta", deltaEvent);
 }
 
-void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& event) {
+void OpenAiResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& event) {
     // 如果之前没有通过 发送，使用完整文本
     if (outputText_.empty()) {
         outputText_ = event.text;
@@ -348,7 +350,7 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
     }
 }
 
-void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event) {
+void OpenAiResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event) {
     const std::string key = toolStateKey(event.id, event.index);
     if (!completedToolCalls_.insert(key).second) return;
 
@@ -423,7 +425,7 @@ void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event)
     sendSseEvent("response.output_item.done", itemDone);
 }
 
-void ResponsesSseSink::handleToolCallStarted(const generation::ToolCallStarted& event)
+void OpenAiResponsesSseSink::handleToolCallStarted(const generation::ToolCallStarted& event)
 {
     const std::string key = toolStateKey(event.id, event.index);
     auto [it, inserted] = incrementalToolCalls_.try_emplace(key);
@@ -458,7 +460,7 @@ void ResponsesSseSink::handleToolCallStarted(const generation::ToolCallStarted& 
     sendSseEvent("response.output_item.added", added);
 }
 
-void ResponsesSseSink::handleToolArgumentsDelta(const generation::ToolArgumentsDelta& event)
+void OpenAiResponsesSseSink::handleToolArgumentsDelta(const generation::ToolArgumentsDelta& event)
 {
     const std::string key = toolStateKey(event.id, event.index);
     const auto it = incrementalToolCalls_.find(key);
@@ -483,7 +485,7 @@ void ResponsesSseSink::handleToolArgumentsDelta(const generation::ToolArgumentsD
     sendSseEvent("response.function_call_arguments.delta", delta);
 }
 
-void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
+void OpenAiResponsesSseSink::handleCompleted(const generation::Completed& event) {
     if (event.meta.isObject() && !event.meta.empty()) {
         meta_ = event.meta;
     }
@@ -566,29 +568,21 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
     sendSseEvent("response.completed", completedEvent);
 }
 
-void ResponsesSseSink::handleError(const generation::Error& event) {
+void OpenAiResponsesSseSink::handleError(const generation::Error& event) {
     LOG_ERROR << "[响应SSE] 错误: code=" << generation::errorCodeToString(event.code)
               << ", messagePresent=" << !event.message.empty()
               << ", messageSize=" << event.message.size()
               << ", detailPresent=" << !event.detail.empty()
               << ", detailSize=" << event.detail.size();
     
-    Json::Value error;
-    error["type"] = generation::errorCodeToString(event.code);
-    error["code"] = generation::errorCodeToString(event.code);
-    error["message"] = event.message;
-    if (!event.detail.empty()) {
-        error["detail"] = event.detail;
-    }
-
     Json::Value errorEvent(Json::objectValue);
     errorEvent["type"] = "error";
     errorEvent["sequence_number"] = sequenceNumber_++;
-    errorEvent["error"] = error;
+    errorEvent["error"] = formatErrorObject(event.code, event.message, event.detail);
     sendSseEvent("error", errorEvent);
 }
 
-Json::Value ResponsesSseSink::buildResponseObject(const std::string& status) {
+Json::Value OpenAiResponsesSseSink::buildResponseObject(const std::string& status) {
     Json::Value response;
     response["id"] = responseId_;
     response["object"] = "response";
@@ -614,3 +608,5 @@ Json::Value ResponsesSseSink::buildResponseObject(const std::string& status) {
     
     return response;
 }
+
+}  // namespace generation::protocol::openai

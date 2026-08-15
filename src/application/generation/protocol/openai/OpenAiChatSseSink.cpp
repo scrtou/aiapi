@@ -1,11 +1,13 @@
-#include <transport/controllers/sinks/ChatSseSink.h>
+#include <application/generation/protocol/openai/OpenAiChatSseSink.h>
+#include <application/generation/protocol/openai/OpenAiErrorFormatter.h>
+#include <platform/Log.h>
 #include <json/json.h>
 #include <chrono>
 #include <random>
 
-using namespace drogon;
+namespace generation::protocol::openai {
 
-ChatSseSink::ChatSseSink(
+OpenAiChatSseSink::OpenAiChatSseSink(
     StreamCallback streamCallback,
     CloseCallback closeCallback,
     const std::string& model
@@ -17,7 +19,7 @@ ChatSseSink::ChatSseSink(
     LOG_INFO << "[聊天SSE] 已创建，模型：" << model_ << ", ID: " << completionId_;
 }
 
-void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
+void OpenAiChatSseSink::onEvent(const generation::GenerationEvent& event) {
     if (closed_) {
         LOG_WARN << "[聊天SSE] 关闭后收到事件";
         return;
@@ -133,21 +135,16 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
             LOG_ERROR << "[聊天SSE] 错误: code=" << generation::errorCodeToString(arg.code)
                       << ", messagePresent=" << !arg.message.empty()
                       << ", messageSize=" << arg.message.size();
-            // 构建错误响应
-            Json::Value errorJson;
-            errorJson["error"]["message"] = arg.message;
-            errorJson["error"]["type"] = generation::errorCodeToString(arg.code);
-            errorJson["error"]["code"] = generation::errorCodeToString(arg.code);
-            
             Json::StreamWriterBuilder writer;
             writer["indentation"] = "";
-            std::string errorStr = Json::writeString(writer, errorJson);
+            std::string errorStr = Json::writeString(
+                writer, formatError(arg.code, arg.message, arg.detail));
             sendSseEvent(errorStr);
         }
     }, event);
 }
 
-void ChatSseSink::onClose() {
+void OpenAiChatSseSink::onClose() {
     if (!closed_) {
         closed_ = true;
         LOG_INFO << "[聊天SSE] 正在关闭";
@@ -157,11 +154,11 @@ void ChatSseSink::onClose() {
     }
 }
 
-bool ChatSseSink::isValid() const {
+bool OpenAiChatSseSink::isValid() const {
     return !closed_;
 }
 
-void ChatSseSink::sendSseEvent(const std::string& data) {
+void OpenAiChatSseSink::sendSseEvent(const std::string& data) {
     if (closed_) return;
     
     std::string sseData = "data: " + data + "\n\n";
@@ -176,7 +173,7 @@ void ChatSseSink::sendSseEvent(const std::string& data) {
     }
 }
 
-void ChatSseSink::sendDone() {
+void OpenAiChatSseSink::sendDone() {
     if (closed_) return;
     
     std::string doneData = "data: [DONE]\n\n";
@@ -185,7 +182,7 @@ void ChatSseSink::sendDone() {
     }
 }
 
-std::string ChatSseSink::buildChunkJson(
+std::string OpenAiChatSseSink::buildChunkJson(
     const std::string& delta,
     const std::string& finishReason,
     bool includeRole,
@@ -231,7 +228,7 @@ std::string ChatSseSink::buildChunkJson(
     return Json::writeString(writer, chunk);
 }
 
-std::string ChatSseSink::buildToolCallChunkJson(
+std::string OpenAiChatSseSink::buildToolCallChunkJson(
     const generation::ToolCallDone& toolCall,
     const std::string& finishReason,
     bool includeRole
@@ -284,7 +281,7 @@ std::string ChatSseSink::buildToolCallChunkJson(
     return Json::writeString(writer, chunk);
 }
 
-std::string ChatSseSink::buildUsageChunkJson(const generation::Usage& usage) {
+std::string OpenAiChatSseSink::buildUsageChunkJson(const generation::Usage& usage) {
     Json::Value chunk;
     chunk["id"] = completionId_;
     chunk["object"] = "chat.completion.chunk";
@@ -314,7 +311,7 @@ std::string ChatSseSink::buildUsageChunkJson(const generation::Usage& usage) {
     return Json::writeString(writer, chunk);
 }
 
-std::string ChatSseSink::generateCompletionId() {
+std::string OpenAiChatSseSink::generateCompletionId() {
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
@@ -325,3 +322,5 @@ std::string ChatSseSink::generateCompletionId() {
     
     return "chatcmpl-" + std::to_string(timestamp) + std::to_string(dis(gen));
 }
+
+}  // namespace generation::protocol::openai

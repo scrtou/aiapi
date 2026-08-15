@@ -1,13 +1,14 @@
-#ifndef CHAT_SSE_SINK_H
-#define CHAT_SSE_SINK_H
+#ifndef OPENAI_CHAT_SSE_SINK_H
+#define OPENAI_CHAT_SSE_SINK_H
 
 #include <application/generation/contracts/IResponseSink.h>
-#include <drogon/drogon.h>
 #include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace generation::protocol::openai {
 
 /**
  * @brief Chat Completions SSE 输出 Sink
@@ -21,7 +22,7 @@
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 7.1 节
  */
-class ChatSseSink : public IResponseSink {
+class OpenAiChatSseSink : public IResponseSink {
 public:
     using StreamCallback = std::function<bool(const std::string&)>;
     using CloseCallback = std::function<void()>;
@@ -33,19 +34,19 @@ public:
      * @param closeCallback 关闭连接的回调
      * @param model 模型名称
      */
-    ChatSseSink(
+    OpenAiChatSseSink(
         StreamCallback streamCallback,
         CloseCallback closeCallback,
         const std::string& model
     );
     
-    ~ChatSseSink() override = default;
+    ~OpenAiChatSseSink() override = default;
     
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
     bool supportsIncrementalToolEvents() const override { return true; }
-    std::string getSinkType() const override { return "ChatSseSink"; }
+    std::string getSinkType() const override { return "OpenAiChatSseSink"; }
     
 private:
     /**
@@ -107,5 +108,6 @@ private:
     bool closed_ = false;
 };
 
+}  // namespace generation::protocol::openai
 
 #endif // 头文件保护结束

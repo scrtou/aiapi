@@ -1,4 +1,4 @@
-#include <application/generation/core/RequestAdapters.h>
+#include <application/generation/protocol/openai/OpenAiRequestAdapter.h>
 #include <platform/ZeroWidthEncoder.h>
 #include <json/json.h>
 #include <platform/Log.h>
@@ -8,9 +8,9 @@
 #include <iterator>
 #include <sstream>
 #include <unordered_set>
-#include <cctype>
 #include <application/generation/core/Session.h>
 
+namespace generation::protocol::openai {
 
 namespace {
 
@@ -453,7 +453,7 @@ bool isResponsesModelOutputBoundary(const Json::Value& item)
 
 }  // namespace
 
-GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
+GenerationRequest OpenAiRequestAdapter::buildChatRequest(
     const Json::Value& reqBody,
     const aiapi::RequestHeaders& headers
 ) {
@@ -562,7 +562,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     return genReq;
 }
 
-GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
+GenerationRequest OpenAiRequestAdapter::buildResponsesRequest(
     const Json::Value& reqBody,
     const aiapi::RequestHeaders& headers
 ) {
@@ -722,7 +722,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     return genReq;
 }
 
-Json::Value RequestAdapters::extractClientInfo(const aiapi::RequestHeaders& headers) {
+Json::Value OpenAiRequestAdapter::extractClientInfo(const aiapi::RequestHeaders& headers) {
     Json::Value clientInfo;
     
     // 提取客户端标识。User-Agent 只能用于协议适配，不能用于鉴权。
@@ -786,7 +786,7 @@ Json::Value RequestAdapters::extractClientInfo(const aiapi::RequestHeaders& head
     return clientInfo;
 }
 
-void RequestAdapters::parseChatMessages(
+void OpenAiRequestAdapter::parseChatMessages(
     const Json::Value& messages,
     std::vector<Message>& result,
     std::string& systemPrompt,
@@ -872,7 +872,7 @@ void RequestAdapters::parseChatMessages(
     }
 }
 
-void RequestAdapters::parseResponseInput(
+void OpenAiRequestAdapter::parseResponseInput(
     const Json::Value& input,
     std::vector<Message>& messages,
     std::string& systemPrompt,
@@ -1100,7 +1100,7 @@ void RequestAdapters::parseResponseInput(
     }
 }
 
-void RequestAdapters::parseResponseInputItems(
+void OpenAiRequestAdapter::parseResponseInputItems(
     const Json::Value& inputItems,
     std::string& currentInput,
     std::vector<ImageInfo>& images
@@ -1228,7 +1228,7 @@ void RequestAdapters::parseResponseInputItems(
     }
 }
 
-std::string RequestAdapters::extractContentText(
+std::string OpenAiRequestAdapter::extractContentText(
     const Json::Value& content,
     std::vector<ImageInfo>& images,
     bool stripZeroWidth,
@@ -1310,7 +1310,7 @@ std::string RequestAdapters::extractContentText(
     return result;
 }
 
-ImageInfo RequestAdapters::parseImageUrl(const std::string& url) {
+ImageInfo OpenAiRequestAdapter::parseImageUrl(const std::string& url) {
     ImageInfo imgInfo;
     
     if (url.empty()) {
@@ -1333,5 +1333,40 @@ ImageInfo RequestAdapters::parseImageUrl(const std::string& url) {
     
     return imgInfo;
 }
-SessionTrackingMode RequestAdapters::trackingMode_ = SessionTrackingMode::Hash;
-IAccountSettingsQuery* RequestAdapters::accountSettings_ = nullptr;
+
+AdapterResult OpenAiRequestAdapter::adapt(const RawProtocolRequest& raw) const
+{
+    if (!raw.body.isObject()) {
+        return AdapterResult{
+            {}, platform::Error::badRequest("Request body must be a JSON object")};
+    }
+
+    GenerationRequest request = operation_ == OpenAiOperation::ResponsesCreate
+        ? buildResponsesRequest(raw.body, raw.headers)
+        : buildChatRequest(raw.body, raw.headers);
+    if (!request.protocolExtensions.isObject()) {
+        request.protocolExtensions = Json::Value(Json::objectValue);
+    }
+    if (raw.body.isMember("metadata") && raw.body["metadata"].isObject()) {
+        for (const auto& name : raw.body["metadata"].getMemberNames()) {
+            std::string lowered = name;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (lowered.find("token") != std::string::npos ||
+                lowered.find("secret") != std::string::npos ||
+                lowered.find("password") != std::string::npos ||
+                lowered.find("authorization") != std::string::npos ||
+                lowered.find("api_key") != std::string::npos) {
+                continue;
+            }
+            request.protocolExtensions["metadata"][name] = raw.body["metadata"][name];
+        }
+    }
+    return AdapterResult{std::move(request), {}};
+}
+
+SessionTrackingMode OpenAiRequestAdapter::trackingMode_ = SessionTrackingMode::Hash;
+IAccountSettingsQuery* OpenAiRequestAdapter::accountSettings_ = nullptr;
+
+}  // namespace generation::protocol::openai

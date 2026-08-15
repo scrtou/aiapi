@@ -3,6 +3,7 @@
 #include <runtime/AppWiring.h>
 #include <infrastructure/config/ConfigValidator.h>
 #include <transport/controllers/AdminAuthFilter.h>
+#include <transport/controllers/ClaudeRateLimitFilter.h>
 #include <transport/controllers/RateLimitFilter.h>
 #include <chrono>
 #include <execinfo.h>
@@ -67,6 +68,7 @@ const Json::Value& getCustomConfig() {
 void ensureFilterReflectionRegistration() {
     // 显式触发过滤器反射注册，避免仅通过字符串路由引用时被链接器裁剪。
     (void)AdminAuthFilter::classTypeName();
+    (void)ClaudeRateLimitFilter::classTypeName();
     (void)RateLimitFilter::classTypeName();
 }
 

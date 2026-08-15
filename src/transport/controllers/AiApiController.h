@@ -1,6 +1,7 @@
 #pragma once
 
 #include <transport/controllers/RateLimitFilter.h>
+#include <transport/controllers/ClaudeRateLimitFilter.h>
 #include <drogon/HttpController.h>
 #include <domain/port/IAiApiUseCase.h>
 
@@ -30,6 +31,10 @@ class AiApiController : public drogon::HttpController<AiApiController>
     ADD_METHOD_TO(AiApiController::responsesDelete, "/chaynsapi/v1/responses/{1}", drogon::Delete);
     ADD_METHOD_TO(AiApiController::retiredNexosWithId, "/nexosapi/v1/responses/{1}", drogon::Delete);
     ADD_METHOD_TO(AiApiController::responsesDelete, "/retoolapi/v1/responses/{1}", drogon::Delete);
+    // Anthropic Messages API.
+    ADD_METHOD_TO(AiApiController::messagesCreate, "/chaynsapi/v1/messages", drogon::Post, "ClaudeRateLimitFilter");
+    ADD_METHOD_TO(AiApiController::messagesCreate, "/retoolapi/v1/messages", drogon::Post, "ClaudeRateLimitFilter");
+    ADD_METHOD_TO(AiApiController::messagesCreate, "/v1/messages", drogon::Post, "ClaudeRateLimitFilter");
     METHOD_LIST_END
 
     void chaynsapichat(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
@@ -40,6 +45,7 @@ class AiApiController : public drogon::HttpController<AiApiController>
     void responsesCreate(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
     void responsesGet(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback, std::string responseId);
     void responsesDelete(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback, std::string responseId);
+    void messagesCreate(const drogon::HttpRequestPtr &req, std::function<void(const drogon::HttpResponsePtr &)> &&callback);
 
     std::string generateClientId(const drogon::HttpRequestPtr &req);
     bool isCreateNewSession(const drogon::HttpRequestPtr &req);

@@ -1,14 +1,15 @@
-#ifndef RESPONSES_SSE_SINK_H
-#define RESPONSES_SSE_SINK_H
+#ifndef OPENAI_RESPONSES_SSE_SINK_H
+#define OPENAI_RESPONSES_SSE_SINK_H
 
 #include <application/generation/contracts/IResponseSink.h>
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
-#include <drogon/drogon.h>
+#include <application/generation/protocol/openai/OpenAiResponsesJsonSink.h>
 #include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace generation::protocol::openai {
 
 /**
  * @brief Responses API SSE 输出 Sink
@@ -23,7 +24,7 @@
  * 
  * 参考设计文档: plans/aiapi-refactor-design.md 第 7.2 节
  */
-class ResponsesSseSink : public IResponseSink, public IResponsePersistenceSink {
+class OpenAiResponsesSseSink : public IResponseSink, public IResponsePersistenceSink {
 public:
     using StreamCallback = std::function<bool(const std::string&)>;
     using CloseCallback = std::function<void()>;
@@ -35,7 +36,7 @@ public:
      * @param closeCallback 关闭连接的回调
      * @param model 模型名称
      */
-    ResponsesSseSink(
+    OpenAiResponsesSseSink(
         StreamCallback streamCallback,
         CloseCallback closeCallback,
         const std::string& model,
@@ -43,13 +44,13 @@ public:
         int inputTokensEstimated = 0
     );
     
-    ~ResponsesSseSink() override;
+    ~OpenAiResponsesSseSink() override;
     
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
     bool supportsIncrementalToolEvents() const override { return true; }
-    std::string getSinkType() const override { return "ResponsesSseSink"; }
+    std::string getSinkType() const override { return "OpenAiResponsesSseSink"; }
     std::optional<ResponsePersistenceRecord> responseRecord() const override;
     
 private:
@@ -127,7 +128,7 @@ private:
     std::unordered_set<std::string> completedToolCalls_;
     Json::Value meta_{Json::objectValue};
     Json::Value nativeOutputItems_{Json::arrayValue};
-    int outputItemIndex_ = 0;   // legacy 文本输出项索引
+    int outputItemIndex_ = 0;
     int textOutputIndex_ = -1;
     int nextNativeOutputIndex_ = 0;
     int64_t createdAt_ = 0;
@@ -139,8 +140,9 @@ private:
     // A silent JSON sink mirrors semantic events solely to expose the final
     // record to the use case.  SSE encoding stays here; persistence stays out
     // of the Controller.
-    ResponsesJsonSink responseRecordSink_;
+    OpenAiResponsesJsonSink responseRecordSink_;
 };
 
+}  // namespace generation::protocol::openai
 
 #endif // 头文件保护结束

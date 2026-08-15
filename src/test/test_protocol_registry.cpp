@@ -129,14 +129,9 @@ DROGON_TEST(OpenAiProtocolAdapter_PopulatesUnifiedBoundary)
     CHECK(!result.request->protocolExtensions["metadata"].isMember("api_key"));
 }
 
-DROGON_TEST(OpenAiProtocolModule_ExposesCapabilitiesAndInjectableSinkFactory)
+DROGON_TEST(OpenAiProtocolModule_ExposesCapabilitiesAndOwnsSinkFactory)
 {
-    bool sinkCalled = false;
-    auto module = generation::protocol::openai::makeOpenAiProtocolModule(
-        [&sinkCalled](const ResponseContext&) -> std::shared_ptr<IResponseSink> {
-            sinkCalled = true;
-            return std::make_shared<NullSink>();
-        });
+    auto module = generation::protocol::openai::makeOpenAiProtocolModule();
 
     const auto capabilities = module->capabilityMapper().capabilities("responses.create");
     CHECK(capabilities.text);
@@ -144,9 +139,12 @@ DROGON_TEST(OpenAiProtocolModule_ExposesCapabilitiesAndInjectableSinkFactory)
     CHECK(capabilities.tools);
 
     ResponseContext context;
+    context.operation = "responses.create";
+    context.model = "sim-model";
+    context.jsonResponse = [](const Json::Value&, int) {};
     auto sink = module->responseSinkFactory("responses.create").create(context);
     REQUIRE(sink);
-    CHECK(sinkCalled);
+    CHECK(sink->getSinkType() == "OpenAiResponsesJsonSink");
 }
 
 DROGON_TEST(ProtocolRegistry_SimulatedProtocolNeedsOnlyBoundaryChanges)

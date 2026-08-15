@@ -1,7 +1,8 @@
 #include <drogon/drogon_test.h>
 #include <drogon/drogon.h>
-#include <application/generation/core/RequestAdapters.h>
+#include <application/generation/protocol/openai/OpenAiRequestAdapter.h>
 using namespace drogon;
+using generation::protocol::openai::OpenAiRequestAdapter;
 
 namespace {
 
@@ -48,20 +49,32 @@ aiapi::RequestHeaders headersFromRequest(const HttpRequestPtr& req)
 GenerationRequest buildChatRequest(const HttpRequestPtr& req)
 {
     const auto body = req ? req->getJsonObject() : nullptr;
-    return RequestAdapters::buildGenerationRequestFromChat(
-        body ? *body : Json::Value(), headersFromRequest(req));
+    generation::protocol::RawProtocolRequest raw;
+    raw.method = "POST";
+    raw.path = "/v1/chat/completions";
+    raw.body = body ? *body : Json::Value();
+    raw.headers = headersFromRequest(req);
+    const auto result = generation::protocol::openai::OpenAiRequestAdapter(
+        generation::protocol::openai::OpenAiOperation::ChatCompletions).adapt(raw);
+    return result.request.value_or(GenerationRequest{});
 }
 
 GenerationRequest buildResponsesRequest(const HttpRequestPtr& req)
 {
     const auto body = req ? req->getJsonObject() : nullptr;
-    return RequestAdapters::buildGenerationRequestFromResponses(
-        body ? *body : Json::Value(), headersFromRequest(req));
+    generation::protocol::RawProtocolRequest raw;
+    raw.method = "POST";
+    raw.path = "/v1/responses";
+    raw.body = body ? *body : Json::Value();
+    raw.headers = headersFromRequest(req);
+    const auto result = generation::protocol::openai::OpenAiRequestAdapter(
+        generation::protocol::openai::OpenAiOperation::ResponsesCreate).adapt(raw);
+    return result.request.value_or(GenerationRequest{});
 }
 
 }
 
-DROGON_TEST(RequestAdapters_Chat_BasicFields)
+DROGON_TEST(OpenAiRequestAdapter_Chat_BasicFields)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -95,7 +108,7 @@ DROGON_TEST(RequestAdapters_Chat_BasicFields)
     CHECK(genReq.requestId.rfind("req_", 0) == 0);
 }
 
-DROGON_TEST(RequestAdapters_Chat_ContentArrayWithImage)
+DROGON_TEST(OpenAiRequestAdapter_Chat_ContentArrayWithImage)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -130,7 +143,7 @@ DROGON_TEST(RequestAdapters_Chat_ContentArrayWithImage)
     CHECK(genReq.images[0].uploadedUrl == "https://example.com/a.png");
 }
 
-DROGON_TEST(RequestAdapters_Chat_ToolsAndToolChoice)
+DROGON_TEST(OpenAiRequestAdapter_Chat_ToolsAndToolChoice)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -164,7 +177,7 @@ DROGON_TEST(RequestAdapters_Chat_ToolsAndToolChoice)
     CHECK(*genReq.toolChoiceSpec.toolName == "read_file");
 }
 
-DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeaves)
+DROGON_TEST(OpenAiRequestAdapter_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeaves)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -206,11 +219,11 @@ DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeav
     CHECK(bridged.namespacePath == "filesystem");
 }
 
-DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
+DROGON_TEST(OpenAiRequestAdapterNamespaceBridgeReadsInjectedSettings)
 {
     FakeAccountSettings settings;
     settings.settings.namespaceToolBridgeEnabled = false;
-    RequestAdapters::setAccountSettingsQuery(&settings);
+    OpenAiRequestAdapter::setAccountSettingsQuery(&settings);
 
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -228,10 +241,10 @@ DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
         makeJsonRequest(body));
     CHECK(request.toolDefinitions.empty());
     REQUIRE(request.protocolExtensions["openai"]["raw_tools"].size() == 1);
-    RequestAdapters::setAccountSettingsQuery(nullptr);
+    OpenAiRequestAdapter::setAccountSettingsQuery(nullptr);
 }
 
-DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayDistinct)
+DROGON_TEST(OpenAiRequestAdapter_Responses_NestedNamespacesAndDuplicateLeafNamesStayDistinct)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -274,7 +287,7 @@ DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayD
     CHECK(genReq.toolDefinitions[1].namespacePath == "archive");
 }
 
-DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
+DROGON_TEST(OpenAiRequestAdapter_Responses_StringInputAndPreviousResponse)
 {
     Json::Value body;
     body["model"] = "GPT-4o-mini";
@@ -295,7 +308,7 @@ DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
     CHECK(genReq.requestId.rfind("req_", 0) == 0);
 }
 
-DROGON_TEST(RequestAdapters_Responses_InputSystemAndDeveloperInstructions)
+DROGON_TEST(OpenAiRequestAdapter_Responses_InputSystemAndDeveloperInstructions)
 {
     Json::Value body;
     body["model"] = "GPT-4o-mini";
@@ -336,7 +349,7 @@ DROGON_TEST(RequestAdapters_Responses_InputSystemAndDeveloperInstructions)
     CHECK(genReq.currentInput.find("question") != std::string::npos);
 }
 
-DROGON_TEST(RequestAdapters_RequestIdHeaders)
+DROGON_TEST(OpenAiRequestAdapter_RequestIdHeaders)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -354,7 +367,7 @@ DROGON_TEST(RequestAdapters_RequestIdHeaders)
     CHECK(responsesReq.requestId == "corr:456");
 }
 
-DROGON_TEST(RequestAdapters_CodexCliStableSessionFromHeader)
+DROGON_TEST(OpenAiRequestAdapter_CodexCliStableSessionFromHeader)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -369,7 +382,7 @@ DROGON_TEST(RequestAdapters_CodexCliStableSessionFromHeader)
     CHECK(genReq.clientInfo["client_session_source"].asString() == "header.session-id");
 }
 
-DROGON_TEST(RequestAdapters_CodexCliStableSessionFromBodyFallback)
+DROGON_TEST(OpenAiRequestAdapter_CodexCliStableSessionFromBodyFallback)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -384,7 +397,7 @@ DROGON_TEST(RequestAdapters_CodexCliStableSessionFromBodyFallback)
     CHECK(genReq.clientInfo["client_session_source"].asString() == "body.conversation_id");
 }
 
-DROGON_TEST(RequestAdapters_CodexWindowIdAloneDoesNotEnableCodexProtocol)
+DROGON_TEST(OpenAiRequestAdapter_CodexWindowIdAloneDoesNotEnableCodexProtocol)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -398,7 +411,7 @@ DROGON_TEST(RequestAdapters_CodexWindowIdAloneDoesNotEnableCodexProtocol)
     CHECK(!genReq.clientInfo.isMember("client_session_id"));
 }
 
-DROGON_TEST(RequestAdapters_RealCodexMayIncludeWindowId)
+DROGON_TEST(OpenAiRequestAdapter_RealCodexMayIncludeWindowId)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -412,7 +425,7 @@ DROGON_TEST(RequestAdapters_RealCodexMayIncludeWindowId)
     CHECK(!genReq.clientInfo.isMember("client_session_id"));
 }
 
-DROGON_TEST(RequestAdapters_Responses_InputItems)
+DROGON_TEST(OpenAiRequestAdapter_Responses_InputItems)
 {
     Json::Value body;
     body["model"] = "GPT-4o";
@@ -439,7 +452,7 @@ DROGON_TEST(RequestAdapters_Responses_InputItems)
     CHECK(!genReq.continuityTexts.empty());
 }
 
-DROGON_TEST(RequestAdapters_Responses_FullTranscriptDoesNotReplayHistoricalToolOutput)
+DROGON_TEST(OpenAiRequestAdapter_Responses_FullTranscriptDoesNotReplayHistoricalToolOutput)
 {
     Json::Value body;
     body["model"] = "Grok 4.5";
@@ -502,7 +515,7 @@ DROGON_TEST(RequestAdapters_Responses_FullTranscriptDoesNotReplayHistoricalToolO
     CHECK(foundHistoricalToolResult);
 }
 
-DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsLatestParallelToolResults)
+DROGON_TEST(OpenAiRequestAdapter_Responses_XmlBridgeKeepsLatestParallelToolResults)
 {
     Json::Value body;
     body["model"] = "Grok 4.5";
@@ -548,7 +561,7 @@ DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsLatestParallelToolResults)
     CHECK(genReq.currentInput.find("call_id=call_b") != std::string::npos);
 }
 
-DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsIncrementalToolOutputWithoutBoundary)
+DROGON_TEST(OpenAiRequestAdapter_Responses_XmlBridgeKeepsIncrementalToolOutputWithoutBoundary)
 {
     Json::Value body;
     body["model"] = "Grok 4.5";
@@ -568,7 +581,7 @@ DROGON_TEST(RequestAdapters_Responses_XmlBridgeKeepsIncrementalToolOutputWithout
     CHECK(genReq.currentInput.find("call_id=call_incremental") != std::string::npos);
 }
 
-DROGON_TEST(RequestAdapters_Responses_XmlBridgeOnlyReplaysNewestToolCycle)
+DROGON_TEST(OpenAiRequestAdapter_Responses_XmlBridgeOnlyReplaysNewestToolCycle)
 {
     Json::Value body;
     body["model"] = "Grok 4.5";
