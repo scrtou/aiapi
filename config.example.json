@@ -146,12 +146,12 @@
         "outbound_limits": {
             "_comment": "Per-provider outbound request size gates. Each upstream has its own hard limit; do NOT share one value. 0 = unlimited.",
             "default": {
-                "max_request_bytes": 1048576,
-                "max_message_bytes": 1048576
+                "max_request_bytes": 4048576,
+                "max_message_bytes": 4048576
             },
             "chaynsapi": {
-                "max_request_bytes": 1048576,
-                "max_message_bytes": 1048576
+                "max_request_bytes": 4048576,
+                "max_message_bytes": 4048576
             },
             "retoolapi": {
                 "max_request_bytes": 1048576,
@@ -324,7 +324,7 @@
         "session_persistence": {
             "memory_expire_hours": 24,
             "memory_cleanup_interval_hours": 12,
-            "db_retention_hours": 720,
+            "db_retention_hours": 336,
             "store_session_payload": true,
             "store_response_body": true
         }

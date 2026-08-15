@@ -185,6 +185,26 @@ std::string escapedLogByte(unsigned char value)
     return escaped;
 }
 
+std::string escapeFullLogPayload(std::string_view source)
+{
+    std::string escaped;
+    escaped.reserve(source.size());
+    for (const unsigned char byte : source) {
+        escaped += escapedLogByte(byte);
+    }
+    return escaped;
+}
+
+void logCompleteUserInputForDebug(std::string_view input)
+{
+    // This is intentionally unbounded at DEBUG level so diagnostics can
+    // distinguish an omitted user request from an upstream/model-side drift.
+    // Escape control bytes to keep the file log one physical line per event.
+    LOG_DEBUG << "[chaynsAPI][ToolBridge] 上游请求完整用户输入"
+              << ": sourceBytes=" << input.size()
+              << ", payload=\"" << escapeFullLogPayload(input) << "\"";
+}
+
 ToolBridgeLogPayload makeToolBridgeLogPayload(std::string_view source)
 {
     ToolBridgeLogPayload payload;
@@ -214,8 +234,9 @@ void logToolBridgePayload(const char* direction, std::string_view source)
     LOG_INFO << "[chaynsAPI][ToolBridge] " << direction
              << ": sourceBytes=" << payload.sourceBytes
              << ", loggedBytes=" << payload.text.size()
-             << ", truncated=" << payload.truncated
-             << ", payload=\"" << payload.text << "\"";
+             << ", truncated=" << payload.truncated;
+    LOG_DEBUG << "[chaynsAPI][ToolBridge] " << direction
+              << ": payload=\"" << payload.text << "\"";
 }
 
 // Upstream bodies may carry conversation content, identifiers, cookies, or
@@ -421,10 +442,10 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
 
     const Json::Value messageContext = historyForChayns(request.messages);
     const auto toolBridgeInstructions = toolBridgeInstructionsForLog(request.input);
+    logCompleteUserInputForDebug(request.input);
     if (toolBridgeInstructions.has_value()) {
-        // `request.input` also contains the user request and may contain an
-        // environment context.  Log only the generated tool-instruction
-        // block, not the complete provider prompt.
+        // The INFO log remains limited to generated tool instructions.  The
+        // complete request input is emitted separately at DEBUG level above.
         logToolBridgePayload("上游请求桥接内容", *toolBridgeInstructions);
     }
     LOG_INFO << "[chaynsAPI] 发送聊天消息";
@@ -917,7 +938,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             // =================================================
             // 分支 B： 新对话 (创建新 线程)
             // =================================================
-            LOG_INFO << "[chaynsAPI] 正在创建新线程： 注入系统提示词 (" << request.systemPrompt.length() << " 字符)";
+            LOG_INFO << "[chaynsAPI] 本次创建新线程： 注入系统提示词 (" << request.systemPrompt.length() << " 字符)";
             string full_message;
             const std::string historyHeader = "\n接下来是 OpenAI 接口格式的历史消息：\n";
             const std::string currentHeader = "\n用户现在的问题是:\n";

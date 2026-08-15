@@ -12,6 +12,7 @@
 #include <list>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -34,6 +35,7 @@ class CapturingProvider final : public provider::IChatProvider
     enum class Mode {
         PlainText,
         BridgeToolCall,
+        InvalidBridgeThenValidActionV3,
         NativeEmptyArguments,
         SemanticFailure,
     };
@@ -44,6 +46,7 @@ class CapturingProvider final : public provider::IChatProvider
         provider::ProviderCallContext&) override
     {
         captured = request;
+        capturedRequests.push_back(request);
         ++calls;
         if (mode_ == Mode::BridgeToolCall)
         {
@@ -52,6 +55,32 @@ class CapturingProvider final : public provider::IChatProvider
                 "\n<function_calls><function_call><tool>read_file</tool>"
                 "<args_json><![CDATA[{\"path\":\"synthetic.txt\"}]]></args_json>"
                 "</function_call></function_calls>";
+            return platform::Result<provider::ProviderResponse>::success(
+                std::move(response));
+        }
+        if (mode_ == Mode::InvalidBridgeThenValidActionV3)
+        {
+            if (bridgeTrigger.empty()) {
+                const auto begin = request.input.find("<Function_");
+                const auto end = begin == std::string::npos
+                    ? std::string::npos
+                    : request.input.find("/>", begin);
+                if (begin != std::string::npos && end != std::string::npos) {
+                    bridgeTrigger = request.input.substr(begin, end - begin + 2);
+                }
+            }
+
+            provider::ProviderResponse response;
+            if (calls == 1) {
+                // Same sentinel, but an invalid action-v3 body.  This makes
+                // the correction include a concrete parser error rather than
+                // merely reporting a missing trigger marker.
+                response.text = bridgeTrigger +
+                    "\n{\"protocol\":\"action-v3\",\"tool_calls\":[{\"name\":\"read_file\",\"arguments\":{\"path\":\"synthetic.txt\"}}]}]}";
+            } else {
+                response.text = bridgeTrigger +
+                    "\n{\"protocol\":\"action-v3\",\"tool_calls\":[{\"name\":\"read_file\",\"arguments\":{\"path\":\"synthetic.txt\"}}]}";
+            }
             return platform::Result<provider::ProviderResponse>::success(
                 std::move(response));
         }
@@ -86,9 +115,11 @@ class CapturingProvider final : public provider::IChatProvider
     }
 
     provider::ProviderRequest captured;
+    std::vector<provider::ProviderRequest> capturedRequests;
     int calls = 0;
   private:
     Mode mode_;
+    std::string bridgeTrigger;
 };
 
 class CollectingSink final : public IResponseSink
@@ -245,6 +276,49 @@ DROGON_TEST(GenerationService_BridgeCodecAndEmitOrderRunThroughProductionPipelin
     CHECK(call.arguments.find("synthetic.txt") != std::string::npos);
     CHECK(std::holds_alternative<generation::Completed>(sink.events.back()));
     CHECK(std::get<generation::Completed>(sink.events.back()).finishReason == "tool_calls");
+    CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_CodexBridgeRetryReusesCurrentThreadAndSendsCorrection)
+{
+    auto channels = makeChannel("codex-bridge-retry-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>(
+        CapturingProvider::Mode::InvalidBridgeThenValidActionV3);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("codex-bridge-retry-fixture", provider));
+
+    auto request = makeRequest("codex-bridge-retry-fixture", fixtureTools());
+    request.clientInfo["client_type"] = "codex";
+    CollectingSink sink;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
+
+    CHECK(!service.runGuarded(request, sink).has_value());
+    REQUIRE(provider->calls == 2);
+    REQUIRE(provider->capturedRequests.size() == 2);
+    const auto& first = provider->capturedRequests[0];
+    const auto& correction = provider->capturedRequests[1];
+
+    CHECK(first.previousConversationId.empty());
+    CHECK(!first.conversationId.empty());
+    CHECK(correction.conversationId == first.conversationId);
+    CHECK(correction.previousConversationId == first.conversationId);
+    CHECK(correction.previousConversationFallbackId.empty());
+    CHECK(correction.input.find("上一条回复格式不正确") != std::string::npos);
+    CHECK(correction.input.find("action-v3 response must be one valid JSON object") !=
+          std::string::npos);
+    CHECK(correction.input.find("synthetic bridge question") == std::string::npos);
+    CHECK(correction.input.find("<tool_instructions>") == std::string::npos);
+    CHECK(correction.rawInput == correction.input);
+
+    const auto toolEvent = std::find_if(
+        sink.events.begin(), sink.events.end(), [](const auto& event) {
+            return std::holds_alternative<generation::ToolCallDone>(event);
+        });
+    REQUIRE(toolEvent != sink.events.end());
+    CHECK(std::get<generation::ToolCallDone>(*toolEvent).name == "read_file");
     CHECK(sink.closed);
 }
 

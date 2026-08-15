@@ -265,6 +265,9 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
         session.response.message["tool_calls"].isArray() &&
         session.response.message["tool_calls"].size() > 0;
     bool hasActionProtocol = false;
+    std::string retryReason = "sentinel_missing_or_mismatched";
+    std::string retryDiagnostic =
+        "the response did not contain the expected exact trigger marker";
     const size_t sentinel = firstText.find(session.provider.toolBridgeTrigger);
     if (sentinel != std::string::npos) {
         const std::string candidate = firstText.substr(sentinel);
@@ -284,6 +287,12 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
             decoded = toolcall::createBridgeProtocolCodec(fallback)->decodeResponse(candidate, options);
         }
         hasActionProtocol = decoded.valid;
+        if (!decoded.valid) {
+            retryReason = "invalid_action_protocol";
+            retryDiagnostic = decoded.diagnostic.message.empty()
+                ? "the response did not contain a valid action protocol payload"
+                : decoded.diagnostic.message;
+        }
         if (decoded.matched && !decoded.valid) {
             LOG_WARN << "[生成服务][CodexRooCompat] 首次动作协议无效: format="
                      << toolcall::bridgeWireFormatName(session.provider.toolBridgeFormat)
@@ -294,6 +303,7 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
 
     LOG_WARN << "[生成服务][CodexRooCompat] 首次响应缺少有效 action protocol，正在严格重试一次";
     const std::string bridgeMessage = session.request.message;
+    const std::string rawMessage = session.request.rawMessage;
     const Json::Value firstResponse = session.response.message;
     toolcall::BridgePolicyOptions options;
     options.clientType = clientType;
@@ -302,13 +312,37 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
     options.sentinel = session.provider.toolBridgeTrigger;
     options.parallelToolCalls = session.request.parallelToolCalls;
     const auto codec = toolcall::createBridgeProtocolCodec(session.provider.toolBridgeFormat);
-    session.request.message += "\n\n[CodexRooCompat retry]\n"
-        "Your previous response was invalid for this transport.\n" +
+    const std::string correctionMessage =
+        "上一条回复格式不正确，未通过工具桥接协议校验。请直接更正上一条回复并重新生成。\n"
+        "错误原因：" + retryDiagnostic + "\n" +
         codec->buildRetryPrompt(options);
+    // The retry is an actual follow-up user message on the thread which just
+    // produced the invalid response.  Do not append it to the original user
+    // request: it must remain a standalone correction rather than look like
+    // a replacement initial prompt.
+    session.request.message = correctionMessage;
+    session.request.rawMessage = correctionMessage;
     session.response.message = Json::Value(Json::objectValue);
 
-    const auto retryError = invokeProvider(session, cancellation, deadline);
+    LOG_WARN << "[生成服务][CodexRooCompat] 严格重试已发起: request_id="
+             << session.state.requestId
+             << ", attempt=1/1, reason=" << retryReason
+             << ", format="
+             << toolcall::bridgeWireFormatName(session.provider.toolBridgeFormat)
+             << ", client=" << clientType
+             << ", reuse_current_provider_thread=true";
+    std::optional<platform::Error> retryError;
+    try {
+        retryError = invokeProvider(
+            session, cancellation, deadline,
+            ProviderInvocationMode::BridgeCorrectionFollowUp);
+    } catch (...) {
+        session.request.message = bridgeMessage;
+        session.request.rawMessage = rawMessage;
+        throw;
+    }
     session.request.message = bridgeMessage;
+    session.request.rawMessage = rawMessage;
     if (retryError) {
         session.response.message = firstResponse;
         LOG_WARN << "[生成服务][CodexRooCompat] 严格重试失败，已恢复首次响应: code="
@@ -442,11 +476,17 @@ std::optional<platform::Error> generation::GenerationPipeline::run(
 }
 
 provider::ProviderRequest generation::GenerationPipeline::providerRequestFromSession(
-    const session_st& session)
+    const session_st& session,
+    ProviderInvocationMode mode)
 {
     provider::ProviderRequest request;
     request.conversationId = session.state.conversationId;
-    if (session.state.isContinuation) {
+    if (mode == ProviderInvocationMode::BridgeCorrectionFollowUp) {
+        // The first provider call in this local request has already stored its
+        // upstream thread against conversationId.  Explicitly reuse that
+        // thread even if this local request began as a new session.
+        request.previousConversationId = session.state.conversationId;
+    } else if (session.state.isContinuation) {
         request.previousConversationId = session.provider.prevProviderKey;
         request.previousConversationFallbackId = session.provider.prevProviderFallbackKey;
         request.previousConversationFallbackModel = session.provider.prevProviderFallbackModel;
@@ -567,7 +607,8 @@ void generation::GenerationPipeline::applyProviderResponse(
 std::optional<platform::Error> generation::GenerationPipeline::invokeProvider(
     session_st& session,
     const platform::CancellationToken& cancellation,
-    platform::Deadline deadline)
+    platform::Deadline deadline,
+    ProviderInvocationMode mode)
 {
     LOG_INFO << "[生成服务] 执行提供者: " << session.request.api;
     if (!providerRegistry_) {
@@ -575,7 +616,7 @@ std::optional<platform::Error> generation::GenerationPipeline::invokeProvider(
     }
 
     if (const auto chatProvider = providerRegistry_->findChatProvider(session.request.api)) {
-        auto request = providerRequestFromSession(session);
+        auto request = providerRequestFromSession(session, mode);
         provider::ProviderCallContext context{cancellation, deadline};
         const auto result = chatProvider->generate(request, context);
         if (!result) {

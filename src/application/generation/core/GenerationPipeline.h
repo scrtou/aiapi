@@ -43,6 +43,15 @@ private:
         bool hasToolDefinitions = false;
     };
 
+    // A strict bridge retry is a correction sent after the provider has
+    // already produced one response.  It must therefore be delivered as a
+    // follow-up on the upstream thread created by that first invocation,
+    // even when the local request itself started a new conversation.
+    enum class ProviderInvocationMode {
+        Default,
+        BridgeCorrectionFollowUp,
+    };
+
     std::optional<platform::Error> execute(
         session_st& session,
         IResponseSink& sink,
@@ -61,10 +70,12 @@ private:
     std::optional<platform::Error> invokeProvider(
         session_st& session,
         const platform::CancellationToken& cancellation,
-        platform::Deadline deadline);
+        platform::Deadline deadline,
+        ProviderInvocationMode mode = ProviderInvocationMode::Default);
 
     static provider::ProviderRequest providerRequestFromSession(
-        const session_st& session);
+        const session_st& session,
+        ProviderInvocationMode mode = ProviderInvocationMode::Default);
     static void applyProviderResponse(
         session_st& session,
         const provider::ProviderResponse& response);
