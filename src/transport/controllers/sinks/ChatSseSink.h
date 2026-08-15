@@ -6,6 +6,8 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 /**
  * @brief Chat Completions SSE 输出 Sink
@@ -42,6 +44,7 @@ public:
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
+    bool supportsIncrementalToolEvents() const override { return true; }
     std::string getSinkType() const override { return "ChatSseSink"; }
     
 private:
@@ -97,6 +100,9 @@ private:
     bool firstChunk_ = true;
     bool sentText_ = false;
     std::optional<generation::Usage> usage_;
+    std::unordered_set<std::string> incrementalToolCalls_;
+    std::unordered_map<std::string, std::unordered_set<int>> toolArgumentSequences_;
+    std::unordered_set<std::string> completedToolCalls_;
     Json::Value meta_{Json::objectValue};
     bool closed_ = false;
 };

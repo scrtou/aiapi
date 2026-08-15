@@ -34,7 +34,7 @@ DROGON_TEST(ContinuityResolver_Responses_PreviousResponseId_Hit)
     index.bind(prevRespId, sessionId);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::Responses;
+    req.responseLifecycle = ResponseLifecycle::Stored;
     req.model = "GPT-4o";
     req.previousResponseId = prevRespId;
 
@@ -57,7 +57,7 @@ DROGON_TEST(ContinuityResolver_Responses_PreviousResponseId_Miss_NewSession)
     index.erase(prevRespId);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::Responses;
+    req.responseLifecycle = ResponseLifecycle::Stored;
     req.model = "GPT-4o";
     req.previousResponseId = prevRespId;
 
@@ -78,7 +78,7 @@ DROGON_TEST(ContinuityResolver_ZeroWidth_Decode_Hit)
     const std::string raw = ZeroWidthEncoder::appendEncoded("hello", sid);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::ChatCompletions;
+    req.responseLifecycle = ResponseLifecycle::Immediate;
     req.model = "GPT-4o";
     req.continuityTexts.push_back(raw);
 
@@ -96,7 +96,7 @@ DROGON_TEST(ContinuityResolver_ZeroWidth_Decode_Miss_NewSession)
     mgr.setTrackingMode(SessionTrackingMode::ZeroWidth);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::ChatCompletions;
+    req.responseLifecycle = ResponseLifecycle::Immediate;
     req.model = "GPT-4o";
     req.continuityTexts.push_back("no_zerowidth_here");
 
@@ -114,7 +114,7 @@ DROGON_TEST(ContinuityResolver_CodexStableSession_WinsWithoutChangingConfiguredM
     mgr.setTrackingMode(SessionTrackingMode::ZeroWidth);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::Responses;
+    req.responseLifecycle = ResponseLifecycle::Stored;
     req.model = "GPT-4o";
     req.clientInfo["client_type"] = "Codex";
     req.clientInfo["client_session_id"] = "conversation-123";
@@ -142,7 +142,7 @@ DROGON_TEST(ContinuityResolver_CodexWithoutStableSession_UsesConfiguredHash)
     mgr.setTrackingMode(SessionTrackingMode::Hash);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::ChatCompletions;
+    req.responseLifecycle = ResponseLifecycle::Immediate;
     req.model = "GPT-4o";
     req.clientInfo["client_type"] = "Codex";
     req.messages.push_back(Message::user("hi"));
@@ -161,7 +161,7 @@ DROGON_TEST(ContinuityResolver_Hash_Path_NonEmpty)
     mgr.setTrackingMode(SessionTrackingMode::Hash);
 
     GenerationRequest req;
-    req.endpointType = EndpointType::ChatCompletions;
+    req.responseLifecycle = ResponseLifecycle::Immediate;
     req.model = "GPT-4o";
     req.clientInfo["client_type"] = "test";
     req.messages.push_back(Message::user("hi"));

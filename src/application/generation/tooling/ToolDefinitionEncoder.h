@@ -1,7 +1,7 @@
 #ifndef TOOL_DEFINITION_ENCODER_H
 #define TOOL_DEFINITION_ENCODER_H
 
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <string>
 
 namespace toolcall {

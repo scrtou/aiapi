@@ -44,6 +44,11 @@
 #include <application/generation/core/AiApiUseCase.h>
 #include <application/generation/core/SessionExecutionGate.h>
 #include <application/generation/core/RequestAdapters.h>
+#include <application/generation/protocol/common/ProtocolRegistry.h>
+#include <transport/controllers/sinks/ChatJsonSink.h>
+#include <transport/controllers/sinks/ChatSseSink.h>
+#include <transport/controllers/sinks/ResponsesJsonSink.h>
+#include <transport/controllers/sinks/ResponsesSseSink.h>
 #include <application/generation/tooling/BridgeHelpers.h>
 #include <application/generation/core/RetiredProviderTelemetry.h>
 #include <infrastructure/executor/BackgroundTaskQueue.h>
@@ -73,6 +78,36 @@ std::chrono::milliseconds remainingBudget(std::chrono::steady_clock::time_point 
         return std::chrono::milliseconds::zero();
     }
     return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+}
+
+generation::protocol::ProtocolSinkFactoryCallback protocolSinkFactory()
+{
+    return [](const generation::protocol::ResponseContext& context)
+        -> std::shared_ptr<IResponseSink> {
+        if (context.operation == "chat.completions") {
+            if (context.stream) {
+                if (!context.streamWriter || !context.close) return nullptr;
+                return std::make_shared<ChatSseSink>(
+                    context.streamWriter, context.close, context.model);
+            }
+            if (!context.jsonResponse) return nullptr;
+            return std::make_shared<ChatJsonSink>(context.jsonResponse, context.model);
+        }
+
+        if (context.operation == "responses.create") {
+            if (context.stream) {
+                if (!context.streamWriter || !context.close) return nullptr;
+                return std::make_shared<ResponsesSseSink>(
+                    context.streamWriter, context.close, context.model,
+                    context.nativeResponsesToolItems, context.inputTokensEstimated);
+            }
+            if (!context.jsonResponse) return nullptr;
+            return std::make_shared<ResponsesJsonSink>(
+                context.jsonResponse, context.model,
+                context.inputTokensEstimated, context.nativeResponsesToolItems);
+        }
+        return nullptr;
+    };
 }
 
 }  // namespace
@@ -439,9 +474,20 @@ StartupResult stepAiApiUseCase(AppContext& ctx, const Json::Value& runtimeConfig
             "AI API use case requires registry/session/index/gate/channel/executor ownership");
     }
 
+    auto protocolRegistry = generation::protocol::makeDefaultProtocolRegistry(
+        protocolSinkFactory());
+    std::string protocolError;
+    if (!protocolRegistry || !protocolRegistry->validate(&protocolError)) {
+        return StartupResult::failed(
+            StartupError::OwnerStartFailed,
+            "protocol registry initialization failed" +
+                (protocolError.empty() ? std::string() : ": " + protocolError));
+    }
+    ctx.setProtocolRegistry(protocolRegistry);
+
     auto aiApiUseCase = std::make_shared<AiApiUseCase>(
         registry.get(), sessionStore.get(), responseIndex.get(), executionGate.get(),
-        channels.get(), executor, runtimeConfig);
+        channels.get(), executor, runtimeConfig, protocolRegistry);
     ctx.setAiApiUseCase(aiApiUseCase);
     AiApiController::setUseCase(aiApiUseCase.get());
     // Drogon owns Controller instances.  Revoke this non-owning static pointer

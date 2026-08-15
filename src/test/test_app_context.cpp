@@ -62,7 +62,7 @@ class TestAiApiUseCase final : public aiapi::IAiApiUseCase
 {
   public:
     aiapi::SubmissionResult submitGeneration(
-        aiapi::GenerationInput, SinkFactory, Completion) override
+        aiapi::GenerationInput, ResponseBinding, Completion) override
     {
         return {};
     }

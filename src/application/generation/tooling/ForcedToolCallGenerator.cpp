@@ -191,9 +191,9 @@ void toolcall::generateForcedToolCall(
 {
     const ForcedChoice choice = parseForcedChoice(session.request.toolChoice);
     const Json::Value& toolDefinitions =
-        (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray() &&
-         session.request.toolsRaw.size() > 0)
-            ? session.request.toolsRaw
+        (!session.request.toolDefinitionsSource.isNull() && session.request.toolDefinitionsSource.isArray() &&
+         session.request.toolDefinitionsSource.size() > 0)
+            ? session.request.toolDefinitionsSource
             : session.request.tools;
     if (!choice.required || !toolDefinitions.isArray() || toolDefinitions.empty()) {
         return;

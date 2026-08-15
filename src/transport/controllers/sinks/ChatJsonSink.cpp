@@ -1,4 +1,5 @@
 #include <transport/controllers/sinks/ChatJsonSink.h>
+#include <algorithm>
 #include <chrono>
 #include <random>
 
@@ -33,7 +34,17 @@ void ChatJsonSink::onEvent(const generation::GenerationEvent& event) {
             }
         }
         else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
-            toolCalls_.push_back(arg);
+            const auto existing = std::find_if(
+                toolCalls_.begin(), toolCalls_.end(), [&arg](const auto& call) {
+                    return !arg.id.empty() ? call.id == arg.id
+                                           : call.id.empty() && call.index == arg.index;
+                });
+            if (existing == toolCalls_.end()) toolCalls_.push_back(arg);
+            else *existing = arg;
+            std::stable_sort(toolCalls_.begin(), toolCalls_.end(), [](const auto& left,
+                                                                      const auto& right) {
+                return left.index < right.index;
+            });
         }
         else if constexpr (std::is_same_v<T, generation::Usage>) {
             // 存储 信息（供 的 字段使用）

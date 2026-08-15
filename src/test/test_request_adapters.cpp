@@ -85,7 +85,7 @@ DROGON_TEST(RequestAdapters_Chat_BasicFields)
     auto req = makeJsonRequest(body, "Kilo-Code/1.0", "Bearer test-key");
     auto genReq = buildChatRequest(req);
 
-    CHECK(genReq.endpointType == EndpointType::ChatCompletions);
+    CHECK(genReq.responseLifecycle == ResponseLifecycle::Immediate);
     CHECK(genReq.model == "GPT-4o");
     CHECK(genReq.stream);
     CHECK(genReq.systemPrompt.find("you are test") != std::string::npos);
@@ -157,9 +157,11 @@ DROGON_TEST(RequestAdapters_Chat_ToolsAndToolChoice)
     auto req = makeJsonRequest(body);
     auto genReq = buildChatRequest(req);
 
-    CHECK(genReq.tools.isArray());
-    CHECK(genReq.tools.size() == 1);
-    CHECK(genReq.toolChoice.find("read_file") != std::string::npos);
+    REQUIRE(genReq.toolDefinitions.size() == 1);
+    CHECK(genReq.toolDefinitions[0].name == "read_file");
+    CHECK(genReq.toolChoiceSpec.mode == ToolChoiceMode::Specific);
+    REQUIRE(genReq.toolChoiceSpec.toolName.has_value());
+    CHECK(*genReq.toolChoiceSpec.toolName == "read_file");
 }
 
 DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeaves)
@@ -189,19 +191,19 @@ DROGON_TEST(RequestAdapters_Responses_NamespaceToolsPreserveRawTreeAndBridgeLeav
     const auto genReq = buildResponsesRequest(
         makeJsonRequest(body));
 
-    REQUIRE(genReq.toolsRaw.isArray());
-    REQUIRE(genReq.toolsRaw.size() == 1);
-    CHECK(genReq.toolsRaw[0]["type"].asString() == "namespace");
-    CHECK(genReq.toolsRaw[0]["name"].asString() == "filesystem");
-    REQUIRE(genReq.toolsRaw[0]["tools"].isArray());
-    CHECK(genReq.toolsRaw[0]["tools"][0]["name"].asString() == "read_file");
+    const auto& rawTools = genReq.protocolExtensions["openai"]["raw_tools"];
+    REQUIRE(rawTools.isArray());
+    REQUIRE(rawTools.size() == 1);
+    CHECK(rawTools[0]["type"].asString() == "namespace");
+    CHECK(rawTools[0]["name"].asString() == "filesystem");
+    REQUIRE(rawTools[0]["tools"].isArray());
+    CHECK(rawTools[0]["tools"][0]["name"].asString() == "read_file");
 
-    REQUIRE(genReq.tools.isArray());
-    REQUIRE(genReq.tools.size() == 1);
-    const auto& bridged = genReq.tools[0]["function"];
-    CHECK(bridged["name"].asString() == "filesystem__read_file");
-    CHECK(bridged["_aiapi_original_name"].asString() == "read_file");
-    CHECK(bridged["_aiapi_namespace"].asString() == "filesystem");
+    REQUIRE(genReq.toolDefinitions.size() == 1);
+    const auto& bridged = genReq.toolDefinitions[0];
+    CHECK(bridged.name == "filesystem__read_file");
+    CHECK(bridged.originalName == "read_file");
+    CHECK(bridged.namespacePath == "filesystem");
 }
 
 DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
@@ -224,8 +226,8 @@ DROGON_TEST(RequestAdaptersNamespaceBridgeReadsInjectedSettings)
 
     const auto request = buildResponsesRequest(
         makeJsonRequest(body));
-    CHECK(request.tools.empty());
-    REQUIRE(request.toolsRaw.size() == 1);
+    CHECK(request.toolDefinitions.empty());
+    REQUIRE(request.protocolExtensions["openai"]["raw_tools"].size() == 1);
     RequestAdapters::setAccountSettingsQuery(nullptr);
 }
 
@@ -264,16 +266,12 @@ DROGON_TEST(RequestAdapters_Responses_NestedNamespacesAndDuplicateLeafNamesStayD
     const auto genReq = buildResponsesRequest(
         makeJsonRequest(body));
 
-    REQUIRE(genReq.toolsRaw.size() == 2);
-    REQUIRE(genReq.tools.size() == 2);
-    CHECK(genReq.tools[0]["function"]["name"].asString() ==
-          "workspace__filesystem__read_file");
-    CHECK(genReq.tools[0]["function"]["_aiapi_namespace"].asString() ==
-          "workspace__filesystem");
-    CHECK(genReq.tools[1]["function"]["name"].asString() ==
-          "archive__read_file");
-    CHECK(genReq.tools[1]["function"]["_aiapi_namespace"].asString() ==
-          "archive");
+    REQUIRE(genReq.protocolExtensions["openai"]["raw_tools"].size() == 2);
+    REQUIRE(genReq.toolDefinitions.size() == 2);
+    CHECK(genReq.toolDefinitions[0].name == "workspace__filesystem__read_file");
+    CHECK(genReq.toolDefinitions[0].namespacePath == "workspace__filesystem");
+    CHECK(genReq.toolDefinitions[1].name == "archive__read_file");
+    CHECK(genReq.toolDefinitions[1].namespacePath == "archive");
 }
 
 DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
@@ -287,7 +285,7 @@ DROGON_TEST(RequestAdapters_Responses_StringInputAndPreviousResponse)
     auto req = makeJsonRequest(body, "RooCode/2.0");
     auto genReq = buildResponsesRequest(req);
 
-    CHECK(genReq.endpointType == EndpointType::Responses);
+    CHECK(genReq.responseLifecycle == ResponseLifecycle::Stored);
     CHECK(genReq.model == "GPT-4o-mini");
     CHECK(genReq.systemPrompt == "keep short");
     CHECK(genReq.currentInput.find("new prompt") != std::string::npos);
@@ -495,7 +493,7 @@ DROGON_TEST(RequestAdapters_Responses_FullTranscriptDoesNotReplayHistoricalToolO
     bool foundHistoricalToolResult = false;
     for (const auto& message : genReq.messages) {
         if (message.role == MessageRole::Tool &&
-            message.toolCallId == "call_old" &&
+            message.toolResultCallId() == "call_old" &&
             message.getTextContent().find("HISTORICAL_TOOL_OUTPUT_MUST_NOT_BE_CURRENT") !=
                 std::string::npos) {
             foundHistoricalToolResult = true;

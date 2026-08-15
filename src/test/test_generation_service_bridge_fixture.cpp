@@ -133,30 +133,26 @@ class CollectingSink final : public IResponseSink
     bool closed = false;
 };
 
-Json::Value fixtureTools()
+std::vector<ToolDefinition> fixtureTools()
 {
-    Json::Value tools(Json::arrayValue);
-    Json::Value tool(Json::objectValue);
-    tool["type"] = "function";
-    tool["function"]["name"] = "read_file";
-    tool["function"]["description"] = "read a synthetic file";
-    tool["function"]["parameters"]["type"] = "object";
-    tool["function"]["parameters"]["properties"]["path"]["type"] = "string";
-    tool["function"]["parameters"]["required"].append("path");
-    tools.append(tool);
-    return tools;
+    ToolDefinition tool;
+    tool.name = "read_file";
+    tool.originalName = tool.name;
+    tool.description = "read a synthetic file";
+    tool.inputSchema["type"] = "object";
+    tool.inputSchema["properties"]["path"]["type"] = "string";
+    tool.inputSchema["required"].append("path");
+    return {std::move(tool)};
 }
 
-Json::Value pingTool()
+std::vector<ToolDefinition> pingTool()
 {
-    Json::Value tools(Json::arrayValue);
-    Json::Value tool(Json::objectValue);
-    tool["type"] = "function";
-    tool["function"]["name"] = "ping";
-    tool["function"]["parameters"]["type"] = "object";
-    tool["function"]["parameters"]["properties"] = Json::Value(Json::objectValue);
-    tools.append(tool);
-    return tools;
+    ToolDefinition tool;
+    tool.name = "ping";
+    tool.originalName = tool.name;
+    tool.inputSchema["type"] = "object";
+    tool.inputSchema["properties"] = Json::Value(Json::objectValue);
+    return {std::move(tool)};
 }
 
 FakeChannelCatalog makeChannel(const std::string& name, bool supportsTools)
@@ -170,16 +166,16 @@ FakeChannelCatalog makeChannel(const std::string& name, bool supportsTools)
     return channels;
 }
 
-GenerationRequest makeRequest(const std::string& provider, Json::Value tools)
+GenerationRequest makeRequest(const std::string& provider,
+                              std::vector<ToolDefinition> tools)
 {
     GenerationRequest request;
     request.provider = provider;
     request.model = "fixture-model";
     request.currentInput = "synthetic bridge question";
     request.messages = {Message::user(request.currentInput)};
-    request.tools = std::move(tools);
-    request.toolsRaw = request.tools;
-    request.toolChoice = "auto";
+    request.toolDefinitions = std::move(tools);
+    request.toolChoiceSpec.mode = ToolChoiceMode::Auto;
     request.clientInfo["client_type"] = "generic-fixture-client";
     request.requestId = "bridge-fixture-request";
     request.continuityTexts = {request.currentInput};
@@ -351,7 +347,8 @@ DROGON_TEST(GenerationService_RequiredToolFallbackRunsInsideEmitResultEvents)
     provider::ProviderRegistry registry;
     REQUIRE(registry.registerChatProvider("forced-tool-fixture", provider));
     auto request = makeRequest("forced-tool-fixture", pingTool());
-    request.toolChoice = R"({"type":"function","function":{"name":"ping"}})";
+    request.toolChoiceSpec.mode = ToolChoiceMode::Specific;
+    request.toolChoiceSpec.toolName = "ping";
     CollectingSink sink;
     ResponseIndex responseIndex;
     session::SessionExecutionGate executionGate;
@@ -376,7 +373,7 @@ DROGON_TEST(GenerationService_ProviderFailurePreservesSemanticErrorAndCloses)
     auto provider = std::make_shared<CapturingProvider>(CapturingProvider::Mode::SemanticFailure);
     provider::ProviderRegistry registry;
     REQUIRE(registry.registerChatProvider("failure-fixture", provider));
-    auto request = makeRequest("failure-fixture", Json::Value(Json::arrayValue));
+    auto request = makeRequest("failure-fixture", {});
     CollectingSink sink;
     ResponseIndex responseIndex;
     session::SessionExecutionGate executionGate;

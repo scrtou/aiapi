@@ -20,7 +20,7 @@
 #include <atomic>
 
 // session_st / SessionTrackingMode / ApiType 已迁至 domain/model/SessionData.h
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <platform/ThreadJoin.h>
 #include <domain/port/IProviderRegistry.h>
 #include <domain/port/IResponseIndex.h>

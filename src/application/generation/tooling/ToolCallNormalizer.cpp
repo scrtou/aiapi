@@ -226,9 +226,9 @@ void toolcall::normalizeToolCallArguments(
     if (toolCalls.empty()) return;
 
     const Json::Value& definitions =
-        (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray() &&
-         session.request.toolsRaw.size() > 0)
-            ? session.request.toolsRaw
+        (!session.request.toolDefinitionsSource.isNull() && session.request.toolDefinitionsSource.isArray() &&
+         session.request.toolDefinitionsSource.size() > 0)
+            ? session.request.toolDefinitionsSource
             : session.request.tools;
 
     for (auto& call : toolCalls) {

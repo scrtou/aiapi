@@ -239,11 +239,13 @@ DROGON_TEST(ActionProtocol_AdapterKeepsClientSpecificCompletionAtEdge)
 {
     ActionEnvelope envelope;
     envelope.finalResponse = "done";
-    const auto codex = adaptForClient(envelope, "Codex");
+    const auto codex = adaptForCapabilities(
+        envelope, capabilitiesForClient("Codex", false));
     CHECK(codex.toolCalls.empty());
     CHECK(codex.text == "done");
 
-    const auto roo = adaptForClient(envelope, "RooCode");
+    const auto roo = adaptForCapabilities(
+        envelope, capabilitiesForClient("RooCode", false));
     REQUIRE(roo.toolCalls.size() == 1);
     CHECK(roo.toolCalls[0].name == "attempt_completion");
     CHECK(roo.text.empty());

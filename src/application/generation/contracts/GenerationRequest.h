@@ -4,17 +4,15 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <map>
+#include <utility>
 #include <json/json.h>
 #include <domain/model/ImageInfo.h>
 
-/**
- * @brief 请求入口类型（API endpoint）
- *
- * 用于区分 Chat Completions 与 Responses 两类入口。
- */
-enum class EndpointType {
-    ChatCompletions,   // OpenAI 聊天补全接口（/v1/chat/completions）
-    Responses          // OpenAI 响应接口（/v1/responses）
+/** Protocol-neutral response identity and persistence lifecycle. */
+enum class ResponseLifecycle {
+    Immediate,
+    Stored,
 };
 
 /**
@@ -27,76 +25,148 @@ enum class MessageRole {
     Tool
 };
 
-/**
- * @brief 内容部分类型
- */
-enum class ContentPartType {
+/** Protocol-neutral content semantics used throughout the application core. */
+enum class ContentBlockType {
     Text,
-    Image
+    Image,
+    ToolUse,
+    ToolResult,
+    Thinking,
 };
 
-/**
- * @brief 内容部分
- * 
- * 消息可以包含多个内容部分（文本、图片等）
- */
-struct ContentPart {
-    ContentPartType type = ContentPartType::Text;
-    std::string text;          // 文本内容
-    std::string imageUrl;      // 图片URL或base64
-    std::string mediaType;     // 图片媒体类型 (/，/jpeg等)
+struct ContentBlock {
+    ContentBlockType type = ContentBlockType::Text;
+    std::string text;
+    std::string imageUrl;
+    std::string mediaType;
+    std::string toolCallId;
+    std::string toolName;
+    Json::Value toolInput;
+    std::string toolInputDelta;
+    std::string toolResult;
+    bool toolResultIsError = false;
 };
+
+enum class ToolDefinitionKind {
+    Function,
+    Custom,
+};
+
+struct ToolDefinition {
+    std::string name;
+    std::string description;
+    Json::Value inputSchema;
+    ToolDefinitionKind kind = ToolDefinitionKind::Function;
+    std::string originalName;
+    std::string namespacePath;
+};
+
+enum class ToolChoiceMode {
+    Auto,
+    None,
+    Any,
+    Specific,
+};
+
+struct ToolChoice {
+    ToolChoiceMode mode = ToolChoiceMode::Auto;
+    std::optional<std::string> toolName;
+};
+
+struct GenerationCapabilities {
+    bool text = true;
+    bool images = false;
+    bool streaming = false;
+    bool tools = false;
+    bool parallelTools = false;
+    bool reasoning = false;
+    bool continuity = false;
+
+    static GenerationCapabilities all() { return GenerationCapabilities{
+        true, true, true, true, true, true, true}; }
+};
+
+inline GenerationCapabilities intersectCapabilities(const GenerationCapabilities& protocol,
+                                                    const GenerationCapabilities& model,
+                                                    const GenerationCapabilities& provider)
+{
+    GenerationCapabilities result;
+    result.text = protocol.text && model.text && provider.text;
+    result.images = protocol.images && model.images && provider.images;
+    result.streaming = protocol.streaming && model.streaming && provider.streaming;
+    result.tools = protocol.tools && model.tools && provider.tools;
+    result.parallelTools = protocol.parallelTools && model.parallelTools && provider.parallelTools;
+    result.reasoning = protocol.reasoning && model.reasoning && provider.reasoning;
+    result.continuity = protocol.continuity && model.continuity && provider.continuity;
+    return result;
+}
 
 /**
  * @brief 消息结构
  *
- * 内部强类型消息表示
+ * 内部 canonical 强类型消息表示
  */
 struct Message {
     MessageRole role = MessageRole::User;
-    std::vector<ContentPart> content;
-    
-    // 工具调用 相关字段
-    std::vector<Json::Value> toolCalls;  // 消息中的 工具调用
-    std::string toolCallId;               // 消息对应的 工具调用 ID
+    std::vector<ContentBlock> blocks;
+
+    bool hasToolUses() const {
+        for (const auto& block : blocks) {
+            if (block.type == ContentBlockType::ToolUse) return true;
+        }
+        return false;
+    }
+
+    std::string toolResultCallId() const {
+        for (const auto& block : blocks) {
+            if (block.type == ContentBlockType::ToolResult &&
+                !block.toolCallId.empty()) {
+                return block.toolCallId;
+            }
+        }
+        return "";
+    }
     
     // 便捷构造函数
     static Message user(const std::string& text) {
         Message msg;
         msg.role = MessageRole::User;
-        ContentPart part;
-        part.type = ContentPartType::Text;
-        part.text = text;
-        msg.content.push_back(part);
+        ContentBlock block;
+        block.type = ContentBlockType::Text;
+        block.text = text;
+        msg.blocks.push_back(std::move(block));
         return msg;
     }
     
     static Message assistant(const std::string& text) {
         Message msg;
         msg.role = MessageRole::Assistant;
-        ContentPart part;
-        part.type = ContentPartType::Text;
-        part.text = text;
-        msg.content.push_back(part);
+        ContentBlock block;
+        block.type = ContentBlockType::Text;
+        block.text = text;
+        msg.blocks.push_back(std::move(block));
         return msg;
     }
     
     static Message system(const std::string& text) {
         Message msg;
         msg.role = MessageRole::System;
-        ContentPart part;
-        part.type = ContentPartType::Text;
-        part.text = text;
-        msg.content.push_back(part);
+        ContentBlock block;
+        block.type = ContentBlockType::Text;
+        block.text = text;
+        msg.blocks.push_back(std::move(block));
         return msg;
     }
     
     // 获取纯文本内容
     std::string getTextContent() const {
         std::string result;
-        for (const auto& part : content) {
-            if (part.type == ContentPartType::Text) {
-                result += part.text;
+        for (const auto& block : blocks) {
+            if (block.type == ContentBlockType::Text ||
+                block.type == ContentBlockType::Thinking) {
+                result += block.text;
+            } else if (block.type == ContentBlockType::ToolResult) {
+                result += block.toolResult;
             }
         }
         return result;
@@ -132,7 +202,7 @@ inline bool hasStableClientSession(const Json::Value& clientInfo) {
  */
 struct GenerationRequest {
     // ========== 入口/会话连续性 ==========
-    EndpointType endpointType = EndpointType::ChatCompletions;
+    ResponseLifecycle responseLifecycle = ResponseLifecycle::Immediate;
     std::optional<std::string> previousResponseId;   // // Responses： previous_响应_id（可选）
     std::vector<std::string> continuityTexts;        // 原始文本集合（用于 ZeroWidth / 其它续聊解析，保留零宽字符）
     Json::Value clientInfo;                          // 后续可换成强类型
@@ -148,13 +218,29 @@ struct GenerationRequest {
     std::vector<ImageInfo> images;  // 当前请求中的图片列表
     
     // ========== 工具调用 ==========
-    Json::Value tools;               // 规范化后的工具定义列表
-    Json::Value toolsRaw;            // 客户端原始工具定义（用于协议输出/诊断）
-    std::string toolChoice;          // 工具选择策略 (//必填)
+    std::vector<ToolDefinition> toolDefinitions;
+    ToolChoice toolChoiceSpec;
     bool parallelToolCalls = true;   // 是否允许同一轮返回多个工具调用
     
     // ========== 输出要求 ==========
     bool stream = false;            // 是否流式输出
+    std::optional<int> maxOutputTokens;
+    std::optional<double> temperature;
+    std::optional<double> topP;
+
+    // Capability negotiation is performed at the application boundary. The
+    // core consumes only the effective result and never re-reads protocol
+    // JSON to infer support.
+    GenerationCapabilities protocolCapabilities = GenerationCapabilities::all();
+    GenerationCapabilities modelCapabilities = GenerationCapabilities::all();
+    GenerationCapabilities providerCapabilities = GenerationCapabilities::all();
+    GenerationCapabilities effectiveCapabilities = GenerationCapabilities::all();
+    bool modelCapabilitiesDeclared = false;
+    std::vector<std::string> capabilityDegradations;
+
+    // Protocol-specific data is retained at the boundary and must not be
+    // interpreted by GenerationPipeline.
+    Json::Value protocolExtensions{Json::objectValue};
     
     // ========== 追踪 ==========
     std::string requestId;          // 请求 ID（可选）
@@ -162,11 +248,9 @@ struct GenerationRequest {
     
     // ========== 辅助方法 ==========
     
-    /**
-     * @brief 检查是否为 Response API 请求
-     */
-    bool isResponseApi() const {
-        return endpointType == EndpointType::Responses;
+    /** Whether this request participates in stored response-ID continuity. */
+    bool usesStoredResponseLifecycle() const {
+        return responseLifecycle == ResponseLifecycle::Stored;
     }
     
     /**

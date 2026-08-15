@@ -11,6 +11,7 @@
 #include <domain/port/IMetricsUseCase.h>
 #include <domain/port/IRetoolWorkspaceAdminUseCase.h>
 #include <domain/port/IRetoolWorkspaceUseCase.h>
+#include <application/generation/protocol/common/ProtocolRegistry.h>
 #include <infrastructure/managedAccount/contracts/ManagedAccount.h>
 
 #include <chrono>
@@ -158,6 +159,14 @@ public:
     const std::shared_ptr<IProviderRegistry>& providerRegistry() const
     {
         return providerRegistry_;
+    }
+    void setProtocolRegistry(std::shared_ptr<generation::protocol::ProtocolRegistry> registry)
+    {
+        protocolRegistry_ = std::move(registry);
+    }
+    const std::shared_ptr<generation::protocol::ProtocolRegistry>& protocolRegistry() const
+    {
+        return protocolRegistry_;
     }
     void setHealthUseCase(std::shared_ptr<IHealthUseCase> useCase)
     {
@@ -401,6 +410,7 @@ private:
     std::shared_ptr<IChannelAdminUseCase> channelAdminUseCase_;
     // Registry/Provider 必须先于其引用的账号服务销毁。
     std::shared_ptr<IManagedAccountContextResolver> managedAccountService_;
+    std::shared_ptr<generation::protocol::ProtocolRegistry> protocolRegistry_;
     std::shared_ptr<IProviderRegistry> providerRegistry_;
     std::shared_ptr<IHealthUseCase> healthUseCase_;
     std::shared_ptr<IResponseIndex> responseIndex_;

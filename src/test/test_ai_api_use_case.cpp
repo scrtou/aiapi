@@ -14,11 +14,44 @@ namespace {
 class FakeProviderCatalog final : public provider::IProviderModelCatalog
 {
   public:
+    bool supportsImages = false;
+
     ProviderModelCatalog getModels() override
     {
         ProviderModel model;
         model.id = "facade-model";
+        ChaynsModelExtension extension;
+        extension.capabilities.images = supportsImages;
+        model.chayns = std::move(extension);
         return ProviderModelCatalog{{model}};
+    }
+
+    std::optional<ProviderModelCapabilities> findModelCapabilities(
+        const std::string& modelId) const override
+    {
+        if (modelId != "facade-model") return std::nullopt;
+        ProviderModelCapabilities capabilities;
+        capabilities.images = supportsImages;
+        return capabilities;
+    }
+};
+
+class FakeChatProvider final : public provider::IChatProvider
+{
+  public:
+    platform::Result<provider::ProviderResponse> generate(
+        const provider::ProviderRequest&,
+        provider::ProviderCallContext&) override
+    {
+        return platform::Result<provider::ProviderResponse>::failure(
+            platform::Error::internal("unused fake provider"));
+    }
+
+    provider::ProviderCapabilities capabilities() const noexcept override
+    {
+        return provider::ProviderCapabilities{/*nativeToolCalls=*/false,
+                                              /*upstreamHistory=*/true,
+                                              /*supportsImages=*/true};
     }
 };
 
@@ -26,10 +59,11 @@ class FakeProviderRegistry final : public IProviderRegistry
 {
   public:
     std::shared_ptr<provider::IProviderModelCatalog> provider;
+    std::shared_ptr<provider::IChatProvider> chatProvider;
 
     std::shared_ptr<provider::IChatProvider> findChatProvider(const std::string&) const override
     {
-        return nullptr;
+        return chatProvider;
     }
 
     std::shared_ptr<provider::IProviderModelCatalog> findModelCatalog(
@@ -89,4 +123,32 @@ DROGON_TEST(AiApiUseCaseOwnsCatalogAndResponsesIndexWorkflows)
 
     CHECK(useCase.deleteResponse("resp_ok").deleted());
     CHECK(!useCase.deleteResponse("resp_ok").deleted());
+}
+
+DROGON_TEST(AiApiUseCase_RejectsCapabilityMissingFromDeclaredModel)
+{
+    FakeProviderRegistry providers;
+    auto catalog = std::make_shared<FakeProviderCatalog>();
+    catalog->supportsImages = false;
+    providers.provider = catalog;
+    providers.chatProvider = std::make_shared<FakeChatProvider>();
+
+    AiApiUseCase useCase(&providers, nullptr, nullptr, nullptr, nullptr, nullptr);
+    aiapi::GenerationInput input;
+    input.provider = "fake";
+    input.method = "POST";
+    input.path = "/v1/chat/completions";
+    input.jsonBody = R"({
+        "model":"facade-model",
+        "messages":[{
+            "role":"user",
+            "content":[{"type":"image_url","image_url":{"url":"https://example.invalid/a.png"}}]
+        }]
+    })";
+
+    const auto result = useCase.submitGeneration(input, {}, {});
+    CHECK(result.outcome == aiapi::SubmissionOutcome::InvalidRequest);
+    REQUIRE(result.error.has_value());
+    CHECK(result.error->type == "unsupported_capability");
+    CHECK(result.error->code == "unsupported_images");
 }

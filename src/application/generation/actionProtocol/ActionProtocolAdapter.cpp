@@ -63,13 +63,4 @@ AdaptedActionResult adaptForCapabilities(const ActionEnvelope& envelope,
     return result;
 }
 
-// 便捷重载：由 clientType 现场推导能力再适配。
-// 这里固定 parallelToolCalls=false（最保守假设）：调用方若关心并行语义，
-// 应自行构造 ClientCapabilities 后走 adaptForCapabilities。
-AdaptedActionResult adaptForClient(const ActionEnvelope& envelope,
-                                   const std::string& clientType) {
-    return adaptForCapabilities(
-        envelope, capabilitiesForClient(clientType, /*parallelToolCalls=*/false));
-}
-
 } // namespace actionproto

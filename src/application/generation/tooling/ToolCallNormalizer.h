@@ -1,7 +1,7 @@
 #ifndef TOOL_CALL_NORMALIZER_H
 #define TOOL_CALL_NORMALIZER_H
 
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <application/generation/contracts/GenerationEvent.h>
 #include <string>
 #include <vector>

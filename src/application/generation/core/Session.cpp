@@ -217,12 +217,12 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     stored.request.images = session.request.images;
     if (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0) {
         stored.request.tools = session.request.tools;
-        stored.request.toolsRaw =
-            (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray())
-                ? session.request.toolsRaw
+        stored.request.toolDefinitionsSource =
+            (!session.request.toolDefinitionsSource.isNull() && session.request.toolDefinitionsSource.isArray())
+                ? session.request.toolDefinitionsSource
                 : session.request.tools;
-    } else if (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray() && session.request.toolsRaw.size() > 0) {
-        stored.request.toolsRaw = session.request.toolsRaw;
+    } else if (!session.request.toolDefinitionsSource.isNull() && session.request.toolDefinitionsSource.isArray() && session.request.toolDefinitionsSource.size() > 0) {
+        stored.request.toolDefinitionsSource = session.request.toolDefinitionsSource;
     }
     if (!session.request.toolChoice.empty()) {
         stored.request.toolChoice = session.request.toolChoice;
@@ -243,8 +243,8 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
 
     // 将合并后的稳定会话状态回写给调用方，后续流程统一使用该结果。
     session = stored;
-    // The old model is also needed to safely upgrade a pre-context ledger
-    // row when the stable session key did not rotate.  The fallback *key*
+    // The persisted model is also needed to recover a context ledger row
+    // when the stable session key did not rotate. The recovery *key*
     // itself is only meaningful across a rotation.
     session.provider.prevProviderFallbackKey.clear();
     session.provider.prevProviderFallbackModel = persistedModel;
@@ -576,7 +576,7 @@ void chatSession::commitSessionTransfer(session_st& session)
     session.state.nextSessionId.clear();  // 清理已使用的 nextSessionId
     
     // 5. 转移 provider-owned upstream thread context through the narrow
-    // P6 capability.  The legacy fallback exists only for unsliced Retool.
+    // provider thread-context capability.
     transferProviderThreadContext(providerRegistry_, session.request.api,
                                   oldSessionId, newSessionId);
     
@@ -677,7 +677,7 @@ std::string chatSession::generateSHA256(const std::string& input) {
             throw;
         }
 #else
-    // 使用旧的接口
+    // OpenSSL 1.x SHA API
         unsigned char hash[SHA256_DIGEST_LENGTH];
         SHA256_CTX sha256;
         SHA256_Init(&sha256);

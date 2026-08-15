@@ -14,6 +14,17 @@ class IProviderModelCatalog
   public:
     virtual ~IProviderModelCatalog() = default;
     virtual ProviderModelCatalog getModels() = 0;
+
+    /**
+     * Non-blocking lookup for capabilities already present in the provider's
+     * model cache. Implementations must not refresh remote state here because
+     * generation admission may run on a transport event loop.
+     */
+    virtual std::optional<ProviderModelCapabilities> findModelCapabilities(
+        const std::string&) const
+    {
+        return std::nullopt;
+    }
 };
 
 }  // namespace provider

@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+#include <json/json.h>
+
 class IResponseSink;
 
 namespace aiapi {
@@ -13,22 +15,32 @@ namespace aiapi {
 /**
  * The only runtime collaborator published to AiApiController.
  *
- * The controller owns HTTP validation and protocol sinks.  This use case owns
+ * The controller owns HTTP validation and IO callbacks. This use case owns
  * request normalization, queue admission, generation execution, provider
  * catalog lookup, and Responses persistence/read/delete workflows.
  */
 class IAiApiUseCase
 {
   public:
-    using SinkFactory = std::function<std::shared_ptr<IResponseSink>(
-        const GenerationPresentation&)>;
     using Completion = std::function<void(
         const GenerationResult&, const std::shared_ptr<IResponseSink>&)>;
+
+    /**
+     * Transport callbacks passed to the protocol-owned Sink factory.
+     * Controllers provide only IO bindings; they do not construct a concrete
+     * Chat/Responses sink.
+     */
+    struct ResponseBinding {
+        bool stream = false;
+        std::function<void(const Json::Value&, int)> jsonResponse;
+        std::function<bool(const std::string&)> streamWriter;
+        std::function<void()> close;
+    };
 
     virtual ~IAiApiUseCase() = default;
 
     virtual SubmissionResult submitGeneration(
-        GenerationInput input, SinkFactory makeSink, Completion onComplete) = 0;
+        GenerationInput input, ResponseBinding binding, Completion onComplete) = 0;
 
     virtual ModelCatalogResult modelCatalog(const std::string& provider) const = 0;
     virtual StoredResponseResult getResponse(const std::string& responseId) = 0;

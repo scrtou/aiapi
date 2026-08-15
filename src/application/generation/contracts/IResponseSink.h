@@ -8,7 +8,8 @@
  * @brief 输出通道接口
  * 
  * Session/UseCase 产生语义事件，通过 IResponseSink 接口输出。
- * Controller 侧提供不同协议的 Sink 实现（Chat SSE / Chat JSON / Responses SSE / Responses JSON）。
+ * 协议模块通过 Sink Factory 提供 Chat/Responses 的具体编码实现；Controller
+ * 只提供 JSON/SSE IO binding，不直接构造具体 Sink。
  * 
  * 这样 Session 层不需要知道具体的输出协议细节。
  * 
@@ -38,6 +39,12 @@ public:
      * @return true 如果通道仍可用于发送事件
      */
     virtual bool isValid() const { return true; }
+
+    /**
+     * Streaming sinks opt into the explicit tool lifecycle events. JSON sinks
+     * continue receiving the terminal ToolCallDone projection only.
+     */
+    virtual bool supportsIncrementalToolEvents() const { return false; }
     
     /**
      * @brief 获取 Sink 类型名称（用于日志）

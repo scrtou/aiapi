@@ -46,12 +46,47 @@ void ChatSseSink::onEvent(const generation::GenerationEvent& event) {
                 sentText_ = true;
             }
         }
+        else if constexpr (std::is_same_v<T, generation::ToolCallStarted>) {
+            const std::string key = arg.id.empty()
+                ? ("index:" + std::to_string(arg.index)) : arg.id;
+            if (completedToolCalls_.count(key) != 0 ||
+                !incrementalToolCalls_.insert(key).second) {
+                return;
+            }
+            generation::ToolCallDone projection;
+            projection.id = arg.id;
+            projection.name = arg.name;
+            projection.index = arg.index;
+            projection.type = arg.type;
+            sendSseEvent(buildToolCallChunkJson(projection, "", firstChunk_));
+            firstChunk_ = false;
+        }
+        else if constexpr (std::is_same_v<T, generation::ToolArgumentsDelta>) {
+            const std::string key = arg.id.empty()
+                ? ("index:" + std::to_string(arg.index)) : arg.id;
+            if (incrementalToolCalls_.count(key) == 0 ||
+                completedToolCalls_.count(key) != 0) {
+                return;
+            }
+            if (!toolArgumentSequences_[key].insert(arg.sequence).second) {
+                return;
+            }
+            generation::ToolCallDone projection;
+            projection.id = arg.id;
+            projection.arguments = arg.delta;
+            projection.index = arg.index;
+            sendSseEvent(buildToolCallChunkJson(projection, "", false));
+        }
         else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
-
-
-
-
-            std::string json = buildToolCallChunkJson(arg, "tool_calls", firstChunk_);
+            const std::string key = arg.id.empty()
+                ? ("index:" + std::to_string(arg.index)) : arg.id;
+            if (!completedToolCalls_.insert(key).second) return;
+            const bool incremental = incrementalToolCalls_.find(key) !=
+                incrementalToolCalls_.end();
+            generation::ToolCallDone projection = arg;
+            if (incremental) projection.arguments.clear();
+            std::string json = buildToolCallChunkJson(
+                projection, "tool_calls", firstChunk_ && !incremental);
             sendSseEvent(json);
             firstChunk_ = false;
         }

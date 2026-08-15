@@ -3,7 +3,7 @@
 
 #include <string>
 #include <application/generation/contracts/GenerationRequest.h>
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <domain/port/IResponseIndex.h>
 /**
  * @brief 会话连续性决策结果

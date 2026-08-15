@@ -320,18 +320,18 @@ provider::ProviderCallContext makeProviderContext(
         cancellation, std::chrono::steady_clock::now() + std::chrono::minutes(10)};
 }
 
-GenerationRequest makeGenerationRequest(EndpointType endpoint,
+GenerationRequest makeGenerationRequest(ResponseLifecycle lifecycle,
                                         bool stream,
                                         const std::string& input)
 {
     GenerationRequest request;
-    request.endpointType = endpoint;
+    request.responseLifecycle = lifecycle;
     request.provider = "chaynsapi";
     request.model = "fixture-free-model";
     request.messages = {Message::user(input)};
     request.currentInput = input;
     request.continuityTexts = {input};
-    request.toolChoice = "none";
+    request.toolChoiceSpec.mode = ToolChoiceMode::None;
     request.stream = stream;
     request.requestId = "fixture-request-" + input;
     return request;
@@ -630,7 +630,7 @@ DROGON_TEST(ChaynsProvider_ChatJsonRunsGenerationServiceAndProductionSink)
         "fixture-free-model");
     GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
-        makeGenerationRequest(EndpointType::ChatCompletions, false, "chat-json-input"),
+        makeGenerationRequest(ResponseLifecycle::Immediate, false, "chat-json-input"),
         sink);
 
     CHECK(!error.has_value());
@@ -656,7 +656,7 @@ DROGON_TEST(ChaynsProvider_ChatSseRunsGenerationServiceAndProductionSink)
         "fixture-free-model");
     GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
-        makeGenerationRequest(EndpointType::ChatCompletions, true, "chat-sse-input"),
+        makeGenerationRequest(ResponseLifecycle::Immediate, true, "chat-sse-input"),
         sink);
 
     CHECK(!error.has_value());
@@ -682,7 +682,7 @@ DROGON_TEST(ChaynsProvider_ResponsesJsonRunsGenerationServiceAndProductionSink)
         false);
     GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
-        makeGenerationRequest(EndpointType::Responses, false, "responses-json-input"),
+        makeGenerationRequest(ResponseLifecycle::Stored, false, "responses-json-input"),
         sink);
 
     CHECK(!error.has_value());
@@ -710,7 +710,7 @@ DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
         false);
     GenerationService service(&harness.registry, &harness.sessionStore, &harness.responseIndex, &harness.executionGate);
     const auto error = service.runGuarded(
-        makeGenerationRequest(EndpointType::Responses, true, "responses-sse-input"),
+        makeGenerationRequest(ResponseLifecycle::Stored, true, "responses-sse-input"),
         sink);
 
     CHECK(!error.has_value());
@@ -734,7 +734,7 @@ DROGON_TEST(ChaynsProvider_GenerationServicePreservesProviderErrorCodeForTranspo
         },
         "missing-fixture-model");
     auto request = makeGenerationRequest(
-        EndpointType::ChatCompletions, false, "unknown-model-input");
+        ResponseLifecycle::Immediate, false, "unknown-model-input");
     request.model = "missing-fixture-model";
 
     GenerationService service(&harness.registry, &harness.sessionStore,

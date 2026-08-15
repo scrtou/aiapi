@@ -397,7 +397,7 @@ public:
 
         BridgeDecodeResult result;
         result.matched = candidate.find("<function_calls") != std::string::npos;
-        result.protocol = "legacy-xml";
+        result.protocol = "function-calls-xml";
         if (!result.matched) return result;
 
         auto bridge = createToolCallBridge(false);

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <sstream>
 #include <unordered_set>
+#include <cctype>
 #include <application/generation/core/Session.h>
 
 
@@ -262,11 +263,105 @@ void appendToolDefinitions(const Json::Value& tools,
     for (const auto& tool : tools) {
         if (!tool.isObject()) continue;
 
-        // toolsRaw 保留客户端发送的顶层结构；namespace 子项不再重复追加。
+        // 协议扩展保留客户端顶层结构；namespace 子项不重复追加。
         rawTools.append(tool);
         appendNormalizedToolDefinition(
             tool, normalizedTools, seen, "", namespaceBridgeEnabled);
     }
+}
+
+void populateTypedToolDefinitions(const Json::Value& tools,
+                                  std::vector<ToolDefinition>& output)
+{
+    if (!tools.isArray()) return;
+    output.clear();
+    for (const auto& tool : tools) {
+        if (!tool.isObject()) continue;
+        const Json::Value& fn = tool.isMember("function") && tool["function"].isObject()
+            ? tool["function"] : tool;
+        const std::string name = fn.get("name", "").asString();
+        if (name.empty()) continue;
+        ToolDefinition definition;
+        definition.name = name;
+        definition.description = fn.get("description", "").asString();
+        definition.inputSchema = fn.isMember("parameters")
+            ? fn["parameters"] : fn.get("input_schema", Json::Value(Json::objectValue));
+        definition.originalName = fn.get("_aiapi_original_name", name).asString();
+        definition.namespacePath = fn.get("_aiapi_namespace", "").asString();
+        if (fn.get("_aiapi_original_type", "function").asString() == "custom") {
+            definition.kind = ToolDefinitionKind::Custom;
+        }
+        output.push_back(std::move(definition));
+    }
+}
+
+void populateTypedToolChoice(const Json::Value& raw, ToolChoice& output)
+{
+    if (raw.isString()) {
+        const auto mode = raw.asString();
+        if (mode == "none") output.mode = ToolChoiceMode::None;
+        else if (mode == "required" || mode == "any") output.mode = ToolChoiceMode::Any;
+        else output.mode = ToolChoiceMode::Auto;
+        return;
+    }
+    if (!raw.isObject()) return;
+    const std::string type = raw.get("type", "").asString();
+    if (type == "none") {
+        output.mode = ToolChoiceMode::None;
+        return;
+    }
+    if (type == "required" || type == "any") {
+        output.mode = ToolChoiceMode::Any;
+        return;
+    }
+    const auto& function = raw.isMember("function") && raw["function"].isObject()
+        ? raw["function"] : raw;
+    const std::string name = function.get("name", "").asString();
+    if (!name.empty()) {
+        output.mode = ToolChoiceMode::Specific;
+        output.toolName = name;
+    }
+}
+
+void appendTextBlock(Message& message, std::string text)
+{
+    if (!message.blocks.empty() &&
+        message.blocks.back().type == ContentBlockType::Text) {
+        message.blocks.back().text += text;
+        return;
+    }
+    ContentBlock block;
+    block.type = ContentBlockType::Text;
+    block.text = std::move(text);
+    message.blocks.push_back(std::move(block));
+}
+
+void appendToolUseBlock(Message& message, const Json::Value& toolCall)
+{
+    if (!toolCall.isObject()) return;
+    ContentBlock block;
+    block.type = ContentBlockType::ToolUse;
+    block.toolCallId = toolCall.get("id", toolCall.get("call_id", "")).asString();
+    const auto& function = toolCall.isMember("function") && toolCall["function"].isObject()
+        ? toolCall["function"] : toolCall;
+    block.toolName = function.get("name", "").asString();
+    if (function.isMember("arguments")) {
+        block.toolInput = function["arguments"];
+    } else if (function.isMember("input")) {
+        block.toolInput = function["input"];
+    }
+    message.blocks.push_back(std::move(block));
+}
+
+void appendToolResultBlock(Message& message,
+                           std::string toolCallId,
+                           std::string result)
+{
+    ContentBlock block;
+    block.type = ContentBlockType::ToolResult;
+    block.toolCallId = std::move(toolCallId);
+    block.toolResult = std::move(result);
+    message.blocks.push_back(std::move(block));
 }
 
 void collectAdditionalTools(const Json::Value& items,
@@ -325,36 +420,27 @@ Message makeCodexToolOutputHistory(const Json::Value& item)
 {
     Message message;
     message.role = MessageRole::Tool;
-    message.toolCallId = item.get("call_id", "").asString();
-
-    ContentPart part;
-    part.type = ContentPartType::Text;
-    part.text = codexToolOutputText(item);
-    message.content.push_back(std::move(part));
+    appendToolResultBlock(message,
+                          item.get("call_id", "").asString(),
+                          codexToolOutputText(item));
     return message;
 }
 
 Message makeCodexToolCallHistory(const Json::Value& item)
 {
-    const std::string type = item.get("type", "tool_call").asString();
     const std::string callId = item.get("call_id", item.get("id", "")).asString();
     const std::string name = item.get("name", "").asString();
     const std::string namespacePath = item.get("namespace", "").asString();
     const Json::Value payload = item.isMember("arguments")
         ? item["arguments"] : item.get("input", Json::Value(""));
-    Message message = Message::assistant("");
-    Json::Value toolCall(Json::objectValue);
-    toolCall["id"] = callId;
-    toolCall["type"] = type == "custom_tool_call" ? "custom" : "function";
-    Json::Value function(Json::objectValue);
-    function["name"] = bridgeToolName(namespacePath, name);
-    if (!namespacePath.empty()) {
-        function["_aiapi_namespace"] = namespacePath;
-        function["_aiapi_original_name"] = name;
-    }
-    function["arguments"] = payload.isString() ? payload.asString() : compactJson(payload);
-    toolCall["function"] = std::move(function);
-    message.toolCalls.push_back(std::move(toolCall));
+    Message message;
+    message.role = MessageRole::Assistant;
+    ContentBlock block;
+    block.type = ContentBlockType::ToolUse;
+    block.toolCallId = callId;
+    block.toolName = bridgeToolName(namespacePath, name);
+    block.toolInput = payload;
+    message.blocks.push_back(std::move(block));
     return message;
 }
 
@@ -374,7 +460,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     LOG_INFO << "[请求适配器] 从 API 请求构建 Generation请求";
     
     GenerationRequest genReq;
-    genReq.endpointType = EndpointType::ChatCompletions;
+    genReq.responseLifecycle = ResponseLifecycle::Immediate;
     genReq.requestId = requestIdFromHeaders(headers);
     
     if (!reqBody.isObject()) {
@@ -391,12 +477,25 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     }
     genReq.stream = reqBody.get("stream", false).asBool();
     genReq.provider = "chaynsapi";  // 默认 上游
+    if (reqBody.isMember("max_tokens") && reqBody["max_tokens"].isInt()) {
+        genReq.maxOutputTokens = reqBody["max_tokens"].asInt();
+    } else if (reqBody.isMember("max_completion_tokens") &&
+               reqBody["max_completion_tokens"].isInt()) {
+        genReq.maxOutputTokens = reqBody["max_completion_tokens"].asInt();
+    }
+    if (reqBody.isMember("temperature") && reqBody["temperature"].isNumeric()) {
+        genReq.temperature = reqBody["temperature"].asDouble();
+    }
+    if (reqBody.isMember("top_p") && reqBody["top_p"].isNumeric()) {
+        genReq.topP = reqBody["top_p"].asDouble();
+    }
     
 
+    Json::Value normalizedTools(Json::arrayValue);
     if (reqBody.isMember("tools") && reqBody["tools"].isArray()) {
-        genReq.tools = reqBody["tools"];
-        genReq.toolsRaw = reqBody["tools"];
-        LOG_INFO << "[请求适配器] API 请求包含" << genReq.tools.size() << " 个工具定义";
+        normalizedTools = reqBody["tools"];
+        genReq.protocolExtensions["openai"]["raw_tools"] = reqBody["tools"];
+        LOG_INFO << "[请求适配器] API 请求包含" << normalizedTools.size() << " 个工具定义";
     }
     if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
         genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();
@@ -404,15 +503,9 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromChat(
     
 
     if (reqBody.isMember("tool_choice")) {
-        if (reqBody["tool_choice"].isString()) {
-            genReq.toolChoice = reqBody["tool_choice"].asString();
-        } else if (reqBody["tool_choice"].isObject()) {
-            //？
-            Json::StreamWriterBuilder writer;
-            writer["indentation"] = "";
-            genReq.toolChoice = Json::writeString(writer, reqBody["tool_choice"]);
-        }
+        populateTypedToolChoice(reqBody["tool_choice"], genReq.toolChoiceSpec);
     }
+    populateTypedToolDefinitions(normalizedTools, genReq.toolDefinitions);
     
     // 2. 提取客户端信息
     genReq.clientInfo = extractClientInfo(headers);
@@ -476,7 +569,7 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     LOG_INFO << "[请求适配器] 从 Responses API 请求构建 Generation请求";
     
     GenerationRequest genReq;
-    genReq.endpointType = EndpointType::Responses;
+    genReq.responseLifecycle = ResponseLifecycle::Stored;
     genReq.requestId = requestIdFromHeaders(headers);
     
     if (!reqBody.isObject()) {
@@ -489,6 +582,16 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     genReq.stream = reqBody.get("stream", false).asBool();
     genReq.systemPrompt = reqBody.get("instructions", "").asString();
     genReq.provider = "chaynsapi";  // 默认 上游
+    if (reqBody.isMember("max_output_tokens") &&
+        reqBody["max_output_tokens"].isInt()) {
+        genReq.maxOutputTokens = reqBody["max_output_tokens"].asInt();
+    }
+    if (reqBody.isMember("temperature") && reqBody["temperature"].isNumeric()) {
+        genReq.temperature = reqBody["temperature"].asDouble();
+    }
+    if (reqBody.isMember("top_p") && reqBody["top_p"].isNumeric()) {
+        genReq.topP = reqBody["top_p"].asDouble();
+    }
     
 
     Json::Value rawTools(Json::arrayValue);
@@ -503,13 +606,10 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
         reqBody["input"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
     collectAdditionalTools(
         reqBody["input_items"], rawTools, normalizedTools, seenTools, namespaceBridgeEnabled);
-    genReq.toolsRaw = std::move(rawTools);
-    genReq.tools = std::move(normalizedTools);
-    if (!genReq.toolsRaw.empty()) {
-        LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.size()
-                 << ", 可桥接=" << genReq.tools.size();
-        //LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << genReq.toolsRaw.toStyledString();
-        //LOG_INFO << "[请求适配器] Responses API 工具定义：桥接后=" << genReq.tools.toStyledString();
+    genReq.protocolExtensions["openai"]["raw_tools"] = rawTools;
+    if (!rawTools.empty()) {
+        LOG_INFO << "[请求适配器] Responses API 工具定义：原始=" << rawTools.size()
+                 << ", 可桥接=" << normalizedTools.size();
     }
     if (reqBody.isMember("parallel_tool_calls") && reqBody["parallel_tool_calls"].isBool()) {
         genReq.parallelToolCalls = reqBody["parallel_tool_calls"].asBool();
@@ -517,24 +617,12 @@ GenerationRequest RequestAdapters::buildGenerationRequestFromResponses(
     
 
     if (reqBody.isMember("tool_choice")) {
-        if (reqBody["tool_choice"].isString()) {
-            genReq.toolChoice = reqBody["tool_choice"].asString();
-        } else if (reqBody["tool_choice"].isObject()) {
-            Json::Value choice = reqBody["tool_choice"];
-            const std::string choiceType = choice.get("type", "").asString();
-            if ((choiceType == "function" || choiceType == "custom") &&
-                choice.isMember("name") && choice["name"].isString() &&
-                !choice.isMember("function")) {
-                Json::Value nested(Json::objectValue);
-                nested["type"] = "function";
-                nested["function"]["name"] = choice["name"];
-                choice = std::move(nested);
-            }
-            genReq.toolChoice = Json::writeString(compactJsonWriter(), choice);
-        }
+        populateTypedToolChoice(reqBody["tool_choice"], genReq.toolChoiceSpec);
     }
+    populateTypedToolDefinitions(normalizedTools, genReq.toolDefinitions);
     LOG_INFO << "[请求适配器] Responses API 工具策略: tool_choice="
-             << (genReq.toolChoice.empty() ? "auto(default)" : genReq.toolChoice)
+             << (reqBody.isMember("tool_choice") ? compactJson(reqBody["tool_choice"])
+                                                  : "auto(default)")
              << ", parallel_tool_calls=" << genReq.parallelToolCalls;
     
     // 2. 提取客户端信息
@@ -744,24 +832,22 @@ void RequestAdapters::parseChatMessages(
                 message.role = MessageRole::Assistant;
             } else if (role == "tool") {
                 message.role = MessageRole::Tool;
-
-                if (msg.isMember("tool_call_id")) {
-                    message.toolCallId = msg["tool_call_id"].asString();
-                }
             } else {
                 continue;  // 跳过未知角色
             }
             
             std::string text = extractContentText(msg["content"], tempImages, isZeroWidthMode);
-            ContentPart part;
-            part.type = ContentPartType::Text;
-            part.text = text;
-            message.content.push_back(part);
+            if (message.role == MessageRole::Tool) {
+                appendToolResultBlock(
+                    message, msg.get("tool_call_id", "").asString(), std::move(text));
+            } else {
+                appendTextBlock(message, text);
+            }
             
             // 提取 消息中的 tool_calls
             if (role == "assistant" && msg.isMember("tool_calls") && msg["tool_calls"].isArray()) {
                 for (const auto& tc : msg["tool_calls"]) {
-                    message.toolCalls.push_back(tc);
+                    appendToolUseBlock(message, tc);
                 }
             }
             
@@ -769,10 +855,10 @@ void RequestAdapters::parseChatMessages(
             if (!result.empty() &&
                 message.role == MessageRole::User &&
                 result.back().role == MessageRole::User &&
-                message.toolCalls.empty() && result.back().toolCalls.empty()) {
-                result.back().content[0].text += text;
+                !message.hasToolUses() && !result.back().hasToolUses()) {
+                appendTextBlock(result.back(), text);
             } else {
-                result.push_back(message);
+                result.push_back(std::move(message));
             }
         } else {
             // 当前输入：
@@ -910,7 +996,6 @@ void RequestAdapters::parseResponseInput(
                     message.role = MessageRole::Assistant;
                 } else if (role == "tool") {
                     message.role = MessageRole::Tool;
-                    message.toolCallId = item.get("tool_call_id", "").asString();
                 } else {
                     continue;
                 }
@@ -920,10 +1005,20 @@ void RequestAdapters::parseResponseInput(
                     text = extractContentText(
                         item["content"], historyImages, isZeroWidthMode);
                 }
-                ContentPart part;
-                part.type = ContentPartType::Text;
-                part.text = text;
-                message.content.push_back(std::move(part));
+                if (message.role == MessageRole::Tool) {
+                    appendToolResultBlock(
+                        message,
+                        item.get("tool_call_id", item.get("call_id", "")).asString(),
+                        std::move(text));
+                } else {
+                    appendTextBlock(message, std::move(text));
+                    if (message.role == MessageRole::Assistant &&
+                        item.isMember("tool_calls") && item["tool_calls"].isArray()) {
+                        for (const auto& toolCall : item["tool_calls"]) {
+                            appendToolUseBlock(message, toolCall);
+                        }
+                    }
+                }
                 messages.push_back(std::move(message));
             } else if (role == "user" || role == "tool") {
                 // chayns 上游只能看到纯文本，所以将本轮标准 tool 角色内容
@@ -983,16 +1078,6 @@ void RequestAdapters::parseResponseInput(
                     }
                 }
             }
-            continue;
-        }
-
-        // 兼容无 role 的 message/content 项。
-        if (type == "message" && item.isMember("content")) {
-            std::vector<ImageInfo>& targetImages =
-                i >= currentInputStart ? images : historyImages;
-            const std::string text = extractContentText(
-                item["content"], targetImages, isZeroWidthMode);
-            appendTextByPosition(i, text);
             continue;
         }
 

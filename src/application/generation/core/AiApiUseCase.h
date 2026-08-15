@@ -6,17 +6,12 @@
 #include <domain/port/IExecutionGate.h>
 #include <domain/port/IProviderRegistry.h>
 #include <domain/port/IResponseIndex.h>
+#include <application/generation/protocol/common/ProtocolRegistry.h>
 #include <json/json.h>
 
 class chatSession;
 
-/**
- * Legacy-generation adapter behind the controller-facing AI use-case port.
- *
- * It is intentionally kept beside GenerationService until P7 replaces that
- * pipeline.  The controller sees only IAiApiUseCase; this class is the single
- * composition seam allowed to coordinate the legacy collaborators.
- */
+/** Controller-facing orchestration for protocol dispatch and generation. */
 class AiApiUseCase final : public aiapi::IAiApiUseCase
 {
   public:
@@ -26,11 +21,12 @@ class AiApiUseCase final : public aiapi::IAiApiUseCase
                  session::IExecutionGate* executionGate,
                  IChannelCatalog* channels,
                  IBackgroundExecutor* executor,
-                 Json::Value runtimeConfig = Json::Value(Json::objectValue));
+                 Json::Value runtimeConfig = Json::Value(Json::objectValue),
+                 std::shared_ptr<generation::protocol::ProtocolRegistry> protocolRegistry = nullptr);
 
     aiapi::SubmissionResult submitGeneration(
         aiapi::GenerationInput input,
-        SinkFactory makeSink,
+        ResponseBinding binding,
         Completion onComplete) override;
 
     aiapi::ModelCatalogResult modelCatalog(const std::string& provider) const override;
@@ -45,4 +41,5 @@ class AiApiUseCase final : public aiapi::IAiApiUseCase
     IChannelCatalog* channels_ = nullptr;
     IBackgroundExecutor* executor_ = nullptr;
     Json::Value runtimeConfig_;
+    std::shared_ptr<generation::protocol::ProtocolRegistry> protocolRegistry_;
 };

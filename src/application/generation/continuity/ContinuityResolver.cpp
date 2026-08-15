@@ -25,7 +25,7 @@ ContinuityDecision ContinuityResolver::resolve(const GenerationRequest& req) con
     decision.mode = mode_;
 
     // // Responses： previous_响应_id 优先
-    if (req.isResponseApi()) {
+    if (req.usesStoredResponseLifecycle()) {
         if (req.previousResponseId.has_value() && !req.previousResponseId->empty()) {
             std::string sessionId;
             if (responseIndex_.tryGetSessionId(*req.previousResponseId, sessionId) &&
@@ -120,7 +120,7 @@ std::string ContinuityResolver::resolveZeroWidthSessionId(const GenerationReques
 }
 
 std::string ContinuityResolver::resolveHashSessionId(const GenerationRequest& req) {
-    // 复用旧 规则：keyData = {， 客户端_信息，模型 } -> SHA256(Styled写入r JSON)
+    // 稳定键规则：keyData = {， 客户端_信息，模型 } -> SHA256(Styled写入r JSON)
     Json::Value keyData(Json::objectValue);
     Json::Value messages(Json::arrayValue);
 

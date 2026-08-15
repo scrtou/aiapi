@@ -23,7 +23,7 @@ ToolCall ToolCall::fromJson(const Json::Value& json) {
         }
     }
     
-    // 兼容 字段格式
+    // OpenAI function-call wire shape.
     if (json.isMember("function")) {
         const auto& func = json["function"];
         if (tc.name.empty()) {
@@ -118,11 +118,22 @@ std::vector<Message> ToolCallBridge::transformRequest(
         Message newMsg = msg;
         
         // 处理 消息中的 tool_calls
-        if (msg.role == MessageRole::Assistant && !msg.toolCalls.empty()) {
+        if (msg.role == MessageRole::Assistant && msg.hasToolUses()) {
             // 将 工具调用 转换为文本追加到内容
             std::vector<ToolCall> calls;
-            for (const auto& tc : msg.toolCalls) {
-                calls.push_back(ToolCall::fromJson(tc));
+            for (const auto& block : msg.blocks) {
+                if (block.type != ContentBlockType::ToolUse) continue;
+                ToolCall call;
+                call.id = block.toolCallId;
+                call.name = block.toolName;
+                if (block.toolInput.isString()) {
+                    call.arguments = block.toolInput.asString();
+                } else if (!block.toolInput.isNull()) {
+                    Json::StreamWriterBuilder writer;
+                    writer["indentation"] = "";
+                    call.arguments = Json::writeString(writer, block.toolInput);
+                }
+                calls.push_back(std::move(call));
             }
             std::string callsText = transformToolCallsToText(calls);
             
@@ -133,15 +144,12 @@ std::vector<Message> ToolCallBridge::transformRequest(
             }
             existingContent += callsText;
             
-            // 清空并重新设置内容
-            newMsg.content.clear();
-            ContentPart part;
-            part.type = ContentPartType::Text;
-            part.text = existingContent;
-            newMsg.content.push_back(part);
-            
-
-            newMsg.toolCalls.clear();
+            // Canonical blocks are rebuilt after the protocol transformation.
+            newMsg.blocks.clear();
+            ContentBlock block;
+            block.type = ContentBlockType::Text;
+            block.text = existingContent;
+            newMsg.blocks.push_back(std::move(block));
         }
         
 
@@ -150,18 +158,21 @@ std::vector<Message> ToolCallBridge::transformRequest(
             newMsg.role = MessageRole::User;
             
             ToolResult result;
-            result.toolCallId = msg.toolCallId;
-            result.content = msg.getTextContent();
+            for (const auto& block : msg.blocks) {
+                if (block.type != ContentBlockType::ToolResult) continue;
+                if (result.toolCallId.empty()) result.toolCallId = block.toolCallId;
+                result.content += block.toolResult;
+                result.isError = result.isError || block.toolResultIsError;
+            }
             
             std::string resultText = transformToolResultToText(result);
             
-            // 设置新内容
-            newMsg.content.clear();
-            ContentPart part;
-            part.type = ContentPartType::Text;
-            part.text = resultText;
-            newMsg.content.push_back(part);
-            newMsg.toolCallId.clear();
+            // 设置 canonical 文本内容
+            newMsg.blocks.clear();
+            ContentBlock block;
+            block.type = ContentBlockType::Text;
+            block.text = resultText;
+            newMsg.blocks.push_back(std::move(block));
         }
         
         transformed.push_back(std::move(newMsg));

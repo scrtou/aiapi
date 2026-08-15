@@ -22,6 +22,18 @@
 
 namespace generation {
 
+enum class GenerationEventType {
+    GenerationStarted,
+    TextDelta,
+    TextDone,
+    ToolCallStarted,
+    ToolArgumentsDelta,
+    ToolCallFinished,
+    GenerationFinished,
+    GenerationError,
+    Usage,
+};
+
 // ========== 事件类型定义 ==========
 
 /**
@@ -50,6 +62,25 @@ struct OutputTextDelta {
 struct OutputTextDone {
     std::string text;           // 完整文本
     int index = 0;              // 输出项索引
+};
+
+/** Start of a tool invocation. */
+struct ToolCallStarted {
+    std::string id;
+    std::string name;
+    int index = 0;
+    std::string type = "function";
+    std::string originalName;
+    std::string namespacePath;
+};
+
+/** Incremental tool argument payload; JSON may be incomplete by design. */
+struct ToolArgumentsDelta {
+    std::string id;
+    std::string delta;
+    int index = 0;
+    // Producers assign a per-tool sequence so sinks can suppress retry replays.
+    int sequence = 0;
 };
 
 /**
@@ -104,6 +135,8 @@ using GenerationEvent = std::variant<
     Started,
     OutputTextDelta,
     OutputTextDone,
+    ToolCallStarted,
+    ToolArgumentsDelta,
     ToolCallDone,
     Usage,
     Completed,
@@ -130,11 +163,26 @@ inline std::string getEventTypeName(const GenerationEvent& event) {
     if (std::holds_alternative<Started>(event)) return "Started";
     if (std::holds_alternative<OutputTextDelta>(event)) return "OutputTextDelta";
     if (std::holds_alternative<OutputTextDone>(event)) return "OutputTextDone";
+    if (std::holds_alternative<ToolCallStarted>(event)) return "ToolCallStarted";
+    if (std::holds_alternative<ToolArgumentsDelta>(event)) return "ToolArgumentsDelta";
     if (std::holds_alternative<ToolCallDone>(event)) return "ToolCallDone";
     if (std::holds_alternative<Usage>(event)) return "Usage";
     if (std::holds_alternative<Completed>(event)) return "Completed";
     if (std::holds_alternative<Error>(event)) return "Error";
     return "Unknown";
+}
+
+inline GenerationEventType getEventType(const GenerationEvent& event)
+{
+    if (std::holds_alternative<Started>(event)) return GenerationEventType::GenerationStarted;
+    if (std::holds_alternative<OutputTextDelta>(event)) return GenerationEventType::TextDelta;
+    if (std::holds_alternative<OutputTextDone>(event)) return GenerationEventType::TextDone;
+    if (std::holds_alternative<ToolCallStarted>(event)) return GenerationEventType::ToolCallStarted;
+    if (std::holds_alternative<ToolArgumentsDelta>(event)) return GenerationEventType::ToolArgumentsDelta;
+    if (std::holds_alternative<ToolCallDone>(event)) return GenerationEventType::ToolCallFinished;
+    if (std::holds_alternative<Usage>(event)) return GenerationEventType::Usage;
+    if (std::holds_alternative<Completed>(event)) return GenerationEventType::GenerationFinished;
+    return GenerationEventType::GenerationError;
 }
 
 /**

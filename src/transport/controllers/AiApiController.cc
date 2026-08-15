@@ -3,10 +3,7 @@
 #include <transport/controllers/ControllerUtils.h>
 #include <transport/controllers/RetiredProviderTombstone.h>
 #include <transport/controllers/codecs/ProviderModelCatalogJsonCodec.h>
-#include <transport/controllers/sinks/ChatJsonSink.h>
-#include <transport/controllers/sinks/ChatSseSink.h>
-#include <transport/controllers/sinks/ResponsesJsonSink.h>
-#include <transport/controllers/sinks/ResponsesSseSink.h>
+#include <application/generation/contracts/IResponseSink.h>
 #include <transport/controllers/sinks/IoLoopResponseStream.h>
 
 #include <drogon/HttpResponse.h>
@@ -85,13 +82,15 @@ aiapi::RequestHeaders requestHeaders(const HttpRequestPtr& req)
     return headers;
 }
 
-aiapi::GenerationInput generationInput(aiapi::Endpoint endpoint,
-                                       const HttpRequestPtr& req,
+aiapi::GenerationInput generationInput(const HttpRequestPtr& req,
                                        const Json::Value& body)
 {
     aiapi::GenerationInput input;
-    input.endpoint = endpoint;
     input.provider = inferProviderFromPath(req);
+    if (req) {
+        input.method = req->methodString();
+        input.path = req->path();
+    }
     input.headers = requestHeaders(req);
     if (req && !req->getBody().empty()) {
         input.jsonBody = req->getBody();
@@ -202,7 +201,7 @@ void AiApiController::chaynsapichat(
     }
 
     const bool stream = (*json).get("stream", false).asBool();
-    const auto input = generationInput(aiapi::Endpoint::ChatCompletions, req, *json);
+    const auto input = generationInput(req, *json);
     auto* const useCase = useCase_;
 
     if (!stream) {
@@ -214,17 +213,14 @@ void AiApiController::chaynsapichat(
         }
 
         auto state = std::make_shared<JsonResponseState>();
+        aiapi::IAiApiUseCase::ResponseBinding binding;
+        binding.jsonResponse = [state](const Json::Value& response, int status) {
+            state->response = HttpResponse::newHttpJsonResponse(response);
+            state->status = status;
+        };
         const auto submission = useCase->submitGeneration(
             input,
-            [state](const aiapi::GenerationPresentation& presentation)
-                -> std::shared_ptr<IResponseSink> {
-                return std::make_shared<ChatJsonSink>(
-                    [state](const Json::Value& response, int status) {
-                        state->response = HttpResponse::newHttpJsonResponse(response);
-                        state->status = status;
-                    },
-                    presentation.model);
-            },
+            std::move(binding),
             [cb, state](const aiapi::GenerationResult& result,
                         const std::shared_ptr<IResponseSink>&) {
                 finishJsonGeneration(cb, state, result);
@@ -251,17 +247,15 @@ void AiApiController::chaynsapichat(
                 return;
             }
 
+            aiapi::IAiApiUseCase::ResponseBinding binding;
+            binding.stream = true;
+            binding.streamWriter = [streamBridge](const std::string& chunk) {
+                return streamBridge->send(chunk);
+            };
+            binding.close = [streamBridge] { streamBridge->close(); };
             const auto submission = useCase->submitGeneration(
                 std::move(input),
-                [streamBridge](const aiapi::GenerationPresentation& presentation)
-                    -> std::shared_ptr<IResponseSink> {
-                    return std::make_shared<ChatSseSink>(
-                        [streamBridge](const std::string& chunk) {
-                            return streamBridge->send(chunk);
-                        },
-                        [streamBridge] { streamBridge->close(); },
-                        presentation.model);
-                },
+                std::move(binding),
                 [](const aiapi::GenerationResult& result,
                    const std::shared_ptr<IResponseSink>& sink) {
                     if (!result.succeeded() && sink && sink->isValid()) {
@@ -334,7 +328,7 @@ void AiApiController::responsesCreate(
     }
 
     const bool stream = (*json).get("stream", false).asBool();
-    const auto input = generationInput(aiapi::Endpoint::Responses, req, *json);
+    const auto input = generationInput(req, *json);
     auto* const useCase = useCase_;
 
     if (!stream) {
@@ -346,19 +340,14 @@ void AiApiController::responsesCreate(
         }
 
         auto state = std::make_shared<JsonResponseState>();
+        aiapi::IAiApiUseCase::ResponseBinding binding;
+        binding.jsonResponse = [state](const Json::Value& response, int status) {
+            state->response = HttpResponse::newHttpJsonResponse(response);
+            state->status = status;
+        };
         const auto submission = useCase->submitGeneration(
             input,
-            [state](const aiapi::GenerationPresentation& presentation)
-                -> std::shared_ptr<IResponseSink> {
-                return std::make_shared<ResponsesJsonSink>(
-                    [state](const Json::Value& response, int status) {
-                        state->response = HttpResponse::newHttpJsonResponse(response);
-                        state->status = status;
-                    },
-                    presentation.model,
-                    presentation.inputTokensEstimated,
-                    presentation.nativeResponsesToolItems);
-            },
+            std::move(binding),
             [cb, state](const aiapi::GenerationResult& result,
                         const std::shared_ptr<IResponseSink>&) {
                 finishJsonGeneration(cb, state, result);
@@ -385,19 +374,15 @@ void AiApiController::responsesCreate(
                 return;
             }
 
+            aiapi::IAiApiUseCase::ResponseBinding binding;
+            binding.stream = true;
+            binding.streamWriter = [streamBridge](const std::string& chunk) {
+                return streamBridge->send(chunk);
+            };
+            binding.close = [streamBridge] { streamBridge->close(); };
             const auto submission = useCase->submitGeneration(
                 std::move(input),
-                [streamBridge](const aiapi::GenerationPresentation& presentation)
-                    -> std::shared_ptr<IResponseSink> {
-                    return std::make_shared<ResponsesSseSink>(
-                        [streamBridge](const std::string& chunk) {
-                            return streamBridge->send(chunk);
-                        },
-                        [streamBridge] { streamBridge->close(); },
-                        presentation.model,
-                        presentation.nativeResponsesToolItems,
-                        presentation.inputTokensEstimated);
-                },
+                std::move(binding),
                 [](const aiapi::GenerationResult& result,
                    const std::shared_ptr<IResponseSink>& sink) {
                     if (!result.succeeded() && sink && sink->isValid()) {

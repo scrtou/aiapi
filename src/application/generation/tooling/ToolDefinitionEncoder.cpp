@@ -196,7 +196,7 @@ int triggerLength(const Json::Value& config)
 std::string globFallbackShellTool(const session_st& session)
 {
     const bool hasGlob = toolcall::hasToolNamed(session.request.tools, "Glob") ||
-        toolcall::hasToolNamed(session.request.toolsRaw, "Glob");
+        toolcall::hasToolNamed(session.request.toolDefinitionsSource, "Glob");
     if (!hasGlob) return "";
     static const char* candidates[] = {
         "Shell", "shell", "exec_command", "execute_command",
@@ -204,7 +204,7 @@ std::string globFallbackShellTool(const session_st& session)
     };
     for (const char* candidate : candidates) {
         if (toolcall::hasToolNamed(session.request.tools, candidate) ||
-            toolcall::hasToolNamed(session.request.toolsRaw, candidate)) {
+            toolcall::hasToolNamed(session.request.toolDefinitionsSource, candidate)) {
             return candidate;
         }
     }
@@ -320,9 +320,9 @@ void toolcall::transformRequestForToolBridge(session_st& session,
         return;
     }
     if (session.request.rawMessage.empty()) session.request.rawMessage = session.request.message;
-    if (session.request.toolsRaw.isNull() || !session.request.toolsRaw.isArray() ||
-        session.request.toolsRaw.size() == 0) {
-        session.request.toolsRaw = session.request.tools;
+    if (session.request.toolDefinitionsSource.isNull() || !session.request.toolDefinitionsSource.isArray() ||
+        session.request.toolDefinitionsSource.size() == 0) {
+        session.request.toolDefinitionsSource = session.request.tools;
     }
     rewriteBridgeConflictingDirectives(session, shouldRewriteUserInput(config));
 
@@ -331,7 +331,7 @@ void toolcall::transformRequestForToolBridge(session_st& session,
         static_cast<size_t>(triggerLength(config)));
     const bool hasStrictApplyDiffTool = (strictToolClient || codexCompat) &&
         (toolcall::hasToolNamed(session.request.tools, "apply_diff") ||
-         toolcall::hasToolNamed(session.request.toolsRaw, "apply_diff"));
+         toolcall::hasToolNamed(session.request.toolDefinitionsSource, "apply_diff"));
     const std::string globFallback = globFallbackShellTool(session);
     if (!globFallback.empty()) {
         LOG_INFO << "[生成服务][" << clientType

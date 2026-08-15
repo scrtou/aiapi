@@ -71,7 +71,7 @@ toolcall::BridgeWireFormat bridgeFormatFromInt(int v)
 Json::Value encodeSession(const session_st& session)
 {
     Json::Value root(Json::objectValue);
-    // schema 版本：后续字段演进时用于判定兼容策略。
+    // schema 版本：后续字段演进时用于选择解码规则。
     root["v"] = 1;
 
     // ---- request ----
@@ -84,7 +84,7 @@ Json::Value encodeSession(const session_st& session)
     req["parallelToolCalls"] = session.request.parallelToolCalls;
     req["rawMessage"]        = session.request.rawMessage;
     req["tools"]             = session.request.tools;
-    req["toolsRaw"]          = session.request.toolsRaw;
+    req["toolDefinitionsSource"] = session.request.toolDefinitionsSource;
 
     Json::Value images(Json::arrayValue);
     for (const auto& img : session.request.images) {
@@ -151,7 +151,7 @@ session_st decodeSession(const Json::Value& payload)
     s.request.parallelToolCalls = getBool(req, "parallelToolCalls", true);
     s.request.rawMessage        = getStr(req, "rawMessage");
     s.request.tools             = getJson(req, "tools");
-    s.request.toolsRaw          = getJson(req, "toolsRaw");
+    s.request.toolDefinitionsSource = getJson(req, "toolDefinitionsSource");
 
     const Json::Value images = getJson(req, "images");
     if (images.isArray()) {

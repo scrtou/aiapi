@@ -7,6 +7,8 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 
 /**
  * @brief Responses API SSE 输出 Sink
@@ -46,6 +48,7 @@ public:
     void onEvent(const generation::GenerationEvent& event) override;
     void onClose() override;
     bool isValid() const override;
+    bool supportsIncrementalToolEvents() const override { return true; }
     std::string getSinkType() const override { return "ResponsesSseSink"; }
     std::optional<ResponsePersistenceRecord> responseRecord() const override;
     
@@ -83,6 +86,8 @@ private:
      * @brief 处理 ToolCallDone 事件
      */
     void handleToolCallDone(const generation::ToolCallDone& event);
+    void handleToolCallStarted(const generation::ToolCallStarted& event);
+    void handleToolArgumentsDelta(const generation::ToolArgumentsDelta& event);
 
     /**
      * @brief 处理 Error 事件
@@ -97,8 +102,20 @@ private:
     Json::Value buildResponseObject(const std::string& status);
     Json::Value buildTextOutputItem(const std::string& status) const;
     void ensureTextItemAdded();
+    void storeNativeOutputItem(int outputIndex, const Json::Value& item);
     void emitNativeToolCall(const generation::ToolCallDone& event);
     static std::string customToolInput(const generation::ToolCallDone& event);
+    static std::string toolStateKey(const std::string& id, int index);
+
+    struct IncrementalToolState {
+        generation::ToolCallStarted started;
+        std::string arguments;
+        std::unordered_set<int> argumentSequences;
+        std::string callId;
+        std::string itemId;
+        int outputIndex = -1;
+        bool nativeItemAdded = false;
+    };
     
     StreamCallback streamCallback_;
     CloseCallback closeCallback_;
@@ -106,10 +123,13 @@ private:
     std::string model_;
     std::string outputText_;     // 累积的输出文本
     std::vector<generation::ToolCallDone> toolCalls_; // 累积的工具调用
+    std::unordered_map<std::string, IncrementalToolState> incrementalToolCalls_;
+    std::unordered_set<std::string> completedToolCalls_;
     Json::Value meta_{Json::objectValue};
     Json::Value nativeOutputItems_{Json::arrayValue};
     int outputItemIndex_ = 0;   // legacy 文本输出项索引
     int textOutputIndex_ = -1;
+    int nextNativeOutputIndex_ = 0;
     int64_t createdAt_ = 0;
     int sequenceNumber_ = 0;
     bool nativeToolItems_ = false;

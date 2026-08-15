@@ -2,7 +2,7 @@
 #define REQUEST_ADAPTERS_H
 
 #include <application/generation/contracts/GenerationRequest.h>
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <json/json.h>
 #include <domain/port/IAccountSettingsQuery.h>
 #include <domain/model/AiApiData.h>

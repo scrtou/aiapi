@@ -7,12 +7,6 @@
 
 namespace aiapi {
 
-/** The two public OpenAI-compatible request shapes accepted by the AI API. */
-enum class Endpoint {
-    ChatCompletions,
-    Responses,
-};
-
 /**
  * Transport metadata needed by request normalization.
  *
@@ -39,17 +33,13 @@ struct RequestHeaders {
  * boundary so domain contracts do not acquire a JsonCpp dependency.
  */
 struct GenerationInput {
-    Endpoint endpoint = Endpoint::ChatCompletions;
     std::string provider;
     std::string jsonBody;
+    // Copied route metadata lets the application select a registered module
+    // without retaining a Drogon request in queued work.
+    std::string method;
+    std::string path;
     RequestHeaders headers;
-};
-
-/** Values needed by the transport-owned response sinks. */
-struct GenerationPresentation {
-    std::string model;
-    bool nativeResponsesToolItems = false;
-    int inputTokensEstimated = 0;
 };
 
 /** A transport-neutral failure payload shared by submission and execution. */

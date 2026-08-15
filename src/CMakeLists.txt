@@ -98,6 +98,8 @@ set(AIAPI_APPLICATION_SOURCES
     application/generation/core/GenerationService.cpp
     application/generation/core/GenerationPipeline.cpp
     application/generation/core/GenerationResponsePipeline.cpp
+    application/generation/protocol/common/ProtocolRegistry.cpp
+    application/generation/protocol/openai/OpenAiProtocolModule.cpp
     application/generation/tooling/BridgeHelpers.cpp
     application/generation/tooling/BridgeProtocolCodec.cpp
     application/generation/tooling/StrictClientRules.cpp

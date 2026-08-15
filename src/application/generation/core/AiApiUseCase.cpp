@@ -2,12 +2,11 @@
 
 #include <application/generation/contracts/IResponseSink.h>
 #include <application/generation/core/GenerationService.h>
-#include <application/generation/core/RequestAdapters.h>
-
 #include <platform/Log.h>
 #include <json/json.h>
 
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace {
@@ -29,6 +28,47 @@ aiapi::Error invalidRequestError(std::string message)
     error.message = std::move(message);
     error.code = "invalid_json";
     return error;
+}
+
+aiapi::Error unsupportedCapabilityError(const std::string& capability)
+{
+    aiapi::Error error;
+    error.httpStatus = 400;
+    error.type = "unsupported_capability";
+    error.code = "unsupported_" + capability;
+    error.message = "Requested capability is not available: " + capability;
+    return error;
+}
+
+struct ModelCapabilityResolution {
+    GenerationCapabilities capabilities = GenerationCapabilities::all();
+    bool declared = false;
+};
+
+ModelCapabilityResolution resolveModelCapabilities(IProviderRegistry* providers,
+                                                    const std::string& providerId,
+                                                    const std::string& modelId)
+{
+    ModelCapabilityResolution result;
+    if (!providers || providerId.empty() || modelId.empty()) return result;
+
+    const auto catalogProvider = providers->findModelCatalog(providerId);
+    if (!catalogProvider) return result;
+
+    try {
+        const auto declared = catalogProvider->findModelCapabilities(modelId);
+        if (!declared.has_value()) return result;
+        result.capabilities.images = declared->images;
+        result.capabilities.reasoning = declared->thinking;
+        // Non-native tool models remain usable through the application Tool
+        // Bridge, so functionCalling is not a hard tools gate here.
+        result.declared = true;
+    } catch (const std::exception& error) {
+        LOG_WARN << "[AI use case] model capability lookup failed: " << error.what();
+    } catch (...) {
+        LOG_WARN << "[AI use case] model capability lookup failed";
+    }
+    return result;
 }
 
 aiapi::Error unavailableError(TaskSubmitResult result)
@@ -130,20 +170,23 @@ AiApiUseCase::AiApiUseCase(IProviderRegistry* providers,
                            session::IExecutionGate* executionGate,
                            IChannelCatalog* channels,
                            IBackgroundExecutor* executor,
-                           Json::Value runtimeConfig)
+                           Json::Value runtimeConfig,
+                           std::shared_ptr<generation::protocol::ProtocolRegistry> protocolRegistry)
     : providers_(providers),
       sessions_(sessions),
       responses_(responses),
       executionGate_(executionGate),
       channels_(channels),
       executor_(executor),
-      runtimeConfig_(std::move(runtimeConfig))
+      runtimeConfig_(std::move(runtimeConfig)),
+      protocolRegistry_(protocolRegistry ? std::move(protocolRegistry)
+                                         : generation::protocol::makeDefaultProtocolRegistry())
 {
 }
 
 aiapi::SubmissionResult AiApiUseCase::submitGeneration(
     aiapi::GenerationInput input,
-    SinkFactory makeSink,
+    ResponseBinding binding,
     Completion onComplete)
 {
     Json::Value requestBody;
@@ -154,17 +197,84 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
         return result;
     }
 
-    GenerationRequest request = input.endpoint == aiapi::Endpoint::Responses
-        ? RequestAdapters::buildGenerationRequestFromResponses(requestBody, input.headers)
-        : RequestAdapters::buildGenerationRequestFromChat(requestBody, input.headers);
-    request.provider = input.provider;
+    if (!protocolRegistry_) {
+        aiapi::SubmissionResult result;
+        result.outcome = aiapi::SubmissionOutcome::Stopped;
+        result.error = internalError("Protocol registry is unavailable");
+        return result;
+    }
 
-    aiapi::GenerationPresentation presentation;
-    presentation.model = request.model;
-    presentation.nativeResponsesToolItems =
+    GenerationRequest request;
+    const generation::protocol::IProtocolResponseSinkFactory* responseSinkFactory = nullptr;
+    std::string protocolOperation;
+    GenerationCapabilities protocolCapabilities = GenerationCapabilities::all();
+    const auto dispatch = protocolRegistry_->dispatch(
+        generation::protocol::RawProtocolRequest{
+            input.method, input.path, requestBody, input.headers});
+    if (!dispatch.succeeded()) {
+        aiapi::SubmissionResult result;
+        result.outcome = aiapi::SubmissionOutcome::InvalidRequest;
+        result.error = dispatch.adaptation.error.has_value()
+            ? toUseCaseError(*dispatch.adaptation.error)
+            : invalidRequestError("Protocol request adaptation failed");
+        return result;
+    }
+    responseSinkFactory = dispatch.responseSinkFactory;
+    protocolOperation = dispatch.operation;
+    protocolCapabilities = dispatch.protocolCapabilities;
+    request = *dispatch.adaptation.request;
+    request.provider = input.provider;
+    request.protocolCapabilities = protocolCapabilities;
+
+    const auto modelCapabilityResolution = resolveModelCapabilities(
+        providers_, request.provider, request.model);
+    request.modelCapabilities = intersectCapabilities(
+        request.modelCapabilities, modelCapabilityResolution.capabilities,
+        GenerationCapabilities::all());
+    request.modelCapabilitiesDeclared = request.modelCapabilitiesDeclared ||
+        modelCapabilityResolution.declared;
+
+    GenerationCapabilities providerCapabilities = GenerationCapabilities::all();
+    if (providers_) {
+        const auto provider = providers_->findChatProvider(request.provider);
+        if (provider) {
+            const auto capabilities = provider->capabilities();
+            providerCapabilities.images = capabilities.supportsImages;
+            providerCapabilities.continuity = capabilities.upstreamHistory;
+            // Tool calls can be bridged by the application even when the
+            // upstream has no native tool protocol. Parallel native calls
+            // remain constrained by the provider capability.
+            providerCapabilities.tools = true;
+            providerCapabilities.parallelTools = capabilities.nativeToolCalls;
+        }
+    }
+    request.providerCapabilities = providerCapabilities;
+    request.effectiveCapabilities = intersectCapabilities(
+        protocolCapabilities, request.modelCapabilities, providerCapabilities);
+    if (!request.images.empty() && !request.effectiveCapabilities.images) {
+        return {aiapi::SubmissionOutcome::InvalidRequest,
+                unsupportedCapabilityError("images")};
+    }
+    if (request.stream && !request.effectiveCapabilities.streaming) {
+        return {aiapi::SubmissionOutcome::InvalidRequest,
+                unsupportedCapabilityError("streaming")};
+    }
+    if (!request.toolDefinitions.empty() && !request.effectiveCapabilities.tools) {
+        return {aiapi::SubmissionOutcome::InvalidRequest,
+                unsupportedCapabilityError("tools")};
+    }
+    if (request.parallelToolCalls && !request.effectiveCapabilities.parallelTools &&
+        !request.toolDefinitions.empty()) {
+        request.parallelToolCalls = false;
+        request.capabilityDegradations.push_back(
+            "parallel_tools_sequentialized_by_provider_capability");
+    }
+
+    const std::string responseModel = request.model;
+    const bool nativeResponsesToolItems =
         request.clientInfo.isObject() &&
         request.clientInfo.get("client_type", "").asString() == "Codex";
-    presentation.inputTokensEstimated =
+    const int inputTokensEstimated =
         static_cast<int>(request.currentInput.length() / 4);
 
     // Capture all borrowed collaborators at admission.  AppWiring may revoke
@@ -186,25 +296,40 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
     }
 
     const auto submitted = executor->submit(
-        input.endpoint == aiapi::Endpoint::Responses
-            ? "responses_generation"
-            : "chat_generation",
-        [request = std::move(request), presentation = std::move(presentation),
-         makeSink = std::move(makeSink), onComplete = std::move(onComplete),
+        protocolOperation + "_generation",
+        [request = std::move(request), responseModel,
+         nativeResponsesToolItems, inputTokensEstimated,
+         binding = std::move(binding), onComplete = std::move(onComplete),
+         protocolRegistry = protocolRegistry_,
+         responseSinkFactory, protocolOperation,
          providers, sessions, responses, executionGate, channels,
          runtimeConfig = std::move(runtimeConfig)]() mutable {
             std::shared_ptr<IResponseSink> sink;
             try {
-                sink = makeSink ? makeSink(presentation) : nullptr;
+                if (!protocolRegistry || !responseSinkFactory) {
+                    throw std::runtime_error("Protocol response sink factory is unavailable");
+                }
+                generation::protocol::ResponseContext context;
+                context.operation = protocolOperation;
+                context.model = responseModel;
+                context.stream = binding.stream;
+                context.nativeResponsesToolItems = nativeResponsesToolItems;
+                context.inputTokensEstimated = inputTokensEstimated;
+                context.jsonResponse = binding.jsonResponse;
+                context.streamWriter = binding.streamWriter;
+                context.close = binding.close;
+                sink = responseSinkFactory->create(context);
             } catch (const std::exception& exception) {
                 LOG_ERROR << "[AI use case] response sink construction threw: "
                           << exception.what();
+                if (binding.close) binding.close();
                 aiapi::GenerationResult result;
                 result.error = internalError("Failed to initialize response sink");
                 invokeCompletion(onComplete, result, sink);
                 return;
             } catch (...) {
                 LOG_ERROR << "[AI use case] response sink construction threw an unknown exception";
+                if (binding.close) binding.close();
                 aiapi::GenerationResult result;
                 result.error = internalError("Failed to initialize response sink");
                 invokeCompletion(onComplete, result, sink);
@@ -212,6 +337,7 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
             }
 
             if (!sink) {
+                if (binding.close) binding.close();
                 aiapi::GenerationResult result;
                 result.error = internalError("Response sink is unavailable");
                 invokeCompletion(onComplete, result, sink);
@@ -226,9 +352,9 @@ aiapi::SubmissionResult AiApiUseCase::submitGeneration(
             aiapi::GenerationResult result;
             if (executionError.has_value()) {
                 result.error = toUseCaseError(*executionError);
-            } else if (request.endpointType == EndpointType::Responses) {
-                // The sink owns OpenAI JSON/SSE encoding; this facade owns the
-                // response-index write so Controllers never touch persistence.
+            } else {
+                // Persistence is opt-in through IResponsePersistenceSink; the
+                // core does not branch on a protocol operation.
                 persistResponseRecord(responses, sink);
             }
             invokeCompletion(onComplete, result, sink);

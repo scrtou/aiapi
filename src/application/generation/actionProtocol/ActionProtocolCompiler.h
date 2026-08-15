@@ -99,7 +99,7 @@ struct ClientCapabilities {
     // 是否支持超出标准工具表的自定义工具（freeform / custom tool）。
     bool supportsCustomTools = false;
     // 一轮内允许的工具调用上限。与 coalescesParallelCalls 配合使用：
-    // 超限时截断而非报错，保证「宁少不错」的兼容策略。
+    // 超限时截断而非报错，保证客户端只接收其声明数量内的调用。
     size_t maxToolCalls = 1;
 
     // --- 收尾语义 ---
@@ -124,7 +124,7 @@ struct ClientCapabilities {
     }
 
     // 「严格工具客户端」：每轮必须有 action，且收尾也只能借工具调用表达。
-    // 这是 Roo/Kilo 系列的判定入口，取代旧代码中对客户端名的字符串比较。
+    // 这是 Roo/Kilo 系列的唯一判定入口，避免分散比较客户端名称。
     // 注意：此处是**推导**而非独立开关，避免出现两个字段互相矛盾的状态。
     bool isStrictToolClient() const {
         return requiresActionEveryTurn && requiresCompletionTool();
@@ -178,7 +178,7 @@ public:
                                          const CompileOptions& options);
 
     // 生成供不支持原生 tool calls 的上游模型使用的 JSON-only action-v3
-    // 规则。compileResponse 仍兼容历史 action-v2 XML。
+    // 规则。compileResponse 同时支持已声明的 action-v2 XML wire format。
     static std::string buildRouterPolicy(
         const std::string& sentinel,
         const ClientCapabilities& capabilities);

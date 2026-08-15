@@ -131,9 +131,9 @@ bool isStrictSentinelEnabled(const session_st& session,
 
 const Json::Value& requestToolDefinitions(const session_st& session)
 {
-    return (!session.request.toolsRaw.isNull() && session.request.toolsRaw.isArray() &&
-            session.request.toolsRaw.size() > 0)
-        ? session.request.toolsRaw
+    return (!session.request.toolDefinitionsSource.isNull() && session.request.toolDefinitionsSource.isArray() &&
+            session.request.toolDefinitionsSource.size() > 0)
+        ? session.request.toolDefinitionsSource
         : session.request.tools;
 }
 
@@ -149,7 +149,7 @@ std::optional<toolcall::ToolDefinitionMatch> resolveToolDefinition(
         return call.name.empty() ? std::optional<toolcall::ToolDefinitionMatch>{}
                                  : toolcall::findToolDefinition(tools, call.name);
     };
-    auto match = findIn(session.request.toolsRaw);
+    auto match = findIn(session.request.toolDefinitionsSource);
     return match.has_value() ? match : findIn(session.request.tools);
 }
 
@@ -262,7 +262,7 @@ void decodeBridgeOutput(const session_st& session,
             : toolcall::BridgeWireFormat::Json;
         auto fallbackDecoded = toolcall::createBridgeProtocolCodec(fallback)->decodeResponse(input, options);
         if (fallbackDecoded.matched && fallbackDecoded.valid) {
-            LOG_WARN << "[生成服务][ToolBridge] 响应使用兼容格式解析: configured="
+            LOG_WARN << "[生成服务][ToolBridge] 响应使用备用配置格式解析: configured="
                      << toolcall::bridgeWireFormatName(session.provider.toolBridgeFormat)
                      << ", detected=" << fallbackDecoded.protocol;
             decoded = std::move(fallbackDecoded);
@@ -471,7 +471,26 @@ void emitProtocolEvents(const session_st& session,
                         const ResponseAssembly& assembly,
                         IResponseSink& sink)
 {
-    for (const auto& call : assembly.toolCalls) sink.onEvent(call);
+    for (const auto& call : assembly.toolCalls) {
+        if (sink.supportsIncrementalToolEvents()) {
+            generation::ToolCallStarted started;
+            started.id = call.id;
+            started.name = call.name;
+            started.index = call.index;
+            started.type = call.type;
+            started.originalName = call.originalName;
+            started.namespacePath = call.namespacePath;
+            sink.onEvent(started);
+
+            generation::ToolArgumentsDelta delta;
+            delta.id = call.id;
+            delta.delta = call.arguments;
+            delta.index = call.index;
+            delta.sequence = 0;
+            sink.onEvent(delta);
+        }
+        sink.onEvent(call);
+    }
     if (!assembly.textContent.empty()) {
         generation::OutputTextDone text;
         text.text = assembly.textContent;

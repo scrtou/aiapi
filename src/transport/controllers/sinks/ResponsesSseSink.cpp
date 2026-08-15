@@ -27,6 +27,11 @@ ResponsesSseSink::ResponsesSseSink(
 }
 
 void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
+    if (const auto* toolDone = std::get_if<generation::ToolCallDone>(&event)) {
+        if (completedToolCalls_.count(toolStateKey(toolDone->id, toolDone->index)) != 0) {
+            return;
+        }
+    }
     // Persistence mirrors semantic events even after the client-side stream
     // has gone away.  That preserves the prior collector behavior: request
     // completion and response-index state are not made contingent on a live
@@ -48,6 +53,12 @@ void ResponsesSseSink::onEvent(const generation::GenerationEvent& event) {
         }
         else if constexpr (std::is_same_v<T, generation::OutputTextDone>) {
             handleOutputTextDone(arg);
+        }
+        else if constexpr (std::is_same_v<T, generation::ToolCallStarted>) {
+            handleToolCallStarted(arg);
+        }
+        else if constexpr (std::is_same_v<T, generation::ToolArgumentsDelta>) {
+            handleToolArgumentsDelta(arg);
         }
         else if constexpr (std::is_same_v<T, generation::ToolCallDone>) {
             handleToolCallDone(arg);
@@ -134,7 +145,7 @@ void ResponsesSseSink::ensureTextItemAdded() {
     if (textItemAdded_) return;
     textItemAdded_ = true;
     textOutputIndex_ = nativeToolItems_
-        ? static_cast<int>(nativeOutputItems_.size())
+        ? nextNativeOutputIndex_++
         : outputItemIndex_;
     Json::Value event(Json::objectValue);
     event["type"] = "response.output_item.added";
@@ -142,6 +153,15 @@ void ResponsesSseSink::ensureTextItemAdded() {
     event["output_index"] = textOutputIndex_;
     event["item"] = buildTextOutputItem("in_progress");
     sendSseEvent("response.output_item.added", event);
+}
+
+void ResponsesSseSink::storeNativeOutputItem(int outputIndex, const Json::Value& item)
+{
+    if (outputIndex < 0) return;
+    while (nativeOutputItems_.size() <= static_cast<Json::ArrayIndex>(outputIndex)) {
+        nativeOutputItems_.append(Json::nullValue);
+    }
+    nativeOutputItems_[static_cast<Json::ArrayIndex>(outputIndex)] = item;
 }
 
 std::string ResponsesSseSink::customToolInput(const generation::ToolCallDone& event) {
@@ -156,13 +176,18 @@ std::string ResponsesSseSink::customToolInput(const generation::ToolCallDone& ev
     return event.arguments;
 }
 
+std::string ResponsesSseSink::toolStateKey(const std::string& id, int index)
+{
+    return id.empty() ? ("index:" + std::to_string(index)) : ("id:" + id);
+}
+
 void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event) {
     const bool custom = event.type == "custom";
     const std::string callId = event.id.empty()
         ? ("call_" + responseId_ + "_" + std::to_string(nativeOutputItems_.size()))
         : event.id;
     const std::string itemId = (custom ? "ctc_" : "fc_") + callId;
-    const int index = static_cast<int>(nativeOutputItems_.size());
+    const int index = nextNativeOutputIndex_++;
     const std::string payload = custom ? customToolInput(event) : event.arguments;
 
     Json::Value addedItem(Json::objectValue);
@@ -206,7 +231,7 @@ void ResponsesSseSink::emitNativeToolCall(const generation::ToolCallDone& event)
     Json::Value finalItem = addedItem;
     finalItem[custom ? "input" : "arguments"] = payload;
     finalItem["status"] = "completed";
-    nativeOutputItems_.append(finalItem);
+    storeNativeOutputItem(index, finalItem);
 
     Json::Value itemDone(Json::objectValue);
     itemDone["type"] = "response.output_item.done";
@@ -324,10 +349,138 @@ void ResponsesSseSink::handleOutputTextDone(const generation::OutputTextDone& ev
 }
 
 void ResponsesSseSink::handleToolCallDone(const generation::ToolCallDone& event) {
-    toolCalls_.push_back(event);
-    if (nativeToolItems_) {
-        emitNativeToolCall(event);
+    const std::string key = toolStateKey(event.id, event.index);
+    if (!completedToolCalls_.insert(key).second) return;
+
+    generation::ToolCallDone finalEvent = event;
+    const auto stateIt = incrementalToolCalls_.find(key);
+    if (stateIt != incrementalToolCalls_.end() && finalEvent.arguments.empty()) {
+        finalEvent.arguments = stateIt->second.arguments;
     }
+    toolCalls_.push_back(finalEvent);
+    if (!nativeToolItems_) return;
+
+    if (stateIt == incrementalToolCalls_.end() || !stateIt->second.nativeItemAdded) {
+        emitNativeToolCall(finalEvent);
+        return;
+    }
+
+    const auto& state = stateIt->second;
+    const bool custom = finalEvent.type == "custom";
+    const std::string payload = custom ? customToolInput(finalEvent) : finalEvent.arguments;
+
+    if (custom || state.arguments.empty()) {
+        const std::string deltaType = custom
+            ? "response.custom_tool_call_input.delta"
+            : "response.function_call_arguments.delta";
+        Json::Value delta(Json::objectValue);
+        delta["type"] = deltaType;
+        delta["sequence_number"] = sequenceNumber_++;
+        delta["item_id"] = state.itemId;
+        delta["output_index"] = state.outputIndex;
+        delta["delta"] = payload;
+        sendSseEvent(deltaType, delta);
+    } else if (payload.compare(0, state.arguments.size(), state.arguments) == 0 &&
+               payload.size() > state.arguments.size()) {
+        Json::Value delta(Json::objectValue);
+        delta["type"] = "response.function_call_arguments.delta";
+        delta["sequence_number"] = sequenceNumber_++;
+        delta["item_id"] = state.itemId;
+        delta["output_index"] = state.outputIndex;
+        delta["delta"] = payload.substr(state.arguments.size());
+        sendSseEvent("response.function_call_arguments.delta", delta);
+    }
+
+    const std::string doneType = custom
+        ? "response.custom_tool_call_input.done"
+        : "response.function_call_arguments.done";
+    Json::Value done(Json::objectValue);
+    done["type"] = doneType;
+    done["sequence_number"] = sequenceNumber_++;
+    done["item_id"] = state.itemId;
+    done["output_index"] = state.outputIndex;
+    done[custom ? "input" : "arguments"] = payload;
+    sendSseEvent(doneType, done);
+
+    Json::Value finalItem(Json::objectValue);
+    finalItem["type"] = custom ? "custom_tool_call" : "function_call";
+    finalItem["id"] = state.itemId;
+    finalItem["call_id"] = state.callId;
+    finalItem["name"] = finalEvent.originalName.empty()
+        ? finalEvent.name : finalEvent.originalName;
+    if (!finalEvent.namespacePath.empty()) {
+        finalItem["namespace"] = finalEvent.namespacePath;
+    }
+    finalItem[custom ? "input" : "arguments"] = payload;
+    finalItem["status"] = "completed";
+    storeNativeOutputItem(state.outputIndex, finalItem);
+
+    Json::Value itemDone(Json::objectValue);
+    itemDone["type"] = "response.output_item.done";
+    itemDone["sequence_number"] = sequenceNumber_++;
+    itemDone["output_index"] = state.outputIndex;
+    itemDone["item"] = finalItem;
+    sendSseEvent("response.output_item.done", itemDone);
+}
+
+void ResponsesSseSink::handleToolCallStarted(const generation::ToolCallStarted& event)
+{
+    const std::string key = toolStateKey(event.id, event.index);
+    auto [it, inserted] = incrementalToolCalls_.try_emplace(key);
+    if (!inserted) return;
+
+    auto& state = it->second;
+    state.started = event;
+    if (!nativeToolItems_) return;
+
+    const bool custom = event.type == "custom";
+    state.callId = event.id.empty()
+        ? ("call_" + responseId_ + "_" + std::to_string(event.index))
+        : event.id;
+    state.itemId = (custom ? "ctc_" : "fc_") + state.callId;
+    state.outputIndex = nextNativeOutputIndex_++;
+    state.nativeItemAdded = true;
+
+    Json::Value item(Json::objectValue);
+    item["type"] = custom ? "custom_tool_call" : "function_call";
+    item["id"] = state.itemId;
+    item["call_id"] = state.callId;
+    item["name"] = event.originalName.empty() ? event.name : event.originalName;
+    if (!event.namespacePath.empty()) item["namespace"] = event.namespacePath;
+    item[custom ? "input" : "arguments"] = "";
+    item["status"] = "in_progress";
+
+    Json::Value added(Json::objectValue);
+    added["type"] = "response.output_item.added";
+    added["sequence_number"] = sequenceNumber_++;
+    added["output_index"] = state.outputIndex;
+    added["item"] = item;
+    sendSseEvent("response.output_item.added", added);
+}
+
+void ResponsesSseSink::handleToolArgumentsDelta(const generation::ToolArgumentsDelta& event)
+{
+    const std::string key = toolStateKey(event.id, event.index);
+    const auto it = incrementalToolCalls_.find(key);
+    if (it == incrementalToolCalls_.end() || completedToolCalls_.count(key) != 0) return;
+
+    auto& state = it->second;
+    if (!state.argumentSequences.insert(event.sequence).second) {
+        return;
+    }
+    state.arguments += event.delta;
+    if (!nativeToolItems_ || !state.nativeItemAdded ||
+        state.started.type == "custom") {
+        return;
+    }
+
+    Json::Value delta(Json::objectValue);
+    delta["type"] = "response.function_call_arguments.delta";
+    delta["sequence_number"] = sequenceNumber_++;
+    delta["item_id"] = state.itemId;
+    delta["output_index"] = state.outputIndex;
+    delta["delta"] = event.delta;
+    sendSseEvent("response.function_call_arguments.delta", delta);
 }
 
 void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
@@ -362,7 +515,7 @@ void ResponsesSseSink::handleCompleted(const generation::Completed& event) {
             itemDone["output_index"] = textOutputIndex_;
             itemDone["item"] = textItem;
             sendSseEvent("response.output_item.done", itemDone);
-            nativeOutputItems_.append(textItem);
+            storeNativeOutputItem(textOutputIndex_, textItem);
         }
 
         Json::Value responseObj = buildResponseObject("completed");

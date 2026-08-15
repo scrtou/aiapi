@@ -1722,3 +1722,19 @@ ProviderModelCatalog chaynsapi::getModels()
     }
     return catalog;
 }
+
+std::optional<ProviderModelCapabilities> chaynsapi::findModelCapabilities(
+    const std::string& modelId) const
+{
+    chayns::ModelDescriptor descriptor;
+    if (!findModel(modelId, descriptor)) return std::nullopt;
+
+    ProviderModelCapabilities capabilities;
+    capabilities.images = chayns::supportsImageInput(descriptor);
+    capabilities.imagesDeclared = descriptor.canHandleImages;
+    capabilities.functionCalling = descriptor.canHandleFunctionCalling;
+    capabilities.googleSearch = descriptor.canHandleGoogleSearch;
+    capabilities.thinking = descriptor.canUseThinking;
+    capabilities.supportedMimeTypes = descriptor.supportedMimeTypes;
+    return capabilities;
+}

@@ -35,6 +35,52 @@ std::string toCompactJson(const Json::Value& value) {
     return Json::writeString(compactJsonWriter(), value);
 }
 
+Json::Value encodeToolDefinitions(const std::vector<ToolDefinition>& definitions)
+{
+    Json::Value result(Json::arrayValue);
+    for (const auto& definition : definitions) {
+        Json::Value tool(Json::objectValue);
+        tool["type"] = "function";
+        auto& function = tool["function"];
+        function["name"] = definition.name;
+        function["description"] = definition.description;
+        function["parameters"] = definition.inputSchema.isNull()
+            ? Json::Value(Json::objectValue) : definition.inputSchema;
+        if (!definition.originalName.empty()) {
+            function["_aiapi_original_name"] = definition.originalName;
+        }
+        if (!definition.namespacePath.empty()) {
+            function["_aiapi_namespace"] = definition.namespacePath;
+        }
+        if (definition.kind == ToolDefinitionKind::Custom) {
+            function["_aiapi_original_type"] = "custom";
+        } else if (!definition.namespacePath.empty()) {
+            function["_aiapi_original_type"] = "namespace_function";
+        }
+        result.append(std::move(tool));
+    }
+    return result;
+}
+
+std::string encodeToolChoice(const ToolChoice& choice)
+{
+    switch (choice.mode) {
+        case ToolChoiceMode::None:
+            return "none";
+        case ToolChoiceMode::Any:
+            return "required";
+        case ToolChoiceMode::Specific: {
+            Json::Value value(Json::objectValue);
+            value["type"] = "function";
+            value["function"]["name"] = choice.toolName.value_or("");
+            return toCompactJson(value);
+        }
+        case ToolChoiceMode::Auto:
+            return "auto";
+    }
+    return "auto";
+}
+
 constexpr auto kProviderCallBudget = std::chrono::minutes(5);
 } // 匿名命名空间
 
@@ -64,9 +110,9 @@ std::string generation::GenerationPipeline::executionKey(const session_st& sessi
  *
  * 【字段映射详细说明】
  * - request.*: 写入模型、通道、工具选择、原始输入等执行入参。
- * - provider.*: 写入客户端信息，用于后续输出清洗与兼容策略。
+ * - provider.*: 写入客户端信息，用于后续输出清洗与客户端策略。
  * - state/时间字段: 初始化创建时间与活跃时间，供会话管理与淘汰逻辑使用。
- * - messageContext: 将强类型消息历史统一转为 Json 结构，保持旧链路兼容。
+ * - messageContext: 在 Session 边界将强类型消息历史序列化为 Json 结构。
  */
 session_st generation::GenerationPipeline::materializeRequest(const GenerationRequest& req) {
     LOG_INFO << "[生成服务] 开始将生成请求物化为会话结构";
@@ -80,11 +126,9 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
     session.provider.clientInfo = req.clientInfo;
     session.request.message = req.currentInput;
     session.request.images = req.images;  // 传递图片列表
-    session.request.tools = req.tools;           // 传递规范化后的工具定义
-    session.request.toolsRaw = (!req.toolsRaw.isNull() && req.toolsRaw.isArray())
-        ? req.toolsRaw
-        : req.tools;                             // 保留客户端原始工具定义
-    session.request.toolChoice = req.toolChoice; // 传递工具选择策略
+    session.request.tools = encodeToolDefinitions(req.toolDefinitions);
+    session.request.toolDefinitionsSource = session.request.tools;
+    session.request.toolChoice = encodeToolChoice(req.toolChoiceSpec);
     session.request.parallelToolCalls = req.parallelToolCalls;
     session.request.rawMessage = req.currentInput; // 保留原始输入（工具桥接注入前）
     session.state.requestId = req.requestId.empty()
@@ -94,13 +138,14 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
     session.state.createdAt = time(nullptr);
     
     // 协议类型：统一映射为 ApiType 枚举，便于后续分支处理
-    session.state.apiType = req.isResponseApi() ? ApiType::Responses : ApiType::ChatCompletions;
+    session.state.apiType = req.usesStoredResponseLifecycle()
+        ? ApiType::Responses : ApiType::ChatCompletions;
     session.state.hasPreviousResponseId = req.previousResponseId.has_value() &&
                                       !req.previousResponseId->empty();
     // prev_上游_key / conversationId 由会话连续性决策器与 会话Store 在后续阶段赋值，避免物化阶段写入不稳定状态
     
     
-    // 转换消息上下文：将强类型消息序列化为 JSON，保持与既有处理链兼容
+    // Session 聚合当前以 JSON 持有消息历史；仅在此边界执行序列化。
     for (const auto& msg : req.messages) {
         Json::Value jsonMsg;
         switch (msg.role) {
@@ -118,14 +163,30 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
                 break;
         }
         jsonMsg["content"] = msg.getTextContent();
-        if (!msg.toolCalls.empty()) {
-            jsonMsg["tool_calls"] = Json::Value(Json::arrayValue);
-            for (const auto& toolCall : msg.toolCalls) {
-                jsonMsg["tool_calls"].append(toolCall);
+        for (const auto& block : msg.blocks) {
+            if (block.type != ContentBlockType::ToolUse) continue;
+            if (!jsonMsg.isMember("tool_calls")) {
+                jsonMsg["tool_calls"] = Json::Value(Json::arrayValue);
             }
+            Json::Value toolCall(Json::objectValue);
+            toolCall["id"] = block.toolCallId;
+            toolCall["type"] = "function";
+            toolCall["function"]["name"] = block.toolName;
+            if (block.toolInput.isString()) {
+                toolCall["function"]["arguments"] = block.toolInput.asString();
+            } else if (!block.toolInput.isNull()) {
+                Json::StreamWriterBuilder writer;
+                writer["indentation"] = "";
+                toolCall["function"]["arguments"] =
+                    Json::writeString(writer, block.toolInput);
+            } else {
+                toolCall["function"]["arguments"] = "";
+            }
+            jsonMsg["tool_calls"].append(std::move(toolCall));
         }
-        if (!msg.toolCallId.empty()) {
-            jsonMsg["tool_call_id"] = msg.toolCallId;
+        const auto toolCallId = msg.toolResultCallId();
+        if (!toolCallId.empty()) {
+            jsonMsg["tool_call_id"] = toolCallId;
         }
         session.addMessageToContext(jsonMsg);
     }
@@ -228,7 +289,7 @@ generation::GenerationPipeline::ToolBridgeState
         (!session.request.tools.isNull() && session.request.tools.isArray() &&
          session.request.tools.size() > 0)
             ? session.request.tools
-            : session.request.toolsRaw;
+            : session.request.toolDefinitionsSource;
     state.hasToolDefinitions = toolsForBridge.isArray() && toolsForBridge.size() > 0;
     state.toolChoiceNone = toLowerStr(session.request.toolChoice) == "none";
     if (state.supportsToolCalls || state.toolChoiceNone || !state.hasToolDefinitions) {
@@ -439,7 +500,7 @@ std::optional<platform::Error> generation::GenerationPipeline::run(
     ConcurrencyPolicy policy
 ) {
     LOG_INFO << "[生成服务] 进入 GenerationPipeline 主入口，协议："
-             << (req.isResponseApi() ? "Responses" : "ChatCompletions")
+             << (req.usesStoredResponseLifecycle() ? "stored" : "immediate")
              << ", 流式: " << req.stream;
 
     if (!sessionStore_ || !responseIndex_) {
@@ -511,9 +572,9 @@ provider::ProviderRequest generation::GenerationPipeline::providerRequestFromSes
 
     if (session.provider.messageContext.isArray()) {
         request.messages.reserve(session.provider.messageContext.size());
-        for (const auto& legacyMessage : session.provider.messageContext) {
+        for (const auto& contextMessage : session.provider.messageContext) {
             provider::ProviderMessage message;
-            const std::string role = legacyMessage.get("role", "user").asString();
+            const std::string role = contextMessage.get("role", "user").asString();
             if (role == "system") {
                 message.role = provider::ProviderMessageRole::System;
             } else if (role == "assistant") {
@@ -523,15 +584,15 @@ provider::ProviderRequest generation::GenerationPipeline::providerRequestFromSes
             } else {
                 message.role = provider::ProviderMessageRole::User;
             }
-            message.text = legacyMessage.get("content", "").asString();
-            message.toolCallId = legacyMessage.get("tool_call_id", "").asString();
+            message.text = contextMessage.get("content", "").asString();
+            message.toolCallId = contextMessage.get("tool_call_id", "").asString();
             request.messages.push_back(std::move(message));
         }
     }
 
     const Json::Value& tools = (!session.request.tools.isNull() && session.request.tools.isArray())
         ? session.request.tools
-        : session.request.toolsRaw;
+        : session.request.toolDefinitionsSource;
     if (tools.isArray()) {
         request.tools.reserve(tools.size());
         for (const auto& item : tools) {

@@ -1,7 +1,7 @@
 #ifndef FORCED_TOOL_CALL_GENERATOR_H
 #define FORCED_TOOL_CALL_GENERATOR_H
 
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <application/generation/contracts/GenerationEvent.h>
 #include <string>
 #include <vector>

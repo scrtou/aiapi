@@ -50,6 +50,8 @@ class chaynsapi final : public provider::ProviderBase,
 
     provider::ProviderCapabilities capabilities() const noexcept override;
     ProviderModelCatalog getModels() override;
+    std::optional<ProviderModelCapabilities> findModelCapabilities(
+        const std::string& modelId) const override;
 
     platform::Result<void> eraseThreadContext(
         const std::string& conversationId) override;

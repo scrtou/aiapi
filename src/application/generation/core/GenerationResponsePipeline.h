@@ -3,7 +3,7 @@
 
 #include <application/generation/contracts/GenerationEvent.h>
 #include <application/generation/contracts/IResponseSink.h>
-#include <application/generation/contracts/LegacySessionData.h>
+#include <application/generation/contracts/GenerationSession.h>
 #include <platform/result/Error.h>
 
 #include <json/json.h>

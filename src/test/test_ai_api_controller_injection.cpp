@@ -19,7 +19,7 @@ class FakeAiApiUseCase final : public aiapi::IAiApiUseCase
     std::string lastResponseId;
 
     aiapi::SubmissionResult submitGeneration(
-        aiapi::GenerationInput, SinkFactory, Completion) override
+        aiapi::GenerationInput, ResponseBinding, Completion) override
     {
         aiapi::SubmissionResult result;
         result.outcome = aiapi::SubmissionOutcome::Accepted;

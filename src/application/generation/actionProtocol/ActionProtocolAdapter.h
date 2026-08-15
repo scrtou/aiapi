@@ -19,10 +19,6 @@ struct AdaptedActionResult {
 AdaptedActionResult adaptForCapabilities(const ActionEnvelope& envelope,
                                          const ClientCapabilities& capabilities);
 
-// 兼容旧调用点：内部先把 clientType 归一化为能力 IR 再委派。
-AdaptedActionResult adaptForClient(const ActionEnvelope& envelope,
-                                   const std::string& clientType);
-
 } // namespace actionproto
 
 #endif

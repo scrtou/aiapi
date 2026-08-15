@@ -1,5 +1,5 @@
-#ifndef LEGACY_SESSION_DATA_H
-#define LEGACY_SESSION_DATA_H
+#ifndef GENERATION_SESSION_H
+#define GENERATION_SESSION_H
 
 #include <domain/model/BridgeWireFormat.h>
 #include <domain/model/ImageInfo.h>
@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-// Transitional aggregate used by the pre-P7 generation pipeline.  JSON fields
-// are explicitly edge-owned here and must not move back into domain models.
+// Execution aggregate used by the generation pipeline. JSON fields are owned
+// by the Session persistence/provider boundary and do not belong in domain models.
 struct session_st
 {
     struct RequestData
@@ -21,7 +21,7 @@ struct session_st
         std::string message;
         std::vector<ImageInfo> images;
         Json::Value tools;
-        Json::Value toolsRaw;
+        Json::Value toolDefinitionsSource;
         std::string toolChoice;
         bool parallelToolCalls = true;
         std::string rawMessage;
@@ -62,4 +62,4 @@ struct session_st
     bool isChatApi() const { return state.apiType == ApiType::ChatCompletions; }
 };
 
-#endif  // LEGACY_SESSION_DATA_H
+#endif  // GENERATION_SESSION_H

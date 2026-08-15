@@ -45,14 +45,14 @@ struct ProviderRequest {
     // primary key has no durable upstream-context record.
     std::string previousConversationFallbackId;
     // The model from the persisted session before this request overwrote it.
-    // It validates legacy upstream-thread recovery whether or not the local
+    // It validates persisted upstream-thread recovery whether or not the local
     // session key itself rotated.
     std::string previousConversationFallbackModel;
     std::string model;
     std::string systemPrompt;
     // `input` is the request-scoped prompt after application policy (for
     // example a tool bridge) has been applied. `rawInput` remains available
-    // for history de-duplication without leaking a legacy session aggregate.
+    // for history de-duplication without leaking the execution session aggregate.
     std::string input;
     std::string rawInput;
     std::vector<ProviderMessage> messages;
@@ -66,7 +66,7 @@ struct ProviderRequest {
     /**
      * Small, string-only routing selectors supplied by the application.
      *
-     * This is deliberately not the legacy JsonCpp clientInfo bag: callers
+     * This is deliberately not the JsonCpp clientInfo bag: callers
      * copy only provider-relevant, non-secret values (currently the Retool
      * `workspace_id` selector). The provider never receives the session
      * aggregate or HTTP headers merely to choose an upstream target.
