@@ -156,6 +156,16 @@ if (UNIX)
     aiapi_enable_coverage(aiapi_startup_db_client_fixture)
     target_link_libraries(aiapi_startup_db_client_fixture PRIVATE Drogon::Drogon)
     add_dependencies(${PROJECT_NAME} aiapi_startup_db_client_fixture)
+
+    # BeginningAdvice runs on Drogon's main event loop.  This isolated fixture
+    # invokes all three production synchronous transports against loopback and
+    # fails if any one silently reverts to HttpClient's default main loop.
+    add_executable(aiapi_startup_sync_http_fixture
+        support/startup_sync_http_fixture.cpp)
+    aiapi_enable_coverage(aiapi_startup_sync_http_fixture)
+    target_link_libraries(aiapi_startup_sync_http_fixture PRIVATE
+        aiapi_infrastructure Drogon::Drogon)
+    add_dependencies(${PROJECT_NAME} aiapi_startup_sync_http_fixture)
 endif()
 
 if (COMMAND ParseAndAddDrogonTests)

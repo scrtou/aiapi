@@ -1,4 +1,5 @@
 #include <infrastructure/account/DrogonAccountHttpTransport.h>
+#include <infrastructure/http/SynchronousHttpClient.h>
 
 #include <drogon/drogon.h>
 
@@ -32,7 +33,10 @@ class DrogonAccountHttpTransport final : public IAccountHttpTransport
         }
         native->setBody(request.body);
 
-        auto client = drogon::HttpClient::newHttpClient(baseUrl);
+        auto client = infrastructure::http::makeSynchronousHttpClient(baseUrl);
+        if (!client) {
+            return {HttpResultCode::BadResponse, nullptr};
+        }
         const auto [result, response] = client->sendRequest(native, timeoutSeconds);
         if (result != drogon::ReqResult::Ok || !response) {
             return {HttpResultCode::BadResponse, nullptr};

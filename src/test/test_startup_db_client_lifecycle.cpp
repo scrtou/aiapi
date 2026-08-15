@@ -19,7 +19,7 @@ struct FixtureResult
     std::string output;
 };
 
-FixtureResult runStartupDbClientFixture()
+FixtureResult runStartupFixture(const std::string& fixtureName)
 {
     FixtureResult result;
     int outputPipe[2];
@@ -27,7 +27,7 @@ FixtureResult runStartupDbClientFixture()
 
     const auto executable =
         std::filesystem::canonical("/proc/self/exe").parent_path() /
-        "aiapi_startup_db_client_fixture";
+        fixtureName;
     const pid_t child = ::fork();
     if (child == 0) {
         ::dup2(outputPipe[1], STDOUT_FILENO);
@@ -69,6 +69,11 @@ FixtureResult runStartupDbClientFixture()
     return result;
 }
 
+FixtureResult runStartupDbClientFixture()
+{
+    return runStartupFixture("aiapi_startup_db_client_fixture");
+}
+
 }  // namespace
 
 DROGON_TEST(StartupDbClient_IsAvailableAtBeginningAdvice)
@@ -77,4 +82,12 @@ DROGON_TEST(StartupDbClient_IsAvailableAtBeginningAdvice)
     CHECK(result.exited);
     CHECK(result.exitCode == 0);
     CHECK(result.output.find("DB_CLIENT_READY") != std::string::npos);
+}
+
+DROGON_TEST(StartupSyncHttp_ProductionTransportsUseANonCurrentIoLoop)
+{
+    const auto result = runStartupFixture("aiapi_startup_sync_http_fixture");
+    CHECK(result.exited);
+    CHECK(result.exitCode == 0);
+    CHECK(result.output.find("SYNC_HTTP_TRANSPORTS_READY") != std::string::npos);
 }

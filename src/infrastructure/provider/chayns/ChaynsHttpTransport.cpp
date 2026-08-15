@@ -1,4 +1,5 @@
 #include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
+#include <infrastructure/http/SynchronousHttpClient.h>
 
 namespace chayns {
 namespace {
@@ -10,7 +11,10 @@ class DrogonChaynsHttpTransport final : public IChaynsHttpTransport
                     const drogon::HttpRequestPtr& request,
                     double timeoutSeconds) override
     {
-        auto client = drogon::HttpClient::newHttpClient(baseUrl);
+        auto client = infrastructure::http::makeSynchronousHttpClient(baseUrl);
+        if (!client) {
+            return {drogon::ReqResult::BadResponse, nullptr};
+        }
         return client->sendRequest(request, timeoutSeconds);
     }
 };
