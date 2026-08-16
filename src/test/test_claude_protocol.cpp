@@ -154,6 +154,11 @@ DROGON_TEST(ClaudeRequestAdapter_MapsCanonicalMessagesAndTools)
     REQUIRE(toolResultPart != request.currentInputParts.end());
     CHECK(toolResultPart->toolResultCallId == "toolu_1");
     CHECK(toolResultPart->text.find("contents") != std::string::npos);
+    const auto textPart = std::find_if(
+        request.currentInputParts.begin(), request.currentInputParts.end(),
+        [](const CurrentInputPart& part) { return part.isReplayableText; });
+    REQUIRE(textPart != request.currentInputParts.end());
+    CHECK(!textPart->isAuxiliary);
     CHECK(request.toolDefinitions.size() == 1);
     CHECK(request.toolDefinitions[0].name == "read_file");
     CHECK(request.toolChoiceSpec.mode == ToolChoiceMode::Any);
@@ -207,6 +212,51 @@ DROGON_TEST(ClaudeRequestAdapter_MapsSystemMessagesToSystemPrompt)
     for (const auto& message : request.messages) {
         CHECK(message.role != MessageRole::System);
     }
+}
+
+DROGON_TEST(ClaudeRequestAdapter_MarksAuxiliaryClaudeCodePrompt)
+{
+    auto module = generation::protocol::claude::makeClaudeProtocolModule();
+    Json::Value body(Json::objectValue);
+    body["model"] = "claude-sonnet-4-6";
+    body["max_tokens"] = 256;
+    body["messages"] = Json::Value(Json::arrayValue);
+    Json::Value user;
+    user["role"] = "user";
+    user["content"] = "[SUGGESTION MODE: Suggest the next prompt]";
+    body["messages"].append(user);
+
+    RawProtocolRequest raw;
+    raw.body = body;
+    raw.headers.userAgent = "claude-code/1.0";
+    const auto result = module->requestAdapter("messages.create").adapt(raw);
+    REQUIRE(result.succeeded());
+    REQUIRE(result.request->currentInputParts.size() == 2);
+    const auto& part = result.request->currentInputParts.front();
+    CHECK(part.isReplayableText);
+    CHECK(part.isAuxiliary);
+    CHECK(result.request->currentTurnKind == CurrentTurnKind::Auxiliary);
+}
+
+DROGON_TEST(ClaudeRequestAdapter_DoesNotInferAuxiliaryFromOrdinaryUserText)
+{
+    auto module = generation::protocol::claude::makeClaudeProtocolModule();
+    Json::Value body(Json::objectValue);
+    body["model"] = "claude-sonnet-4-6";
+    body["max_tokens"] = 256;
+    body["messages"] = Json::Value(Json::arrayValue);
+    Json::Value user;
+    user["role"] = "user";
+    user["content"] = "Please explain the text [SUGGESTION MODE: literally].";
+    body["messages"].append(user);
+
+    RawProtocolRequest raw;
+    raw.body = body;
+    const auto result = module->requestAdapter("messages.create").adapt(raw);
+    REQUIRE(result.succeeded());
+    REQUIRE(!result.request->currentInputParts.empty());
+    CHECK(!result.request->currentInputParts.front().isAuxiliary);
+    CHECK(result.request->currentTurnKind == CurrentTurnKind::Durable);
 }
 
 DROGON_TEST(ClaudeRequestAdapter_RejectsInvalidRequiredFields)

@@ -483,7 +483,7 @@ BridgeWireFormat resolveBridgeWireFormat(const Json::Value& toolBridgeConfig,
         actionproto::capabilitiesForClient(clientType, /*parallelToolCalls=*/false);
     BridgeWireFormat format = capabilities.prefersXmlWire
         ? BridgeWireFormat::Xml
-        : (capabilities.family == actionproto::ClientFamily::Codex
+        : (capabilities.prefersJsonWire
                ? BridgeWireFormat::Json
                : BridgeWireFormat::Xml);
     if (!toolBridgeConfig.isObject()) return format;

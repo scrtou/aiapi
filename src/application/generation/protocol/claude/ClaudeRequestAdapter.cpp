@@ -219,10 +219,32 @@ std::string currentText(const Message& message)
     return result;
 }
 
+bool isAuxiliaryClaudeCodePrompt(const std::string& text,
+                                 const std::string& userAgent)
+{
+    std::string loweredUserAgent = userAgent;
+    std::transform(loweredUserAgent.begin(), loweredUserAgent.end(),
+                   loweredUserAgent.begin(), [](unsigned char c) {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    if (loweredUserAgent.find("claude-code") == std::string::npos) return false;
+
+    // Claude Code sends a few client-side requests through the same Messages
+    // endpoint (title generation, next-prompt suggestion, and recap).  They
+    // may carry the full user-text prefix, but they are not a new durable
+    // conversation turn and therefore must not advance the replay snapshot.
+    return text.find("[SUGGESTION MODE:") != std::string::npos ||
+        text.find("The user stepped away and is coming back.") != std::string::npos ||
+        (text.find("<session>") != std::string::npos &&
+         text.find("Write the title in the predominant language") != std::string::npos);
+}
+
 void appendCurrentInputPart(GenerationRequest& request,
                             std::string text,
                             bool isToolResult = false,
-                            std::string toolResultCallId = {})
+                            std::string toolResultCallId = {},
+                            bool isReplayableText = false,
+                            bool isAuxiliary = false)
 {
     if (text.empty()) return;
     request.currentInput += text;
@@ -230,12 +252,18 @@ void appendCurrentInputPart(GenerationRequest& request,
     part.text = std::move(text);
     part.isToolResult = isToolResult;
     part.toolResultCallId = std::move(toolResultCallId);
+    part.isReplayableText = isReplayableText;
+    part.isAuxiliary = isAuxiliary;
     request.currentInputParts.push_back(std::move(part));
 }
 
-void appendCurrentInputMessage(GenerationRequest& request, const Message& message)
+void appendCurrentInputMessage(GenerationRequest& request,
+                               const Message& message,
+                               const std::string& userAgent)
 {
-    appendCurrentInputPart(request, currentText(message));
+    const std::string text = currentText(message);
+    appendCurrentInputPart(request, text, false, {}, true,
+                           isAuxiliaryClaudeCodePrompt(text, userAgent));
 
     bool hasPriorToolResult = false;
     for (const auto& block : message.blocks) {
@@ -479,9 +507,19 @@ AdapterResult ClaudeRequestAdapter::adapt(const RawProtocolRequest& raw) const
         if (!appendContentBlocks(rawMessage["content"], currentMessage, &currentImages, parseError)) {
             return invalid(parseError);
         }
-        appendCurrentInputMessage(request, currentMessage);
+        appendCurrentInputMessage(request, currentMessage, raw.headers.userAgent);
     }
     request.images = std::move(currentImages);
+
+    bool hasReplayableText = false;
+    bool auxiliaryOnly = true;
+    for (const auto& part : request.currentInputParts) {
+        if (part.isToolResult || !part.isReplayableText) continue;
+        hasReplayableText = true;
+        auxiliaryOnly = auxiliaryOnly && part.isAuxiliary;
+    }
+    request.currentTurnKind = hasReplayableText && auxiliaryOnly
+        ? CurrentTurnKind::Auxiliary : CurrentTurnKind::Durable;
     return AdapterResult{std::move(request), {}};
 }
 

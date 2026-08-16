@@ -38,7 +38,7 @@ struct ResponseAssembly {
     std::string clientType;
     actionproto::ClientCapabilities clientCapabilities;
     bool strictToolClient = false;
-    bool codexRooCompat = false;
+    bool strictToolBridge = false;
     bool strictSentinel = false;
     ToolChoiceSpec toolChoice;
     std::string textContent;
@@ -179,11 +179,11 @@ ResponseAssembly makeAssembly(const session_st& session,
     assembly.clientCapabilities = actionproto::capabilitiesForClient(
         assembly.clientType, session.request.parallelToolCalls);
     assembly.strictToolClient = assembly.clientCapabilities.isStrictToolClient();
-    assembly.codexRooCompat = assembly.clientCapabilities.family == actionproto::ClientFamily::Codex &&
+    assembly.strictToolBridge = assembly.clientCapabilities.requiresStrictToolBridge &&
         !supportsToolCalls;
     assembly.toolChoice = parseToolChoiceSpec(session.request.toolChoice);
     assembly.strictSentinel = isStrictSentinelEnabled(
-        session, assembly.strictToolClient || assembly.codexRooCompat,
+        session, assembly.strictToolClient || assembly.strictToolBridge,
         assembly.toolChoice.required, runtimeConfig);
     return assembly;
 }
@@ -343,9 +343,9 @@ void filterForcedTool(const session_st& session, ResponseAssembly& assembly)
     assembly.toolCalls = std::move(accepted);
 }
 
-void resolveCodexCompletion(ResponseAssembly& assembly)
+void resolveBridgeCompletion(ResponseAssembly& assembly)
 {
-    if (!assembly.codexRooCompat || assembly.toolCalls.empty()) return;
+    if (!assembly.strictToolBridge || assembly.toolCalls.empty()) return;
     std::vector<generation::ToolCallDone> executable;
     std::string completion;
     executable.reserve(assembly.toolCalls.size());
@@ -363,7 +363,7 @@ void resolveCodexCompletion(ResponseAssembly& assembly)
             !arguments["result"].asString().empty() && completion.empty()) {
             completion = arguments["result"].asString();
         } else {
-            LOG_WARN << "[生成服务][CodexRooCompat] attempt_completion 参数无效";
+            LOG_WARN << "[生成服务][ToolBridgeCompat] attempt_completion 参数无效";
         }
     }
     if (!executable.empty()) {
@@ -372,7 +372,7 @@ void resolveCodexCompletion(ResponseAssembly& assembly)
     } else if (!completion.empty()) {
         assembly.toolCalls.clear();
         assembly.textContent = std::move(completion);
-        LOG_INFO << "[生成服务][CodexRooCompat] 已将虚拟 attempt_completion 转换为最终文本";
+        LOG_INFO << "[生成服务][ToolBridgeCompat] 已将虚拟 attempt_completion 转换为最终文本";
     } else {
         assembly.toolCalls.clear();
     }
@@ -544,7 +544,7 @@ std::vector<std::string> generation::GenerationResponsePipeline::emit(
 
     annotateToolCallIdentities(session, assembly.toolCalls);
     filterForcedTool(session, assembly);
-    resolveCodexCompletion(assembly);
+    resolveBridgeCompletion(assembly);
     if (assembly.toolCalls.empty() && assembly.toolChoice.required) {
         toolcall::generateForcedToolCall(session, assembly.toolCalls, assembly.textContent);
     }

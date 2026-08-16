@@ -94,7 +94,7 @@ Json::Value encodeSession(const session_st& session)
 {
     Json::Value root(Json::objectValue);
     // schema 版本：后续字段演进时用于选择解码规则。
-    root["v"] = 2;
+    root["v"] = 3;
 
     // ---- request ----
     Json::Value req(Json::objectValue);
@@ -156,6 +156,7 @@ Json::Value encodeSession(const session_st& session)
     pv["messageContext"]               = session.provider.messageContext;
     pv["pendingToolCallIds"]           = encodeStringArray(session.provider.pendingToolCallIds);
     pv["consumedToolResultIds"]        = encodeStringArray(session.provider.consumedToolResultIds);
+    pv["replayableInputTextSnapshot"]  = session.provider.replayableInputTextSnapshot;
     root["provider"] = pv;
 
     return root;
@@ -225,6 +226,8 @@ session_st decodeSession(const Json::Value& payload)
     s.provider.pendingToolCallIds = decodeStringArray(getJson(pv, "pendingToolCallIds"));
     s.provider.consumedToolResultIds =
         decodeStringArray(getJson(pv, "consumedToolResultIds"));
+    s.provider.replayableInputTextSnapshot =
+        getStr(pv, "replayableInputTextSnapshot");
 
     return s;
 }

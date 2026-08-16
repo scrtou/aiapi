@@ -80,7 +80,7 @@ void rewriteBridgeConflictingDirectives(session_st& session, bool rewriteUserInp
              << ") " << messageBefore << "->" << session.request.message.size();
 }
 
-bool codexRequestLikelyNeedsExternalState(const std::string& message)
+bool requestLikelyNeedsExternalState(const std::string& message)
 {
     if (message.empty() || message.find("[tool_result") != std::string::npos) return false;
     const std::string lower = toLowerStr(message);
@@ -214,7 +214,7 @@ std::string globFallbackShellTool(const session_st& session)
 toolcall::BridgePolicyOptions makePolicyOptions(const session_st& session,
                                                  const std::string& clientType,
                                                  const ToolChoice& choice,
-                                                 bool codexCompat)
+                                                 bool requiresExternalStateClient)
 {
     toolcall::BridgePolicyOptions options;
     options.clientType = clientType;
@@ -225,7 +225,8 @@ toolcall::BridgePolicyOptions makePolicyOptions(const session_st& session,
     options.forcedToolName = choice.forcedName;
     options.parallelToolCalls = session.request.parallelToolCalls;
     options.requireToolForCurrentRequest =
-        codexCompat && codexRequestLikelyNeedsExternalState(session.request.message);
+        requiresExternalStateClient &&
+        requestLikelyNeedsExternalState(session.request.message);
     return options;
 }
 
@@ -291,7 +292,7 @@ void toolcall::transformRequestForToolBridge(session_st& session,
     const auto capabilities = actionproto::capabilitiesForClient(
         clientType, session.request.parallelToolCalls);
     const bool strictToolClient = capabilities.isStrictToolClient();
-    const bool codexCompat = capabilities.family == actionproto::ClientFamily::Codex;
+    const bool bridgeCompat = capabilities.requiresStrictToolBridge;
     const Json::Value config = runtimeConfig.isObject() && runtimeConfig.isMember("tool_bridge") &&
         runtimeConfig["tool_bridge"].isObject()
         ? runtimeConfig["tool_bridge"]
@@ -307,10 +308,10 @@ void toolcall::transformRequestForToolBridge(session_st& session,
              << ", client=" << clientType << ", channel=" << session.request.api
              << ", model=" << session.request.model;
 
-    if (codexCompat) {
+    if (bridgeCompat) {
         const size_t stripped = session.request.systemPrompt.size();
         session.request.systemPrompt.clear();
-        LOG_INFO << "[生成服务][CodexRooCompat] 已移除上游可见 Codex instructions: chars="
+        LOG_INFO << "[生成服务][ToolBridgeCompat] 已移除上游可见原生 instructions: chars="
                  << stripped;
     }
 
@@ -329,7 +330,7 @@ void toolcall::transformRequestForToolBridge(session_st& session,
     const ToolChoice choice = parseToolChoice(session.request.toolChoice);
     session.provider.toolBridgeTrigger = generateRandomTriggerSignal(
         static_cast<size_t>(triggerLength(config)));
-    const bool hasStrictApplyDiffTool = (strictToolClient || codexCompat) &&
+    const bool hasStrictApplyDiffTool = (strictToolClient || bridgeCompat) &&
         (toolcall::hasToolNamed(session.request.tools, "apply_diff") ||
          toolcall::hasToolNamed(session.request.toolDefinitionsSource, "apply_diff"));
     const std::string globFallback = globFallbackShellTool(session);
@@ -347,7 +348,7 @@ void toolcall::transformRequestForToolBridge(session_st& session,
                  << "] 检测到历史 apply_diff 失败，已注入精确匹配与重新读取恢复规则";
     }
 
-    const auto options = makePolicyOptions(session, clientType, choice, codexCompat);
+    const auto options = makePolicyOptions(session, clientType, choice, bridgeCompat);
     codec->transformHistory(session.provider.messageContext, options);
     definitions = decorateDefinitions(codec, std::move(definitions), options,
                                      hasStrictApplyDiffTool, recoveringApplyDiffFailure,

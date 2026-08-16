@@ -265,6 +265,40 @@ DROGON_TEST(SessionStore_ZeroWidthKeepsStableSessionAcrossCommit)
     mgr.delSession("zw_stable_session");
 }
 
+DROGON_TEST(SessionStore_AuxiliaryTurnDoesNotCommitContextOrRotateHash)
+{
+    chatSession mgr;
+    mgr.setTrackingMode(SessionTrackingMode::Hash);
+
+    session_st session;
+    session.state.conversationId = "hash_auxiliary_session";
+    session.request.api.clear();
+    session.request.model = "GPT-4o";
+    session.request.message = "[SUGGESTION MODE: next prompt]\n";
+    session.request.rawMessage = session.request.message;
+    session.request.currentTurnKind = CurrentTurnKind::Auxiliary;
+    session.response.message["message"] = "suggestion";
+
+    Json::Value priorUser;
+    priorUser["role"] = "user";
+    priorUser["content"] = "durable question";
+    session.addMessageToContext(priorUser);
+    Json::Value priorAssistant;
+    priorAssistant["role"] = "assistant";
+    priorAssistant["content"] = "durable answer";
+    session.addMessageToContext(priorAssistant);
+    mgr.addSession(session.state.conversationId, session);
+
+    CHECK(mgr.prepareNextSessionId(session) == "hash_auxiliary_session");
+    mgr.coverSessionresponse(session);
+
+    session_st persisted;
+    mgr.getSession("hash_auxiliary_session", persisted);
+    REQUIRE(persisted.provider.messageContext.size() == 2);
+    CHECK(persisted.provider.messageContext[0]["content"].asString() == "durable question");
+    CHECK(persisted.provider.messageContext[1]["content"].asString() == "durable answer");
+}
+
 DROGON_TEST(SessionStore_ZeroWidthCreateOrUpdateDoesNotRotateKey)
 {
     chatSession mgr;

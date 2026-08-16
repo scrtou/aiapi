@@ -84,6 +84,9 @@ DROGON_TEST(BridgeProtocolCodec_ResolveRequestFormat)
               Json::Value(Json::objectValue), "Codex", "chaynsapi", "normal") ==
           toolcall::BridgeWireFormat::Json);
     CHECK(toolcall::resolveBridgeWireFormat(
+              Json::Value(Json::objectValue), "ClaudeCode", "chaynsapi", "normal") ==
+          toolcall::BridgeWireFormat::Json);
+    CHECK(toolcall::resolveBridgeWireFormat(
               Json::Value(Json::objectValue), "RooCode", "chaynsapi", "normal") ==
           toolcall::BridgeWireFormat::Xml);
 }

@@ -215,6 +215,7 @@ void chatSession::updateExistingSessionFromRequest(const std::string& sessionId,
     stored.request.message = session.request.message;
     stored.request.rawMessage = session.request.rawMessage.empty() ? session.request.message : session.request.rawMessage;
     stored.request.images = session.request.images;
+    stored.request.currentTurnKind = session.request.currentTurnKind;
     if (!session.request.tools.isNull() && session.request.tools.isArray() && session.request.tools.size() > 0) {
         stored.request.tools = session.request.tools;
         stored.request.toolDefinitionsSource =
@@ -485,6 +486,16 @@ std::string chatSession::generateConversationKey(
 
 std::string chatSession::prepareNextSessionId(session_st& session)
 {
+    if (session.request.currentTurnKind == CurrentTurnKind::Auxiliary) {
+        // Auxiliary provider calls (for example Claude Code title/suggestion
+        // requests) must not rotate the hash key because they are not durable
+        // conversation turns.
+        session.state.nextSessionId = session.state.conversationId;
+        LOG_INFO << "[SessionTransfer] 辅助请求不参与会话上下文提交: "
+                 << session.state.conversationId;
+        return session.state.nextSessionId;
+    }
+
     // 根据追踪模式生成下一轮的 sessionId
     if (isZeroWidthMode()) {
         // ZeroWidth is a transport mechanism, not a per-turn identifier.
@@ -527,16 +538,20 @@ std::string chatSession::prepareNextSessionId(session_st& session)
 
 void chatSession::commitSessionTransfer(session_st& session)
 {
-    // 1. 更新 messageContext（添加本轮对话）
-    Json::Value userMsg;
-    userMsg["role"] = "user";
-    userMsg["content"] = session.request.rawMessage.empty() ? session.request.message : session.request.rawMessage;
-    session.addMessageToContext(userMsg);
-    
-    Json::Value assistantMsg;
-    assistantMsg["role"] = "assistant";
-    assistantMsg["content"] = session.response.message["message"].asString();
-    session.addMessageToContext(assistantMsg);
+    // 1. 更新 messageContext（添加本轮对话）。辅助请求仍然调用上游，
+    // 但不是 durable turn，不能污染后续 provider context 或 Hash key。
+    if (session.request.currentTurnKind == CurrentTurnKind::Durable) {
+        Json::Value userMsg;
+        userMsg["role"] = "user";
+        userMsg["content"] = session.request.rawMessage.empty()
+            ? session.request.message : session.request.rawMessage;
+        session.addMessageToContext(userMsg);
+
+        Json::Value assistantMsg;
+        assistantMsg["role"] = "assistant";
+        assistantMsg["content"] = session.response.message["message"].asString();
+        session.addMessageToContext(assistantMsg);
+    }
     
     session.state.lastActiveAt = time(nullptr);
     

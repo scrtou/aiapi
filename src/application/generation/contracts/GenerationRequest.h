@@ -8,6 +8,7 @@
 #include <utility>
 #include <json/json.h>
 #include <domain/model/ImageInfo.h>
+#include <application/generation/contracts/CurrentTurnKind.h>
 
 /** Protocol-neutral response identity and persistence lifecycle. */
 enum class ResponseLifecycle {
@@ -85,6 +86,14 @@ struct CurrentInputPart {
     std::string text;
     std::string toolResultCallId;
     bool isToolResult = false;
+    // Some clients send an append-only transcript in the current input rather
+    // than only the new user text.  Such adapters opt in so the session core
+    // can suppress the already-delivered text prefix after continuity is
+    // resolved.
+    bool isReplayableText = false;
+    // Auxiliary client prompts (for example a suggestion/recap request) may
+    // contain that prefix but must not replace the durable user-text snapshot.
+    bool isAuxiliary = false;
 };
 
 struct GenerationCapabilities {
@@ -229,6 +238,10 @@ struct GenerationRequest {
     // ========== 输入 ==========
     std::vector<Message> messages;  // 内部强类型消息列表
     std::string currentInput;       // 当前用户输入（纯文本）
+    // Adapters use this semantic marker for client-side requests such as
+    // title/recap/suggestion generation. Auxiliary turns are still sent to
+    // the provider, but must not become durable conversation history.
+    CurrentTurnKind currentTurnKind = CurrentTurnKind::Durable;
     // Optional lossless decomposition of currentInput.  Adapters that carry
     // tool results populate this so the core can reconcile result IDs after
     // session continuity has been resolved.

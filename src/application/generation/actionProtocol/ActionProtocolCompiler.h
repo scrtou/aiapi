@@ -32,7 +32,8 @@ namespace actionproto {
 //   Auto   —— 不预设，按首个非空白字符嗅探（'{' 视为 JSON，否则按 XML 解析）
 //   JsonV3 —— 强制 action-v3：哨兵之后必须紧跟单个 JSON 对象
 //   XmlV2  —— 强制 action-v2：<action_protocol version="1"> ... <end_action/>
-// 强制模式用于已知客户端偏好（见 ClientCapabilities::prefersXmlWire），
+// 强制模式用于已知客户端偏好（见 ClientCapabilities::prefersXmlWire /
+// ClientCapabilities::prefersJsonWire），
 // 可在格式不符时尽早失败，避免把 XML 误当 JSON 解析产生歧义诊断。
 enum class WireFormat {
     Auto,
@@ -109,6 +110,7 @@ struct ClientCapabilities {
 
     // --- 传输与产出约束 ---
     bool prefersXmlWire = false;          // 默认走 XML action-v2 而非 JSON action-v3
+    bool prefersJsonWire = false;         // 默认走 JSON action-v3 而非 XML action-v2
     bool allowsProseWithToolCall = true;  // 是否允许文本与工具调用同时出现
     bool requiresStrictToolNames = false; // 工具名必须严格命中已声明工具表，未命中即丢弃
     // 上游给出的调用数超过 maxToolCalls 时，截断为前 maxToolCalls 个而非报错。
@@ -117,6 +119,10 @@ struct ClientCapabilities {
     // 客户端在收到 finish_reason="tool_calls" 后即停止消费同轮文本，
     // 因此零宽会话 ID 等带外文本必须在工具调用事件之前先行发出。
     bool stopsConsumingTextAfterToolCall = false;
+
+    // Codex 与 Claude Code 在没有原生工具通道时共用同一套严格文本桥接
+    // 策略（冲突指令清理、精确哨兵、协议重试与动作收尾）。
+    bool requiresStrictToolBridge = false;
 
     // 是否需要把 final_response 降级为虚拟工具调用。
     bool requiresCompletionTool() const {

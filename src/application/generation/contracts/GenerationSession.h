@@ -4,6 +4,7 @@
 #include <domain/model/BridgeWireFormat.h>
 #include <domain/model/ImageInfo.h>
 #include <domain/model/SessionData.h>
+#include <application/generation/contracts/CurrentTurnKind.h>
 #include <json/json.h>
 
 #include <cstddef>
@@ -21,6 +22,10 @@ struct session_st
         std::string systemPrompt;
         std::string message;
         std::vector<ImageInfo> images;
+        // Request-scoped semantic marker. It is copied from the normalized
+        // request before persisted session state is merged and is not part of
+        // the durable session snapshot.
+        CurrentTurnKind currentTurnKind = CurrentTurnKind::Durable;
         Json::Value tools;
         Json::Value toolDefinitionsSource;
         // Request-scoped diagnostic value.  It records the callable tool
@@ -61,6 +66,10 @@ struct session_st
         // idempotent.
         std::vector<std::string> pendingToolCallIds;
         std::vector<std::string> consumedToolResultIds;
+        // The latest client-declared append-only user-text snapshot.  It is
+        // deliberately protocol-neutral: adapters opt in per input fragment
+        // when their upstream wire format repeats historical text.
+        std::string replayableInputTextSnapshot;
     };
 
     RequestData request;

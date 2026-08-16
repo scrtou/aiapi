@@ -213,6 +213,8 @@ ClientCapabilities capabilitiesForFamily(ClientFamily family,
         case ClientFamily::Codex:
             // Codex 支持 freeform/custom 工具定义。
             capabilities.supportsCustomTools = true;
+            capabilities.prefersJsonWire = true;
+            capabilities.requiresStrictToolBridge = true;
             // Codex 在未开启并行时要求把多调用收敛为首个调用。
             capabilities.coalescesParallelCalls = !parallelToolCalls;
             // Codex 客户端一旦读到 finish_reason="tool_calls" 即结束本轮文本消费，
@@ -222,6 +224,8 @@ ClientCapabilities capabilitiesForFamily(ClientFamily family,
         case ClientFamily::ClaudeCode:
             // Claude Code 的约束与 Codex 同构：自定义工具 + 文本须前置。
             capabilities.supportsCustomTools = true;
+            capabilities.prefersJsonWire = true;
+            capabilities.requiresStrictToolBridge = true;
             capabilities.coalescesParallelCalls = !parallelToolCalls;
             capabilities.stopsConsumingTextAfterToolCall = true;
             break;

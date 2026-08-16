@@ -165,10 +165,14 @@ std::string firstToolCallId(const CollectingSink& sink)
     return std::get<generation::ToolCallDone>(*event).id;
 }
 
-CurrentInputPart currentTextPart(std::string text)
+CurrentInputPart currentTextPart(std::string text,
+                                 bool isReplayableText = false,
+                                 bool isAuxiliary = false)
 {
     CurrentInputPart part;
     part.text = std::move(text);
+    part.isReplayableText = isReplayableText;
+    part.isAuxiliary = isAuxiliary;
     return part;
 }
 
@@ -186,6 +190,15 @@ void setCurrentInput(GenerationRequest& request,
 {
     request.currentInput.clear();
     for (const auto& part : parts) request.currentInput += part.text;
+    bool hasReplayableText = false;
+    bool auxiliaryOnly = true;
+    for (const auto& part : parts) {
+        if (part.isToolResult || !part.isReplayableText) continue;
+        hasReplayableText = true;
+        auxiliaryOnly = auxiliaryOnly && part.isAuxiliary;
+    }
+    request.currentTurnKind = hasReplayableText && auxiliaryOnly
+        ? CurrentTurnKind::Auxiliary : CurrentTurnKind::Durable;
     request.currentInputParts = std::move(parts);
     request.messages = {Message::user(request.currentInput)};
 }
@@ -246,12 +259,15 @@ DROGON_TEST(SessionCodec_RoundTripsToolResultLedger)
     session_st source;
     source.provider.pendingToolCallIds = {"call_pending_a", "call_pending_b"};
     source.provider.consumedToolResultIds = {"call_consumed_a", "call_consumed_b"};
+    source.provider.replayableInputTextSnapshot = "first turn\nsecond turn\n";
 
     const Json::Value encoded = sessioncodec::encodeSession(source);
-    CHECK(encoded["v"].asInt() == 2);
+    CHECK(encoded["v"].asInt() == 3);
     const session_st decoded = sessioncodec::decodeSession(encoded);
     CHECK(decoded.provider.pendingToolCallIds == source.provider.pendingToolCallIds);
     CHECK(decoded.provider.consumedToolResultIds == source.provider.consumedToolResultIds);
+    CHECK(decoded.provider.replayableInputTextSnapshot ==
+          source.provider.replayableInputTextSnapshot);
 }
 
 DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
@@ -308,6 +324,61 @@ DROGON_TEST(GenerationService_RuntimeConfigReachesToolBridgePipeline)
     // -> ToolDefinitionEncoder rather than falling back to global runtime state.
     CHECK(provider->captured.input.find("action-v3") != std::string::npos);
     CHECK(provider->captured.input.find("<function_calls>") == std::string::npos);
+    CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_ClaudeCodeExternalStateRequestsRequireToolBridgeAction)
+{
+    auto channels = makeChannel("claude-external-state-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>();
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("claude-external-state-fixture", provider));
+
+    auto request = makeRequest("claude-external-state-fixture", fixtureTools());
+    request.clientInfo["client_type"] = "ClaudeCode";
+    request.currentInput = "当前目录是什么，有什么文件";
+    request.messages = {Message::user(request.currentInput)};
+
+    CollectingSink sink;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels);
+
+    CHECK(!service.runGuarded(request, sink).has_value());
+    CHECK(provider->calls == 1);
+    CHECK(provider->captured.input.find("<tool_instructions>") != std::string::npos);
+    CHECK(provider->captured.input.find(
+              "This request requires external inspection; use a real tool_call, not final_response.") !=
+          std::string::npos);
+    CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_ClaudeCodeConversationalRequestsAllowFinalResponse)
+{
+    auto channels = makeChannel("claude-conversation-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>();
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("claude-conversation-fixture", provider));
+
+    auto request = makeRequest("claude-conversation-fixture", fixtureTools());
+    request.clientInfo["client_type"] = "ClaudeCode";
+    request.currentInput = "你好，请介绍一下自己";
+    request.messages = {Message::user(request.currentInput)};
+
+    CollectingSink sink;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels);
+
+    CHECK(!service.runGuarded(request, sink).has_value());
+    CHECK(provider->calls == 1);
+    CHECK(provider->captured.input.find("<tool_instructions>") != std::string::npos);
+    CHECK(provider->captured.input.find("The action MUST be a tool call.") ==
+          std::string::npos);
     CHECK(sink.closed);
 }
 
@@ -461,6 +532,131 @@ DROGON_TEST(GenerationService_SuppressesReplayedToolResultsAfterSessionResolutio
           persisted.provider.consumedToolResultIds.end());
 }
 
+DROGON_TEST(GenerationService_SuppressesReplayableClaudeTextPrefix)
+{
+    auto channels = makeChannel("replayable-text-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>();
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("replayable-text-fixture", provider));
+
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    sessionStore.setTrackingMode(SessionTrackingMode::ZeroWidth);
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels);
+
+    const std::string stableSessionId = "sess_replayable_text";
+    const std::string continuityMarker = ZeroWidthEncoder::appendEncoded(
+        "continuity", stableSessionId);
+    const auto configure = [&](GenerationRequest& request, const std::string& requestId,
+                               std::string text, bool auxiliary = false) {
+        request.requestId = requestId;
+        request.continuityTexts = {continuityMarker};
+        setCurrentInput(request, {currentTextPart(std::move(text), true, auxiliary)});
+    };
+
+    auto firstRequest = makeRequest("replayable-text-fixture", {});
+    configure(firstRequest, "replayable-text-first", "read the file\n");
+    CollectingSink firstSink;
+    CHECK(!service.runGuarded(firstRequest, firstSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 1);
+    CHECK(provider->capturedRequests[0].input == "read the file\n");
+
+    auto secondRequest = makeRequest("replayable-text-fixture", {});
+    configure(secondRequest, "replayable-text-second",
+              "read the file\nupdate its timestamp\n");
+    CollectingSink secondSink;
+    CHECK(!service.runGuarded(secondRequest, secondSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 2);
+    CHECK(provider->capturedRequests[1].input == "update its timestamp\n");
+
+    auto suggestionRequest = makeRequest("replayable-text-fixture", {});
+    configure(suggestionRequest, "replayable-text-suggestion",
+              "read the file\nupdate its timestamp\n[SUGGESTION MODE: next prompt]\n", true);
+    CollectingSink suggestionSink;
+    CHECK(!service.runGuarded(suggestionRequest, suggestionSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 3);
+    CHECK(provider->capturedRequests[2].input == "[SUGGESTION MODE: next prompt]\n");
+
+    auto thirdRequest = makeRequest("replayable-text-fixture", {});
+    configure(thirdRequest, "replayable-text-third",
+              "read the file\nupdate its timestamp\nwho are you\n");
+    CollectingSink thirdSink;
+    CHECK(!service.runGuarded(thirdRequest, thirdSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 4);
+    CHECK(provider->capturedRequests[3].input == "who are you\n");
+    CHECK(std::none_of(provider->capturedRequests[3].messages.begin(),
+                       provider->capturedRequests[3].messages.end(),
+                       [](const auto& message) {
+                           return message.text.find("SUGGESTION MODE") != std::string::npos;
+                       }));
+
+    session_st persisted;
+    sessionStore.getSession(stableSessionId, persisted);
+    CHECK(persisted.provider.replayableInputTextSnapshot ==
+          "read the file\nupdate its timestamp\nwho are you\n");
+}
+
+DROGON_TEST(GenerationService_InitializesReplayableTextSnapshotWithoutHistoricalInference)
+{
+    auto channels = makeChannel("replayable-text-baseline-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>();
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("replayable-text-baseline-fixture", provider));
+
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    sessionStore.setTrackingMode(SessionTrackingMode::ZeroWidth);
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels);
+
+    const std::string stableSessionId = "sess_replayable_text_baseline";
+    const std::string continuityMarker = ZeroWidthEncoder::appendEncoded(
+        "continuity", stableSessionId);
+
+    // A context may contain text that looks like a prefix of this input, but
+    // it is not an authoritative replay cursor.  With no explicit snapshot,
+    // the first replayable input is the baseline and must be forwarded whole.
+    session_st continued;
+    continued.state.conversationId = stableSessionId;
+    continued.provider.prevProviderKey = stableSessionId;
+    Json::Value priorUser(Json::objectValue);
+    priorUser["role"] = "user";
+    priorUser["content"] = "read the file\n";
+    continued.addMessageToContext(priorUser);
+    sessionStore.addSession(stableSessionId, continued);
+
+    auto replayedRequest = makeRequest("replayable-text-baseline-fixture", {});
+    replayedRequest.requestId = "replayable-text-baseline-first";
+    replayedRequest.continuityTexts = {continuityMarker};
+    setCurrentInput(replayedRequest, {
+        currentTextPart("read the file\nanswer the question\n", true),
+    });
+    CollectingSink replayedSink;
+    CHECK(!service.runGuarded(replayedRequest, replayedSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 1);
+    CHECK(provider->capturedRequests[0].input ==
+          "read the file\nanswer the question\n");
+
+    auto nextRequest = makeRequest("replayable-text-baseline-fixture", {});
+    nextRequest.requestId = "replayable-text-baseline-followup";
+    nextRequest.continuityTexts = {continuityMarker};
+    setCurrentInput(nextRequest, {
+        currentTextPart("read the file\nanswer the question\nnext question\n", true),
+    });
+    CollectingSink nextSink;
+    CHECK(!service.runGuarded(nextRequest, nextSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 2);
+    CHECK(provider->capturedRequests[1].input == "next question\n");
+
+    session_st persisted;
+    sessionStore.getSession(stableSessionId, persisted);
+    CHECK(persisted.provider.replayableInputTextSnapshot ==
+          "read the file\nanswer the question\nnext question\n");
+}
+
 DROGON_TEST(GenerationService_CodexBridgeRetryReusesCurrentThreadAndSendsCorrection)
 {
     auto channels = makeChannel("codex-bridge-retry-fixture", false);
@@ -471,6 +667,49 @@ DROGON_TEST(GenerationService_CodexBridgeRetryReusesCurrentThreadAndSendsCorrect
 
     auto request = makeRequest("codex-bridge-retry-fixture", fixtureTools());
     request.clientInfo["client_type"] = "codex";
+    CollectingSink sink;
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate, &channels);
+
+    CHECK(!service.runGuarded(request, sink).has_value());
+    REQUIRE(provider->calls == 2);
+    REQUIRE(provider->capturedRequests.size() == 2);
+    const auto& first = provider->capturedRequests[0];
+    const auto& correction = provider->capturedRequests[1];
+
+    CHECK(first.previousConversationId.empty());
+    CHECK(!first.conversationId.empty());
+    CHECK(correction.conversationId == first.conversationId);
+    CHECK(correction.previousConversationId == first.conversationId);
+    CHECK(correction.previousConversationFallbackId.empty());
+    CHECK(correction.input.find("上一条回复格式不正确") != std::string::npos);
+    CHECK(correction.input.find("action-v3 response must be one valid JSON object") !=
+          std::string::npos);
+    CHECK(correction.input.find("synthetic bridge question") == std::string::npos);
+    CHECK(correction.input.find("<tool_instructions>") == std::string::npos);
+    CHECK(correction.rawInput == correction.input);
+
+    const auto toolEvent = std::find_if(
+        sink.events.begin(), sink.events.end(), [](const auto& event) {
+            return std::holds_alternative<generation::ToolCallDone>(event);
+        });
+    REQUIRE(toolEvent != sink.events.end());
+    CHECK(std::get<generation::ToolCallDone>(*toolEvent).name == "read_file");
+    CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_ClaudeCodeBridgeRetryReusesCurrentThreadAndSendsCorrection)
+{
+    auto channels = makeChannel("claude-bridge-retry-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>(
+        CapturingProvider::Mode::InvalidBridgeThenValidActionV3);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("claude-bridge-retry-fixture", provider));
+
+    auto request = makeRequest("claude-bridge-retry-fixture", fixtureTools());
+    request.clientInfo["client_type"] = "ClaudeCode";
     CollectingSink sink;
     ResponseIndex responseIndex;
     session::SessionExecutionGate executionGate;

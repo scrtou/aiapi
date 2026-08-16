@@ -192,6 +192,11 @@ DROGON_TEST(ActionProtocol_ClientCapabilities)
     CHECK(codex.maxToolCalls == 1);
     const auto codexParallel = capabilitiesForClient("Codex", true);
     CHECK(codexParallel.maxToolCalls > 1);
+    const auto claude = capabilitiesForClient("ClaudeCode", false);
+    CHECK(claude.prefersJsonWire);
+    CHECK(claude.requiresStrictToolBridge);
+    CHECK(claude.prefersJsonWire == codex.prefersJsonWire);
+    CHECK(claude.requiresStrictToolBridge == codex.requiresStrictToolBridge);
     const auto roo = capabilitiesForClient("RooCode", true);
     CHECK(roo.requiresActionEveryTurn);
     CHECK(roo.maxToolCalls == 1);

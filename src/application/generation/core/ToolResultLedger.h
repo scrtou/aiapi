@@ -13,6 +13,7 @@ struct ReconciliationResult {
     std::size_t accepted = 0;
     std::size_t suppressedDuplicate = 0;
     std::size_t acceptedWithoutPendingCall = 0;
+    std::size_t suppressedReplayTextBytes = 0;
 };
 
 /**
@@ -20,8 +21,8 @@ struct ReconciliationResult {
  *
  * A protocol adapter supplies opaque text fragments plus canonical tool-result
  * identities.  This service never parses protocol JSON or bridge text: it
- * only suppresses result fragments whose IDs have already been accepted for
- * the stable conversation.
+ * only suppresses result fragments whose IDs have already been accepted and
+ * text prefixes that an adapter explicitly marks as an append-only replay.
  */
 ReconciliationResult reconcileCurrentInput(
     session_st& session,

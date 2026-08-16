@@ -61,7 +61,7 @@ private:
     static session_st materializeRequest(const GenerationRequest& request);
     static std::string executionKey(const session_st& session);
     ToolBridgeState prepareToolBridge(session_st& session) const;
-    void retryCodexBridgeResponse(
+    void retryStrictToolBridgeResponse(
         session_st& session,
         const ToolBridgeState& bridge,
         const platform::CancellationToken& cancellation,

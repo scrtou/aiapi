@@ -127,6 +127,7 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
     session.request.systemPrompt = req.systemPrompt;
     session.provider.clientInfo = req.clientInfo;
     session.request.message = req.currentInput;
+    session.request.currentTurnKind = req.currentTurnKind;
     session.request.images = req.images;  // 传递图片列表
     session.request.tools = encodeToolDefinitions(req.toolDefinitions);
     session.request.toolDefinitionsSource = session.request.tools;
@@ -351,7 +352,7 @@ generation::GenerationPipeline::ToolBridgeState
     return state;
 }
 
-void generation::GenerationPipeline::retryCodexBridgeResponse(
+void generation::GenerationPipeline::retryStrictToolBridgeResponse(
     session_st& session,
     const ToolBridgeState& bridge,
     const platform::CancellationToken& cancellation,
@@ -360,8 +361,8 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
     const std::string clientType = safeJsonAsString(
         session.provider.clientInfo.get("client_type", ""), "");
     const bool shouldRetry =
-        actionproto::capabilitiesForClient(clientType, session.request.parallelToolCalls).family ==
-            actionproto::ClientFamily::Codex &&
+        actionproto::capabilitiesForClient(clientType, session.request.parallelToolCalls)
+            .requiresStrictToolBridge &&
         !bridge.supportsToolCalls && !bridge.toolChoiceNone &&
         !session.provider.toolBridgeTrigger.empty() && bridge.hasToolDefinitions;
     if (!shouldRetry) return;
@@ -401,14 +402,14 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
                 : decoded.diagnostic.message;
         }
         if (decoded.matched && !decoded.valid) {
-            LOG_WARN << "[生成服务][CodexRooCompat] 首次动作协议无效: format="
+            LOG_WARN << "[生成服务][ToolBridgeCompat] 首次动作协议无效: format="
                      << toolcall::bridgeWireFormatName(session.provider.toolBridgeFormat)
                      << ", error=" << decoded.diagnostic.message;
         }
     }
     if (hasNativeCalls || hasActionProtocol) return;
 
-    LOG_WARN << "[生成服务][CodexRooCompat] 首次响应缺少有效 action protocol，正在严格重试一次";
+    LOG_WARN << "[生成服务][ToolBridgeCompat] 首次响应缺少有效 action protocol，正在严格重试一次";
     const std::string bridgeMessage = session.request.message;
     const std::string rawMessage = session.request.rawMessage;
     const Json::Value firstResponse = session.response.message;
@@ -431,7 +432,7 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
     session.request.rawMessage = correctionMessage;
     session.response.message = Json::Value(Json::objectValue);
 
-    LOG_WARN << "[生成服务][CodexRooCompat] 严格重试已发起: request_id="
+    LOG_WARN << "[生成服务][ToolBridgeCompat] 严格重试已发起: request_id="
              << session.state.requestId
              << ", attempt=1/1, reason=" << retryReason
              << ", format="
@@ -452,10 +453,10 @@ void generation::GenerationPipeline::retryCodexBridgeResponse(
     session.request.rawMessage = rawMessage;
     if (retryError) {
         session.response.message = firstResponse;
-        LOG_WARN << "[生成服务][CodexRooCompat] 严格重试失败，已恢复首次响应: code="
+        LOG_WARN << "[生成服务][ToolBridgeCompat] 严格重试失败，已恢复首次响应: code="
                  << retryError->type();
     } else {
-        LOG_INFO << "[生成服务][CodexRooCompat] 严格重试完成";
+        LOG_INFO << "[生成服务][ToolBridgeCompat] 严格重试完成";
     }
 }
 
@@ -512,7 +513,7 @@ std::optional<platform::Error> generation::GenerationPipeline::execute(
             return std::nullopt;
         }
 
-        retryCodexBridgeResponse(session, bridge, cancellation, deadline);
+        retryStrictToolBridgeResponse(session, bridge, cancellation, deadline);
         if (guard.isCancelled()) {
             return emitCancellation(session, "调用提供者后请求被取消", "请求已取消 after provider call",
                                     responsePipeline_, sink);
@@ -580,12 +581,16 @@ std::optional<platform::Error> generation::GenerationPipeline::run(
 
     const auto toolResultReconciliation = toolresult::reconcileCurrentInput(
         session, req.currentInputParts);
-    if (toolResultReconciliation.suppressedDuplicate > 0) {
-        LOG_INFO << "[ToolResultLedger] 已抑制已消费的工具结果: requestId="
+    if (toolResultReconciliation.suppressedDuplicate > 0 ||
+        toolResultReconciliation.suppressedReplayTextBytes > 0) {
+        LOG_INFO << "[CurrentInputLedger] 已抑制已消费的工具结果或历史文本: requestId="
                  << session.state.requestId
                  << ", conversationId=" << session.state.conversationId
-                 << ", suppressed=" << toolResultReconciliation.suppressedDuplicate
-                 << ", accepted=" << toolResultReconciliation.accepted;
+                 << ", suppressedToolResults="
+                 << toolResultReconciliation.suppressedDuplicate
+                 << ", suppressedReplayTextBytes="
+                 << toolResultReconciliation.suppressedReplayTextBytes
+                 << ", acceptedToolResults=" << toolResultReconciliation.accepted;
     }
 
     LOG_INFO << "[生成服务] 会话 " << (session.state.isContinuation ? "续接" : "新建")
