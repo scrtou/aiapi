@@ -19,9 +19,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 FAIL = 4
 
-CHAYNS_HEADER = SRC / "infrastructure/provider/chayns/chaynsapi.h"
+CHAYNS_HEADER = SRC / "infrastructure/provider/chayns/ChaynsProvider.h"
+CHAYNS_COMPAT_HEADER = SRC / "infrastructure/provider/chayns/chaynsapi.h"
 CHAYNS_CPP = SRC / "infrastructure/provider/chayns/chaynsapi.cpp"
-RETOOL_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
+RETOOL_HEADER = SRC / "infrastructure/provider/retool/RetoolProvider.h"
 WIRING = SRC / "runtime/AppWiring.cpp"
 GENERATION_PIPELINE = SRC / "application/generation/core/GenerationPipeline.cpp"
 SESSION = SRC / "application/generation/core/Session.cpp"
@@ -51,6 +52,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         return path.read_text(errors="replace")
 
     header = read(CHAYNS_HEADER)
+    compat_header = read(CHAYNS_COMPAT_HEADER)
     chayns_cpp = read(CHAYNS_CPP)
     wiring = read(WIRING)
     generation_pipeline = read(GENERATION_PIPELINE)
@@ -79,7 +81,8 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "Session.h",
         "session.response",
     )
-    singleton = re.compile(r"::\s*(?:getInstance|instance)\s*\(")
+    singleton = re.compile(
+        r"::\s*(?:getInstance|instance)\s*\(|\bdrogon\s*::\s*app\s*\(")
     for path in provider_sources:
         code = uncommented(read(path))
         relative = path.relative_to(ROOT)
@@ -102,16 +105,19 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
             errors.append(f"provider header is outside final infrastructure location: {path.relative_to(ROOT)}")
 
     if not re.search(
-        r"class\s+chaynsapi\s+final\s*:\s*public\s+provider::ProviderBase",
+        r"class\s+ChaynsProvider\s+final\s*:\s*public\s+provider::ProviderBase",
         header,
     ):
-        errors.append("chaynsapi must directly derive from provider::ProviderBase")
+        errors.append("ChaynsProvider must directly derive from provider::ProviderBase")
     for needle in (
         "public provider::IProviderModelCatalog",
         "public provider::IProviderThreadContext",
         "platform::Result<void> initialize()",
         "doGenerate(",
-        "sendWithinContext(",
+        "sleepWithinContext(",
+        "chayns::ChaynsPollingLoop",
+        "chayns::ChaynsThreadContext",
+        "chayns::ChaynsProtocolClient",
     ):
         if needle not in header:
             errors.append(f"Chayns P6-W2 provider contract missing: {needle}")
@@ -120,14 +126,45 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "provider::ProviderCallContext",
         "platform::Result<provider::ProviderResponse>",
         "interruptionError(context)",
-        "sendWithinContext(",
+        "sleepWithinContext(",
     ):
         if needle not in chayns_cpp:
             errors.append(f"Chayns P6-W2 implementation missing: {needle}")
 
+    if "using chaynsapi = ChaynsProvider" not in compat_header:
+        errors.append("chaynsapi compatibility header must remain an alias only")
+    if re.search(r"\bclass\s+chaynsapi\b", uncommented(compat_header)):
+        errors.append("chaynsapi compatibility header revived a second provider class")
+
+    required_components = (
+        "ChaynsProviderPolicy.h",
+        "ChaynsProtocolClient.h",
+        "ChaynsThreadContext.h",
+        "ChaynsPollingLoop.h",
+        "ChaynsHttpTransport.h",
+    )
+    for component in required_components:
+        if not (chayns_dir / component).is_file():
+            errors.append(f"Chayns layered component missing: {component}")
+
+    clean_orchestrator = uncommented(chayns_cpp)
+    for forbidden in ("HttpRequest::new", "m_transport->send", "drogon::app("):
+        if forbidden in clean_orchestrator:
+            errors.append(
+                f"ChaynsProvider orchestrator bypasses its protocol/config boundary: {forbidden}")
+    polling_source = read(chayns_dir / "ChaynsPollingLoop.cpp")
+    for field in (
+        "provider=chaynsapi",
+        "requestId=",
+        "conversationId=",
+        "upstreamThreadId=",
+    ):
+        if field not in polling_source:
+            errors.append(f"Chayns polling correlation log field missing: {field}")
+
     # Composition must register Chayns only through the complete narrow lane.
     for needle in (
-        "provider::makeProductionProvider<chaynsapi>",
+        "provider::makeProductionProvider<ChaynsProvider>",
         "chayns->initialize()",
         'registerChatProvider("chaynsapi", chayns, chayns, chayns)',
         "registry->freeze()",
@@ -238,7 +275,7 @@ def main() -> int:
         mutation = original.replace("public provider::ProviderBase", "public BrokenProviderBase", 1)
         if mutation == original:
             print("P6-W2 Chayns Provider slice gate selftest FAIL")
-            print("  probe could not mutate chaynsapi ProviderBase inheritance")
+            print("  probe could not mutate ChaynsProvider ProviderBase inheritance")
             return FAIL
         mutation_errors = validate({CHAYNS_HEADER: mutation})
         if not mutation_errors:

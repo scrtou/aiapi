@@ -42,7 +42,6 @@ AdaptedActionResult adaptForCapabilities(const ActionEnvelope& envelope,
     // 参数序列化关闭缩进，保持与上游 tool_call.arguments 的紧凑格式一致。
     if (result.toolCalls.empty() && capabilities.requiresCompletionTool()) {
         generation::ToolCallDone completion;
-        completion.id = "action_completion_0";
         completion.name = capabilities.completionToolName;
         completion.index = 0;
         Json::Value args(Json::objectValue);

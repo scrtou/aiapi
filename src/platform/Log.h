@@ -1,8 +1,10 @@
 #pragma once
 
 #include <iostream>
+#include <fstream>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <utility>
 
 namespace platform {
@@ -18,6 +20,18 @@ namespace platform {
 class LogLine
 {
   public:
+    // Configure an application log sink independent of the process launcher.
+    // This keeps application diagnostics available when aiapi is started
+    // directly inside Docker (without restart_aiapi.sh redirecting stdout).
+    static void configureFile(const std::string& path)
+    {
+        std::lock_guard<std::mutex> lock(outputMutex_());
+        auto& file = file_();
+        file.close();
+        if (path.empty()) return;
+        file.open(path, std::ios::out | std::ios::app);
+    }
+
     explicit LogLine(const char* level)
     {
         stream_ << '[' << level << "] ";
@@ -30,9 +44,14 @@ class LogLine
 
     ~LogLine()
     {
-        static std::mutex outputMutex;
-        std::lock_guard<std::mutex> lock(outputMutex);
-        std::clog << stream_.str() << '\n';
+        std::lock_guard<std::mutex> lock(outputMutex_());
+        const std::string line = stream_.str();
+        std::clog << line << '\n';
+        auto& file = file_();
+        if (file.is_open()) {
+            file << line << '\n';
+            file.flush();
+        }
     }
 
     template <typename Value>
@@ -43,6 +62,18 @@ class LogLine
     }
 
   private:
+    static std::mutex& outputMutex_()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    static std::ofstream& file_()
+    {
+        static std::ofstream file;
+        return file;
+    }
+
     std::ostringstream stream_;
 };
 

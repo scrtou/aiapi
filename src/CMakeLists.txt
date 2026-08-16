@@ -97,6 +97,7 @@ set(AIAPI_APPLICATION_SOURCES
     application/generation/core/GenerationService.cpp
     application/generation/core/GenerationPipeline.cpp
     application/generation/core/GenerationResponsePipeline.cpp
+    application/generation/core/ToolResultLedger.cpp
     application/generation/protocol/common/ProtocolRegistry.cpp
     application/generation/protocol/claude/ClaudeProtocolModule.cpp
     application/generation/protocol/claude/ClaudeRequestAdapter.cpp
@@ -131,6 +132,10 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
     infrastructure/account/AccountClock.cpp
     infrastructure/account/RetoolProvisionClock.cpp
     infrastructure/provider/chayns/ChaynsHttpTransport.cpp
+    infrastructure/provider/chayns/ChaynsProviderPolicy.cpp
+    infrastructure/provider/chayns/ChaynsProtocolClient.cpp
+    infrastructure/provider/chayns/ChaynsPollingLoop.cpp
+    infrastructure/provider/chayns/ChaynsThreadContext.cpp
     infrastructure/provider/chayns/ChaynsClock.cpp
     infrastructure/provider/chayns/ChaynsModelCatalog.cpp
     infrastructure/provider/chayns/ChaynsMessageCorrelation.cpp
@@ -138,6 +143,11 @@ set(AIAPI_INFRASTRUCTURE_SOURCES
     infrastructure/provider/chayns/chaynsThreadReaper.cpp
     infrastructure/provider/retool/RetoolHttpTransport.cpp
     infrastructure/provider/retool/RetoolClock.cpp
+    infrastructure/provider/retool/RetoolWorkspaceContext.cpp
+    infrastructure/provider/retool/RetoolProviderSettings.cpp
+    infrastructure/provider/retool/RetoolProtocolHttp.cpp
+    infrastructure/provider/retool/RetoolWorkflowClient.cpp
+    infrastructure/provider/retool/RetoolAgentClient.cpp
     infrastructure/provider/retool/retoolapi.cpp
     infrastructure/managedAccount/backends/ClassicProviderAccountBackend.cpp
     infrastructure/managedAccount/backends/RetoolWorkspaceBackend.cpp

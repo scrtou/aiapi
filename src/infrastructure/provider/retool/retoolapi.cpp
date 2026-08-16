@@ -1,4 +1,5 @@
-#include <infrastructure/provider/retool/retoolapi.h>
+#include <infrastructure/provider/retool/RetoolProvider.h>
+#include <infrastructure/provider/retool/RetoolProtocolHttp.h>
 #include <infrastructure/codec/RetoolWorkspaceJsonCodec.h>
 
 #include <drogon/drogon.h>
@@ -57,30 +58,6 @@ bool isAnthropicModelName(const std::string& model)
     return trimCopy(model).rfind("claude-", 0) == 0;
 }
 
-size_t maxRetoolAgentBootstrapSystemPromptChars()
-{
-    constexpr size_t kDefaultMaxChars = 12000;
-    const auto& customConfig = drogon::app().getCustomConfig();
-    if (!customConfig.isObject()) return kDefaultMaxChars;
-
-    if (customConfig.isMember("retoolapi") && customConfig["retoolapi"].isObject())
-    {
-        const auto& cfg = customConfig["retoolapi"];
-        if (cfg.isMember("agent_bootstrap_system_prompt_max_chars"))
-        {
-            const auto& value = cfg["agent_bootstrap_system_prompt_max_chars"];
-            if (value.isUInt64()) return static_cast<size_t>(value.asUInt64());
-            if (value.isInt())
-            {
-                const auto v = value.asInt();
-                return v <= 0 ? 0 : static_cast<size_t>(v);
-            }
-        }
-    }
-
-    return kDefaultMaxChars;
-}
-
 bool replaceQuotedValueAfter(std::string& input,
                              size_t startPos,
                              const std::string& fieldPrefix,
@@ -95,33 +72,6 @@ bool replaceQuotedValueAfter(std::string& input,
     return true;
 }
 
-class ScopedWorkspaceUsage
-{
-  public:
-    ScopedWorkspaceUsage(workspace::IRetoolWorkspaceUseCase* workspaces,
-                         const std::string& workspaceId)
-        : workspaces_(workspaces), workspaceId_(workspaceId)
-    {
-        if (workspaces_ && !workspaceId_.empty())
-        {
-            active_ = workspaces_->markUsageStarted(workspaceId_, nullptr);
-        }
-    }
-
-    ~ScopedWorkspaceUsage()
-    {
-        if (active_ && workspaces_ && !workspaceId_.empty())
-        {
-            workspaces_->markUsageFinished(workspaceId_, nullptr);
-        }
-    }
-
-  private:
-    workspace::IRetoolWorkspaceUseCase* workspaces_;
-    std::string workspaceId_;
-    bool active_ = false;
-};
-
 std::optional<platform::Error> interruptionError(
     const provider::ProviderCallContext& context)
 {
@@ -134,45 +84,24 @@ std::optional<platform::Error> interruptionError(
     return std::nullopt;
 }
 
-size_t configuredHistoryLimit(const char* key, size_t fallback)
-{
-    constexpr size_t kMaximumConfiguredBytes = 8 * 1024 * 1024;
-    const auto& customConfig = drogon::app().getCustomConfig();
-    if (!customConfig.isObject() ||
-        !customConfig.isMember("history_replay") ||
-        !customConfig["history_replay"].isObject()) {
-        return fallback;
-    }
-
-    const auto& value = customConfig["history_replay"][key];
-    if (value.isUInt64()) {
-        return static_cast<size_t>(std::min<Json::UInt64>(
-            value.asUInt64(), static_cast<Json::UInt64>(kMaximumConfiguredBytes)));
-    }
-    if (value.isInt()) {
-        const int configured = value.asInt();
-        if (configured >= 0) {
-            return static_cast<size_t>(std::min<int>(
-                configured, static_cast<int>(kMaximumConfiguredBytes)));
-        }
-    }
-    return fallback;
-}
 }  // namespace
 
-retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
+RetoolProvider::RetoolProvider(std::shared_ptr<retool::IRetoolHttpTransport> transport,
                      std::shared_ptr<retool::IRetoolClock> clock,
                      IManagedAccountContextResolver& accounts,
                      workspace::IRetoolWorkspaceUseCase& workspaces,
                      IChannelCatalog& channels,
-                     provider::ProviderBase::FailureObserver failureObserver)
+                     provider::ProviderBase::FailureObserver failureObserver,
+                     retool::RetoolProviderSettings settings)
     : provider::ProviderBase(std::move(failureObserver)),
-      transport_(std::move(transport)), clock_(std::move(clock))
+      clock_(std::move(clock)),
+      workflowClient_(
+          std::make_shared<retool::RetoolWorkflowClient>(transport)),
+      agentClient_(
+          std::make_shared<retool::RetoolAgentClient>(std::move(transport))),
+      workspaceContext_(workspaces),
+      settings_(std::move(settings))
 {
-    if (!transport_)
-    {
-        throw std::invalid_argument("retoolapi requires a non-null HTTP transport");
-    }
     if (!clock_)
     {
         throw std::invalid_argument("retoolapi requires a non-null clock");
@@ -182,9 +111,9 @@ retoolapi::retoolapi(std::shared_ptr<retool::IRetoolHttpTransport> transport,
     channels_ = &channels;
 }
 
-retoolapi::~retoolapi() = default;
+RetoolProvider::~RetoolProvider() = default;
 
-platform::Result<void> retoolapi::initialize()
+platform::Result<void> RetoolProvider::initialize()
 {
     modelCatalog_.models.clear();
     auto appendModel = [this](const std::string& id) {
@@ -211,19 +140,19 @@ platform::Result<void> retoolapi::initialize()
     return platform::Result<void>::success();
 }
 
-provider::ProviderCapabilities retoolapi::capabilities() const noexcept
+provider::ProviderCapabilities RetoolProvider::capabilities() const noexcept
 {
     return provider::ProviderCapabilities{/*nativeToolCalls=*/false,
                                           /*upstreamHistory=*/true,
                                           /*supportsImages=*/false};
 }
 
-ProviderModelCatalog retoolapi::getModels()
+ProviderModelCatalog RetoolProvider::getModels()
 {
     return modelCatalog_;
 }
 
-std::string retoolapi::requireWorkspaceId(
+std::string RetoolProvider::requireWorkspaceId(
     const provider::ProviderRequest& request) const
 {
     for (const char* key : {"workspace_id", "workspaceId"}) {
@@ -235,7 +164,7 @@ std::string retoolapi::requireWorkspaceId(
     return "";
 }
 
-std::string retoolapi::resolveWorkspaceId(const provider::ProviderRequest& request,
+std::string RetoolProvider::resolveWorkspaceId(const provider::ProviderRequest& request,
                                           bool requireAgent,
                                           std::string* errorMessage)
 {
@@ -247,24 +176,22 @@ std::string retoolapi::resolveWorkspaceId(const provider::ProviderRequest& reque
     auto explicitId = requireWorkspaceId(request);
     if (!explicitId.empty())
     {
-        std::lock_guard<std::mutex> lock(threadMutex_);
-        conversationWorkspaceMap_[request.conversationId] = explicitId;
-        LOG_INFO << "[retoolapi] workspace selection: source=explicit"
-                 << ", conversation=" << request.conversationId
+        workspaceContext_.bindWorkspace(request.conversationId, explicitId);
+        LOG_INFO << "[retoolapi] workspace selection: provider=retoolapi, source=explicit"
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", workspace=" << explicitId;
         return explicitId;
     }
 
+    const auto affinity = workspaceContext_.workspaceFor(request.conversationId);
+    if (!affinity.empty())
     {
-        std::lock_guard<std::mutex> lock(threadMutex_);
-        auto affinityIt = conversationWorkspaceMap_.find(request.conversationId);
-        if (affinityIt != conversationWorkspaceMap_.end() && !affinityIt->second.empty())
-        {
-            LOG_INFO << "[retoolapi] workspace selection: source=conversation_affinity"
-                     << ", conversation=" << request.conversationId
-                     << ", workspace=" << affinityIt->second;
-            return affinityIt->second;
-        }
+        LOG_INFO << "[retoolapi] workspace selection: provider=retoolapi, source=conversation_affinity"
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
+                 << ", workspace=" << affinity;
+        return affinity;
     }
 
     auto workspaces = workspaces_->list(errorMessage);
@@ -303,12 +230,10 @@ std::string retoolapi::resolveWorkspaceId(const provider::ProviderRequest& reque
     const auto selectedId = !candidates.front().workspaceId.empty()
         ? candidates.front().workspaceId
         : candidates.front().subdomain;
-    {
-        std::lock_guard<std::mutex> lock(threadMutex_);
-        conversationWorkspaceMap_[request.conversationId] = selectedId;
-    }
-    LOG_INFO << "[retoolapi] workspace selection: source=pool"
-             << ", conversation=" << request.conversationId
+    workspaceContext_.bindWorkspace(request.conversationId, selectedId);
+    LOG_INFO << "[retoolapi] workspace selection: provider=retoolapi, source=pool"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
              << ", workspace=" << selectedId
              << ", email=" << candidates.front().email
              << ", baseUrl=" << candidates.front().baseUrl
@@ -317,110 +242,14 @@ std::string retoolapi::resolveWorkspaceId(const provider::ProviderRequest& reque
     return selectedId;
 }
 
-std::string retoolapi::buildCookieHeader(const Json::Value& workspaceJson) const
+platform::Result<Json::Value> RetoolProvider::parseJsonResponse(
+    const HttpResponsePtr& resp,
+    std::string_view operation) const
 {
-    std::vector<std::string> parts;
-    auto append = [&parts](const std::string& name, const std::string& value) {
-        if (!value.empty()) parts.push_back(name + "=" + value);
-    };
-    append("accessToken", workspaceJson.get("accessToken", "").asString());
-    append("xsrfToken", workspaceJson.get("xsrfToken", "").asString());
-    append("xsrfTokenSameSite", workspaceJson.get("xsrfToken", "").asString());
-    if (workspaceJson.isMember("extraCookies") && workspaceJson["extraCookies"].isObject())
-    {
-        for (const auto& name : workspaceJson["extraCookies"].getMemberNames())
-        {
-            append(name, workspaceJson["extraCookies"][name].asString());
-        }
-    }
-    std::ostringstream out;
-    for (size_t i = 0; i < parts.size(); ++i)
-    {
-        if (i) out << "; ";
-        out << parts[i];
-    }
-    return out.str();
+    return retool::protocol_http::decodeJsonBody(resp, operation);
 }
 
-Json::Value retoolapi::parseJsonResponse(const HttpResponsePtr& resp) const
-{
-    if (!resp) return Json::Value(Json::nullValue);
-    auto json = resp->getJsonObject();
-    if (json) return *json;
-    Json::Value parsed;
-    Json::CharReaderBuilder reader;
-    std::string errs;
-    std::istringstream in(std::string(resp->getBody()));
-    if (Json::parseFromStream(reader, in, &parsed, &errs))
-    {
-        return parsed;
-    }
-    return Json::Value(Json::nullValue);
-}
-
-platform::Error retoolapi::classifyHttpError(
-    int httpStatus, const std::string& message) const
-{
-    platform::ErrorCode code = platform::ErrorCode::ProviderError;
-    if (httpStatus == 401) {
-        code = platform::ErrorCode::Unauthorized;
-    } else if (httpStatus == 403) {
-        code = platform::ErrorCode::Forbidden;
-    } else if (httpStatus == 400 || httpStatus == 404 || httpStatus == 422) {
-        code = platform::ErrorCode::BadRequest;
-    } else if (httpStatus == 408 || httpStatus == 504) {
-        code = platform::ErrorCode::Timeout;
-    } else if (httpStatus == 429) {
-        code = platform::ErrorCode::RateLimited;
-    }
-    return platform::Error(code, message, {}, {}, httpStatus);
-}
-
-retool::HttpResult retoolapi::sendWithinContext(
-    const provider::ProviderCallContext& context,
-    const std::string& baseUrl,
-    const HttpRequestPtr& request,
-    double maximumTimeoutSeconds) const
-{
-    const auto remaining = context.remaining();
-    const double remainingSeconds = static_cast<double>(remaining.count()) / 1000.0;
-    const double timeoutSeconds = std::min(maximumTimeoutSeconds, remainingSeconds);
-    if (timeoutSeconds <= 0.0 || context.isCancelled()) {
-        return {ReqResult::BadResponse, nullptr};
-    }
-    return transport_->send(baseUrl, request, timeoutSeconds);
-}
-
-HttpResponsePtr retoolapi::sendJsonRequest(
-    const provider::ProviderCallContext& context,
-    const std::string& baseUrl,
-    HttpMethod method,
-    const std::string& path,
-    const Json::Value* body,
-    const Json::Value& workspaceJson,
-    double timeoutSeconds) const
-{
-    auto req = body ? HttpRequest::newHttpJsonRequest(*body) : HttpRequest::newHttpRequest();
-    req->setMethod(method);
-    req->setPath(path);
-    req->addHeader("accept", "application/json");
-    req->addHeader("content-type", "application/json");
-    req->addHeader("x-xsrf-token", workspaceJson.get("xsrfToken", "").asString());
-    req->addHeader("x-retool-client-version", "3.356.0-f7a1e09 (Build 313746)");
-    req->addHeader("user-agent", "Mozilla/5.0");
-    req->addHeader("cookie", buildCookieHeader(workspaceJson));
-    auto [result, resp] = sendWithinContext(context, baseUrl, req, timeoutSeconds);
-    if (interruptionError(context)) {
-        return nullptr;
-    }
-    if (result != ReqResult::Ok || !resp)
-    {
-        return nullptr;
-    }
-    return resp;
-}
-
-bool retoolapi::sleepWithinContext(
+bool RetoolProvider::sleepWithinContext(
     const provider::ProviderCallContext& context,
     std::chrono::milliseconds duration) const
 {
@@ -428,11 +257,14 @@ bool retoolapi::sleepWithinContext(
     const auto remaining = context.remaining();
     const auto sleepFor = std::min(duration, remaining);
     if (sleepFor <= std::chrono::milliseconds::zero()) return false;
-    clock_->sleepFor(sleepFor);
-    return !interruptionError(context).has_value();
+    return clock_->sleepFor(
+        sleepFor,
+        [&context] {
+            return context.isCancelled() || context.deadlineExceeded();
+        });
 }
 
-std::string retoolapi::buildTranscriptPrompt(
+std::string RetoolProvider::buildTranscriptPrompt(
     const provider::ProviderRequest& request) const
 {
     std::string systemText = request.systemPrompt;
@@ -471,7 +303,7 @@ std::string retoolapi::buildTranscriptPrompt(
     return prompt;
 }
 
-std::string retoolapi::lastUserContent(
+std::string RetoolProvider::lastUserContent(
     const provider::ProviderRequest& request) const
 {
     if (!request.input.empty()) return request.input;
@@ -483,12 +315,12 @@ std::string retoolapi::lastUserContent(
     return "";
 }
 
-std::string retoolapi::encodeJsonString(const std::string& value) const
+std::string RetoolProvider::encodeJsonString(const std::string& value) const
 {
     return toCompactJson(Json::Value(value)).substr(1, toCompactJson(Json::Value(value)).size() - 2);
 }
 
-Json::Value retoolapi::resolveRetoolProviderBinding(const Json::Value& workspaceJson, const std::string& model) const
+Json::Value RetoolProvider::resolveRetoolProviderBinding(const Json::Value& workspaceJson, const std::string& model) const
 {
     Json::Value binding(Json::objectValue);
     const auto lowerModel = trimCopy(model);
@@ -517,7 +349,7 @@ Json::Value retoolapi::resolveRetoolProviderBinding(const Json::Value& workspace
     return binding;
 }
 
-bool retoolapi::populateProviderResources(
+bool RetoolProvider::populateProviderResources(
     const provider::ProviderCallContext& context,
     const std::string& workspaceId,
     Json::Value& workspaceJson) const
@@ -528,14 +360,18 @@ bool retoolapi::populateProviderResources(
         return false;
     }
 
-    auto resourcesResp = sendJsonRequest(
-        context, baseUrl, Get, "/api/resources", nullptr, workspaceJson, 30.0);
+    auto resourcesResp = workflowClient_->listResources(
+        context, baseUrl, workspaceJson);
     if (!resourcesResp || resourcesResp->statusCode() >= 400)
     {
         return false;
     }
 
-    auto resourcesJson = parseJsonResponse(resourcesResp);
+    auto resourcesDecoded = parseJsonResponse(resourcesResp.value(), "list resources");
+    if (!resourcesDecoded) {
+        return false;
+    }
+    auto resourcesJson = std::move(resourcesDecoded.value());
     if (!resourcesJson.isMember("resources") || !resourcesJson["resources"].isArray())
     {
         return false;
@@ -576,7 +412,7 @@ bool retoolapi::populateProviderResources(
     return true;
 }
 
-provider::ProviderMetadata retoolapi::buildRetoolMeta(const std::string& workspaceId,
+provider::ProviderMetadata RetoolProvider::buildRetoolMeta(const std::string& workspaceId,
                                                       const std::string& routeType,
                                                       const std::string& resourceId,
                                                       const Json::Value& binding,
@@ -597,7 +433,7 @@ provider::ProviderMetadata retoolapi::buildRetoolMeta(const std::string& workspa
     return meta;
 }
 
-bool retoolapi::replaceFirstRegex(std::string& input, const std::regex& pattern, const std::string& replacement) const
+bool RetoolProvider::replaceFirstRegex(std::string& input, const std::regex& pattern, const std::string& replacement) const
 {
     std::smatch match;
     if (!std::regex_search(input, match, pattern)) return false;
@@ -605,7 +441,7 @@ bool retoolapi::replaceFirstRegex(std::string& input, const std::regex& pattern,
     return true;
 }
 
-Json::Value retoolapi::buildAnthropicWorkflowTemplate(
+Json::Value RetoolProvider::buildAnthropicWorkflowTemplate(
     const provider::ProviderCallContext& context,
     const Json::Value& destinationWorkflow,
     const Json::Value& workspaceJson,
@@ -630,20 +466,21 @@ Json::Value retoolapi::buildAnthropicWorkflowTemplate(
     sourceWorkspace["accessToken"] = sourceAccessToken;
     sourceWorkspace["xsrfToken"] = sourceXsrfToken;
 
-    auto sourceResp = sendJsonRequest(
+    auto sourceResp = workflowClient_->fetchWorkflow(
         context,
         sourceWorkspace.get("baseUrl", "").asString(),
-        Get,
-        "/api/workflow/" + sourceWorkflowId,
-        nullptr,
-        sourceWorkspace,
-        30.0);
+        sourceWorkflowId,
+        sourceWorkspace);
     if (!sourceResp || sourceResp->statusCode() != k200OK)
     {
         return Json::Value(Json::nullValue);
     }
 
-    auto sourceJson = parseJsonResponse(sourceResp);
+    auto sourceDecoded = parseJsonResponse(sourceResp.value(), "fetch source workflow");
+    if (!sourceDecoded) {
+        return Json::Value(Json::nullValue);
+    }
+    auto sourceJson = std::move(sourceDecoded.value());
     if (!sourceJson.isMember("workflow") || !sourceJson["workflow"].isObject())
     {
         return Json::Value(Json::nullValue);
@@ -707,7 +544,7 @@ Json::Value retoolapi::buildAnthropicWorkflowTemplate(
     return patchWorkflowTemplate(parsed, workspaceJson, prompt, model);
 }
 
-Json::Value retoolapi::patchWorkflowTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& prompt, const std::string& model) const
+Json::Value RetoolProvider::patchWorkflowTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& prompt, const std::string& model) const
 {
     Json::Value patched = workflow;
     auto data = patched.get("templateData", "").asString();
@@ -757,7 +594,7 @@ Json::Value retoolapi::patchWorkflowTemplate(const Json::Value& workflow, const 
     return patched;
 }
 
-Json::Value retoolapi::patchAgentTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& model) const
+Json::Value RetoolProvider::patchAgentTemplate(const Json::Value& workflow, const Json::Value& workspaceJson, const std::string& model) const
 {
     Json::Value patched = workflow;
     auto data = patched.get("templateData", "").asString();
@@ -782,7 +619,7 @@ Json::Value retoolapi::patchAgentTemplate(const Json::Value& workflow, const Jso
     return patched;
 }
 
-platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
+platform::Result<provider::ProviderResponse> RetoolProvider::requestWorkflow(
     const provider::ProviderRequest& request,
     provider::ProviderCallContext& context)
 {
@@ -797,7 +634,7 @@ platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
         return Result::failure(platform::Error::unauthorized(
             resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
-    ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
+    auto usageGuard = workspaceContext_.startUsage(workspaceId);
 
     std::string error;
     if (!accounts_) {
@@ -814,7 +651,9 @@ platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
     Json::Value workspace = accountContext->data;
     const std::string baseUrl = workspace.get("baseUrl", "").asString();
     const std::string workflowId = workspace.get("workflowId", "").asString();
-    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << request.conversationId
+    LOG_INFO << "[retoolapi] resolved workspace context: provider=retoolapi"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
              << ", workspace=" << workspaceId
              << ", email=" << workspace.get("email", "").asString()
              << ", baseUrl=" << baseUrl
@@ -824,25 +663,28 @@ platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
             "retool workspace is missing workflow configuration"));
     }
 
-    auto workflowResp = sendJsonRequest(
-        context, baseUrl, Get, "/api/workflow/" + workflowId, nullptr, workspace);
+    auto workflowResp = workflowClient_->fetchWorkflow(
+        context, baseUrl, workflowId, workspace);
     if (const auto interrupted = interruptionError(context)) {
         return Result::failure(*interrupted);
     }
     if (!workflowResp) {
-        return Result::failure(platform::Error::providerError(
-            "failed to fetch retool workflow"));
+        return Result::failure(workflowResp.error());
     }
-    auto workflowJson = parseJsonResponse(workflowResp);
-    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow")) {
-        if (workflowResp->statusCode() == k200OK) {
-            return Result::failure(platform::Error::providerError(
-                "Retool workflow response is invalid", {},
-                static_cast<int>(workflowResp->statusCode())));
-        }
-        return Result::failure(classifyHttpError(
+    if (workflowResp->statusCode() != k200OK) {
+        return Result::failure(retool::protocol_http::classifyHttpError(
             static_cast<int>(workflowResp->statusCode()),
             std::string(workflowResp->getBody())));
+    }
+    auto workflowDecoded = parseJsonResponse(workflowResp.value(), "fetch workflow");
+    if (!workflowDecoded) {
+        return Result::failure(workflowDecoded.error());
+    }
+    auto workflowJson = std::move(workflowDecoded.value());
+    if (!workflowJson.isMember("workflow") || !workflowJson["workflow"].isObject()) {
+        return Result::failure(platform::Error::providerError(
+            "Retool workflow response is invalid", "invalid_schema",
+            static_cast<int>(workflowResp->statusCode())));
     }
 
     const std::string requestedModel = request.model.empty() ? "gpt-4o-mini" : request.model;
@@ -873,64 +715,83 @@ platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
             workflowJson["workflow"], workspace, prompt, requestedModel);
     }
 
-    auto saveResp = sendJsonRequest(
-        context, baseUrl, Post, "/api/workflow/" + workflowId, &patched, workspace, 60.0);
+    auto saveResp = workflowClient_->saveWorkflow(
+        context, baseUrl, workflowId, patched, workspace);
     if (const auto interrupted = interruptionError(context)) {
         return Result::failure(*interrupted);
     }
     if (!saveResp || saveResp->statusCode() >= 400) {
-        return Result::failure(saveResp
-            ? classifyHttpError(static_cast<int>(saveResp->statusCode()),
-                                std::string(saveResp->getBody()))
-            : platform::Error::providerError("failed to save retool workflow"));
+        return Result::failure(!saveResp
+            ? saveResp.error()
+            : retool::protocol_http::classifyHttpError(
+                  static_cast<int>(saveResp->statusCode()),
+                  std::string(saveResp->getBody())));
     }
 
-    Json::Value runBody(Json::objectValue);
-    runBody["workflowId"] = workflowId;
-    auto runResp = sendJsonRequest(
-        context, baseUrl, Post, "/api/workflow/run", &runBody, workspace);
+    auto runResp = workflowClient_->startRun(
+        context, baseUrl, workflowId, workspace);
     if (const auto interrupted = interruptionError(context)) {
         return Result::failure(*interrupted);
     }
     if (!runResp) {
-        return Result::failure(platform::Error::providerError(
-            "failed to start retool workflow run"));
+        return Result::failure(runResp.error());
     }
-    auto runJson = parseJsonResponse(runResp);
-    if (runResp->statusCode() >= 400 || !runJson.isMember("id")) {
-        if (runResp->statusCode() < 400) {
-            return Result::failure(platform::Error::providerError(
-                "Retool workflow run response is invalid", {},
-                static_cast<int>(runResp->statusCode())));
-        }
-        return Result::failure(classifyHttpError(
+    if (runResp->statusCode() >= 400) {
+        return Result::failure(retool::protocol_http::classifyHttpError(
             static_cast<int>(runResp->statusCode()), std::string(runResp->getBody())));
+    }
+    auto runDecoded = parseJsonResponse(runResp.value(), "start workflow run");
+    if (!runDecoded) {
+        return Result::failure(runDecoded.error());
+    }
+    auto runJson = std::move(runDecoded.value());
+    if (!runJson.isMember("id") || !runJson["id"].isString() ||
+        runJson["id"].asString().empty()) {
+        return Result::failure(platform::Error::providerError(
+            "Retool workflow run response is invalid", "invalid_schema",
+            static_cast<int>(runResp->statusCode())));
     }
 
     const std::string runId = runJson["id"].asString();
+    LOG_INFO << "[retoolapi] workflow run started: provider=retoolapi"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
+             << ", upstreamRunId=" << runId
+             << ", workspace=" << workspaceId;
     for (int i = 0; i < 120; ++i) {
         if (const auto interrupted = interruptionError(context)) {
             return Result::failure(*interrupted);
         }
-        auto pollResp = sendJsonRequest(
-            context, baseUrl, Get,
-            "/api/workflowRun/getBlockLevelLogs?runId=" + runId,
-            nullptr, workspace);
+        auto pollResp = workflowClient_->pollRun(
+            context, baseUrl, runId, workspace);
         if (const auto interrupted = interruptionError(context)) {
             return Result::failure(*interrupted);
         }
         if (!pollResp) {
-            return Result::failure(platform::Error::providerError(
-                "failed to poll retool workflow run"));
+            return Result::failure(pollResp.error());
         }
         if (pollResp->statusCode() >= 400) {
-            return Result::failure(classifyHttpError(
+            return Result::failure(retool::protocol_http::classifyHttpError(
                 static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
         }
-        auto pollJson = parseJsonResponse(pollResp);
+        auto pollDecoded = parseJsonResponse(pollResp.value(), "poll workflow run");
+        if (!pollDecoded) {
+            return Result::failure(pollDecoded.error());
+        }
+        auto pollJson = std::move(pollDecoded.value());
         const auto code1 = pollJson["blockLevelLogs"]["code1"];
+        if (!code1.isObject() || !code1["status"].isString()) {
+            return Result::failure(platform::Error::providerError(
+                "Retool workflow poll response is invalid", "invalid_schema",
+                static_cast<int>(pollResp->statusCode())));
+        }
         const auto status = code1.get("status", "").asString();
         if (status == "SUCCESS") {
+            LOG_INFO << "[retoolapi] workflow run completed: provider=retoolapi"
+                     << ", requestId=" << request.requestId
+                     << ", conversationId=" << request.conversationId
+                     << ", upstreamRunId=" << runId
+                     << ", workspace=" << workspaceId;
             provider::ProviderResponse response;
             response.text = trimCopy(jsonToStringOrCompactJson(code1["output"]["data"], ""));
             response.meta = buildRetoolMeta(
@@ -952,7 +813,7 @@ platform::Result<provider::ProviderResponse> retoolapi::requestWorkflow(
     return Result::failure(platform::Error::timeout("retool workflow run timed out"));
 }
 
-platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
+platform::Result<provider::ProviderResponse> RetoolProvider::requestAgent(
     const provider::ProviderRequest& request,
     provider::ProviderCallContext& context)
 {
@@ -967,7 +828,7 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
         return Result::failure(platform::Error::unauthorized(
             resolveError.empty() ? "workspaceId is required for retoolapi" : resolveError));
     }
-    ScopedWorkspaceUsage usageGuard(workspaces_, workspaceId);
+    auto usageGuard = workspaceContext_.startUsage(workspaceId);
 
     std::string error;
     if (!accounts_) {
@@ -984,7 +845,9 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
     Json::Value workspace = accountContext->data;
     const std::string baseUrl = workspace.get("baseUrl", "").asString();
     const std::string agentId = workspace.get("agentId", "").asString();
-    LOG_INFO << "[retoolapi] resolved workspace context: conversation=" << request.conversationId
+    LOG_INFO << "[retoolapi] resolved workspace context: provider=retoolapi"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
              << ", workspace=" << workspaceId
              << ", email=" << workspace.get("email", "").asString()
              << ", baseUrl=" << baseUrl
@@ -994,25 +857,28 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             "retool workspace is missing agent configuration"));
     }
 
-    auto workflowResp = sendJsonRequest(
-        context, baseUrl, Get, "/api/workflow/" + agentId, nullptr, workspace);
+    auto workflowResp = agentClient_->fetchAgentWorkflow(
+        context, baseUrl, agentId, workspace);
     if (const auto interrupted = interruptionError(context)) {
         return Result::failure(*interrupted);
     }
     if (!workflowResp) {
-        return Result::failure(platform::Error::providerError(
-            "failed to fetch retool agent workflow"));
+        return Result::failure(workflowResp.error());
     }
-    auto workflowJson = parseJsonResponse(workflowResp);
-    if (workflowResp->statusCode() != k200OK || !workflowJson.isMember("workflow")) {
-        if (workflowResp->statusCode() == k200OK) {
-            return Result::failure(platform::Error::providerError(
-                "Retool agent workflow response is invalid", {},
-                static_cast<int>(workflowResp->statusCode())));
-        }
-        return Result::failure(classifyHttpError(
+    if (workflowResp->statusCode() != k200OK) {
+        return Result::failure(retool::protocol_http::classifyHttpError(
             static_cast<int>(workflowResp->statusCode()),
             std::string(workflowResp->getBody())));
+    }
+    auto workflowDecoded = parseJsonResponse(workflowResp.value(), "fetch agent workflow");
+    if (!workflowDecoded) {
+        return Result::failure(workflowDecoded.error());
+    }
+    auto workflowJson = std::move(workflowDecoded.value());
+    if (!workflowJson.isMember("workflow") || !workflowJson["workflow"].isObject()) {
+        return Result::failure(platform::Error::providerError(
+            "Retool agent workflow response is invalid", "invalid_schema",
+            static_cast<int>(workflowResp->statusCode())));
     }
 
     std::string requestedModel = request.model;
@@ -1035,57 +901,56 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             "matching retool provider resource not found for requested model"));
     }
     auto patched = patchAgentTemplate(workflowJson["workflow"], workspace, requestedModel);
-    auto saveResp = sendJsonRequest(
-        context, baseUrl, Post, "/api/workflow/" + agentId, &patched, workspace, 60.0);
+    auto saveResp = agentClient_->saveAgentWorkflow(
+        context, baseUrl, agentId, patched, workspace);
     if (const auto interrupted = interruptionError(context)) {
         return Result::failure(*interrupted);
     }
     if (!saveResp || saveResp->statusCode() >= 400) {
-        return Result::failure(saveResp
-            ? classifyHttpError(static_cast<int>(saveResp->statusCode()),
-                                std::string(saveResp->getBody()))
-            : platform::Error::providerError("failed to save retool agent workflow"));
+        return Result::failure(!saveResp
+            ? saveResp.error()
+            : retool::protocol_http::classifyHttpError(
+                  static_cast<int>(saveResp->statusCode()),
+                  std::string(saveResp->getBody())));
     }
 
     auto createThread = [&]() -> platform::Result<std::string> {
         if (const auto interrupted = interruptionError(context)) {
             return platform::Result<std::string>::failure(*interrupted);
         }
-        Json::Value threadBody(Json::objectValue);
-        threadBody["name"] = "aiapi-thread";
-        threadBody["timezone"] = "UTC";
-        auto threadResp = sendJsonRequest(
-            context, baseUrl, Post, "/api/agents/" + agentId + "/threads",
-            &threadBody, workspace);
+        auto threadResp = agentClient_->createThread(
+            context, baseUrl, agentId, workspace);
         if (const auto interrupted = interruptionError(context)) {
             return platform::Result<std::string>::failure(*interrupted);
         }
         if (!threadResp) {
-            return platform::Result<std::string>::failure(platform::Error::providerError(
-                "failed to create retool agent thread"));
+            return platform::Result<std::string>::failure(threadResp.error());
         }
-        auto threadJson = parseJsonResponse(threadResp);
-        if (threadResp->statusCode() >= 400 || !threadJson.isMember("id")) {
-            if (threadResp->statusCode() < 400) {
-                return platform::Result<std::string>::failure(platform::Error::providerError(
-                    "Retool agent thread response is invalid", {},
-                    static_cast<int>(threadResp->statusCode())));
-            }
-            return platform::Result<std::string>::failure(classifyHttpError(
+        if (threadResp->statusCode() >= 400) {
+            return platform::Result<std::string>::failure(retool::protocol_http::classifyHttpError(
                 static_cast<int>(threadResp->statusCode()), std::string(threadResp->getBody())));
+        }
+        auto threadDecoded = parseJsonResponse(threadResp.value(), "create agent thread");
+        if (!threadDecoded) {
+            return platform::Result<std::string>::failure(threadDecoded.error());
+        }
+        auto threadJson = std::move(threadDecoded.value());
+        if (!threadJson.isMember("id") || !threadJson["id"].isString() ||
+            threadJson["id"].asString().empty()) {
+            return platform::Result<std::string>::failure(platform::Error::providerError(
+                "Retool agent thread response is invalid", "invalid_schema",
+                static_cast<int>(threadResp->statusCode())));
         }
         const auto newThreadId = threadJson["id"].asString();
         if (newThreadId.empty()) {
             return platform::Result<std::string>::failure(platform::Error::providerError(
                 "Retool agent thread response has an empty id"));
         }
-        LOG_INFO << "[retoolapi] createThread success: workspace=" << workspaceId
-                 << ", conversation=" << request.conversationId
+        LOG_INFO << "[retoolapi] createThread success: provider=retoolapi, workspace=" << workspaceId
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", threadId=" << newThreadId;
-        {
-            std::lock_guard<std::mutex> lock(threadMutex_);
-            agentThreadMap_[request.conversationId] = newThreadId;
-        }
+        workspaceContext_.bindAgentThread(request.conversationId, newThreadId);
         return platform::Result<std::string>::success(newThreadId);
     };
 
@@ -1095,22 +960,15 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
         if (const auto interrupted = interruptionError(context)) {
             return platform::Result<HttpResponsePtr>::failure(*interrupted);
         }
-        Json::Value messageBody(Json::objectValue);
-        messageBody["type"] = "text";
-        messageBody["text"] = text;
-        messageBody["timezone"] = "UTC";
-        auto response = sendJsonRequest(
-            context, baseUrl,
-            Post, "/api/agents/" + agentId + "/threads/" + targetThreadId + "/messages",
-            &messageBody, workspace);
+        auto response = agentClient_->sendTextMessage(
+            context, baseUrl, agentId, targetThreadId, text, workspace);
         if (const auto interrupted = interruptionError(context)) {
             return platform::Result<HttpResponsePtr>::failure(*interrupted);
         }
         if (!response) {
-            return platform::Result<HttpResponsePtr>::failure(platform::Error::providerError(
-                "failed to send retool agent message"));
+            return platform::Result<HttpResponsePtr>::failure(response.error());
         }
-        return platform::Result<HttpResponsePtr>::success(std::move(response));
+        return platform::Result<HttpResponsePtr>::success(response.value());
     };
 
     auto waitForAgentRun = [&](const std::string& runId) -> platform::Result<void> {
@@ -1118,24 +976,28 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<void>::failure(*interrupted);
             }
-            auto pollResp = sendJsonRequest(
-                context, baseUrl, Get,
-                "/api/agents/" + agentId +
-                    "/logs/" + runId +
-                    "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
-                nullptr, workspace);
+            auto pollResp = agentClient_->pollRun(
+                context, baseUrl, agentId, runId, workspace);
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<void>::failure(*interrupted);
             }
             if (!pollResp) {
-                return platform::Result<void>::failure(platform::Error::providerError(
-                    "failed to poll retool agent logs during thread replay"));
+                return platform::Result<void>::failure(pollResp.error());
             }
             if (pollResp->statusCode() >= 400) {
-                return platform::Result<void>::failure(classifyHttpError(
+                return platform::Result<void>::failure(retool::protocol_http::classifyHttpError(
                     static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
             }
-            auto pollJson = parseJsonResponse(pollResp);
+            auto pollDecoded = parseJsonResponse(pollResp.value(), "poll agent replay");
+            if (!pollDecoded) {
+                return platform::Result<void>::failure(pollDecoded.error());
+            }
+            auto pollJson = std::move(pollDecoded.value());
+            if (!pollJson.isObject() || !pollJson["status"].isString()) {
+                return platform::Result<void>::failure(platform::Error::providerError(
+                    "Retool agent poll response is invalid", "invalid_schema",
+                    static_cast<int>(pollResp->statusCode())));
+            }
             const auto status = pollJson.get("status", "").asString();
             if (status == "COMPLETED") {
                 return platform::Result<void>::success();
@@ -1167,11 +1029,13 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
         int replayedUser = 0;
         int replayedAssistant = 0;
         const auto bootstrapSystem = trimCopy(request.systemPrompt);
-        const auto bootstrapSystemMaxChars = maxRetoolAgentBootstrapSystemPromptChars();
+        const auto bootstrapSystemMaxChars =
+            settings_.agentBootstrapSystemPromptMaxChars;
         if (!bootstrapSystem.empty() &&
             (bootstrapSystemMaxChars == 0 || bootstrapSystem.size() <= bootstrapSystemMaxChars)) {
-            LOG_INFO << "[retoolapi] replay bootstrap system prompt: workspace=" << workspaceId
-                     << ", conversation=" << request.conversationId
+            LOG_INFO << "[retoolapi] replay bootstrap system prompt: provider=retoolapi, workspace=" << workspaceId
+                     << ", requestId=" << request.requestId
+                     << ", conversationId=" << request.conversationId
                      << ", threadId=" << targetThreadId
                      << ", chars=" << bootstrapSystem.size();
             auto bootstrap = sendThreadTextMessage(
@@ -1180,12 +1044,16 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
                     bootstrapSystem);
             if (!bootstrap) return platform::Result<void>::failure(bootstrap.error());
             const auto& bootstrapResp = bootstrap.value();
-            auto bootstrapJson = parseJsonResponse(bootstrapResp);
             if (bootstrapResp->statusCode() >= 400) {
-                return platform::Result<void>::failure(classifyHttpError(
+                return platform::Result<void>::failure(retool::protocol_http::classifyHttpError(
                     static_cast<int>(bootstrapResp->statusCode()),
                     std::string(bootstrapResp->getBody())));
             }
+            const auto bootstrapDecoded = parseJsonResponse(bootstrapResp, "send bootstrap message");
+            if (!bootstrapDecoded) {
+                return platform::Result<void>::failure(bootstrapDecoded.error());
+            }
+            const auto& bootstrapJson = bootstrapDecoded.value();
             const std::string bootstrapRunId =
                 bootstrapJson.get("agentRunId", "").asString().empty()
                     ? bootstrapJson["content"].get("runId", "").asString()
@@ -1196,27 +1064,27 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             }
             ++replayedSystem;
         } else if (!bootstrapSystem.empty()) {
-            LOG_WARN << "[retoolapi] skip bootstrap system prompt because it is too long: workspace="
-                     << workspaceId << ", conversation=" << request.conversationId
+            LOG_WARN << "[retoolapi] skip bootstrap system prompt because it is too long: provider=retoolapi, workspace="
+                     << workspaceId << ", requestId=" << request.requestId
+                     << ", conversationId=" << request.conversationId
                      << ", threadId=" << targetThreadId
                      << ", chars=" << bootstrapSystem.size()
                      << ", maxChars=" << bootstrapSystemMaxChars;
         }
 
-        constexpr size_t kDefaultReplayRequestBytes = 256 * 1024;
-        constexpr size_t kDefaultReplayMessageBytes = 128 * 1024;
-        const size_t replayRequestBudget = configuredHistoryLimit(
-            "max_request_bytes", kDefaultReplayRequestBytes);
-        const size_t replayMessageBudget = configuredHistoryLimit(
-            "max_message_bytes", kDefaultReplayMessageBytes);
+        const size_t replayRequestBudget =
+            settings_.historyReplayMaxRequestBytes;
+        const size_t replayMessageBudget =
+            settings_.historyReplayMaxMessageBytes;
         const std::string currentHistoryMessage = request.rawInput.empty()
             ? request.input
             : request.rawInput;
         // Preserve the established history_replay contract: zero request budget
         // disables replay entirely (it does not mean "unlimited").
         if (replayRequestBudget == 0) {
-            LOG_INFO << "[retoolapi] recreated thread history disabled by request budget: workspace="
-                     << workspaceId << ", conversation=" << request.conversationId
+            LOG_INFO << "[retoolapi] recreated thread history disabled by request budget: provider=retoolapi, workspace="
+                     << workspaceId << ", requestId=" << request.requestId
+                     << ", conversationId=" << request.conversationId
                      << ", threadId=" << targetThreadId;
             return platform::Result<void>::success();
         }
@@ -1249,8 +1117,9 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             selectedBytes += replayText.size();
         }
         std::reverse(selected.begin(), selected.end());
-        LOG_INFO << "[retoolapi] recreated thread history budget: workspace=" << workspaceId
-                 << ", conversation=" << request.conversationId
+        LOG_INFO << "[retoolapi] recreated thread history budget: provider=retoolapi, workspace=" << workspaceId
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", threadId=" << targetThreadId
                  << ", selected=" << selected.size()
                  << ", selectedBytes=" << selectedBytes
@@ -1267,18 +1136,21 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             if (!replay) return platform::Result<void>::failure(replay.error());
             const auto& replayResp = replay.value();
             if (static_cast<int>(replayResp->statusCode()) == 413) {
-                LOG_WARN << "[retoolapi] skip replay history message after upstream HTTP 413: workspace="
-                         << workspaceId << ", conversation=" << request.conversationId
+                LOG_WARN << "[retoolapi] skip replay history message after upstream HTTP 413: provider=retoolapi, workspace="
+                         << workspaceId << ", requestId=" << request.requestId
+                         << ", conversationId=" << request.conversationId
                          << ", threadId=" << targetThreadId
                          << ", bytes=" << replayText.size();
                 continue;
             }
             if (replayResp->statusCode() >= 400) {
-                return platform::Result<void>::failure(classifyHttpError(
+                return platform::Result<void>::failure(retool::protocol_http::classifyHttpError(
                     static_cast<int>(replayResp->statusCode()),
                     std::string(replayResp->getBody())));
             }
-            const auto replayJson = parseJsonResponse(replayResp);
+            const auto replayDecoded = parseJsonResponse(replayResp, "send replay message");
+            if (!replayDecoded) return platform::Result<void>::failure(replayDecoded.error());
+            const auto& replayJson = replayDecoded.value();
             const std::string replayRunId =
                 replayJson.get("agentRunId", "").asString().empty()
                     ? replayJson["content"].get("runId", "").asString()
@@ -1290,8 +1162,9 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
             if (role == provider::ProviderMessageRole::User) ++replayedUser;
             if (role == provider::ProviderMessageRole::Assistant) ++replayedAssistant;
         }
-        LOG_INFO << "[retoolapi] replayHistoryToThread finished: workspace=" << workspaceId
-                 << ", conversation=" << request.conversationId
+        LOG_INFO << "[retoolapi] replayHistoryToThread finished: provider=retoolapi, workspace=" << workspaceId
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", threadId=" << targetThreadId
                  << ", replayedSystem=" << replayedSystem
                  << ", replayedUser=" << replayedUser
@@ -1301,16 +1174,13 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
 
     std::string threadId;
     bool reusedThread = false;
-    {
-        std::lock_guard<std::mutex> lock(threadMutex_);
-        const auto it = agentThreadMap_.find(request.conversationId);
-        if (it != agentThreadMap_.end()) {
-            threadId = it->second;
-            reusedThread = !threadId.empty();
-            LOG_INFO << "[retoolapi] reuse cached thread: workspace=" << workspaceId
-                     << ", conversation=" << request.conversationId
-                     << ", threadId=" << threadId;
-        }
+    threadId = workspaceContext_.agentThreadFor(request.conversationId);
+    if (!threadId.empty()) {
+        reusedThread = true;
+        LOG_INFO << "[retoolapi] reuse cached thread: provider=retoolapi, workspace=" << workspaceId
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
+                 << ", threadId=" << threadId;
     }
     if (threadId.empty()) {
         const auto created = createThread();
@@ -1324,13 +1194,11 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
     HttpResponsePtr messageResp = message.value();
     if (reusedThread && messageResp->statusCode() == k404NotFound &&
         std::string(messageResp->getBody()).find("Thread not found") != std::string::npos) {
-        LOG_WARN << "[retoolapi] cached thread missing upstream, recreating: workspace=" << workspaceId
-                 << ", conversation=" << request.conversationId
+        LOG_WARN << "[retoolapi] cached thread missing upstream, recreating: provider=retoolapi, workspace=" << workspaceId
+                 << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", oldThreadId=" << threadId;
-        {
-            std::lock_guard<std::mutex> lock(threadMutex_);
-            agentThreadMap_.erase(request.conversationId);
-        }
+        workspaceContext_.eraseAgentThread(request.conversationId);
         const auto replacement = createThread();
         if (!replacement) return Result::failure(replacement.error());
         threadId = replacement.value();
@@ -1339,17 +1207,22 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
         message = sendThreadTextMessage(threadId, currentUserText);
         if (!message) return Result::failure(message.error());
         messageResp = message.value();
-        LOG_INFO << "[retoolapi] resent current message after thread recreation: workspace="
-                 << workspaceId << ", conversation=" << request.conversationId
+        LOG_INFO << "[retoolapi] resent current message after thread recreation: provider=retoolapi, workspace="
+                 << workspaceId << ", requestId=" << request.requestId
+                 << ", conversationId=" << request.conversationId
                  << ", threadId=" << threadId
                  << ", chars=" << currentUserText.size();
     }
 
     if (messageResp->statusCode() >= 400) {
-        return Result::failure(classifyHttpError(
+        return Result::failure(retool::protocol_http::classifyHttpError(
             static_cast<int>(messageResp->statusCode()), std::string(messageResp->getBody())));
     }
-    const auto messageJson = parseJsonResponse(messageResp);
+    const auto messageDecoded = parseJsonResponse(messageResp, "send agent message");
+    if (!messageDecoded) {
+        return Result::failure(messageDecoded.error());
+    }
+    const auto& messageJson = messageDecoded.value();
     const std::string runId = messageJson.get("agentRunId", "").asString().empty()
         ? messageJson["content"].get("runId", "").asString()
         : messageJson.get("agentRunId", "").asString();
@@ -1357,31 +1230,47 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
         return Result::failure(platform::Error::providerError(
             "missing retool agent run id"));
     }
+    LOG_INFO << "[retoolapi] agent run started: provider=retoolapi"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
+             << ", upstreamThreadId=" << threadId
+             << ", upstreamRunId=" << runId
+             << ", workspace=" << workspaceId;
 
     for (int i = 0; i < 180; ++i) {
         if (const auto interrupted = interruptionError(context)) {
             return Result::failure(*interrupted);
         }
-        auto pollResp = sendJsonRequest(
-            context, baseUrl, Get,
-            "/api/agents/" + agentId +
-                "/logs/" + runId +
-                "?startAfterUUID=00000000-0000-7000-8000-000000000000&limit=100",
-            nullptr, workspace);
+        auto pollResp = agentClient_->pollRun(
+            context, baseUrl, agentId, runId, workspace);
         if (const auto interrupted = interruptionError(context)) {
             return Result::failure(*interrupted);
         }
         if (!pollResp) {
-            return Result::failure(platform::Error::providerError(
-                "failed to poll retool agent logs"));
+            return Result::failure(pollResp.error());
         }
         if (pollResp->statusCode() >= 400) {
-            return Result::failure(classifyHttpError(
+            return Result::failure(retool::protocol_http::classifyHttpError(
                 static_cast<int>(pollResp->statusCode()), std::string(pollResp->getBody())));
         }
-        const auto pollJson = parseJsonResponse(pollResp);
+        const auto pollDecoded = parseJsonResponse(pollResp.value(), "poll agent run");
+        if (!pollDecoded) {
+            return Result::failure(pollDecoded.error());
+        }
+        const auto& pollJson = pollDecoded.value();
+        if (!pollJson.isObject() || !pollJson["status"].isString()) {
+            return Result::failure(platform::Error::providerError(
+                "Retool agent poll response is invalid", "invalid_schema",
+                static_cast<int>(pollResp->statusCode())));
+        }
         const auto status = pollJson.get("status", "").asString();
         if (status == "COMPLETED") {
+            LOG_INFO << "[retoolapi] agent run completed: provider=retoolapi"
+                     << ", requestId=" << request.requestId
+                     << ", conversationId=" << request.conversationId
+                     << ", upstreamThreadId=" << threadId
+                     << ", upstreamRunId=" << runId
+                     << ", workspace=" << workspaceId;
             provider::ProviderResponse response;
             const auto trace = pollJson["trace"];
             if (trace.isArray() && !trace.empty()) {
@@ -1412,7 +1301,7 @@ platform::Result<provider::ProviderResponse> retoolapi::requestAgent(
     return Result::failure(platform::Error::timeout("retool agent run timed out"));
 }
 
-platform::Result<provider::ProviderResponse> retoolapi::doGenerate(
+platform::Result<provider::ProviderResponse> RetoolProvider::doGenerate(
     const provider::ProviderRequest& request,
     provider::ProviderCallContext& context)
 {
@@ -1427,6 +1316,10 @@ platform::Result<provider::ProviderResponse> retoolapi::doGenerate(
     if (!channels_) {
         return Result::failure(platform::Error::internal("channel catalog unavailable"));
     }
+    LOG_INFO << "[retoolapi] request started: provider=retoolapi"
+             << ", requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId
+             << ", model=" << request.model;
     for (const auto& channel : channels_->listChannels()) {
         if (channel.channelName == "retoolapi" && !channel.channelStatus) {
             return Result::failure(platform::Error::unauthorized(
@@ -1440,36 +1333,22 @@ platform::Result<provider::ProviderResponse> retoolapi::doGenerate(
     return requestWorkflow(request, context);
 }
 
-platform::Result<void> retoolapi::eraseThreadContext(
+platform::Result<void> RetoolProvider::eraseThreadContext(
     const std::string& conversationId)
 {
-    std::lock_guard<std::mutex> lock(threadMutex_);
-    agentThreadMap_.erase(conversationId);
-    conversationWorkspaceMap_.erase(conversationId);
-    return platform::Result<void>::success();
+    return workspaceContext_.erase(conversationId);
 }
 
-platform::Result<void> retoolapi::transferThreadContext(
+platform::Result<void> RetoolProvider::transferThreadContext(
     const std::string& oldId, const std::string& newId)
 {
     if (oldId.empty() || newId.empty() || oldId == newId) {
         return platform::Result<void>::success();
     }
-    std::lock_guard<std::mutex> lock(threadMutex_);
-    const auto it = agentThreadMap_.find(oldId);
-    if (it != agentThreadMap_.end()) {
-        agentThreadMap_[newId] = it->second;
-        agentThreadMap_.erase(it);
-    }
-    const auto workspaceIt = conversationWorkspaceMap_.find(oldId);
-    if (workspaceIt != conversationWorkspaceMap_.end()) {
-        conversationWorkspaceMap_[newId] = workspaceIt->second;
-        conversationWorkspaceMap_.erase(workspaceIt);
-    }
-    return platform::Result<void>::success();
+    return workspaceContext_.transfer(oldId, newId);
 }
 
-platform::Result<void> retoolapi::deleteUpstreamThread(
+platform::Result<void> RetoolProvider::deleteUpstreamThread(
     const std::string&, const std::string&, const std::string&, const std::string&)
 {
     // Retool does not expose a stable remote-thread deletion contract. Session

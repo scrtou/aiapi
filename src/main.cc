@@ -5,8 +5,10 @@
 #include <transport/controllers/AdminAuthFilter.h>
 #include <transport/controllers/ClaudeRateLimitFilter.h>
 #include <transport/controllers/RateLimitFilter.h>
+#include <platform/Log.h>
 #include <chrono>
 #include <execinfo.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <exception>
@@ -152,6 +154,24 @@ int main() {
 
     // 加载并校验配置
     drogon::app().loadConfigFile("../config.json");
+    // Application logs must remain available when the binary is launched
+    // directly (for example as a Docker CMD), rather than through the helper
+    // script that redirects stdout to aiapi.stdout.log.
+    {
+        const auto& logConfig = getCustomConfig()["log"];
+        const std::string logDir = logConfig.get("log_path", "logs").asString();
+        const std::string baseName = logConfig.get("logfile_base_name", "aiapi").asString();
+        const std::filesystem::path appLogPath =
+            std::filesystem::path(logDir) / (baseName + ".application.log");
+        std::error_code error;
+        std::filesystem::create_directories(appLogPath.parent_path(), error);
+        if (error) {
+            LOG_WARN << "[启动] 无法创建应用日志目录: " << error.message();
+        } else {
+            platform::LogLine::configureFile(appLogPath.string());
+            LOG_INFO << "[启动] 应用层日志文件: " << appLogPath.string();
+        }
+    }
     ensureFilterReflectionRegistration();
 
     if (!validateConfigFile("../config.json")) {

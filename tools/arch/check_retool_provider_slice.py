@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 FAIL = 4
 
-RETOOL_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
+RETOOL_HEADER = SRC / "infrastructure/provider/retool/RetoolProvider.h"
+RETOOL_COMPAT_HEADER = SRC / "infrastructure/provider/retool/retoolapi.h"
 RETOOL_CPP = SRC / "infrastructure/provider/retool/retoolapi.cpp"
 WIRING = SRC / "runtime/AppWiring.cpp"
 GENERATION_PIPELINE = SRC / "application/generation/core/GenerationPipeline.cpp"
@@ -44,6 +45,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         return path.read_text(errors="replace")
 
     header = read(RETOOL_HEADER)
+    compat_header = read(RETOOL_COMPAT_HEADER)
     retool_cpp = read(RETOOL_CPP)
     wiring = read(WIRING)
     generation_pipeline = read(GENERATION_PIPELINE)
@@ -74,7 +76,8 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "session.response",
     )
     legacy_result = re.compile(r"\bprovider::Provider(?:Result|Error)\b")
-    singleton = re.compile(r"::\s*(?:getInstance|instance)\s*\(")
+    singleton = re.compile(
+        r"::\s*(?:getInstance|instance)\s*\(|\bdrogon\s*::\s*app\s*\(")
     for path in provider_sources:
         code = uncommented(read(path))
         relative = path.relative_to(ROOT)
@@ -87,16 +90,15 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
             errors.append(f"{relative} revived a project singleton lookup")
 
     if not re.search(
-        r"class\s+retoolapi\s+final\s*:\s*public\s+provider::ProviderBase",
+        r"class\s+RetoolProvider\s+final\s*:\s*public\s+provider::ProviderBase",
         header,
     ):
-        errors.append("retoolapi must directly derive from provider::ProviderBase")
+        errors.append("RetoolProvider must directly derive from provider::ProviderBase")
     for needle in (
         "public provider::IProviderModelCatalog",
         "public provider::IProviderThreadContext",
         "platform::Result<void> initialize()",
         "doGenerate(",
-        "sendWithinContext(",
         "sleepWithinContext(",
         "eraseThreadContext(",
         "transferThreadContext(",
@@ -109,7 +111,6 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "provider::ProviderCallContext",
         "platform::Result<provider::ProviderResponse>",
         "interruptionError(context)",
-        "sendWithinContext(",
         "sleepWithinContext(",
         "requestWorkflow(",
         "requestAgent(",
@@ -117,6 +118,54 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     ):
         if needle not in retool_cpp:
             errors.append(f"Retool P6-W3 implementation missing: {needle}")
+
+    if "using retoolapi = RetoolProvider" not in compat_header:
+        errors.append("retoolapi compatibility header must remain an alias only")
+    if re.search(r"\bclass\s+retoolapi\b", uncommented(compat_header)):
+        errors.append("retoolapi compatibility header revived a second provider class")
+
+    required_components = (
+        "RetoolWorkflowClient.h",
+        "RetoolAgentClient.h",
+        "RetoolWorkspaceContext.h",
+        "RetoolProtocolHttp.h",
+        "RetoolHttpTransport.h",
+        "RetoolProviderSettings.h",
+    )
+    for component in required_components:
+        if not (retool_dir / component).is_file():
+            errors.append(f"Retool layered component missing: {component}")
+
+    clean_orchestrator = uncommented(retool_cpp)
+    for forbidden in ("HttpRequest::new", "transport->send", "drogon::app("):
+        if forbidden in clean_orchestrator:
+            errors.append(
+                f"RetoolProvider orchestrator bypasses its protocol/config boundary: {forbidden}")
+    for field in (
+        "provider=retoolapi",
+        "requestId=",
+        "conversationId=",
+        "upstreamRunId=",
+        "upstreamThreadId=",
+    ):
+        if field not in retool_cpp:
+            errors.append(f"Retool correlation log field missing: {field}")
+    # Every orchestrator diagnostic that identifies itself as a Retool event
+    # must carry the same request/conversation correlation pair.  Checking the
+    # complete stream (rather than a handful of representative literals)
+    # prevents future branches from silently reintroducing unjoinable logs.
+    for match in re.finditer(r"LOG_(?:INFO|WARN|ERROR|DEBUG)\s*<<", clean_orchestrator):
+        end = clean_orchestrator.find(";", match.start())
+        statement = clean_orchestrator[match.start():end if end >= 0 else len(clean_orchestrator)]
+        if "[retoolapi]" in statement:
+            if "requestId=" not in statement or "conversationId=" not in statement:
+                line = clean_orchestrator.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"Retool orchestrator correlation fields missing at log line {line}")
+    protocol_http = read(retool_dir / "RetoolProtocolHttp.h")
+    for needle in ("class ResponseResult", "platform::Error", "classifyHttpError"):
+        if needle not in protocol_http:
+            errors.append(f"Retool typed protocol boundary missing: {needle}")
 
     # The one registry has only narrow chat/model/thread capabilities now.
     for path, code in ((REGISTRY_PORT, registry_port),
@@ -144,7 +193,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
     if "findProvider(" in uncommented(invoke_provider):
         errors.append("GenerationPipeline revived a Retool legacy fallback")
 
-    if "provider::makeProductionProvider<retoolapi>" not in wiring:
+    if "provider::makeProductionProvider<RetoolProvider>" not in wiring:
         errors.append("runtime Retool slice wiring missing production provider factory")
     if "retoolProvider->initialize()" not in wiring:
         errors.append("runtime Retool slice wiring missing initialize() Result check")
@@ -160,6 +209,7 @@ def validate(overrides: Mapping[Path, str] | None = None) -> list[str]:
         "RetoolProvider_AgentFixtureRunsRealRequestAgentOffline",
         "RetoolProvider_CancellationStopsBeforeTheNextPollingBoundary",
         "RetoolProvider_ProvidesNarrowModelAndThreadCapabilities",
+        "RetoolProtocolClient_MapsTransportCancellationAndFailure",
     ):
         if needle not in fixture_test:
             errors.append(f"Retool P6-W3 fixture coverage missing: {needle}")
@@ -190,7 +240,7 @@ def main() -> int:
         mutation = original.replace("public provider::ProviderBase", "public BrokenProviderBase", 1)
         if mutation == original:
             print("P6-W3 Retool Provider slice gate selftest FAIL")
-            print("  probe could not mutate retoolapi ProviderBase inheritance")
+            print("  probe could not mutate RetoolProvider ProviderBase inheritance")
             return FAIL
         mutation_errors = validate({RETOOL_HEADER: mutation})
         if not mutation_errors:

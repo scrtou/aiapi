@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <utility>
+#include <vector>
 
 namespace generation::protocol::claude {
 namespace {
@@ -198,16 +199,11 @@ bool appendContentBlocks(const Json::Value& content,
     return true;
 }
 
-std::string toolResultText(const Message& message)
+std::string toolResultText(const ContentBlock& block)
 {
-    std::string result;
-    for (const auto& block : message.blocks) {
-        if (block.type != ContentBlockType::ToolResult) continue;
-        if (!result.empty()) result += "\n";
-        result += "\n[tool_result tool_use_id=" + block.toolCallId;
-        if (block.toolResultIsError) result += " is_error=true";
-        result += "]\n" + block.toolResult + "\n[/tool_result]\n";
-    }
+    std::string result = "\n[tool_result tool_use_id=" + block.toolCallId;
+    if (block.toolResultIsError) result += " is_error=true";
+    result += "]\n" + block.toolResult + "\n[/tool_result]\n";
     return result;
 }
 
@@ -221,6 +217,40 @@ std::string currentText(const Message& message)
         }
     }
     return result;
+}
+
+void appendCurrentInputPart(GenerationRequest& request,
+                            std::string text,
+                            bool isToolResult = false,
+                            std::string toolResultCallId = {})
+{
+    if (text.empty()) return;
+    request.currentInput += text;
+    CurrentInputPart part;
+    part.text = std::move(text);
+    part.isToolResult = isToolResult;
+    part.toolResultCallId = std::move(toolResultCallId);
+    request.currentInputParts.push_back(std::move(part));
+}
+
+void appendCurrentInputMessage(GenerationRequest& request, const Message& message)
+{
+    appendCurrentInputPart(request, currentText(message));
+
+    bool hasPriorToolResult = false;
+    for (const auto& block : message.blocks) {
+        if (block.type != ContentBlockType::ToolResult) continue;
+
+        std::string rendered;
+        if (hasPriorToolResult) rendered += "\n";
+        rendered += toolResultText(block);
+        appendCurrentInputPart(request, std::move(rendered), true, block.toolCallId);
+        hasPriorToolResult = true;
+    }
+    // Preserve the historical adapter's per-message separator as an opaque
+    // non-tool fragment.  The core may later drop a stale tool-result fragment
+    // without touching surrounding current-turn text.
+    appendCurrentInputPart(request, "\n");
 }
 
 void appendHistoryMessages(const Message& source, std::vector<Message>& output)
@@ -449,9 +479,7 @@ AdapterResult ClaudeRequestAdapter::adapt(const RawProtocolRequest& raw) const
         if (!appendContentBlocks(rawMessage["content"], currentMessage, &currentImages, parseError)) {
             return invalid(parseError);
         }
-        request.currentInput += currentText(currentMessage);
-        request.currentInput += toolResultText(currentMessage);
-        request.currentInput += "\n";
+        appendCurrentInputMessage(request, currentMessage);
     }
     request.images = std::move(currentImages);
     return AdapterResult{std::move(request), {}};

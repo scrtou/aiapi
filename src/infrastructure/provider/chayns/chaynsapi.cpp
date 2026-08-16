@@ -1,5 +1,5 @@
 #include <drogon/drogon.h>
-#include <infrastructure/provider/chayns/chaynsapi.h>
+#include <infrastructure/provider/chayns/ChaynsProvider.h>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -11,10 +11,9 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
-#include <unordered_map>
-#include <unordered_set>
+#include <set>
 #include <infrastructure/provider/chayns/ChaynsBrowserImpersonation.h>
-using namespace drogon;
+#include <infrastructure/provider/chayns/ChaynsProviderPolicy.h>
 using std::string;
 
 namespace {
@@ -26,63 +25,6 @@ constexpr std::size_t TOOL_BRIDGE_LOG_MAX_BYTES = 16U * 1024U;
 constexpr std::string_view TOOL_INSTRUCTIONS_OPEN = "<tool_instructions>\n";
 constexpr std::string_view TOOL_INSTRUCTIONS_CLOSE = "</tool_instructions>";
 constexpr std::string_view TOOL_BRIDGE_LOG_TRUNCATION = "...<truncated>";
-
-constexpr const char* CHAYNS_FREE_ORIGIN = "https://sidekick.ki";
-constexpr const char* CHAYNS_FREE_REFERER = "https://sidekick.ki/";
-constexpr const char* CHAYNS_PRO_ORIGIN = "https://mein.sidekick.ki";
-constexpr const char* CHAYNS_PRO_REFERER = "https://mein.sidekick.ki/";
-
-struct ChaynsRequestRoute
-{
-    bool isPro = false;
-    int threadTypeId = 8;
-    std::int64_t workspaceUacId = 0;
-    std::string origin = CHAYNS_FREE_ORIGIN;
-    std::string referer = CHAYNS_FREE_REFERER;
-};
-
-ChaynsRequestRoute requestRouteForAccount(const Accountinfo_st& account)
-{
-    ChaynsRequestRoute route;
-    route.isPro = account.accountType == "pro";
-    if (route.isPro) {
-        route.threadTypeId = 9;
-        route.workspaceUacId = account.workspaceUacId;
-        route.origin = CHAYNS_PRO_ORIGIN;
-        route.referer = CHAYNS_PRO_REFERER;
-    }
-    return route;
-}
-
-void applyChaynsRouteHeaders(const HttpRequestPtr& request,
-                             const Accountinfo_st& account,
-                             const ChaynsRequestRoute& route)
-{
-    chayns_browser::applyBrowserHeadersForAccount(
-        request,
-        account.userName,
-        account.personId,
-        route.origin,
-        route.referer);
-}
-
-bool isUsableChaynsAccount(const std::shared_ptr<Accountinfo_st>& account, bool requiresPro)
-{
-    if (!account || !account->tokenStatus || !account->accountStatus ||
-        account->status != AccountStatus::ACTIVE || account->authToken.empty()) {
-        return false;
-    }
-    if (requiresPro) {
-        return account->accountType == "pro" && account->workspaceUacId > 0;
-    }
-    return account->accountType == "free";
-}
-
-bool postFailureMayHaveBeenAccepted(HttpStatusCode status)
-{
-    const int code = static_cast<int>(status);
-    return code == 408 || code >= 500;
-}
 
 platform::Result<provider::ProviderResponse> chaynsFailure(
     platform::ErrorCode code,
@@ -195,13 +137,17 @@ std::string escapeFullLogPayload(std::string_view source)
     return escaped;
 }
 
-void logCompleteUserInputForDebug(std::string_view input)
+void logCompleteUserInputForDebug(std::string_view input,
+                                  std::string_view requestId,
+                                  std::string_view conversationId)
 {
     // This is intentionally unbounded at DEBUG level so diagnostics can
     // distinguish an omitted user request from an upstream/model-side drift.
     // Escape control bytes to keep the file log one physical line per event.
     LOG_DEBUG << "[chaynsAPI][ToolBridge] 上游请求完整用户输入"
-              << ": sourceBytes=" << input.size()
+              << ": requestId=" << requestId
+              << ", conversationId=" << conversationId
+              << ", sourceBytes=" << input.size()
               << ", payload=\"" << escapeFullLogPayload(input) << "\"";
 }
 
@@ -225,72 +171,57 @@ ToolBridgeLogPayload makeToolBridgeLogPayload(std::string_view source)
     return payload;
 }
 
-void logToolBridgePayload(const char* direction, std::string_view source)
+void logToolBridgePayload(const char* direction,
+                          std::string_view source,
+                          std::string_view requestId,
+                          std::string_view conversationId)
 {
     const ToolBridgeLogPayload payload = makeToolBridgeLogPayload(source);
     // Keep this single-line and bounded: Drogon's file logger then preserves
     // a searchable request/response pair without allowing response content to
     // forge additional log lines.
     LOG_INFO << "[chaynsAPI][ToolBridge] " << direction
-             << ": sourceBytes=" << payload.sourceBytes
+             << ": requestId=" << requestId
+             << ", conversationId=" << conversationId
+             << ", sourceBytes=" << payload.sourceBytes
              << ", loggedBytes=" << payload.text.size()
              << ", truncated=" << payload.truncated;
     LOG_DEBUG << "[chaynsAPI][ToolBridge] " << direction
-              << ": payload=\"" << payload.text << "\"";
-}
-
-// Upstream bodies may carry conversation content, identifiers, cookies, or
-// error details.  Logging only transport metadata keeps failure diagnostics
-// useful without duplicating that sensitive data into aiapi.log.
-std::string summarizeUpstreamResponse(const HttpResponsePtr& response)
-{
-    if (!response) {
-        return "responsePresent=false";
-    }
-    return "responsePresent=true, status=" +
-           std::to_string(static_cast<int>(response->statusCode())) +
-           ", bodySize=" + std::to_string(response->getBody().size());
+              << ": requestId=" << requestId
+              << ", conversationId=" << conversationId
+              << ", payload=\"" << payload.text << "\"";
 }
 
 }  // namespace
 
-chaynsapi::chaynsapi(IAccountSelector& accountSelector,
+ChaynsProvider::ChaynsProvider(IAccountSelector& accountSelector,
                      std::shared_ptr<chayns::IChaynsHttpTransport> transport,
                      std::shared_ptr<chayns::IChaynsClock> clock,
                      std::shared_ptr<chayns::IChaynsThreadLedger> threadLedger,
-                     FailureObserver failureObserver)
+                     FailureObserver failureObserver,
+                     ChaynsProviderSettings settings)
     : ProviderBase(std::move(failureObserver)),
       m_accountSelector(accountSelector),
-      m_transport(std::move(transport)),
+      m_protocolClient(
+          std::make_shared<chayns::ChaynsProtocolClient>(std::move(transport))),
       m_clock(std::move(clock)),
-      m_threadLedger(std::move(threadLedger))
+      m_pollingLoop(m_protocolClient, m_clock),
+      m_threadContext(std::move(threadLedger)),
+      m_upstreamErrorTexts(std::move(settings.upstreamErrorTexts))
 {
-    if (!m_transport) {
-        throw std::invalid_argument("chaynsapi requires a non-null HTTP transport");
-    }
     if (!m_clock) {
         throw std::invalid_argument("chaynsapi requires a non-null clock");
     }
 }
 
-platform::Result<void> chaynsapi::initialize()
+platform::Result<void> ChaynsProvider::initialize()
 {
-    chayns_browser::reloadConfigFromDrogon();
-
     if (!loadModels(true)) {
         return platform::Result<void>::failure(platform::Error::providerError(
             "Failed to load Chayns model catalog", "model_catalog_initialization"));
     }
 
-    // 从配置 custom_config.upstream_error_texts 加载上游错误文本列表
-    m_upstreamErrorTexts.clear();
-    const auto& customConfig = drogon::app().getCustomConfig();
-    if (customConfig.isMember("upstream_error_texts") && customConfig["upstream_error_texts"].isArray()) {
-        for (const auto& item : customConfig["upstream_error_texts"]) {
-            if (item.isString()) {
-                m_upstreamErrorTexts.push_back(item.asString());
-            }
-        }
+    if (!m_upstreamErrorTexts.empty()) {
         LOG_INFO << "[chaynsAPI] 已从配置加载" << m_upstreamErrorTexts.size() << " 条上游错误文本";
     } else {
         LOG_WARN << "[chaynsAPI] 配置中未找到 upstream_error_texts，上游错误文本匹配将不可用";
@@ -298,14 +229,14 @@ platform::Result<void> chaynsapi::initialize()
     return platform::Result<void>::success();
 }
 
-provider::ProviderCapabilities chaynsapi::capabilities() const noexcept
+provider::ProviderCapabilities ChaynsProvider::capabilities() const noexcept
 {
     return provider::ProviderCapabilities{/*nativeToolCalls=*/false,
                                           /*upstreamHistory=*/true,
                                           /*supportsImages=*/true};
 }
 
-std::shared_ptr<std::mutex> chaynsapi::accountExecutionGate(
+std::shared_ptr<std::mutex> ChaynsProvider::accountExecutionGate(
     const std::string& accountUserName)
 {
     std::lock_guard<std::mutex> lock(m_accountGatesMutex);
@@ -316,123 +247,29 @@ std::shared_ptr<std::mutex> chaynsapi::accountExecutionGate(
     return gate;
 }
 
-chayns::HttpResult chaynsapi::sendWithinContext(
+std::optional<platform::Error> ChaynsProvider::sleepWithinContext(
     const provider::ProviderCallContext& context,
-    const std::string& baseUrl,
-    const drogon::HttpRequestPtr& request,
-    double maximumTimeoutSeconds)
+    std::chrono::milliseconds duration) const
 {
-    const auto remaining = context.remaining();
-    const double remainingSeconds = static_cast<double>(remaining.count()) / 1000.0;
-    const double timeoutSeconds = std::min(maximumTimeoutSeconds, remainingSeconds);
-    if (timeoutSeconds <= 0.0 || context.isCancelled()) {
-        return {drogon::ReqResult::BadResponse, nullptr};
+    if (const auto interrupted = interruptionError(context)) return interrupted;
+    const auto bounded = std::min(duration, context.remaining());
+    if (bounded <= std::chrono::milliseconds::zero()) {
+        return platform::Error::timeout(
+            "Chayns provider request deadline exceeded");
     }
-    return m_transport->send(baseUrl, request, timeoutSeconds);
+    if (m_clock->sleepFor(
+        bounded,
+        [&context] {
+            return context.isCancelled() || context.deadlineExceeded();
+        })) {
+        return std::nullopt;
+    }
+    if (const auto interrupted = interruptionError(context)) return interrupted;
+    return platform::Error::timeout(
+        "Chayns provider request deadline exceeded");
 }
 
-
-std::string chaynsapi::uploadImageToService(const ImageInfo& image,
-                                            const std::string& personId,
-                                            const std::string& authToken,
-                                            const std::string& accountUserName,
-                                            const std::string& origin,
-                                            const std::string& referer,
-                                            const provider::ProviderCallContext& context)
-{
-    LOG_INFO << "[chaynsAPI] 正在上传图片到图片服务，personIdPresent=" << !personId.empty();
-    
-    // 如果已经有 URL，直接返回
-    if (!image.uploadedUrl.empty()) {
-        LOG_INFO << "[chaynsAPI] 图片已有已上传 URL，urlPresent=true";
-        return image.uploadedUrl;
-    }
-    
-    // 需要上传 图片
-    if (image.base64Data.empty()) {
-        LOG_ERROR << "[chaynsAPI] 没有图片数据可上传";
-        return "";
-    }
-    
-    // 构建上传请求
-
-    std::string uploadPath = "/image-service/v3/Images/" + personId;
-    
-    // 首先解码 数据
-    std::string decodedData = drogon::utils::base64Decode(image.base64Data);
-    
-    // 确定文件扩展名
-    std::string extension = "png";
-    if (image.mediaType.find("jpeg") != std::string::npos || image.mediaType.find("jpg") != std::string::npos) {
-        extension = "jpg";
-    } else if (image.mediaType.find("gif") != std::string::npos) {
-        extension = "gif";
-    } else if (image.mediaType.find("webp") != std::string::npos) {
-        extension = "webp";
-    }
-    
-    // 创建 HTTP 请求并构建 / 请求体
-    auto request = HttpRequest::newHttpRequest();
-    request->setMethod(HttpMethod::Post);
-    request->setPath(uploadPath);
-    request->addHeader("Authorization", "Bearer " + authToken);
-    chayns_browser::applyBrowserHeaders(
-        request,
-        chayns_browser::accountKeyFor(accountUserName, personId),
-        origin,
-        referer);
-    
-
-    std::string boundary = "----WebKitFormBoundary" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-    std::string contentType = "multipart/form-data; boundary=" + boundary;
-    request->setContentTypeString(contentType);
-    
-    std::string mimeType = "image/" + extension;
-    if (extension == "jpg") mimeType = "image/jpeg";
-    
-    std::string body;
-    body += "--" + boundary + "\r\n";
-    body += "Content-Disposition: form-data; name=\"file\"; filename=\"image." + extension + "\"\r\n";
-    body += "Content-Type: " + mimeType + "\r\n\r\n";
-    body += decodedData;
-    body += "\r\n--" + boundary + "--\r\n";
-    
-    request->setBody(body);
-    
-    auto [result, response] = sendWithinContext(
-        context, "https://cube.tobit.cloud", request, chayns::kUpstreamUploadTimeoutSeconds);
-    
-    if (result != ReqResult::Ok || !response) {
-        LOG_ERROR << "[chaynsAPI] 上传图片失败： 网络错误";
-        return "";
-    }
-    
-    if (response->statusCode() != k200OK && response->statusCode() != k201Created) {
-        LOG_ERROR << "[chaynsAPI] 上传图片失败： " << summarizeUpstreamResponse(response);
-        return "";
-    }
-    
-    // 解析响应获取图片URL
-    auto jsonResp = response->getJsonObject();
-    if (!jsonResp) {
-        LOG_ERROR << "[chaynsAPI] 解析上传响应JSON失败";
-        return "";
-    }
-    
-
-    if (jsonResp->isMember("baseDomain") && jsonResp->isMember("image") && (*jsonResp)["image"].isMember("path")) {
-        std::string baseDomain = (*jsonResp)["baseDomain"].asString();
-        std::string imagePath = (*jsonResp)["image"]["path"].asString();
-        std::string imageUrl = baseDomain + imagePath;
-        LOG_INFO << "[chaynsAPI] 图片上传成功：urlPresent=true";
-        return imageUrl;
-    }
-    
-    LOG_ERROR << "[chaynsAPI] 上传响应格式异常";
-    return "";
-}
-
-platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
+platform::Result<provider::ProviderResponse> ChaynsProvider::doGenerate(
     const provider::ProviderRequest& request,
     provider::ProviderCallContext& context)
 {
@@ -442,13 +279,17 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
 
     const Json::Value messageContext = historyForChayns(request.messages);
     const auto toolBridgeInstructions = toolBridgeInstructionsForLog(request.input);
-    logCompleteUserInputForDebug(request.input);
+    logCompleteUserInputForDebug(request.input,
+                                 request.requestId,
+                                 request.conversationId);
     if (toolBridgeInstructions.has_value()) {
         // The INFO log remains limited to generated tool instructions.  The
         // complete request input is emitted separately at DEBUG level above.
-        logToolBridgePayload("上游请求桥接内容", *toolBridgeInstructions);
+        logToolBridgePayload("上游请求桥接内容", *toolBridgeInstructions,
+                             request.requestId, request.conversationId);
     }
-    LOG_INFO << "[chaynsAPI] 发送聊天消息";
+    LOG_INFO << "[chaynsAPI] 发送聊天消息: requestId=" << request.requestId
+             << ", conversationId=" << request.conversationId;
     string modelname = request.model;
 
     // Resolve and validate the model before consuming an account or uploading
@@ -496,6 +337,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
     bool fatalAmbiguousSend = false;
     bool fatalCorrelationConflict = false;
     bool fatalResponseTimeout = false;
+    std::optional<platform::Error> lastSubmissionError;
     // Queueing behind another request on the same account must not consume the
     // upstream polling budget.  The deadline starts only after the first
     // account lease has been acquired.
@@ -528,74 +370,19 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
     std::set<std::string> attemptedAccounts;
     std::shared_ptr<Accountinfo_st> selectedAccount;
 
-    ThreadContext continuationContext;
+    chayns::ThreadContext continuationContext;
     bool hasContinuationContext = false;
     std::optional<chayns::ThreadLedgerRow> incompleteLedgerContext;
     bool incompleteLedgerUsedFallbackKey = false;
     if (!request.previousConversationId.empty()) {
-        {
-            std::lock_guard<std::mutex> lock(m_threadMapMutex);
-            auto it = m_threadMap.find(request.previousConversationId);
-            if (it != m_threadMap.end()) {
-                continuationContext = it->second;
-                hasContinuationContext = true;
-            }
+        const auto lookup = m_threadContext.lookup(
+            request.previousConversationId, request.previousConversationFallbackId);
+        if (lookup.context.has_value()) {
+            continuationContext = *lookup.context;
+            hasContinuationContext = true;
         }
-
-        // m_threadMap is intentionally process-local.  On a process restart,
-        // restore its provider-specific half from the ledger after the
-        // application session has recovered the stable local session key.
-        // This runs on the background generation worker, never on Drogon's
-        // HTTP event loop.
-        if (!hasContinuationContext && m_threadLedger && m_threadLedger->isEnabled()) {
-            auto persisted = m_threadLedger->loadThreadBySessionId(
-                request.previousConversationId);
-            bool usedFallbackKey = false;
-            if (!persisted.has_value() &&
-                !request.previousConversationFallbackId.empty() &&
-                request.previousConversationFallbackId != request.previousConversationId) {
-                persisted = m_threadLedger->loadThreadBySessionId(
-                    request.previousConversationFallbackId);
-                usedFallbackKey = persisted.has_value();
-            }
-            if (persisted.has_value()) {
-                ThreadContext restored;
-                restored.threadId = persisted->threadId;
-                restored.userAuthorId = persisted->userAuthorId;
-                restored.agentAuthorId = persisted->agentAuthorId;
-                restored.accountUserName = persisted->accountUserName;
-                restored.modelId = persisted->modelId;
-                restored.accountType = persisted->accountType;
-                restored.threadTypeId = persisted->threadTypeId;
-                restored.workspaceUacId = persisted->workspaceUacId;
-                restored.origin = persisted->origin;
-                restored.referer = persisted->referer;
-                restored.lastRequestMessageId = persisted->lastRequestMessageId;
-                restored.lastRequestCreationTime = persisted->lastRequestCreationTime;
-                restored.lastAssistantMessageId = persisted->lastAssistantMessageId;
-
-                const bool hasRequiredContext =
-                    !restored.threadId.empty() && !restored.accountUserName.empty() &&
-                    !restored.modelId.empty() && !restored.accountType.empty() &&
-                    !restored.origin.empty() && !restored.referer.empty() &&
-                    restored.threadTypeId > 0 &&
-                    (restored.accountType != "pro" || restored.workspaceUacId > 0);
-                if (!hasRequiredContext) {
-                    incompleteLedgerContext = *persisted;
-                    incompleteLedgerUsedFallbackKey = usedFallbackKey;
-                } else {
-                    std::lock_guard<std::mutex> lock(m_threadMapMutex);
-                    const auto [it, inserted] = m_threadMap.emplace(
-                        request.previousConversationId, std::move(restored));
-                    continuationContext = it->second;
-                    hasContinuationContext = true;
-                    LOG_INFO << "[chaynsAPI] 已从线程台账恢复上游线程上下文: "
-                             << "threadIdPresent=" << !continuationContext.threadId.empty()
-                             << ", fallbackKeyUsed=" << usedFallbackKey
-                             << ", inserted=" << inserted;
-                }
-            }
-        }
+        incompleteLedgerContext = lookup.incompleteLedgerContext;
+        incompleteLedgerUsedFallbackKey = lookup.usedFallbackKey;
     }
     
     std::unique_lock<std::mutex> accountExecutionLock;
@@ -633,7 +420,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             selectedAccount.reset();
         }
 
-        if (!isUsableChaynsAccount(selectedAccount, selectedModel.requiresPro)) {
+        if (!chayns::policy::isUsableAccount(selectedAccount, selectedModel.requiresPro)) {
             selectedAccount.reset();
 
             // A continuation may only reuse its original account when that
@@ -646,7 +433,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             if (totalAttempts == 1 && !needSwitchAccount && !continuationAccount.empty()) {
                 m_accountSelector.getAccountByUserName(
                     "chaynsapi", continuationAccount, selectedAccount);
-                if (!isUsableChaynsAccount(selectedAccount, selectedModel.requiresPro)) {
+                if (!chayns::policy::isUsableAccount(selectedAccount, selectedModel.requiresPro)) {
                     LOG_WARN << "[chaynsAPI] 续聊账户不可用或权限不足: "
                              << continuationAccount;
                     selectedAccount.reset();
@@ -658,7 +445,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 // Switching is a retry preference, not an additional account
                 // requirement. If there is only one eligible account, finish
                 // the retry budget with it instead of misreporting a 503.
-                if (isUsableChaynsAccount(previousAccount, selectedModel.requiresPro)) {
+                if (chayns::policy::isUsableAccount(previousAccount, selectedModel.requiresPro)) {
                     selectedAccount = previousAccount;
                     LOG_WARN << "[chaynsAPI] 没有可切换的其它账户，继续使用当前账户: "
                              << selectedAccount->userName;
@@ -676,7 +463,8 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
         }
 
         std::shared_ptr<Accountinfo_st> accountinfo = selectedAccount;
-        const ChaynsRequestRoute requestRoute = requestRouteForAccount(*accountinfo);
+        const chayns::policy::RequestRoute requestRoute =
+            chayns::policy::requestRouteForAccount(*accountinfo);
         LOG_INFO << "[chaynsAPI] 已选择请求路由: accountType="
                  << accountinfo->accountType
                  << ", threadTypeId=" << requestRoute.threadTypeId
@@ -704,7 +492,7 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 !requestRoute.isPro && legacy.accountUserName == accountinfo->userName &&
                 legacy.origin == requestRoute.origin && legacy.referer == requestRoute.referer;
             if (!legacy.threadId.empty() && legacyFreeRouteMatches && restoredModelMatches) {
-                ThreadContext restored;
+                chayns::ThreadContext restored;
                 restored.threadId = legacy.threadId;
                 restored.userAuthorId = legacy.userAuthorId;
                 restored.agentAuthorId = legacy.agentAuthorId;
@@ -718,15 +506,13 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 restored.lastRequestMessageId = legacy.lastRequestMessageId;
                 restored.lastRequestCreationTime = legacy.lastRequestCreationTime;
                 restored.lastAssistantMessageId = legacy.lastAssistantMessageId;
-                std::lock_guard<std::mutex> lock(m_threadMapMutex);
-                const auto [it, inserted] = m_threadMap.emplace(
-                    request.previousConversationId, std::move(restored));
-                continuationContext = it->second;
+                continuationContext = restored;
+                m_threadContext.cache(request.previousConversationId, std::move(restored));
                 hasContinuationContext = true;
                 LOG_INFO << "[chaynsAPI] 已兼容恢复旧版线程台账上下文: "
                          << "threadIdPresent=" << !continuationContext.threadId.empty()
                          << ", fallbackKeyUsed=" << incompleteLedgerUsedFallbackKey
-                         << ", inserted=" << inserted;
+                         << ", inserted=true";
             } else {
                 LOG_WARN << "[chaynsAPI] 上游线程台账记录不完整，安全地创建新线程: "
                           << "threadIdPresent=" << !legacy.threadId.empty()
@@ -746,7 +532,11 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<provider::ProviderResponse>::failure(*interrupted);
             }
-            m_clock->sleepFor(std::chrono::milliseconds(20));
+            if (const auto interrupted =
+                    sleepWithinContext(context, std::chrono::milliseconds(20))) {
+                return platform::Result<provider::ProviderResponse>::failure(
+                    *interrupted);
+            }
         }
         const auto accountWaitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             m_clock->now() - accountWaitStartedAt).count();
@@ -760,33 +550,15 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
 
         if (accountinfo->personId.empty()) {
             LOG_INFO << "[chaynsAPI] personId为空，正在尝试获取";
-            auto request = HttpRequest::newHttpRequest();
-            request->setMethod(HttpMethod::Get);
-            request->setPath("/v2/userSettings");
-            request->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            applyChaynsRouteHeaders(request, *accountinfo, requestRoute);
-            auto [result, response] = sendWithinContext(
-                context, "https://auth.chayns.net", request, chayns::kUpstreamRequestTimeoutSeconds);
+            const auto personId = m_protocolClient->getPersonId(
+                *accountinfo, requestRoute, context,
+                request.requestId, request.conversationId);
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<provider::ProviderResponse>::failure(*interrupted);
             }
-            if (result == ReqResult::Ok && response && response->statusCode() == k200OK) {
-                auto jsonResp = response->getJsonObject();
-                if (jsonResp) {
-                    if (jsonResp->isMember("personId")) {
-                        accountinfo->personId = (*jsonResp)["personId"].asString();
-                        LOG_INFO << "[chaynsAPI] 成功获取 personId：personIdPresent=true";
-                    } else {
-                        LOG_ERROR << "[chaynsAPI] 用户设置响应JSON中未找到 personId，"
-                                  << summarizeUpstreamResponse(response);
-                    }
-                } else {
-                    LOG_ERROR << "[chaynsAPI] 解析用户设置响应为JSON对象失败，"
-                              << summarizeUpstreamResponse(response);
-                }
-            } else {
-                LOG_ERROR << "[chaynsAPI] 获取用户设置失败，"
-                          << summarizeUpstreamResponse(response);
+            if (personId.has_value()) {
+                accountinfo->personId = *personId;
+                LOG_INFO << "[chaynsAPI] 成功获取 personId：personIdPresent=true";
             }
         }
         
@@ -798,7 +570,11 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                                      "Failed to obtain a valid personId",
                                      "person_id_unavailable", 500);
             }
-            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 5));
+            if (const auto interrupted = sleepWithinContext(
+                    context, std::chrono::milliseconds(BASE_DELAY * 5))) {
+                return platform::Result<provider::ProviderResponse>::failure(
+                    *interrupted);
+            }
             continue;
         }
         
@@ -806,14 +582,16 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
         if (!imagesUploaded && !request.images.empty()) {
             LOG_INFO << "[chaynsAPI] 正在处理" << request.images.size() << " 张图片上传";
             for (const auto& img : request.images) {
-                std::string imageUrl = uploadImageToService(
+                std::string imageUrl = m_protocolClient->uploadImage(
                     img,
                     accountinfo->personId,
                     accountinfo->authToken,
                     accountinfo->userName,
                     requestRoute.origin,
                     requestRoute.referer,
-                    context);
+                    context,
+                    request.requestId,
+                    request.conversationId);
                 if (const auto interrupted = interruptionError(context)) {
                     return platform::Result<provider::ProviderResponse>::failure(*interrupted);
                 }
@@ -863,7 +641,6 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                      << continuationContext.modelId << ", new=" << modelname;
         }
         
-        Json::Value sendResponseJson;
         bool sendFailed = false;
         
         if (isFollowUp) {
@@ -888,51 +665,26 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 LOG_INFO << "[chaynsAPI] 已添加" << uploadedImageUrls.size() << " 张图片到后续消息";
             }
             
-            auto reqSend = HttpRequest::newHttpJsonRequest(messageBody);
-            reqSend->setMethod(HttpMethod::Post);
-            string path = "/intercom-backend/v2/thread/" + threadId + "/message";
-            reqSend->setPath(path);
-            reqSend->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            applyChaynsRouteHeaders(reqSend, *accountinfo, requestRoute);
-            
             LOG_INFO << "[chaynsAPI] 正在发送后续消息到线程: threadIdPresent=" << !threadId.empty();
-            
-            auto sendResult = sendWithinContext(
-                context, "https://cube.tobit.cloud", reqSend, chayns::kUpstreamRequestTimeoutSeconds);
+
+            const auto submission = m_protocolClient->sendFollowupMessage(
+                threadId, messageBody, *accountinfo, requestRoute, context,
+                request.requestId, request.conversationId);
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<provider::ProviderResponse>::failure(*interrupted);
             }
-            if (sendResult.first != ReqResult::Ok || !sendResult.second) {
-                LOG_ERROR << "[chaynsAPI] 发送后续消息失败(网络错误)";
-                sendFailed = true;
-                fatalAmbiguousSend = true;
-            } else {
-                auto responseSend = sendResult.second;
-                if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
-                    auto sendJson = responseSend->getJsonObject();
-                    if (!sendJson) {
-                        LOG_ERROR << "[chaynsAPI] 后续消息发送成功但响应JSON为空";
-                        sendFailed = true;
-                        fatalAmbiguousSend = true;
-                    } else {
-                        sendResponseJson = *sendJson;
-                    }
-                    if (sendResponseJson.isMember("creationTime")) {
-                        lastMessageTime = sendResponseJson["creationTime"].asString();
-                    }
-                    if (sendResponseJson.isMember("id") && sendResponseJson["id"].isString()) {
-                        requestMessageId = sendResponseJson["id"].asString();
-                    }
-                    if (sendResponseJson.isMember("author") && sendResponseJson["author"].isMember("id")) {
-                        userAuthorId = sendResponseJson["author"]["id"].asString();
-                    }
-                } else {
-                    LOG_ERROR << "[chaynsAPI] 后续消息发送失败，"
-                              << summarizeUpstreamResponse(responseSend);
-                    sendFailed = true;
-                    fatalAmbiguousSend = postFailureMayHaveBeenAccepted(
-                        responseSend->statusCode());
+            if (!submission.accepted) {
+                LOG_ERROR << "[chaynsAPI] 发送后续消息失败: status="
+                          << submission.statusCode;
+                if (submission.error.hasError()) {
+                    lastSubmissionError = submission.error;
                 }
+                sendFailed = true;
+                fatalAmbiguousSend = submission.ambiguous;
+            } else {
+                lastMessageTime = submission.creationTime;
+                requestMessageId = submission.messageId;
+                userAuthorId = submission.userAuthorId;
             }
         } else {
             // =================================================
@@ -1052,15 +804,6 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 sendMessageRequest["messages"][0] = message;
             };
 
-            const auto buildNewThreadRequest = [&]() {
-                auto req = HttpRequest::newHttpJsonRequest(sendMessageRequest);
-                req->setMethod(HttpMethod::Post);
-                req->setPath("/intercom-backend/v2/thread?forceCreate=true");
-                req->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-                applyChaynsRouteHeaders(req, *accountinfo, requestRoute);
-                return req;
-            };
-
             const auto ladder = continuity::degradationLadder(historyBudget);
             size_t ladderIndex = 0;
 
@@ -1077,19 +820,17 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                 applyNewThreadText(reduced);
             }
 
-            auto sendResult = sendWithinContext(
-                context,
-                "https://cube.tobit.cloud",
-                buildNewThreadRequest(),
-                chayns::kUpstreamRequestTimeoutSeconds);
+            auto submission = m_protocolClient->createThread(
+                sendMessageRequest, *accountinfo, requestRoute,
+                accountinfo->personId, selectedModel.personId, context,
+                request.requestId, request.conversationId);
 
             if (const auto interrupted = interruptionError(context)) {
                 return platform::Result<provider::ProviderResponse>::failure(*interrupted);
             }
 
             // 413 fallback: upstream hard limit may be lower than configured value
-            while (sendResult.first == ReqResult::Ok && sendResult.second &&
-                   static_cast<int>(sendResult.second->statusCode()) == 413 &&
+            while (submission.statusCode == 413 &&
                    ladderIndex + 1 < ladder.size()) {
                 ++ladderIndex;
                 const std::string reduced = rebuildNewThreadText(ladder[ladderIndex]);
@@ -1099,63 +840,29 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                          << ", originalBytes=" << full_message.size()
                          << ", retryBytes=" << reduced.size();
                 applyNewThreadText(reduced);
-                sendResult = sendWithinContext(
-                    context,
-                    "https://cube.tobit.cloud",
-                    buildNewThreadRequest(),
-                    chayns::kUpstreamRequestTimeoutSeconds);
+                submission = m_protocolClient->createThread(
+                    sendMessageRequest, *accountinfo, requestRoute,
+                    accountinfo->personId, selectedModel.personId, context,
+                    request.requestId, request.conversationId);
                 if (const auto interrupted = interruptionError(context)) {
                     return platform::Result<provider::ProviderResponse>::failure(*interrupted);
                 }
             }
 
-            if (sendResult.first != ReqResult::Ok || !sendResult.second) {
-                LOG_ERROR << "[chaynsAPI] 创建线程失败(网络错误)";
-                sendFailed = true;
-                fatalAmbiguousSend = true;
-            } else {
-                auto responseSend = sendResult.second;
-                if (responseSend->statusCode() == k200OK || responseSend->statusCode() == k201Created) {
-                    auto sendJson = responseSend->getJsonObject();
-                    if (!sendJson) {
-                        LOG_ERROR << "[chaynsAPI] 创建线程成功但响应JSON为空";
-                        sendFailed = true;
-                        fatalAmbiguousSend = true;
-                    } else {
-                        sendResponseJson = *sendJson;
-                    }
-                    if (sendResponseJson.isMember("id")) {
-                        threadId = sendResponseJson["id"].asString();
-                        
-                        if (sendResponseJson.isMember("members") && sendResponseJson["members"].isArray()) {
-                            for (const auto& member : sendResponseJson["members"]) {
-                                if (member.isMember("personId") && member["personId"].asString() == accountinfo->personId) {
-                                    if (member.isMember("id") && member["id"].isString()) {
-                                        userAuthorId = member["id"].asString();
-                                    }
-                                }
-                                if (member.isMember("personId") && member["personId"].asString() == selectedModel.personId &&
-                                    member.isMember("id") && member["id"].isString()) {
-                                    agentAuthorId = member["id"].asString();
-                                }
-                            }
-                        }
-                        
-                        if (sendResponseJson.isMember("messages") && sendResponseJson["messages"].isArray() && sendResponseJson["messages"].size() > 0) {
-                            const auto& sentMessage = sendResponseJson["messages"][0];
-                            lastMessageTime = sentMessage.get("creationTime", "").asString();
-                            requestMessageId = sentMessage.get("id", "").asString();
-                            if (sentMessage.isMember("author") && sentMessage["author"].isObject()) {
-                                userAuthorId = sentMessage["author"].get("id", userAuthorId).asString();
-                            }
-                        }
-                    }
-                } else {
-                    LOG_ERROR << "[chaynsAPI] 创建线程失败，状态码：" << responseSend->statusCode();
-                    sendFailed = true;
-                    fatalAmbiguousSend = postFailureMayHaveBeenAccepted(
-                        responseSend->statusCode());
+            if (!submission.accepted) {
+                LOG_ERROR << "[chaynsAPI] 创建线程失败: status="
+                          << submission.statusCode;
+                if (submission.error.hasError()) {
+                    lastSubmissionError = submission.error;
                 }
+                sendFailed = true;
+                fatalAmbiguousSend = submission.ambiguous;
+            } else {
+                threadId = submission.threadId;
+                userAuthorId = submission.userAuthorId;
+                agentAuthorId = submission.agentAuthorId;
+                lastMessageTime = submission.creationTime;
+                requestMessageId = submission.messageId;
             }
         }
         
@@ -1170,7 +877,11 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
             if (consecutiveFails >= CONSECUTIVE_FAILS_BEFORE_SWITCH) {
                 LOG_WARN << "[chaynsAPI] 连续失败" << consecutiveFails << " 次, 下次将切换账号";
             }
-            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 5));
+            if (const auto interrupted = sleepWithinContext(
+                    context, std::chrono::milliseconds(BASE_DELAY * 5))) {
+                return platform::Result<provider::ProviderResponse>::failure(
+                    *interrupted);
+            }
             continue;
         }
         
@@ -1187,98 +898,33 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
         messageAnchor.userAuthorId = userAuthorId;
         messageAnchor.agentAuthorId = agentAuthorId;
         messageAnchor.creationTime = lastMessageTime;
-        std::unordered_set<std::string> consumedMessageIds;
-        Json::Value reasoningMessages(Json::arrayValue);
-        string response_message;
-        int response_statusCode = 204;
-        int pollCount = 0;
-        bool pollFound = false;
-
-        const string pollPath = "/intercom-backend/v2/thread/" + threadId + "/message";
-        const auto pollingStartedAt = m_clock->now();
-        LOG_INFO << "[chaynsAPI] 开始轮询锚定消息，请求总截止时间: "
-                 << std::chrono::duration_cast<std::chrono::seconds>(
-                        chayns::kRequestPollingDeadline).count()
-                 << " 秒";
-        LOG_INFO << "[chaynsAPI] 轮询路径: " << pollPath+"&take=1000&viewMode=user&afterDate="+lastMessageTime;
-
-        while (m_clock->now() < requestDeadline) {
-            if (const auto interrupted = interruptionError(context)) {
-                return platform::Result<provider::ProviderResponse>::failure(*interrupted);
-            }
-            pollCount++;
-            auto reqGet = HttpRequest::newHttpRequest();
-            reqGet->setMethod(HttpMethod::Get);
-            reqGet->setPath(pollPath);
-            reqGet->setParameter("take", "1000");
-            reqGet->setParameter("viewMode", "user");
-            reqGet->setParameter("afterDate", lastMessageTime);
-            reqGet->addHeader("Authorization", "Bearer " + accountinfo->authToken);
-            applyChaynsRouteHeaders(reqGet, *accountinfo, requestRoute);
-
-            auto getResult = sendWithinContext(
-                context, "https://cube.tobit.cloud", reqGet, chayns::kUpstreamRequestTimeoutSeconds);
-            if (const auto interrupted = interruptionError(context)) {
-                return platform::Result<provider::ProviderResponse>::failure(*interrupted);
-            }
-            if (getResult.first == ReqResult::Ok && getResult.second) {
-                auto responseGet = getResult.second;
-                if (responseGet->statusCode() == k200OK) {
-                    auto jsonResp = responseGet->getJsonObject();
-                    if (jsonResp && jsonResp->isArray() && !jsonResp->empty()) {
-                        const auto correlated = chayns::correlateMessageBatch(
-                            *jsonResp, messageAnchor, consumedMessageIds);
-                        if (messageAnchor.agentAuthorId.empty() &&
-                            !correlated.inferredAgentAuthorId.empty()) {
-                            messageAnchor.agentAuthorId = correlated.inferredAgentAuthorId;
-                        }
-                        for (const auto& reasoning : correlated.reasoningMessages) {
-                            reasoningMessages.append(reasoning);
-                        }
-                        if (correlated.status == chayns::CorrelationStatus::Superseded) {
-                            LOG_ERROR << "[chaynsAPI] 当前消息最终回复前出现另一条用户消息，拒绝猜测回复归属";
-                            response_statusCode = 409;
-                            fatalCorrelationConflict = true;
-                            pollFound = true;
-                            break;
-                        }
-                        if (correlated.status == chayns::CorrelationStatus::FinalFound) {
-                            const auto& msg = correlated.finalMessage;
-                            response_message = msg.get("text", "").asString();
-                            final_assistantMessageId = msg.get("id", "").asString();
-                            response_statusCode = 200;
-                            pollFound = true;
-                            LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount
-                                     << " 次, 成功获取锚定响应"
-                                     << ", reasoningCount=" << reasoningMessages.size();
-                            LOG_INFO << "[chaynsAPI] 回复已接收: textLength="
-                                     << response_message.size();
-                            if (toolBridgeInstructions.has_value()) {
-                                logToolBridgePayload("上游响应桥接内容",
-                                                     response_message);
-                            }
-                            LOG_DEBUG << "[chaynsAPI] 回复内容: " << response_message;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            const auto now = m_clock->now();
-            if (now >= requestDeadline) {
-                break;
-            }
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - pollingStartedAt);
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                requestDeadline - now);
-            m_clock->sleepFor(
-                std::min(chayns::pollingDelayForElapsed(elapsed), remaining));
+        auto polling = m_pollingLoop.poll(
+            messageAnchor, *accountinfo, requestRoute, requestDeadline, context,
+            request.requestId, request.conversationId);
+        if (!polling) {
+            return platform::Result<provider::ProviderResponse>::failure(polling.error());
         }
+        auto pollResult = std::move(polling.value());
+        Json::Value reasoningMessages = std::move(pollResult.reasoningMessages);
+        string response_message = std::move(pollResult.responseMessage);
+        const int response_statusCode = pollResult.statusCode;
+        fatalCorrelationConflict = pollResult.correlationConflict;
+        fatalResponseTimeout = !pollResult.found;
+        final_assistantMessageId = std::move(pollResult.assistantMessageId);
+        messageAnchor.agentAuthorId = std::move(pollResult.agentAuthorId);
 
-        if (!pollFound) {
-            LOG_INFO << "[chaynsAPI] 轮询结束，总计轮询" << pollCount << " 次, 未获取到响应";
-            fatalResponseTimeout = true;
+        if (response_statusCode == 200) {
+            LOG_INFO << "[chaynsAPI] 回复已接收: textLength="
+                     << response_message.size();
+            if (toolBridgeInstructions.has_value()) {
+                logToolBridgePayload("上游响应桥接内容",
+                                     response_message,
+                                     request.requestId,
+                                     request.conversationId);
+            }
+            LOG_DEBUG << "[chaynsAPI] 回复内容: " << response_message;
+        } else if (fatalCorrelationConflict) {
+            LOG_ERROR << "[chaynsAPI] 当前消息最终回复前出现另一条用户消息，拒绝猜测回复归属";
         }
 
         // Preserve the exact upstream anchor and any reasoning observed even
@@ -1341,7 +987,16 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
         
         // 添加延迟避免过于频繁的重试
         if (m_clock->now() < requestDeadline) {
-            m_clock->sleepFor(std::chrono::milliseconds(BASE_DELAY * 10));
+            const auto requestRemaining =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    requestDeadline - m_clock->now());
+            if (const auto interrupted = sleepWithinContext(
+                    context,
+                    std::min(std::chrono::milliseconds(BASE_DELAY * 10),
+                             requestRemaining))) {
+                return platform::Result<provider::ProviderResponse>::failure(
+                    *interrupted);
+            }
         }
         
     } // 外层重试循环结束（totalAttempts < MAX_UPSTREAM_RETRIES）
@@ -1356,53 +1011,23 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
     // ========== 重试循环结束，处理最终结果 ==========
     
     if (upstreamSuccess) {
-        // 更新上下文映射表
-        {
-            std::lock_guard<std::mutex> lock(m_threadMapMutex);
-            ThreadContext ctx;
-            ctx.threadId = final_threadId;
-            ctx.userAuthorId = final_userAuthorId;
-            ctx.agentAuthorId = final_agentAuthorId;
-            ctx.accountUserName = final_accountUserName;
-            ctx.modelId = modelname;
-            ctx.accountType = final_accountType;
-            ctx.threadTypeId = final_threadTypeId;
-            ctx.workspaceUacId = final_workspaceUacId;
-            ctx.origin = final_origin;
-            ctx.referer = final_referer;
-            ctx.lastRequestMessageId = final_requestMessageId;
-            ctx.lastRequestCreationTime = final_requestCreationTime;
-            ctx.lastAssistantMessageId = final_assistantMessageId;
-            m_threadMap[request.conversationId] = ctx;
-        }
-
-        // 上游线程台账：内存 m_threadMap 会随进程退出/会话过期消失。
-        // Persist the complete credential-free context so a restart can both
-        // reattach the next turn and still let the reaper clean up orphaned
-        // upstream threads.
-        {
-            if (m_threadLedger && m_threadLedger->isEnabled() && !final_threadId.empty()) {
-                chayns::ThreadLedgerRow row;
-                row.threadId        = final_threadId;
-                row.sessionId       = request.conversationId;
-                row.userAuthorId    = final_userAuthorId;
-                row.agentAuthorId   = final_agentAuthorId;
-                row.accountUserName = final_accountUserName;
-                row.modelId         = modelname;
-                row.accountType     = final_accountType;
-                row.threadTypeId    = final_threadTypeId;
-                row.workspaceUacId  = final_workspaceUacId;
-                row.origin          = final_origin;
-                row.referer         = final_referer;
-                row.lastRequestMessageId = final_requestMessageId;
-                row.lastRequestCreationTime = final_requestCreationTime;
-                row.lastAssistantMessageId = final_assistantMessageId;
-                row.createdAt       = static_cast<int64_t>(time(nullptr));
-                row.lastActiveAt    = row.createdAt;
-                // 异步落库：请求链路不等 DB，失败在 DbManager 内部降级忽略。
-                m_threadLedger->asyncUpsertThread(row);
-            }
-        }
+        chayns::ThreadContext contextToStore;
+        contextToStore.threadId = final_threadId;
+        contextToStore.userAuthorId = final_userAuthorId;
+        contextToStore.agentAuthorId = final_agentAuthorId;
+        contextToStore.accountUserName = final_accountUserName;
+        contextToStore.modelId = modelname;
+        contextToStore.accountType = final_accountType;
+        contextToStore.threadTypeId = final_threadTypeId;
+        contextToStore.workspaceUacId = final_workspaceUacId;
+        contextToStore.origin = final_origin;
+        contextToStore.referer = final_referer;
+        contextToStore.lastRequestMessageId = final_requestMessageId;
+        contextToStore.lastRequestCreationTime = final_requestCreationTime;
+        contextToStore.lastAssistantMessageId = final_assistantMessageId;
+        // The context component owns both the process-local mapping and the
+        // credential-free durable ledger update.
+        m_threadContext.store(request.conversationId, contextToStore);
 
         provider::ProviderResponse response;
         response.text = std::move(final_response_message);
@@ -1424,28 +1049,16 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
     if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
         // A delayed upstream reply makes either local mapping unsafe for the
         // next turn; detach rather than issuing cleanup HTTP on this path.
-        std::lock_guard<std::mutex> lock(m_threadMapMutex);
+        std::vector<std::string> detachedConversationIds;
         if (!request.previousConversationId.empty()) {
-            m_threadMap.erase(request.previousConversationId);
+            detachedConversationIds.push_back(request.previousConversationId);
         }
         if (!request.previousConversationFallbackId.empty() &&
             request.previousConversationFallbackId != request.previousConversationId) {
-            m_threadMap.erase(request.previousConversationFallbackId);
+            detachedConversationIds.push_back(request.previousConversationFallbackId);
         }
-        m_threadMap.erase(request.conversationId);
-    }
-    if (fatalAmbiguousSend || fatalCorrelationConflict || fatalResponseTimeout) {
-        if (m_threadLedger && m_threadLedger->isEnabled()) {
-            if (!request.previousConversationId.empty()) {
-                m_threadLedger->asyncDetachThreadBySessionId(request.previousConversationId);
-            }
-            if (!request.previousConversationFallbackId.empty() &&
-                request.previousConversationFallbackId != request.previousConversationId) {
-                m_threadLedger->asyncDetachThreadBySessionId(
-                    request.previousConversationFallbackId);
-            }
-            m_threadLedger->asyncDetachThreadBySessionId(request.conversationId);
-        }
+        detachedConversationIds.push_back(request.conversationId);
+        m_threadContext.detach(detachedConversationIds);
     }
     if (fatalCorrelationConflict) {
         return chaynsFailure(platform::ErrorCode::Conflict,
@@ -1462,11 +1075,15 @@ platform::Result<provider::ProviderResponse> chaynsapi::doGenerate(
                              "Timed out waiting for the anchored upstream response",
                              "upstream_response_timeout", 504);
     }
+    if (lastSubmissionError.has_value()) {
+        return platform::Result<provider::ProviderResponse>::failure(
+            std::move(*lastSubmissionError));
+    }
     return chaynsFailure(platform::ErrorCode::ProviderError,
                          "Upstream failed after all retries",
                          "upstream_retry_exhausted", 500);
 }
-bool chaynsapi::findModel(const std::string& modelName, chayns::ModelDescriptor& model) const
+bool ChaynsProvider::findModel(const std::string& modelName, chayns::ModelDescriptor& model) const
 {
     std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
     const auto it = m_modelCatalog.byName.find(modelName);
@@ -1477,7 +1094,7 @@ bool chaynsapi::findModel(const std::string& modelName, chayns::ModelDescriptor&
     return true;
 }
 
-bool chaynsapi::loadModels(
+bool ChaynsProvider::loadModels(
     bool forceRefresh,
     const provider::ProviderCallContext* context)
 {
@@ -1511,43 +1128,16 @@ bool chaynsapi::loadModels(
     }
     m_lastModelRefreshAttempt = refreshStartedAt;
 
-    auto request = HttpRequest::newHttpRequest();
-    
-    request->setMethod(HttpMethod::Get);
-    request->setPath("/chayns-ai-chatbot/nativeModelChatbot");
-    chayns_browser::applyBrowserHeaders(request);
-    
     if (context && interruptionError(*context)) {
         return false;
     }
-    const auto exchange = context
-        ? sendWithinContext(*context,
-                            "https://cube.tobit.cloud",
-                            request,
-                            chayns::kUpstreamRequestTimeoutSeconds)
-        : m_transport->send("https://cube.tobit.cloud",
-                            request,
-                            chayns::kUpstreamRequestTimeoutSeconds);
-    const auto& result = exchange.first;
-    const auto& response = exchange.second;
+    const auto apiModels = m_protocolClient->getModelCatalog(context);
     if (context && interruptionError(*context)) {
         return false;
     }
+    if (!apiModels.has_value()) return false;
 
-    if (result != ReqResult::Ok || !response || response->statusCode() != k200OK) {
-        LOG_ERROR << "[chaynsAPI] 从API获取模型列表失败, result=" << static_cast<int>(result)
-                  << ", status=" << (response ? static_cast<int>(response->statusCode()) : 0);
-        return false;
-    }
-    
-    Json::Value api_models;
-    Json::Reader reader;
-    if (!reader.parse(string(response->getBody()), api_models)) {
-        LOG_ERROR << "[chaynsAPI] 解析模型API响应失败";
-        return false;
-    }
-
-    auto parsed = chayns::parseModelCatalog(api_models);
+    auto parsed = chayns::parseModelCatalog(*apiModels);
     if (!parsed.valid || parsed.catalog.byName.empty()) {
         LOG_ERROR << "[chaynsAPI] 模型列表结构无效或没有可用模型, skipped=" << parsed.skipped;
         return false;
@@ -1601,47 +1191,22 @@ bool chaynsapi::loadModels(
     return true;
 }
 
-platform::Result<void> chaynsapi::transferThreadContext(
+platform::Result<void> ChaynsProvider::transferThreadContext(
     const std::string& oldId,
     const std::string& newId)
 {
-    LOG_INFO << "[chaynsAPI] 正在尝试转移线程上下文，从" << oldId << " 到 " << newId;
-    std::lock_guard<std::mutex> lock(m_threadMapMutex);
-    const auto it = m_threadMap.find(oldId);
-    if (it == m_threadMap.end()) {
-        LOG_WARN << "[chaynsAPI] 转移线程上下文失败： oldId 未在线程Map中找到";
-        return platform::Result<void>::success();
-    }
-
-    m_threadMap[newId] = it->second;
-    m_threadMap.erase(it);
-    LOG_INFO << "[chaynsAPI] 成功转移线程上下文，从" << oldId << " 到 " << newId;
-    // 台账跟随轮转：否则旧 local key 的行会立刻显得"已过期"而被 reaper 误删活跃线程。
-    if (m_threadLedger && m_threadLedger->isEnabled()) {
-        m_threadLedger->asyncUpdateThreadSessionId(oldId, newId);
-    }
-    return platform::Result<void>::success();
+    return m_threadContext.transfer(oldId, newId);
 }
 
-platform::Result<void> chaynsapi::eraseThreadContext(
+platform::Result<void> ChaynsProvider::eraseThreadContext(
     const std::string& conversationId)
 {
-    bool erased = false;
-    {
-        std::lock_guard<std::mutex> lock(m_threadMapMutex);
-        erased = m_threadMap.erase(conversationId) != 0;
-    }
-    LOG_INFO << "[chaynsAPI] 删除会话映射： convId 删除数量=" << (erased ? 1 : 0);
-
     // This path only detaches the ledger.  Reaper owns remote deletion, so a
     // local session cleanup never blocks on upstream HTTP.
-    if (m_threadLedger && m_threadLedger->isEnabled()) {
-        m_threadLedger->asyncDetachThreadBySessionId(conversationId);
-    }
-    return platform::Result<void>::success();
+    return m_threadContext.erase(conversationId);
 }
 
-platform::Result<void> chaynsapi::deleteUpstreamThread(
+platform::Result<void> ChaynsProvider::deleteUpstreamThread(
     const std::string& accountUserName,
     const std::string& threadId,
     const std::string& origin,
@@ -1655,38 +1220,14 @@ platform::Result<void> chaynsapi::deleteUpstreamThread(
             "Unable to delete Chayns upstream thread", "thread_delete_account_unavailable"));
     }
 
-    Json::Value body;
-    Json::Value threadIds(Json::arrayValue);
-    threadIds.append(threadId);
-    body["threadIds"] = threadIds;
-    body["personId"] = account->personId;
-
-    auto request = HttpRequest::newHttpJsonRequest(body);
-    request->setMethod(HttpMethod::Delete);
-    request->setPath("/intercom-backend/v2/thread/member/delete");
-    request->addHeader("Authorization", "Bearer " + account->authToken);
-    chayns_browser::applyBrowserHeadersForAccount(
-        request,
-        account->userName,
-        account->personId,
-        origin.empty() ? CHAYNS_FREE_ORIGIN : origin,
-        referer.empty() ? CHAYNS_FREE_REFERER : referer);
-
-    auto [result, response] = m_transport->send(
-        "https://cube.tobit.cloud", request, chayns::kUpstreamRequestTimeoutSeconds);
-    if (result != ReqResult::Ok || !response ||
-        (response->statusCode() != k200OK && response->statusCode() != k204NoContent)) {
-        LOG_WARN << "[chaynsAPI] 删除上游线程失败, result=" << static_cast<int>(result)
-                 << ", " << summarizeUpstreamResponse(response);
-        const int status = response ? static_cast<int>(response->statusCode()) : 0;
-        return platform::Result<void>::failure(platform::Error::providerError(
-            "Failed to delete Chayns upstream thread", "thread_delete_failed", status));
-    }
+    const auto result = m_protocolClient->deleteThread(
+        *account, threadId, origin, referer);
+    if (!result) return result;
     LOG_INFO << "[chaynsAPI] 已删除上游线程";
     return platform::Result<void>::success();
 }
 
-ProviderModelCatalog chaynsapi::getModels()
+ProviderModelCatalog ChaynsProvider::getModels()
 {
     (void)loadModels(false);
     std::shared_lock<std::shared_mutex> lock(m_modelCatalogMutex);
@@ -1723,7 +1264,7 @@ ProviderModelCatalog chaynsapi::getModels()
     return catalog;
 }
 
-std::optional<ProviderModelCapabilities> chaynsapi::findModelCapabilities(
+std::optional<ProviderModelCapabilities> ChaynsProvider::findModelCapabilities(
     const std::string& modelId) const
 {
     chayns::ModelDescriptor descriptor;

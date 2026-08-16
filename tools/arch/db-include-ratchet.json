@@ -2,7 +2,6 @@
   "_comment": "非 persistence adapter 直接 include infrastructure/persistence 的文件白名单（棘轮）。新增即 FAIL(4)。冻结现状，不主张现状即目标态。",
   "allowed_files": [
     "infrastructure/provider/chayns/chaynsThreadReaper.cpp",
-    "infrastructure/provider/chayns/chaynsapi.cpp",
     "runtime/AppContext.cpp",
     "runtime/AppWiring.cpp"
   ],
@@ -10,5 +9,5 @@
     "application",
     "transport"
   ],
-  "_note": "must_stay_clean 列出已完成依赖倒置的物理层，必须保持零直连。每完成一个模块的倒置，把它从 allowed_files 移除并加入此列表。composition root（main.cc / runtime/AppWiring.cpp / runtime/AppContext.cpp）按定义可知具体模块；AppContext.cpp 为不完整 runtime-owned 类型提供析构定义，其条目不代表待偿债务；业务层条目才是。"
+  "_note": "must_stay_clean 列出已完成依赖倒置的物理层，必须保持零直连。每完成一个模块的倒置，把它从 allowed_files 移除并加入此列表。"
 }

@@ -1,6 +1,7 @@
 #include <drogon/drogon_test.h>
 
 #include <application/generation/tooling/BridgeProtocolCodec.h>
+#include <application/generation/tooling/ToolDefinitionResolver.h>
 
 namespace {
 
@@ -49,6 +50,21 @@ Json::Value sampleHistory() {
 }
 
 }  // namespace
+
+DROGON_TEST(ToolDefinitionResolver_CountsCallableDefinitionsRecursively)
+{
+    Json::Value tools = sampleTools();
+    Json::Value namespaceTool(Json::objectValue);
+    namespaceTool["type"] = "namespace";
+    namespaceTool["name"] = "workspace";
+    namespaceTool["tools"] = sampleTools();
+    namespaceTool["tools"].append(Json::Value("invalid"));
+    tools.append(std::move(namespaceTool));
+    tools.append(Json::Value(Json::objectValue));
+
+    CHECK(toolcall::countToolDefinitions(tools) == 2);
+    CHECK(toolcall::countToolDefinitions(Json::Value(Json::nullValue)) == 0);
+}
 
 DROGON_TEST(BridgeProtocolCodec_ResolveRequestFormat)
 {

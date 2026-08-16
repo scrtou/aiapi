@@ -6,6 +6,7 @@
 #include <domain/model/SessionData.h>
 #include <json/json.h>
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,10 @@ struct session_st
         std::vector<ImageInfo> images;
         Json::Value tools;
         Json::Value toolDefinitionsSource;
+        // Request-scoped diagnostic value.  It records the callable tool
+        // definitions supplied by the current client request before session
+        // continuation can restore definitions from an earlier turn.
+        std::size_t clientRequestedToolCount = 0;
         std::string toolChoice;
         bool parallelToolCalls = true;
         std::string rawMessage;
@@ -49,6 +54,13 @@ struct session_st
         bool supportsToolCalls = true;
         Json::Value clientInfo;
         Json::Value messageContext = Json::Value(Json::arrayValue);
+        // Correlation ledger for client tool-result delivery.  It belongs to
+        // the stable upstream conversation rather than to a wire protocol:
+        // emitted calls await a result in pendingToolCallIds; accepted results
+        // remain in consumedToolResultIds to make full-transcript retries
+        // idempotent.
+        std::vector<std::string> pendingToolCallIds;
+        std::vector<std::string> consumedToolResultIds;
     };
 
     RequestData request;

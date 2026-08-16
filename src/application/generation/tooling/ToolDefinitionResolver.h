@@ -2,6 +2,7 @@
 #define TOOL_DEFINITION_RESOLVER_H
 
 #include <json/json.h>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
@@ -121,6 +122,16 @@ template <typename Visitor>
 bool visitToolDefinitions(const Json::Value& tools, Visitor visitor)
 {
     return detail::visitToolDefinitionsImpl(tools, "", visitor);
+}
+
+inline std::size_t countToolDefinitions(const Json::Value& tools)
+{
+    std::size_t count = 0;
+    visitToolDefinitions(tools, [&](const ToolDefinitionMatch&) {
+        ++count;
+        return true;
+    });
+    return count;
 }
 
 inline std::optional<ToolDefinitionMatch> findToolDefinition(

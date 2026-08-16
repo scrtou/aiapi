@@ -1,7 +1,7 @@
 #ifndef CHAYNS_THREAD_DB_MANAGER_H
 #define CHAYNS_THREAD_DB_MANAGER_H
 
-#include <infrastructure/persistence/chaynsThread/IChaynsThreadLedger.h>
+#include <domain/port/IChaynsThreadLedger.h>
 
 #include <drogon/drogon.h>
 #include <drogon/orm/DbClient.h>

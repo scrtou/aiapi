@@ -27,6 +27,9 @@ DROGON_TEST(ActionProtocol_CompilesJsonToolCall)
     CHECK(result.envelope.protocolVersion == 3);
     REQUIRE(result.envelope.toolCalls.size() == 1);
     CHECK(result.envelope.toolCalls[0].name == "exec_command");
+    // Action parsing is client/wire-output agnostic.  The response pipeline
+    // assigns the correlation ID only after all tool-call sources are merged.
+    CHECK(result.envelope.toolCalls[0].id.empty());
 
     Json::Value arguments;
     Json::CharReaderBuilder builder;
@@ -248,5 +251,6 @@ DROGON_TEST(ActionProtocol_AdapterKeepsClientSpecificCompletionAtEdge)
         envelope, capabilitiesForClient("RooCode", false));
     REQUIRE(roo.toolCalls.size() == 1);
     CHECK(roo.toolCalls[0].name == "attempt_completion");
+    CHECK(roo.toolCalls[0].id.empty());
     CHECK(roo.text.empty());
 }

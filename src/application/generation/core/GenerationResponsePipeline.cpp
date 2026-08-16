@@ -18,6 +18,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -436,6 +437,22 @@ void applyClientRules(const session_st& session, ResponseAssembly& assembly)
     }
 }
 
+void assignUniqueToolCallIds(std::vector<generation::ToolCallDone>& calls)
+{
+    // This is an output-lifecycle invariant, not a wire-format or client
+    // policy.  It runs after every source of calls (bridge, native, forced,
+    // and completion) has been assembled, so all response sinks receive
+    // non-empty, unique IDs for correlation with the following tool result.
+    std::unordered_set<std::string> emittedIds;
+    for (auto& call : calls) {
+        if (call.id.empty() || !emittedIds.insert(call.id).second) {
+            do {
+                call.id = generateFallbackToolCallId();
+            } while (!emittedIds.insert(call.id).second);
+        }
+    }
+}
+
 void embedSessionIdIfNeeded(chatSession* sessionStore,
                             const session_st& session,
                             const actionproto::ClientCapabilities& capabilities,
@@ -517,8 +534,9 @@ generation::GenerationResponsePipeline::GenerationResponsePipeline(
 {
 }
 
-void generation::GenerationResponsePipeline::emit(const session_st& session,
-                                                   IResponseSink& sink) const
+std::vector<std::string> generation::GenerationResponsePipeline::emit(
+    const session_st& session,
+    IResponseSink& sink) const
 {
     const bool supportsToolCalls = channelSupportsToolCalls(session.request.api);
     ResponseAssembly assembly = makeAssembly(session, supportsToolCalls, runtimeConfig_);
@@ -534,8 +552,15 @@ void generation::GenerationResponsePipeline::emit(const session_st& session,
     toolcall::normalizeToolCallArguments(session, assembly.toolCalls);
     validateToolCalls(session, assembly);
     applyClientRules(session, assembly);
+    assignUniqueToolCallIds(assembly.toolCalls);
+    std::vector<std::string> emittedToolCallIds;
+    emittedToolCallIds.reserve(assembly.toolCalls.size());
+    for (const auto& call : assembly.toolCalls) {
+        if (!call.id.empty()) emittedToolCallIds.push_back(call.id);
+    }
     embedSessionIdIfNeeded(sessionStore_, session, assembly.clientCapabilities, assembly, sink);
     emitProtocolEvents(session, assembly, sink);
+    return emittedToolCallIds;
 }
 
 void generation::GenerationResponsePipeline::emitError(

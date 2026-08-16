@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <drogon/drogon.h>
 #include <drogon/HttpRequest.h>
 #include <json/json.h>
 #include <string>
@@ -11,18 +10,6 @@
 // P0: apply a coherent browser header set on every outbound request.
 // P1: bind a stable profile per account identity (userName/personId) from a small pool.
 namespace chayns_browser {
-
-inline Json::Value safeCustomConfig()
-{
-    try {
-        // 读取 Drogon 已加载的 custom_config。不能在此处调用自身，否则首次初始化
-        // browser profile 时会无限递归并以堆栈溢出结束。
-        return drogon::app().getCustomConfig();
-    } catch (...) {
-        return Json::Value(Json::objectValue);
-    }
-}
-
 
 struct BrowserProfile {
     std::string id;
@@ -220,27 +207,20 @@ inline ImpersonationConfig loadConfigFrom(const Json::Value& customConfig) {
 }
 
 inline ImpersonationConfig& configSingleton() {
-    static ImpersonationConfig cfg = []() {
-        try {
-            return loadConfigFrom(safeCustomConfig());
-        } catch (...) {
-            return loadConfigFrom(Json::Value(Json::objectValue));
-        }
-    }();
+    // Runtime configuration is installed explicitly by the composition root.
+    // A deterministic default keeps fixtures independent from process globals.
+    static ImpersonationConfig cfg =
+        loadConfigFrom(Json::Value(Json::objectValue));
     return cfg;
 }
 
-// Allow tests / explicit refresh to replace config.
-inline void setConfigForTest(ImpersonationConfig cfg) {
+inline void setConfig(ImpersonationConfig cfg) {
     configSingleton() = std::move(cfg);
 }
 
-inline void reloadConfigFromDrogon() {
-    try {
-        configSingleton() = loadConfigFrom(safeCustomConfig());
-    } catch (...) {
-        // keep previous
-    }
+// Compatibility name retained for focused browser-profile fixtures.
+inline void setConfigForTest(ImpersonationConfig cfg) {
+    setConfig(std::move(cfg));
 }
 
 inline const BrowserProfile* findProfileById(const ImpersonationConfig& cfg, const std::string& id) {

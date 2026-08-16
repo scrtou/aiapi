@@ -1,5 +1,7 @@
 #include <drogon/drogon_test.h>
 
+// ARCH_TESTS: infrastructure/http/SynchronousHttpClient.h
+
 #include <runtime/AppContext.h>
 
 #include <chrono>

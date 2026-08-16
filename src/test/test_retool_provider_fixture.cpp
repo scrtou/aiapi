@@ -1,8 +1,15 @@
 #include <drogon/drogon_test.h>
 
+// ARCH_TESTS: infrastructure/provider/retool/RetoolAgentClient.h
+// ARCH_TESTS: infrastructure/provider/retool/RetoolProtocolHttp.h
+// ARCH_TESTS: infrastructure/provider/retool/RetoolProvider.h
+
 #include <infrastructure/provider/retool/RetoolClock.h>
 #include <infrastructure/provider/retool/RetoolHttpTransport.h>
+#include <infrastructure/provider/retool/RetoolWorkspaceContext.h>
 #include <infrastructure/provider/retool/retoolapi.h>
+#include <infrastructure/provider/retool/RetoolProviderSettings.h>
+#include <infrastructure/provider/retool/RetoolWorkflowClient.h>
 #include <application/workspace/RetoolWorkspaceUseCase.h>
 #include <domain/port/IRetoolWorkspaceStore.h>
 #include <infrastructure/managedAccount/backends/RetoolWorkspaceBackend.h>
@@ -357,6 +364,86 @@ Json::Value agentPollExchange(const std::string& status)
 
 }  // namespace
 
+DROGON_TEST(RetoolWorkspaceContext_OwnsAffinityThreadsAndUsageLease)
+{
+    auto store = std::make_shared<FakeRetoolWorkspaceStore>();
+    RetoolWorkspaceInfo info;
+    info.workspaceId = "ws-context";
+    info.baseUrl = "https://workspace.invalid";
+    info.status = "active";
+    info.verifyStatus = "passed";
+    store->rows.push_back(info);
+    workspace::RetoolWorkspaceUseCase workspaces(store.get(), nullptr);
+    retool::RetoolWorkspaceContext context(workspaces);
+
+    context.bindWorkspace("conversation-before", "ws-context");
+    context.bindAgentThread("conversation-before", "thread-context");
+    CHECK(context.workspaceFor("conversation-before") == "ws-context");
+    CHECK(context.agentThreadFor("conversation-before") == "thread-context");
+    {
+        auto lease = context.startUsage("ws-context");
+        CHECK(store->usageLog.size() == 1);
+        CHECK(store->usageLog[0] == "ws-context:1:touch");
+    }
+    REQUIRE(store->usageLog.size() == 2);
+    CHECK(store->usageLog[1] == "ws-context:0:touch");
+
+    REQUIRE(context.transfer("conversation-before", "conversation-after").ok());
+    CHECK(context.workspaceFor("conversation-after") == "ws-context");
+    CHECK(context.agentThreadFor("conversation-after") == "thread-context");
+    REQUIRE(context.erase("conversation-after").ok());
+    CHECK(context.workspaceFor("conversation-after").empty());
+    CHECK(context.agentThreadFor("conversation-after").empty());
+}
+
+DROGON_TEST(RetoolProviderSettings_ParsesInjectedLimitsWithoutGlobalConfig)
+{
+    Json::Value config(Json::objectValue);
+    config["retoolapi"]["agent_bootstrap_system_prompt_max_chars"] = 0;
+    config["history_replay"]["max_request_bytes"] = 99 * 1024 * 1024;
+    config["history_replay"]["max_message_bytes"] = -1;
+
+    const auto settings = retool::providerSettingsFromConfig(config);
+    CHECK(settings.agentBootstrapSystemPromptMaxChars == 0);
+    CHECK(settings.historyReplayMaxRequestBytes == 8 * 1024 * 1024);
+    CHECK(settings.historyReplayMaxMessageBytes == 128 * 1024);
+}
+
+DROGON_TEST(RetoolProtocolClient_MapsTransportCancellationAndFailure)
+{
+    auto transport = std::make_shared<FixtureRetoolTransport>();
+    retool::RetoolWorkflowClient client(transport);
+
+    platform::CancellationSource cancellation;
+    auto token = cancellation.token();
+    auto context = makeProviderContext(token);
+    const auto failed = client.fetchWorkflow(
+        context, "https://workspace.invalid", "workflow-1", Json::Value(Json::objectValue));
+    REQUIRE(!failed);
+    CHECK(failed.error().code == platform::ErrorCode::ProviderError);
+    CHECK(failed.error().message.find("fetch workflow") != std::string::npos);
+
+    cancellation.request();
+    const auto cancelled = client.fetchWorkflow(
+        context, "https://workspace.invalid", "workflow-1", Json::Value(Json::objectValue));
+    REQUIRE(!cancelled);
+    CHECK(cancelled.error().code == platform::ErrorCode::Cancelled);
+}
+
+DROGON_TEST(RetoolProtocolHttp_DecodeJsonBodyRejectsMalformedPayload)
+{
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setStatusCode(drogon::k200OK);
+    response->setBody("{not-json");
+
+    const auto decoded = retool::protocol_http::decodeJsonBody(
+        response, "fetch workflow");
+    REQUIRE(!decoded.ok());
+    CHECK(decoded.error().code == platform::ErrorCode::ProviderError);
+    CHECK(decoded.error().providerCode == "invalid_json");
+    CHECK(decoded.error().upstreamHttpStatus == 200);
+}
+
 DROGON_TEST(RetoolProvider_WorkflowFixtureRunsRealRequestWorkflowOffline)
 {
     auto fixture = installWorkspace("ws-1", true, false);
@@ -481,6 +568,7 @@ DROGON_TEST(RetoolProvider_InvalidJsonMappingIsCharacterized)
     const auto result = invoke(provider, request);
     REQUIRE(!result.ok());
     CHECK(result.error().code == platform::ErrorCode::ProviderError);
+    CHECK(result.error().providerCode == "invalid_json");
     CHECK(result.error().upstreamHttpStatus == 200);
     CHECK(transport->errors.empty());
     CHECK(usageBalanced(fixture.store));

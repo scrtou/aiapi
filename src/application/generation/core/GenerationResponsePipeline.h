@@ -25,7 +25,10 @@ public:
                                IChannelCatalog* channelCatalog,
                                Json::Value runtimeConfig = Json::Value(Json::objectValue)) noexcept;
 
-    void emit(const session_st& session, IResponseSink& sink) const;
+    // Returns the final correlation IDs actually emitted to the client.  The
+    // caller persists them in the session tool-result ledger only after the
+    // response has been assembled successfully.
+    std::vector<std::string> emit(const session_st& session, IResponseSink& sink) const;
     void emitError(platform::ErrorCode code, const std::string& message,
                    IResponseSink& sink) const;
     void emitError(const platform::Error& error, IResponseSink& sink) const;

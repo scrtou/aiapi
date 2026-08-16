@@ -73,6 +73,20 @@ struct ToolChoice {
     std::optional<std::string> toolName;
 };
 
+/**
+ * A provider-facing fragment of the current turn.
+ *
+ * The protocol adapter owns the rendered text because upstream bridge syntax
+ * is protocol-specific.  The optional tool-result identity is canonical,
+ * however, so the session lifecycle can suppress an already-consumed result
+ * without parsing or rewriting protocol text.
+ */
+struct CurrentInputPart {
+    std::string text;
+    std::string toolResultCallId;
+    bool isToolResult = false;
+};
+
 struct GenerationCapabilities {
     bool text = true;
     bool images = false;
@@ -215,6 +229,10 @@ struct GenerationRequest {
     // ========== 输入 ==========
     std::vector<Message> messages;  // 内部强类型消息列表
     std::string currentInput;       // 当前用户输入（纯文本）
+    // Optional lossless decomposition of currentInput.  Adapters that carry
+    // tool results populate this so the core can reconcile result IDs after
+    // session continuity has been resolved.
+    std::vector<CurrentInputPart> currentInputParts;
     std::vector<ImageInfo> images;  // 当前请求中的图片列表
     
     // ========== 工具调用 ==========

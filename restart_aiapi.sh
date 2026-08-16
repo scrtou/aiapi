@@ -60,4 +60,6 @@ pgrep -ax aiapi || { echo "启动失败，请查看 $OUT_LOG"; tail -n 30 "$OUT_
 
 echo "[4/4] 端口监听"
 ss -lntp 2>/dev/null | grep ":$PORT" || echo "警告: 端口 $PORT 未监听"
-echo "完成。实时日志: tail -f $BUILD_DIR/logs/aiapi.log"
+echo "完成。传输层实时日志: tail -f $BUILD_DIR/logs/aiapi.log"
+echo "应用层实时日志:   tail -f $OUT_LOG"
+echo "应用层持久日志:   tail -f $BUILD_DIR/logs/aiapi.application.log"

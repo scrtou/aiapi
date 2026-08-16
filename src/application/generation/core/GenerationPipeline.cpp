@@ -1,8 +1,10 @@
 #include <application/generation/core/GenerationPipeline.h>
+#include <application/generation/core/ToolResultLedger.h>
 #include <application/generation/continuity/ContinuityResolver.h>
 #include <application/generation/continuity/ResponseIndex.h>
 #include <application/generation/tooling/BridgeHelpers.h>
 #include <application/generation/tooling/ToolDefinitionEncoder.h>
+#include <application/generation/tooling/ToolDefinitionResolver.h>
 #include <application/generation/tooling/BridgeProtocolCodec.h>
 #include <application/generation/actionProtocol/ActionProtocolCompiler.h>
 #include <json/json.h>
@@ -128,6 +130,7 @@ session_st generation::GenerationPipeline::materializeRequest(const GenerationRe
     session.request.images = req.images;  // 传递图片列表
     session.request.tools = encodeToolDefinitions(req.toolDefinitions);
     session.request.toolDefinitionsSource = session.request.tools;
+    session.request.clientRequestedToolCount = req.toolDefinitions.size();
     session.request.toolChoice = encodeToolChoice(req.toolChoiceSpec);
     session.request.parallelToolCalls = req.parallelToolCalls;
     session.request.rawMessage = req.currentInput; // 保留原始输入（工具桥接注入前）
@@ -290,9 +293,47 @@ generation::GenerationPipeline::ToolBridgeState
          session.request.tools.size() > 0)
             ? session.request.tools
             : session.request.toolDefinitionsSource;
-    state.hasToolDefinitions = toolsForBridge.isArray() && toolsForBridge.size() > 0;
+    const std::size_t effectiveToolCount = toolcall::countToolDefinitions(toolsForBridge);
+    const std::size_t clientRequestedToolCount = session.request.clientRequestedToolCount;
+    const char* definitionSource = clientRequestedToolCount > 0
+        ? "client_request"
+        : (effectiveToolCount > 0 ? "session_cache" : "none");
+    state.hasToolDefinitions = effectiveToolCount > 0;
     state.toolChoiceNone = toLowerStr(session.request.toolChoice) == "none";
-    if (state.supportsToolCalls || state.toolChoiceNone || !state.hasToolDefinitions) {
+
+    const auto logBridgeStats = [&](std::size_t bridged,
+                                    std::string_view decision,
+                                    std::string_view notBridgedReason) {
+        const std::size_t consideredToolCount =
+            std::max(clientRequestedToolCount, effectiveToolCount);
+        const std::size_t notBridged = consideredToolCount > bridged
+            ? consideredToolCount - bridged
+            : 0;
+        LOG_INFO << "[生成服务][ToolBridge] 工具桥接统计: requestId="
+                 << session.state.requestId
+                 << ", conversationId=" << session.state.conversationId
+                 << ", provider=" << session.request.api
+                 << ", clientRequested=" << clientRequestedToolCount
+                 << ", effectiveDefinitions=" << effectiveToolCount
+                 << ", bridged=" << bridged
+                 << ", notBridged=" << notBridged
+                 << ", definitionSource=" << definitionSource
+                 << ", decision=" << decision
+                 << ", notBridgedReason=" << notBridgedReason;
+    };
+
+    if (state.supportsToolCalls) {
+        logBridgeStats(0, "native_passthrough", "native_tool_calls_supported");
+        return state;
+    }
+    if (state.toolChoiceNone) {
+        logBridgeStats(0, "bridge_skipped", "tool_choice_none");
+        return state;
+    }
+    if (!state.hasToolDefinitions) {
+        logBridgeStats(0, "bridge_skipped", clientRequestedToolCount == 0
+            ? "client_supplied_no_tools"
+            : "no_valid_tool_definitions");
         return state;
     }
 
@@ -302,6 +343,11 @@ generation::GenerationPipeline::ToolBridgeState
         session.request.tools = toolsForBridge;
     }
     toolcall::transformRequestForToolBridge(session, runtimeConfig_);
+    const bool bridgeApplied = !session.provider.toolBridgeTrigger.empty() &&
+        session.request.tools.isNull();
+    logBridgeStats(bridgeApplied ? effectiveToolCount : 0,
+                   bridgeApplied ? "text_bridge_applied" : "bridge_skipped",
+                   bridgeApplied ? "none" : "definition_encoding_empty");
     return state;
 }
 
@@ -473,7 +519,8 @@ std::optional<platform::Error> generation::GenerationPipeline::execute(
         }
 
         prepareNextSessionId(sessionStore, session);
-        responsePipeline_.emit(session, sink);
+        const auto emittedToolCallIds = responsePipeline_.emit(session, sink);
+        toolresult::recordEmittedToolCallIds(session, emittedToolCallIds);
         persistCompletedSession(sessionStore, *responseIndex_, session);
         recordRequestCompletedStat(session, 200);
     } catch (const std::exception& error) {
@@ -523,10 +570,23 @@ std::optional<platform::Error> generation::GenerationPipeline::run(
              << (decision.debug.empty() ? "" : (" 调试信息=" + decision.debug));
 
     const std::string currentRequestId = session.state.requestId;
+    const std::size_t currentClientRequestedToolCount =
+        session.request.clientRequestedToolCount;
     sessionManager.getOrCreateSession(decision.sessionId, session);
     // Session continuation restores persisted state. requestId is request
     // scoped and must never be inherited from the previous turn.
     session.state.requestId = currentRequestId;
+    session.request.clientRequestedToolCount = currentClientRequestedToolCount;
+
+    const auto toolResultReconciliation = toolresult::reconcileCurrentInput(
+        session, req.currentInputParts);
+    if (toolResultReconciliation.suppressedDuplicate > 0) {
+        LOG_INFO << "[ToolResultLedger] 已抑制已消费的工具结果: requestId="
+                 << session.state.requestId
+                 << ", conversationId=" << session.state.conversationId
+                 << ", suppressed=" << toolResultReconciliation.suppressedDuplicate
+                 << ", accepted=" << toolResultReconciliation.accepted;
+    }
 
     LOG_INFO << "[生成服务] 会话 " << (session.state.isContinuation ? "续接" : "新建")
              << ", 会话ID: " << session.state.conversationId

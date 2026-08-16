@@ -1,10 +1,18 @@
 #include <drogon/drogon_test.h>
 
+// ARCH_TESTS: infrastructure/provider/chayns/ChaynsPollingLoop.h
+// ARCH_TESTS: infrastructure/provider/chayns/ChaynsProtocolClient.h
+// ARCH_TESTS: infrastructure/provider/chayns/ChaynsProvider.h
+// ARCH_TESTS: infrastructure/provider/chayns/ChaynsProviderPolicy.h
+// ARCH_TESTS: infrastructure/provider/chayns/ChaynsThreadContext.h
+
 #include <application/account/accountManager.h>
 #include <infrastructure/provider/chayns/ChaynsHttpTransport.h>
+#include <infrastructure/provider/chayns/ChaynsProtocolClient.h>
+#include <infrastructure/provider/chayns/ChaynsProviderPolicy.h>
 #include <infrastructure/provider/chayns/ChaynsClock.h>
 #include <infrastructure/provider/chayns/chaynsapi.h>
-#include <infrastructure/persistence/chaynsThread/IChaynsThreadLedger.h>
+#include <domain/port/IChaynsThreadLedger.h>
 #include <domain/port/IAccountStore.h>
 #include <infrastructure/provider/ProviderRegistry.h>
 #include <application/generation/continuity/ResponseIndex.h>
@@ -370,6 +378,89 @@ struct GenerationFixtureHarness
 
 }  // namespace
 
+DROGON_TEST(ChaynsThreadContext_OwnsMemoryAndLedgerLifecycle)
+{
+    auto ledger = std::make_shared<FixtureChaynsThreadLedger>();
+    chayns::ChaynsThreadContext contexts(ledger);
+    chayns::ThreadContext stored;
+    stored.threadId = "<thread-context>";
+    stored.userAuthorId = "<user-author>";
+    stored.agentAuthorId = "<agent-author>";
+    stored.accountUserName = "fixture-free-account";
+    stored.modelId = "fixture-free-model";
+    stored.accountType = "free";
+    stored.threadTypeId = 8;
+    stored.origin = "https://sidekick.ki";
+    stored.referer = "https://sidekick.ki/";
+
+    contexts.store("conversation-before-rotation", stored);
+    REQUIRE(ledger->upserts.size() == 1);
+    CHECK(ledger->upserts[0].sessionId == "conversation-before-rotation");
+    CHECK(ledger->upserts[0].threadId == "<thread-context>");
+
+    const auto cached = contexts.lookup("conversation-before-rotation");
+    REQUIRE(cached.context.has_value());
+    CHECK(cached.context->modelId == "fixture-free-model");
+    CHECK(ledger->loadedSessionIds.empty());
+
+    REQUIRE(contexts.transfer("conversation-before-rotation",
+                              "conversation-after-rotation").ok());
+    REQUIRE(ledger->rotations.size() == 1);
+    CHECK(ledger->rotations[0].first == "conversation-before-rotation");
+    CHECK(ledger->rotations[0].second == "conversation-after-rotation");
+    CHECK(contexts.lookup("conversation-after-rotation").context.has_value());
+
+    REQUIRE(contexts.erase("conversation-after-rotation").ok());
+    REQUIRE(ledger->detachedSessionIds.size() == 1);
+    CHECK(ledger->detachedSessionIds[0] == "conversation-after-rotation");
+}
+
+DROGON_TEST(ChaynsThreadContext_ExposesIncompleteFallbackForSafeMigration)
+{
+    auto ledger = std::make_shared<FixtureChaynsThreadLedger>();
+    chayns::ThreadLedgerRow legacy;
+    legacy.sessionId = "legacy-conversation";
+    legacy.threadId = "<legacy-thread>";
+    legacy.accountUserName = "fixture-free-account";
+    legacy.origin = "https://sidekick.ki";
+    legacy.referer = "https://sidekick.ki/";
+    ledger->row = legacy;
+
+    chayns::ChaynsThreadContext contexts(ledger);
+    const auto lookup = contexts.lookup("current-conversation",
+                                        "legacy-conversation");
+    CHECK(!lookup.context.has_value());
+    REQUIRE(lookup.incompleteLedgerContext.has_value());
+    CHECK(lookup.incompleteLedgerContext->threadId == "<legacy-thread>");
+    CHECK(lookup.usedFallbackKey);
+    REQUIRE(ledger->loadedSessionIds.size() == 2);
+    CHECK(ledger->loadedSessionIds[0] == "current-conversation");
+    CHECK(ledger->loadedSessionIds[1] == "legacy-conversation");
+}
+
+DROGON_TEST(ChaynsThreadContext_RotatesDurableOnlyContextAfterRestart)
+{
+    auto ledger = std::make_shared<FixtureChaynsThreadLedger>();
+    chayns::ThreadLedgerRow persisted;
+    persisted.sessionId = "before-restart-rotation";
+    persisted.threadId = "<durable-thread>";
+    persisted.accountUserName = "fixture-free-account";
+    persisted.modelId = "fixture-free-model";
+    persisted.accountType = "free";
+    persisted.threadTypeId = 8;
+    persisted.origin = "https://sidekick.ki";
+    persisted.referer = "https://sidekick.ki/";
+    ledger->row = persisted;
+
+    chayns::ChaynsThreadContext contexts(ledger);
+    REQUIRE(contexts.transfer("before-restart-rotation",
+                              "after-restart-rotation").ok());
+    REQUIRE(ledger->rotations.size() == 1);
+    CHECK(ledger->rotations[0].first == "before-restart-rotation");
+    CHECK(ledger->rotations[0].second == "after-restart-rotation");
+    CHECK(contexts.lookup("after-restart-rotation").context.has_value());
+}
+
 DROGON_TEST(ChaynsProvider_FixtureTransportRunsRealPortPathOffline)
 {
     AccountManager accounts;
@@ -722,6 +813,52 @@ DROGON_TEST(ChaynsProvider_ResponsesSseRunsGenerationServiceAndProductionSink)
     CHECK(closes == 1);
     CHECK(harness.transport->remaining() == 0);
     CHECK(harness.transport->errors.empty());
+}
+
+DROGON_TEST(ChaynsProtocolClient_MessageSubmissionCarriesTypedTransportFailure)
+{
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    chayns::ChaynsProtocolClient client(transport);
+    Accountinfo_st account;
+    account.userName = "fixture-user";
+    account.authToken = "fixture-token";
+    account.personId = "fixture-person";
+    account.accountType = "free";
+    Json::Value body(Json::objectValue);
+    body["text"] = "fixture message";
+
+    platform::CancellationSource cancellation;
+    auto context = provider::ProviderCallContext{
+        cancellation.token(),
+        std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+    const auto submission = client.sendFollowupMessage(
+        "thread-1", body, account, chayns::policy::requestRouteForAccount(account),
+        context, "request-typed", "conversation-typed");
+
+    CHECK(!submission.accepted);
+    CHECK(submission.ambiguous);
+    CHECK(submission.error.code == platform::ErrorCode::ProviderError);
+    CHECK(submission.error.providerCode == "transport_failure");
+}
+
+DROGON_TEST(ChaynsProtocolClient_EmptyPoll204IsAQuietEmptyBatch)
+{
+    auto transport = std::make_shared<FixtureChaynsTransport>();
+    transport->enqueue("poll-empty.json");
+    chayns::ChaynsProtocolClient client(transport);
+    Accountinfo_st account;
+    account.userName = "fixture-user";
+    account.authToken = "fixture-token";
+    account.personId = "fixture-person";
+
+    const auto messages = client.getThreadMessages(
+        "<thread-1>", "2026-08-16T09:39:39.000Z", account,
+        chayns::policy::requestRouteForAccount(account), 5.0,
+        "request-204", "conversation-204");
+    REQUIRE(messages.has_value());
+    CHECK(messages->isArray());
+    CHECK(messages->empty());
+    CHECK(transport->remaining() == 0);
 }
 
 DROGON_TEST(ChaynsProvider_GenerationServicePreservesProviderErrorCodeForTransport)

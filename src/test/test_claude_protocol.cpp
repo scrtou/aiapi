@@ -6,6 +6,7 @@
 #include <application/generation/protocol/common/ProtocolRegistry.h>
 #include <transport/controllers/AiApiController.h>
 
+#include <algorithm>
 #include <string>
 
 using namespace generation::protocol;
@@ -146,6 +147,13 @@ DROGON_TEST(ClaudeRequestAdapter_MapsCanonicalMessagesAndTools)
     CHECK(request.currentInput.find("new question") != std::string::npos);
     CHECK(request.currentInput.find("contents") != std::string::npos);
     CHECK(countOccurrences(request.currentInput, "contents") == 1);
+    REQUIRE(request.currentInputParts.size() >= 2);
+    const auto toolResultPart = std::find_if(
+        request.currentInputParts.begin(), request.currentInputParts.end(),
+        [](const CurrentInputPart& part) { return part.isToolResult; });
+    REQUIRE(toolResultPart != request.currentInputParts.end());
+    CHECK(toolResultPart->toolResultCallId == "toolu_1");
+    CHECK(toolResultPart->text.find("contents") != std::string::npos);
     CHECK(request.toolDefinitions.size() == 1);
     CHECK(request.toolDefinitions[0].name == "read_file");
     CHECK(request.toolChoiceSpec.mode == ToolChoiceMode::Any);

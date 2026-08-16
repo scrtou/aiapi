@@ -5,9 +5,10 @@
 #include <infrastructure/account/AccountClock.h>
 #include <domain/port/IAccountHttpTransport.h>
 #include <infrastructure/account/RetoolProvisionClock.h>
-#include <infrastructure/provider/chayns/chaynsapi.h>
+#include <infrastructure/provider/chayns/ChaynsProvider.h>
+#include <infrastructure/provider/chayns/ChaynsBrowserImpersonation.h>
 #include <infrastructure/provider/chayns/chaynsThreadReaper.h>
-#include <infrastructure/provider/retool/retoolapi.h>
+#include <infrastructure/provider/retool/RetoolProvider.h>
 #include <application/channel/channelManager.h>
 #include <transport/controllers/AiApiController.h>
 #include <transport/controllers/AccountController.h>
@@ -53,6 +54,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 
 namespace lifecycle {
 
@@ -319,7 +321,9 @@ StartupResult stepInjectStores(AppContext& ctx, const Json::Value& runtimeConfig
 }
 
 StartupResult stepProviderRegistry(
-    AppContext& ctx, std::chrono::steady_clock::time_point processStartTime)
+    AppContext& ctx,
+    const Json::Value& runtimeConfig,
+    std::chrono::steady_clock::time_point processStartTime)
 {
     auto registry = std::make_shared<provider::ProviderRegistry>();
     const auto& accounts = ctx.accountManager();
@@ -348,11 +352,24 @@ StartupResult stepProviderRegistry(
         std::move(classicAccounts), std::move(retoolAccounts));
     ctx.setManagedAccountService(managedAccounts);
 
-    auto chayns = provider::makeProductionProvider<chaynsapi>(
+    chayns_browser::setConfig(
+        chayns_browser::loadConfigFrom(runtimeConfig));
+    ChaynsProviderSettings chaynsSettings;
+    const auto& upstreamErrorTexts = runtimeConfig["upstream_error_texts"];
+    if (upstreamErrorTexts.isArray()) {
+        for (const auto& item : upstreamErrorTexts) {
+            if (item.isString()) {
+                chaynsSettings.upstreamErrorTexts.push_back(item.asString());
+            }
+        }
+    }
+    auto chayns = provider::makeProductionProvider<ChaynsProvider>(
         *accounts,
         chayns::makeDrogonChaynsHttpTransport(),
         chayns::makeRealChaynsClock(),
-        threadLedger);
+        threadLedger,
+        provider::ProviderBase::FailureObserver{},
+        std::move(chaynsSettings));
     const auto chaynsInitialization = chayns->initialize();
     if (!chaynsInitialization) {
         return StartupResult::failed(
@@ -364,12 +381,14 @@ StartupResult stepProviderRegistry(
                                      "failed to register chaynsapi provider");
     }
 
-    auto retoolProvider = provider::makeProductionProvider<retoolapi>(
+    auto retoolProvider = provider::makeProductionProvider<RetoolProvider>(
         retool::makeDrogonRetoolHttpTransport(),
         retool::makeRealRetoolClock(),
         *managedAccounts,
         *workspaceUseCase,
-        *channels);
+        *channels,
+        provider::ProviderBase::FailureObserver{},
+        retool::providerSettingsFromConfig(runtimeConfig));
     const auto retoolInitialization = retoolProvider->initialize();
     if (!retoolInitialization) {
         return StartupResult::failed(
@@ -742,8 +761,8 @@ void registerApplicationSteps(
     ctx.addStep("inject stores",         [&customConfig, &ctx] {
         return stepInjectStores(ctx, customConfig);
     });
-    ctx.addStep("provider registry",     [&ctx, processStartTime] {
-        return stepProviderRegistry(ctx, processStartTime);
+    ctx.addStep("provider registry",     [&customConfig, &ctx, processStartTime] {
+        return stepProviderRegistry(ctx, customConfig, processStartTime);
     });
     ctx.addStep("session services",      [&ctx] { return stepSessionServices(ctx); });
     ctx.addStep("AI API use case",       [&customConfig, &ctx] {

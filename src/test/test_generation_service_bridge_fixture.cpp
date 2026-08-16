@@ -5,13 +5,16 @@
 #include <application/generation/continuity/ResponseIndex.h>
 #include <application/generation/core/SessionExecutionGate.h>
 #include <application/generation/core/Session.h>
+#include <application/generation/core/SessionCodec.h>
 #include <application/generation/contracts/IResponseSink.h>
 #include <application/generation/core/GenerationService.h>
+#include <platform/ZeroWidthEncoder.h>
 
 #include <algorithm>
 #include <list>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -35,6 +38,7 @@ class CapturingProvider final : public provider::IChatProvider
     enum class Mode {
         PlainText,
         BridgeToolCall,
+        ActionV3ToolCall,
         InvalidBridgeThenValidActionV3,
         NativeEmptyArguments,
         SemanticFailure,
@@ -55,6 +59,24 @@ class CapturingProvider final : public provider::IChatProvider
                 "\n<function_calls><function_call><tool>read_file</tool>"
                 "<args_json><![CDATA[{\"path\":\"synthetic.txt\"}]]></args_json>"
                 "</function_call></function_calls>";
+            return platform::Result<provider::ProviderResponse>::success(
+                std::move(response));
+        }
+        if (mode_ == Mode::ActionV3ToolCall)
+        {
+            const auto begin = request.input.find("<Function_");
+            const auto end = begin == std::string::npos
+                ? std::string::npos
+                : request.input.find("/>", begin);
+            if (begin == std::string::npos || end == std::string::npos) {
+                return platform::Result<provider::ProviderResponse>::failure(
+                    platform::Error::providerError("missing bridge sentinel"));
+            }
+
+            provider::ProviderResponse response;
+            response.text = request.input.substr(begin, end - begin + 2) +
+                "\n{\"protocol\":\"action-v3\",\"tool_calls\":[{\"name\":\"read_file\","
+                "\"arguments\":{\"path\":\"synthetic.txt\"}}]}";
             return platform::Result<provider::ProviderResponse>::success(
                 std::move(response));
         }
@@ -133,6 +155,41 @@ class CollectingSink final : public IResponseSink
     bool closed = false;
 };
 
+std::string firstToolCallId(const CollectingSink& sink)
+{
+    const auto event = std::find_if(
+        sink.events.begin(), sink.events.end(), [](const auto& value) {
+            return std::holds_alternative<generation::ToolCallDone>(value);
+        });
+    if (event == sink.events.end()) return "";
+    return std::get<generation::ToolCallDone>(*event).id;
+}
+
+CurrentInputPart currentTextPart(std::string text)
+{
+    CurrentInputPart part;
+    part.text = std::move(text);
+    return part;
+}
+
+CurrentInputPart currentToolResultPart(std::string id, std::string text)
+{
+    CurrentInputPart part;
+    part.text = std::move(text);
+    part.toolResultCallId = std::move(id);
+    part.isToolResult = true;
+    return part;
+}
+
+void setCurrentInput(GenerationRequest& request,
+                     std::vector<CurrentInputPart> parts)
+{
+    request.currentInput.clear();
+    for (const auto& part : parts) request.currentInput += part.text;
+    request.currentInputParts = std::move(parts);
+    request.messages = {Message::user(request.currentInput)};
+}
+
 std::vector<ToolDefinition> fixtureTools()
 {
     ToolDefinition tool;
@@ -183,6 +240,19 @@ GenerationRequest makeRequest(const std::string& provider,
 }
 
 }  // namespace
+
+DROGON_TEST(SessionCodec_RoundTripsToolResultLedger)
+{
+    session_st source;
+    source.provider.pendingToolCallIds = {"call_pending_a", "call_pending_b"};
+    source.provider.consumedToolResultIds = {"call_consumed_a", "call_consumed_b"};
+
+    const Json::Value encoded = sessioncodec::encodeSession(source);
+    CHECK(encoded["v"].asInt() == 2);
+    const session_st decoded = sessioncodec::decodeSession(encoded);
+    CHECK(decoded.provider.pendingToolCallIds == source.provider.pendingToolCallIds);
+    CHECK(decoded.provider.consumedToolResultIds == source.provider.consumedToolResultIds);
+}
 
 DROGON_TEST(GenerationService_ToolBridgeTransformsRequestThroughRunGuarded)
 {
@@ -273,6 +343,122 @@ DROGON_TEST(GenerationService_BridgeCodecAndEmitOrderRunThroughProductionPipelin
     CHECK(std::holds_alternative<generation::Completed>(sink.events.back()));
     CHECK(std::get<generation::Completed>(sink.events.back()).finishReason == "tool_calls");
     CHECK(sink.closed);
+}
+
+DROGON_TEST(GenerationService_AssignsUniqueIdsToSequentialBridgeCalls)
+{
+    auto channels = makeChannel("bridge-id-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>(
+        CapturingProvider::Mode::ActionV3ToolCall);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("bridge-id-fixture", provider));
+
+    Json::Value runtimeConfig(Json::objectValue);
+    runtimeConfig["tool_bridge"]["format_by_channel"]["bridge-id-fixture"] = "json";
+
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels, runtimeConfig);
+
+    auto firstRequest = makeRequest("bridge-id-fixture", fixtureTools());
+    firstRequest.clientInfo["client_type"] = "ClaudeCode";
+    firstRequest.requestId = "bridge-id-fixture-first";
+    CollectingSink firstSink;
+    CHECK(!service.runGuarded(firstRequest, firstSink).has_value());
+
+    auto secondRequest = makeRequest("bridge-id-fixture", fixtureTools());
+    secondRequest.clientInfo["client_type"] = "ClaudeCode";
+    secondRequest.requestId = "bridge-id-fixture-second";
+    CollectingSink secondSink;
+    CHECK(!service.runGuarded(secondRequest, secondSink).has_value());
+
+    const std::string firstId = firstToolCallId(firstSink);
+    const std::string secondId = firstToolCallId(secondSink);
+    CHECK(firstId.rfind("call_", 0) == 0);
+    CHECK(secondId.rfind("call_", 0) == 0);
+    CHECK(firstId != secondId);
+}
+
+DROGON_TEST(GenerationService_SuppressesReplayedToolResultsAfterSessionResolution)
+{
+    auto channels = makeChannel("tool-result-ledger-fixture", false);
+    auto provider = std::make_shared<CapturingProvider>(
+        CapturingProvider::Mode::ActionV3ToolCall);
+    provider::ProviderRegistry registry;
+    REQUIRE(registry.registerChatProvider("tool-result-ledger-fixture", provider));
+
+    Json::Value runtimeConfig(Json::objectValue);
+    runtimeConfig["tool_bridge"]["format_by_channel"]["tool-result-ledger-fixture"] = "json";
+
+    ResponseIndex responseIndex;
+    session::SessionExecutionGate executionGate;
+    chatSession sessionStore;
+    sessionStore.setTrackingMode(SessionTrackingMode::ZeroWidth);
+    GenerationService service(&registry, &sessionStore, &responseIndex, &executionGate,
+                              &channels, runtimeConfig);
+
+    const std::string stableSessionId = "sess_tool_result_ledger";
+    const std::string continuityMarker = ZeroWidthEncoder::appendEncoded(
+        "continuity", stableSessionId);
+
+    auto firstRequest = makeRequest("tool-result-ledger-fixture", fixtureTools());
+    firstRequest.requestId = "tool-result-ledger-first";
+    firstRequest.continuityTexts = {continuityMarker};
+    setCurrentInput(firstRequest, {currentTextPart("initial turn")});
+    CollectingSink firstSink;
+    CHECK(!service.runGuarded(firstRequest, firstSink).has_value());
+    const std::string firstCallId = firstToolCallId(firstSink);
+    REQUIRE(!firstCallId.empty());
+
+    const std::string firstResult = "result-from-first-call-unique";
+    auto secondRequest = makeRequest("tool-result-ledger-fixture", fixtureTools());
+    secondRequest.requestId = "tool-result-ledger-second";
+    secondRequest.continuityTexts = {continuityMarker};
+    setCurrentInput(secondRequest, {
+        currentTextPart("second turn\n"),
+        currentToolResultPart(firstCallId,
+            "[tool_result tool_use_id=" + firstCallId + "]\n" + firstResult +
+            "\n[/tool_result]\n"),
+    });
+    CollectingSink secondSink;
+    CHECK(!service.runGuarded(secondRequest, secondSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 2);
+    CHECK(provider->capturedRequests[1].input.find(firstResult) != std::string::npos);
+    const std::string secondCallId = firstToolCallId(secondSink);
+    REQUIRE(!secondCallId.empty());
+    CHECK(secondCallId != firstCallId);
+
+    const std::string secondResult = "result-from-second-call-unique";
+    auto thirdRequest = makeRequest("tool-result-ledger-fixture", fixtureTools());
+    thirdRequest.requestId = "tool-result-ledger-third";
+    thirdRequest.continuityTexts = {continuityMarker};
+    setCurrentInput(thirdRequest, {
+        currentTextPart("third turn\n"),
+        currentToolResultPart(firstCallId,
+            "[tool_result tool_use_id=" + firstCallId + "]\n" + firstResult +
+            "\n[/tool_result]\n"),
+        currentToolResultPart(secondCallId,
+            "[tool_result tool_use_id=" + secondCallId + "]\n" + secondResult +
+            "\n[/tool_result]\n"),
+    });
+    CollectingSink thirdSink;
+    CHECK(!service.runGuarded(thirdRequest, thirdSink).has_value());
+    REQUIRE(provider->capturedRequests.size() == 3);
+    const auto& thirdProviderInput = provider->capturedRequests[2].input;
+    CHECK(thirdProviderInput.find("third turn") != std::string::npos);
+    CHECK(thirdProviderInput.find(secondResult) != std::string::npos);
+    CHECK(thirdProviderInput.find(firstResult) == std::string::npos);
+
+    session_st persisted;
+    sessionStore.getSession(stableSessionId, persisted);
+    CHECK(std::find(persisted.provider.consumedToolResultIds.begin(),
+                    persisted.provider.consumedToolResultIds.end(), firstCallId) !=
+          persisted.provider.consumedToolResultIds.end());
+    CHECK(std::find(persisted.provider.consumedToolResultIds.begin(),
+                    persisted.provider.consumedToolResultIds.end(), secondCallId) !=
+          persisted.provider.consumedToolResultIds.end());
 }
 
 DROGON_TEST(GenerationService_CodexBridgeRetryReusesCurrentThreadAndSendsCorrection)

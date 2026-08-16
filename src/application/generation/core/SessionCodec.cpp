@@ -2,6 +2,8 @@
 
 #include <application/generation/tooling/BridgeProtocolCodec.h>
 
+#include <vector>
+
 namespace sessioncodec {
 namespace {
 
@@ -35,6 +37,26 @@ Json::Value getJson(const Json::Value& v, const char* key)
 {
     if (!v.isObject() || !v.isMember(key)) return Json::Value();
     return v[key];
+}
+
+Json::Value encodeStringArray(const std::vector<std::string>& values)
+{
+    Json::Value encoded(Json::arrayValue);
+    for (const auto& value : values) encoded.append(value);
+    return encoded;
+}
+
+std::vector<std::string> decodeStringArray(const Json::Value& value)
+{
+    std::vector<std::string> decoded;
+    if (!value.isArray()) return decoded;
+    decoded.reserve(value.size());
+    for (const auto& item : value) {
+        if (item.isString() && !item.asString().empty()) {
+            decoded.push_back(item.asString());
+        }
+    }
+    return decoded;
 }
 
 // ---- 枚举稳定映射：显式整数，禁止依赖声明顺序 ----
@@ -72,7 +94,7 @@ Json::Value encodeSession(const session_st& session)
 {
     Json::Value root(Json::objectValue);
     // schema 版本：后续字段演进时用于选择解码规则。
-    root["v"] = 1;
+    root["v"] = 2;
 
     // ---- request ----
     Json::Value req(Json::objectValue);
@@ -132,6 +154,8 @@ Json::Value encodeSession(const session_st& session)
     pv["supportsToolCalls"]            = session.provider.supportsToolCalls;
     pv["clientInfo"]                   = session.provider.clientInfo;
     pv["messageContext"]               = session.provider.messageContext;
+    pv["pendingToolCallIds"]           = encodeStringArray(session.provider.pendingToolCallIds);
+    pv["consumedToolResultIds"]        = encodeStringArray(session.provider.consumedToolResultIds);
     root["provider"] = pv;
 
     return root;
@@ -198,6 +222,9 @@ session_st decodeSession(const Json::Value& payload)
     // 否则 addMessageToContext 的 append 行为会因类型不符而异常。
     Json::Value mc = getJson(pv, "messageContext");
     s.provider.messageContext = mc.isArray() ? mc : Json::Value(Json::arrayValue);
+    s.provider.pendingToolCallIds = decodeStringArray(getJson(pv, "pendingToolCallIds"));
+    s.provider.consumedToolResultIds =
+        decodeStringArray(getJson(pv, "consumedToolResultIds"));
 
     return s;
 }

@@ -121,7 +121,6 @@ CompileResult compileJsonAction(
             }
 
             ToolAction action;
-            action.id = "action_" + std::to_string(envelope.toolCalls.size());
             action.name = trim(call["name"].asString());
             action.argumentsJson = compactJson(call["arguments"]);
             envelope.toolCalls.push_back(std::move(action));
@@ -380,7 +379,6 @@ CompileResult ActionProtocolCompiler::compileResponse(
                            "tool_call is not closed");
         }
         ToolAction action;
-        action.id = "action_" + std::to_string(envelope.toolCalls.size());
         action.name = name;
         action.argumentsJson = arguments;
         envelope.toolCalls.push_back(std::move(action));
