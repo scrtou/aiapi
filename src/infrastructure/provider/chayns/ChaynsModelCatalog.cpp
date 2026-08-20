@@ -178,7 +178,7 @@ bool supportsMimeType(const ModelDescriptor& model, const std::string& requested
         return false;
     }
 
-    // Upstream metadata sometimes sets canHandleImages=true but publishes a
+    // 上游元数据有时会将 canHandleImages=true，但发布
     // text-only supportedMimeTypes list. In that exact conflict, trust the
     // explicit capability flag for common image inputs supported by the
     // uploader. Once at least one image MIME

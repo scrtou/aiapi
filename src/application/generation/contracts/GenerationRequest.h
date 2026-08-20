@@ -11,6 +11,7 @@
 #include <application/generation/contracts/CurrentTurnKind.h>
 
 /** Protocol-neutral response identity and persistence lifecycle. */
+/** 响应生命周期 */
 enum class ResponseLifecycle {
     Immediate,
     Stored,

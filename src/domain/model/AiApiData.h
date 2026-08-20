@@ -35,8 +35,6 @@ struct RequestHeaders {
 struct GenerationInput {
     std::string provider;
     std::string jsonBody;
-    // Copied route metadata lets the application select a registered module
-    // without retaining a Drogon request in queued work.
     std::string method;
     std::string path;
     RequestHeaders headers;

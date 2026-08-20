@@ -236,97 +236,176 @@ void AiApiController::setUseCase(aiapi::IAiApiUseCase* useCase)
     useCase_ = useCase;
 }
 
+/**
+ * @brief 处理 OpenAI Chat Completions 兼容请求。
+ *
+ * 该处理器同时绑定 `/chaynsapi/v1/chat/completions` 和
+ * `/retoolapi/v1/chat/completions`。控制器只负责 HTTP 输入校验、建立 JSON/SSE
+ * 输出通道以及把任务提交给 IAiApiUseCase；协议适配、能力检查、后台排队、
+ * Provider 调用和生成事件编码均由 UseCase 及其下游流水线完成。
+ *
+ * 主流程：记录安全元数据 -> 解析并校验 JSON -> 根据 `stream` 分流：
+ * - 非流式：后台生成完整 JSON，完成后切回 Drogon IO 线程发送一次响应；
+ * - 流式：先返回 SSE 响应，再通过线程安全的流桥接器逐块写入并最终关闭连接。
+ *
+ * C++ 语法：`AiApiController::` 表示该函数属于 AiApiController；`const T&`
+ * 表示只读引用、避免复制；`T&&` 是右值引用，使一次性的 Drogon 回调可以被
+ * `std::move` 转移到异步任务中。函数返回 `void`，HTTP 结果通过 callback 交回。
+ */
 void AiApiController::chaynsapichat(
     const HttpRequestPtr &req,
     std::function<void(const HttpResponsePtr &)> &&callback)
 {
+    // LOG_INFO 使用重载后的 `<<` 流插入运算符写入 INFO 级别日志。
     LOG_INFO << "[AI] ";
+
+    // 仅记录方法、路径、正文大小以及敏感请求头是否存在，不输出正文、令牌或 Cookie 的实际内容。
     logSafeRequestMetadata(req, "chat.completions");
 
+    // shared_ptr 是共享所有权智能指针；当前为空，parseJsonOrError 成功后令其指向 Json::Value。
     std::shared_ptr<Json::Value> json;
+
+    // `!` 是逻辑非；解析失败时辅助函数已发送 400 响应，所以用提前 return 终止后续处理。
     if (!ctl::parseJsonOrError(req, callback, json)) return;
+
+    // `*json` 解引用智能指针，`["messages"]` 访问 JSON 字段；字段缺失或空数组时 empty() 为 true。
     if ((*json)["messages"].empty()) {
         ctl::sendError(callback, k400BadRequest, "invalid_request_error",
                        "Messages array cannot be empty");
         return;
     }
 
+    // get("stream", false) 表示字段缺失时默认非流式，asBool() 将 Json::Value 转为 bool。
     const bool stream = (*json).get("stream", false).asBool();
+
+    // auto 由编译器推导为 aiapi::GenerationInput；辅助函数保存 Provider、路径、方法、请求头和原始 JSON。
     const auto input = generationInput(req, *json);
+
+    // 实际类型为 IAiApiUseCase* const：指针本身不能改指向，但仍可调用目标对象的非 const 方法。
+    // 复制到局部变量后，可安全地按值捕获进下面的异步 Lambda；该裸指针不拥有 UseCase 生命周期。
     auto* const useCase = useCase_;
 
+    // -------------------- 非流式 JSON 分支 --------------------
     if (!stream) {
+        // callback 是有名字的右值引用，在表达式中仍是左值；std::move 才允许转移其内部资源。
+        // shared_ptr 延长回调生命周期，并使后台完成 Lambda 与 IO 线程调度代码可以共同持有它。
         auto cb = std::make_shared<std::function<void(const HttpResponsePtr&)>>(
             std::move(callback));
+
+        // UseCase 未注入或已在停机阶段撤销时，构造 503，并通过 respondInLoop 切回 Drogon IO 线程发送。
         if (!useCase) {
             ctl::respondInLoop(cb, unavailableResponse());
             return;
         }
 
+        // JsonResponseState 在“协议 Sink 生成响应”和“完成回调发送响应”之间共享 HTTP 响应及状态码。
         auto state = std::make_shared<JsonResponseState>();
+
+        // `aiapi::IAiApiUseCase::ResponseBinding` 使用作用域解析符访问命名空间、类及其嵌套类型。
+        // 非流式绑定只需提供 jsonResponse；stream 保持默认 false。
         aiapi::IAiApiUseCase::ResponseBinding binding;
+
+        // `[state]` 表示 Lambda 按值捕获 shared_ptr，引用计数增加，保证异步执行时状态仍然有效。
+        // 协议 JSON Sink 完成编码后调用这里；这里只暂存响应，尚未调用最外层 HTTP callback。
         binding.jsonResponse = [state](const Json::Value& response, int status) {
             state->response = HttpResponse::newHttpJsonResponse(response);
             state->status = status;
         };
+
+        // submitGeneration 先同步完成协议适配、能力校验和队列准入，再由后台任务执行实际生成。
+        // 因此 submission 表示“是否成功提交”，而下面的 GenerationResult 表示“后台执行是否成功”。
         const auto submission = useCase->submitGeneration(
             input,
+            // binding 后续不再使用，移动可避免复制其中保存的 std::function。
             std::move(binding),
+            // `[cb, state]` 按值捕获两个 shared_ptr，使它们一直存活到后台完成回调结束。
             [cb, state](const aiapi::GenerationResult& result,
+                        // 第二个形参故意不命名：接口会传入 Sink，但非流式收尾逻辑不需要直接使用它。
                         const std::shared_ptr<IResponseSink>&) {
+                // 失败时发送标准错误；成功时发送 state 中的完整 JSON；响应操作会被排回 IO 线程。
                 finishJsonGeneration(cb, state, result);
             });
+
+        // accepted() 为 false 表示任务没有进入后台队列，例如请求无效、队列满或正在停机。
         if (!submission.accepted()) {
+            // error 是 optional；`*submission.error` 取出错误值。此处依赖“拒绝必带错误”的接口约定。
             ctl::respondInLoop(cb, makeUseCaseError(*submission.error));
         }
         return;
     }
 
+    // -------------------- 流式 SSE 分支 --------------------
+    // newAsyncStreamResponse 创建基于 HTTP chunked transfer 的异步响应；回调会在流可写时收到流对象。
     auto response = HttpResponse::newAsyncStreamResponse(
+        // input 和 useCase 按值捕获。Lambda 默认的 operator() 是 const；mutable 允许随后移动 input。
         [input, useCase](ResponseStreamPtr streamResponse) mutable {
+            // 智能指针支持布尔判断；空流无法发送任何 SSE 数据。
             if (!streamResponse) {
                 LOG_WARN << "[AI] ";
                 return;
             }
+
+            // 把 Drogon 流移动给桥接器。桥接器确保 send、close 和销毁都发生在 TCP 所属事件循环线程。
             const auto streamBridge = IoLoopResponseStream::create(std::move(streamResponse));
             if (!streamBridge) {
                 LOG_WARN << "[AI] IO ";
                 return;
             }
+
+            // 流已开始建立后不再改发普通 JSON 503；UseCase 不可用时只能安全关闭流。
             if (!useCase) {
                 streamBridge->close();
                 return;
             }
 
             aiapi::IAiApiUseCase::ResponseBinding binding;
-            binding.stream = true;
+
+            // 注意：ResponseBinding::stream 默认是 false，本分支当前没有显式把它改为 true。
+            // 下游响应工厂会依据该字段选择 JSON Sink 或 SSE Sink，这是理解当前实际行为的关键。
+
+            // 协议 Sink 每产生一个 SSE 数据块就调用该 Lambda；返回 false 表示流已关闭或发送失败。
             binding.streamWriter = [streamBridge](const std::string& chunk) {
                 return streamBridge->send(chunk);
             };
+
+            // 省略空圆括号的无参 Lambda；正常结束或失败时由下游调用以关闭 chunked 响应。
             binding.close = [streamBridge] { streamBridge->close(); };
+
             const auto submission = useCase->submitGeneration(
+                // Lambda 带 mutable，因此捕获的 input 可以被移动；提交后本分支不再访问它。
                 std::move(input),
                 std::move(binding),
+                // 空捕获列表 `[]` 表示完成回调不依赖外部局部变量。
                 [](const aiapi::GenerationResult& result,
                    const std::shared_ptr<IResponseSink>& sink) {
+                    // `&&` 短路求值：只有 sink 非空时才调用 isValid()，避免空指针解引用。
                     if (!result.succeeded() && sink && sink->isValid()) {
+                        // 将 UseCase 错误转成统一生成事件，由协议 Sink 编码为对应的流式错误格式。
                         emitUseCaseErrorToSink(*result.error, *sink);
                         sink->onClose();
                     }
+                    // 成功路径不在此重复关闭；GenerationPipeline 的统一出口会发送完成事件并关闭 Sink。
                 });
+
+            // 这是同步的队列准入失败，此时可能尚未创建协议 Sink，只记录结果并关闭底层流。
             if (!submission.accepted()) {
                 LOG_WARN << "[AI] ("
+                         // enum class 不会隐式转成整数，必须使用 static_cast 显式转换后才能写入日志。
                          << static_cast<int>(submission.outcome) << ")，";
                 streamBridge->close();
             }
         },
+        // 第二个参数为 disableKickoffTimeout；true 关闭默认启动超时，适合耗时较长的 AI SSE 请求。
         true);
 
+    // SSE 必需及常用响应头：声明事件流、禁用缓存和代理缓冲，并尽量维持长连接。
     response->setContentTypeString("text/event-stream; charset=utf-8");
     response->addHeader("Cache-Control", "no-cache");
     response->addHeader("Connection", "keep-alive");
     response->addHeader("X-Accel-Buffering", "no");
     response->addHeader("Keep-Alive", "timeout=60");
+
+    // 流式模式先把响应头和异步响应对象交给 Drogon，正文随后由 streamWriter 分块发送。
     callback(response);
 }
 

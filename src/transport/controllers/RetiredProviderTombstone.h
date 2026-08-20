@@ -27,7 +27,7 @@ TombstoneMetric makeNexosTombstoneMetric(const drogon::HttpRequestPtr& req);
 /// the active provider/request metric dimension.
 void recordNexosTombstoneMetric(const drogon::HttpRequestPtr& req);
 
-/// Build the stable 410 response shared by every /nexosapi/v1/* route.
+/// 构建所有 /nexosapi/v1/* 路由共用的稳定 410 响应。
 void respondNexosTombstone(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback);
